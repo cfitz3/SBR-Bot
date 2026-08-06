@@ -1,0 +1,28 @@
+{
+  "//": "Solution-style root config: builds all workspace packages in dependency order via `tsc -b`.",
+  "files": [],
+  "references": [
+    { "path": "packages/shared-types" },
+    { "path": "packages/env" },
+    { "path": "packages/config" },
+    { "path": "packages/db" },
+    { "path": "packages/redis" },
+    { "path": "packages/observability" },
+    { "path": "packages/identity" },
+    { "path": "packages/hypixel" },
+    { "path": "packages/pricing" },
+    { "path": "packages/progression" },
+    { "path": "packages/bridge" },
+    { "path": "packages/moderation" },
+    { "path": "packages/community" },
+    { "path": "packages/analytics" },
+    { "path": "packages/commands-bridge" },
+    { "path": "packages/commands-admin" },
+    { "path": "packages/panel-core" },
+    { "path": "packages/jobs" },
+    { "path": "apps/workers" },
+    { "path": "apps/bridge-bot" },
+    { "path": "apps/admin-bot" },
+    { "path": "apps/web-panel" }
+  ]
+}

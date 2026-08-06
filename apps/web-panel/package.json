@@ -1,0 +1,22 @@
+{
+  "name": "@sbr/app-web-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@sbr/community": "*",
+    "@sbr/config": "*",
+    "@sbr/db": "*",
+    "@sbr/moderation": "*",
+    "@sbr/observability": "*",
+    "@sbr/panel-core": "*",
+    "@sbr/redis": "*",
+    "@sbr/shared-types": "*"
+  }
+}

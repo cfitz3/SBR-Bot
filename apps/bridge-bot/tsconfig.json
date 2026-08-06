@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/analytics" },
+    { "path": "../../packages/bridge" },
+    { "path": "../../packages/commands-bridge" },
+    { "path": "../../packages/config" },
+    { "path": "../../packages/db" },
+    { "path": "../../packages/hypixel" },
+    { "path": "../../packages/identity" },
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/pricing" },
+    { "path": "../../packages/progression" },
+    { "path": "../../packages/redis" },
+    { "path": "../../packages/shared-types" }
+  ]
+}

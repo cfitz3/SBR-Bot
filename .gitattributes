@@ -1,0 +1,8 @@
+# Normalize line endings to LF for all text files (avoids CRLF churn on Windows).
+* text=auto eol=lf
+
+# Keep lockfiles/binaries from being altered.
+package-lock.json -text
+*.png binary
+*.jpg binary
+*.ico binary

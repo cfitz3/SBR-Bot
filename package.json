@@ -1,0 +1,28 @@
+{
+  "name": "sbr-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SBR Guild Platform — Hypixel Skyblock community bots + web control panel (monorepo)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "db:generate": "npm run generate -w @sbr/db",
+    "db:validate": "npm run validate -w @sbr/db",
+    "build": "npm run db:generate && tsc -b",
+    "typecheck": "npm run db:generate && tsc -b",
+    "clean": "tsc -b --clean && node -e \"require('fs').rmSync('node_modules/.cache',{recursive:true,force:true})\"",
+    "test": "npm run build && npm run test --workspaces --if-present",
+    "healthcheck": "npm run healthcheck -w @sbr/app-workers --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
+  }
+}

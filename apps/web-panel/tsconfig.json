@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/community" },
+    { "path": "../../packages/config" },
+    { "path": "../../packages/db" },
+    { "path": "../../packages/moderation" },
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/panel-core" },
+    { "path": "../../packages/redis" },
+    { "path": "../../packages/shared-types" }
+  ]
+}

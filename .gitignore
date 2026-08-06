@@ -1,0 +1,18 @@
+node_modules/
+build/
+dist/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# editor / agent tooling
+/.vscode/
+/.idea/
+/.claude/
+/.windsurf/
+
+# prisma generated client (regenerated via `npm run db:generate`)
+**/generated/prisma/

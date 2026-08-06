@@ -1,0 +1,642 @@
+// SBR Guild Platform — data model. See DOMAIN_MODEL.md for the narrative version.
+// Postgres is the source of truth; Redis mirrors hot/ephemeral state (REDIS_KEYSPACE.md).
+//
+// Datasource URL is provided via prisma.config.ts (CLI) and the pg driver adapter
+// (runtime, src/client.ts), matching the Prisma 7 driver-adapter model.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────── Enums ───────────────────────────────
+
+enum GuildStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum MemberRole {
+  MEMBER
+  MODERATOR
+  OFFICER
+  ADMIN
+  OWNER
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  LEFT
+  BANNED
+}
+
+enum LinkStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  UNLINKED
+}
+
+enum LinkVerificationMethod {
+  HYPIXEL_SOCIAL // Discord field on the Hypixel profile (COMMANDS.md /link)
+  MANUAL
+}
+
+enum SkyblockGameMode {
+  NORMAL
+  IRONMAN
+  STRANDED
+  BINGO
+}
+
+enum PermSubjectType {
+  DISCORD_ROLE
+  DISCORD_USER
+  GUILD_RANK
+}
+
+enum BridgeCapability {
+  RELAY_MESSAGE
+  RUN_COMMAND
+  MENTION
+  BYPASS_FILTER
+  BYPASS_COOLDOWN
+  ADMIN
+}
+
+enum WordMatchType {
+  EXACT
+  SUBSTRING
+  REGEX
+  WILDCARD
+}
+
+enum WordAction {
+  BLOCK
+  FLAG
+  REPLACE
+  SHADOW_MUTE
+}
+
+enum SourceContext {
+  BRIDGE
+  DISCORD
+  INGAME
+}
+
+enum InfractionType {
+  SPAM
+  PROFANITY
+  HARASSMENT
+  ADVERTISING
+  CHEATING
+  RULE_BREAK
+  OTHER
+}
+
+enum InfractionSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum InfractionStatus {
+  OPEN
+  ACTIONED
+  EXPIRED
+  APPEALED
+  OVERTURNED
+}
+
+enum ModActionType {
+  WARN
+  MUTE
+  UNMUTE
+  KICK
+  BAN
+  UNBAN
+  NOTE
+  ROLE_CHANGE
+  GUILD_EXPEL
+}
+
+enum TicketCategory {
+  SUPPORT
+  REPORT
+  APPEAL
+  APPLICATION
+  OTHER
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+enum EventType {
+  DUNGEON
+  SLAYER
+  FISHING
+  MINING
+  GIVEAWAY
+  MEETING
+  CUSTOM
+}
+
+enum EventStatus {
+  SCHEDULED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum RSVPState {
+  GOING
+  MAYBE
+  NOT_GOING
+  WAITLIST
+}
+
+enum LFGActivity {
+  DUNGEONS
+  SLAYERS
+  KUUDRA
+  FISHING
+  MINING
+  OTHER
+}
+
+enum LFGStatus {
+  OPEN
+  FULL
+  EXPIRED
+  CLOSED
+}
+
+enum MilestoneType {
+  SKILL_LEVEL
+  CATACOMBS_LEVEL
+  SLAYER_TIER
+  NETWORTH_THRESHOLD
+  COLLECTION
+  CUSTOM
+}
+
+enum SnapshotSource {
+  SCHEDULED
+  ON_DEMAND
+  EVENT_TRACKED // sub-hourly cadence for progression-event leaderboards (WORKERS.md §2.5)
+  BACKFILL
+}
+
+enum CommandSurface {
+  BRIDGE_BOT
+  ADMIN_BOT
+  WEB_PANEL
+  INGAME
+}
+
+enum JobStatus {
+  QUEUED
+  ACTIVE
+  COMPLETED
+  FAILED
+  RETRYING
+  CANCELLED
+}
+
+// ─────────────────────────── Identity & Accounts ───────────────────────────
+
+model DiscordUser {
+  id          String   @id @default(cuid())
+  discordId   String   @unique
+  username    String?
+  globalName  String?
+  avatarHash  String?
+  isStaff     Boolean  @default(false)
+  lastSeenAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  linkedAccounts LinkedAccount[]
+  memberships    GuildMember[]
+
+  @@index([discordId])
+}
+
+model MinecraftAccount {
+  id                  String   @id @default(cuid())
+  uuid                String   @unique
+  currentIgn          String?
+  ignHistoryCachedAt  DateTime?
+  hypixelLastFetchedAt DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  linkedAccounts    LinkedAccount[]
+  selectedProfiles  SelectedSkyblockProfile[]
+  snapshots         ProfileSnapshot[]
+  milestones        Milestone[]
+
+  @@index([uuid])
+  @@index([currentIgn])
+}
+
+model LinkedAccount {
+  id                 String                 @id @default(cuid())
+  discordUserId      String
+  minecraftAccountId String
+  status             LinkStatus             @default(PENDING)
+  verificationMethod LinkVerificationMethod @default(HYPIXEL_SOCIAL)
+  isPrimary          Boolean                @default(false)
+  verifiedAt         DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  discordUser      DiscordUser      @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([discordUserId, minecraftAccountId])
+  @@index([status])
+}
+
+// ─────────────────────────── Guild & Membership ───────────────────────────
+
+model Guild {
+  id             String      @id @default(cuid())
+  hypixelGuildId String?     @unique
+  name           String
+  tag            String?
+  discordGuildId String      @unique
+  status         GuildStatus @default(ACTIVE)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  config        GuildConfig?
+  members       GuildMember[]
+  permissions   BridgePermission[]
+  wordlist      WordlistEntry[]
+  infractions   Infraction[]
+  modActions    ModerationAction[]
+  tickets       Ticket[]
+  applications  Application[]
+  events        Event[]
+  lfgPosts      LFGPost[]
+  subscriptions NotificationSubscription[]
+
+  @@index([discordGuildId])
+}
+
+model GuildMember {
+  id            String       @id @default(cuid())
+  guildId       String
+  discordUserId String
+  guildRank     String?
+  role          MemberRole   @default(MEMBER)
+  status        MemberStatus @default(ACTIVE)
+  joinedAt      DateTime?
+  leftAt        DateTime?
+  lastSeenAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  guild       Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  discordUser DiscordUser @relation(fields: [discordUserId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, discordUserId])
+  @@index([guildId, status])
+  @@index([guildId, role])
+}
+
+model SelectedSkyblockProfile {
+  id                 String           @id @default(cuid())
+  minecraftAccountId String
+  guildId            String? // null = global selection
+  profileId          String
+  cuteName           String?
+  gameMode           SkyblockGameMode @default(NORMAL)
+  isActive           Boolean          @default(true)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([minecraftAccountId, guildId])
+  @@index([minecraftAccountId, isActive])
+}
+
+// ─────────────────────────── Config & Permissions ───────────────────────────
+
+model GuildConfig {
+  id               String   @id @default(cuid())
+  guildId          String   @unique
+  bridgeChannelId  String?
+  staffChannelId   String?
+  logChannelId     String?
+  applicationsChannelId String?
+  eventsChannelId  String?
+  prefixes         String[] @default(["!"])
+  timezone         String   @default("UTC")
+  applicationsOpen Boolean  @default(false)
+  bridgeSuspended  Boolean  @default(false)
+  minWeight        Int?
+  minNetworth      BigInt?
+  features         Json     @default("{}")
+  cooldownDefaults Json     @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+}
+
+model BridgePermission {
+  id          String           @id @default(cuid())
+  guildId     String
+  subjectType PermSubjectType
+  subjectId   String // role id / discord id / in-game rank name
+  capability  BridgeCapability
+  allow       Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, subjectType, subjectId, capability])
+  @@index([guildId, capability])
+}
+
+model WordlistEntry {
+  id        String        @id @default(cuid())
+  guildId   String
+  pattern   String
+  matchType WordMatchType @default(SUBSTRING)
+  action    WordAction    @default(BLOCK)
+  severity  Int           @default(1)
+  enabled   Boolean       @default(true)
+  addedById String?
+  note      String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, enabled])
+  @@index([guildId, action])
+}
+
+// ─────────────────────────── Moderation & Support ───────────────────────────
+
+model Infraction {
+  id                       String             @id @default(cuid())
+  guildId                  String
+  targetDiscordId          String?
+  targetMinecraftAccountId String?
+  type                     InfractionType
+  severity                 InfractionSeverity @default(LOW)
+  reason                   String
+  sourceContext            SourceContext      @default(DISCORD)
+  status                   InfractionStatus   @default(OPEN)
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  guild   Guild              @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  actions ModerationAction[]
+
+  @@index([guildId, targetDiscordId, createdAt])
+  @@index([guildId, type])
+  @@index([guildId, status])
+}
+
+model ModerationAction {
+  id                       String        @id @default(cuid())
+  guildId                  String
+  infractionId             String?
+  actorDiscordId           String
+  targetDiscordId          String?
+  targetMinecraftAccountId String?
+  type                     ModActionType
+  reason                   String
+  // Cross-surface mute records both surfaces it swept (COMMANDS.md /mute).
+  surfaces                 String[]      @default([])
+  durationSeconds          Int?
+  expiresAt                DateTime?
+  active                   Boolean       @default(true)
+  createdAt                DateTime      @default(now())
+
+  guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  infraction Infraction? @relation(fields: [infractionId], references: [id], onDelete: SetNull)
+
+  @@index([guildId, targetDiscordId, active])
+  @@index([guildId, type, createdAt])
+  @@index([guildId, expiresAt])
+}
+
+model Ticket {
+  id                 String         @id @default(cuid())
+  guildId            String
+  openerDiscordId    String
+  assigneeDiscordId  String?
+  category           TicketCategory @default(SUPPORT)
+  status             TicketStatus   @default(OPEN)
+  channelId          String?
+  subject            String?
+  closeReason        String?
+  closedAt           DateTime?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, status])
+  @@index([guildId, openerDiscordId])
+}
+
+model Application {
+  id                  String            @id @default(cuid())
+  guildId             String
+  applicantDiscordId  String
+  minecraftAccountId  String?
+  answers             Json              @default("{}")
+  status              ApplicationStatus @default(SUBMITTED)
+  reviewerDiscordId   String?
+  decisionReason      String?
+  submittedAt         DateTime?
+  decidedAt           DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, status])
+  @@index([guildId, applicantDiscordId])
+}
+
+// ─────────────────────────── Community & Engagement ───────────────────────────
+
+model Event {
+  id              String      @id @default(cuid())
+  guildId         String
+  title           String
+  description     String?
+  type            EventType   @default(CUSTOM)
+  status          EventStatus @default(SCHEDULED)
+  startsAt        DateTime
+  endsAt          DateTime?
+  capacity        Int?
+  hostDiscordId   String?
+  messageId       String?
+  // Progression-tracking events drive the sub-hourly snapshot cohort (WORKERS.md §2.5).
+  tracksProgression Boolean   @default(false)
+  reminderState   Json        @default("{}")
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  guild     Guild             @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  rsvps     EventRSVP[]
+  snapshots ProfileSnapshot[]
+
+  @@index([guildId, status, startsAt])
+}
+
+model EventRSVP {
+  id          String    @id @default(cuid())
+  eventId     String
+  discordId   String
+  state       RSVPState @default(GOING)
+  respondedAt DateTime  @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, discordId])
+  @@index([eventId, state])
+}
+
+model LFGPost {
+  id               String      @id @default(cuid())
+  guildId          String
+  authorDiscordId  String
+  activity         LFGActivity @default(OTHER)
+  details          String?
+  slotsTotal       Int         @default(5)
+  slotsFilled      Int         @default(1)
+  status           LFGStatus   @default(OPEN)
+  expiresAt        DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, status])
+  @@index([guildId, activity, status])
+}
+
+model NotificationSubscription {
+  id        String   @id @default(cuid())
+  guildId   String
+  discordId String
+  category  String // mayor | firesale | bingo | events | ...
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, discordId, category])
+  @@index([guildId, category])
+}
+
+// ─────────────────────────── Progression & Analytics ───────────────────────────
+
+model ProfileSnapshot {
+  id                 String         @id @default(cuid())
+  minecraftAccountId String
+  profileId          String
+  // Day bucket + intra-day sequence: normal snapshots use seq 0 (one/day); the
+  // event-tracked cohort writes many per day (seq 1..N) for live leaderboards.
+  captureDate        DateTime       @db.Date
+  seq                Int            @default(0)
+  capturedAt         DateTime       @default(now())
+  source             SnapshotSource @default(SCHEDULED)
+  eventId            String? // set for EVENT_TRACKED snapshots
+  networth           BigInt?
+  skillAverage       Float?
+  catacombsLevel     Float?
+  senitherWeight     Float?
+  metrics            Json           @default("{}")
+  createdAt          DateTime       @default(now())
+
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+  event            Event?           @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  milestones       Milestone[]
+
+  @@unique([minecraftAccountId, profileId, captureDate, seq])
+  @@index([minecraftAccountId, capturedAt]) // progression over time
+  @@index([eventId, minecraftAccountId, capturedAt]) // event leaderboard: latest per member
+}
+
+model Milestone {
+  id                 String        @id @default(cuid())
+  minecraftAccountId String
+  guildId            String?
+  type               MilestoneType
+  metric             String
+  thresholdValue     BigInt
+  achievedAt         DateTime      @default(now())
+  snapshotId         String?
+  announced          Boolean       @default(false)
+  createdAt          DateTime      @default(now())
+
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+  snapshot         ProfileSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+
+  @@unique([minecraftAccountId, type, metric, thresholdValue])
+  @@index([minecraftAccountId, achievedAt])
+  @@index([announced])
+}
+
+model CommandUsage {
+  id        String         @id @default(cuid())
+  guildId   String?
+  discordId String?
+  surface   CommandSurface
+  command   String
+  args      Json?
+  success   Boolean        @default(true)
+  latencyMs Int?
+  invokedAt DateTime       @default(now())
+
+  @@index([guildId, command, invokedAt])
+  @@index([surface, invokedAt])
+}
+
+model WorkerJobLog {
+  id            String    @id @default(cuid())
+  queue         String
+  jobId         String?
+  type          String
+  status        JobStatus @default(QUEUED)
+  attempts      Int       @default(0)
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  durationMs    Int?
+  error         String?
+  resultSummary Json?
+  createdAt     DateTime  @default(now())
+
+  @@index([queue, status, createdAt])
+  @@index([type, createdAt])
+}

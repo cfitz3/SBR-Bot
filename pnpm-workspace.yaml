@@ -1,0 +1,13 @@
+# The design (ARCHITECTURE.md) targets pnpm + Turborepo. This repo is currently
+# scaffolded with **npm workspaces** (npm 11 is the installed toolchain), which is
+# wire-compatible with the same packages/* and apps/* layout.
+#
+# To migrate to pnpm later:
+#   1) corepack enable && corepack prepare pnpm@latest --activate
+#   2) rm package-lock.json && pnpm install
+#   3) (optional) add turbo.json tasks and swap root scripts to `turbo run`.
+#
+# This file is kept so the pnpm layout is documented and ready.
+packages:
+  - "packages/*"
+  - "apps/*"
