@@ -2,7 +2,7 @@
 
 Full-stack platform for a Hypixel Skyblock guild community: a member-facing
 Bridge/Skyblock Discord bot, a staff-facing Admin bot, background workers, and a
-Discord-OAuth web control panel — all sharing one typed domain core.
+Discord-OAuth web control panel all sharing one typed domain core.
 
 **Design docs** live in [`docs/`](./docs):
 [Charter](./docs/PROJECT_CHARTER.md) ·
