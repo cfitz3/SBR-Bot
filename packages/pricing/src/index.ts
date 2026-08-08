@@ -10,10 +10,20 @@ export {
   type NetworthServiceDeps,
   type NetworthRequest,
 } from "./networth.js";
+export { MarketServiceImpl, type MarketServiceDeps } from "./market.js";
+export { ItemCatalog, type ItemCatalogDeps } from "./catalog.js";
 export type {
   PriceSource,
   PriceLookup,
   NetworthEngine,
   NetworthEngineInput,
   NetworthComputation,
+  BazaarProvider,
+  BazaarSnapshot,
+  BazaarProductQuote,
+  BinSource,
+  BinEntry,
+  BinListing,
+  PlayerAuctionProvider,
+  ItemResourceProvider,
 } from "./ports.js";

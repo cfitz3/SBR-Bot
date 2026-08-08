@@ -358,6 +358,8 @@ model GuildConfig {
   bridgeSuspended  Boolean  @default(false)
   minWeight        Int?
   minNetworth      BigInt?
+  // Platform role -> Discord role id, as `/set-role type:mapping` records it.
+  roleMappings     Json     @default("{}")
   features         Json     @default("{}")
   cooldownDefaults Json     @default("{}")
   createdAt        DateTime @default(now())
@@ -534,7 +536,11 @@ model LFGPost {
   activity         LFGActivity @default(OTHER)
   details          String?
   slotsTotal       Int         @default(5)
+  // Denormalized count of `members`, kept in step on every join/leave so the
+  // list view can sort and filter without loading the roster of every post.
   slotsFilled      Int         @default(1)
+  /// Discord ids holding a slot, author first (COMMANDS.md /runs roster).
+  members          String[]    @default([])
   status           LFGStatus   @default(OPEN)
   expiresAt        DateTime?
   createdAt        DateTime    @default(now())
@@ -639,4 +645,55 @@ model WorkerJobLog {
 
   @@index([queue, status, createdAt])
   @@index([type, createdAt])
+}
+
+// ─────────────────────────── Analytics (ANALYTICS.md) ───────────────────────────
+
+enum MetricPeriod {
+  HOURLY
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+/// Raw fact table. Producers append to the `buf:analytics` Redis Stream on the
+/// hot path; the `analytics-ingest` job drains it into here in batches, so a
+/// slow database never shows up as command latency.
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  /// Internal Guild.id, or null for platform-wide events.
+  guildId   String?
+  discordId String?
+  /// Free-form rather than the CommandSurface enum: analytics also records
+  /// "SYSTEM" events that no command surface produced.
+  surface   String
+  type      String
+  props     Json     @default("{}")
+  /// When the event happened, which is not when it was ingested — rollups
+  /// bucket on this so a backlogged drain still lands in the right period.
+  ts        DateTime
+  createdAt DateTime @default(now())
+
+  @@index([guildId, type, ts])
+  @@index([ts])
+}
+
+/// Aggregated counts per (guild, metric, period, bucket, dimensions).
+///
+/// Deliberately has no unique constraint: rollups are rebuilt by deleting the
+/// partition and re-inserting it (ANALYTICS.md §3), which is both simpler than
+/// an upsert and the documented recovery path. A unique key over a nullable
+/// `guildId` would also not behave, since Postgres treats NULLs as distinct.
+model MetricRollup {
+  id          String       @id @default(cuid())
+  guildId     String?
+  metric      String
+  period      MetricPeriod
+  bucketStart DateTime
+  dims        Json         @default("{}")
+  count       Int          @default(0)
+  computedAt  DateTime     @default(now())
+
+  @@index([guildId, metric, period, bucketStart])
+  @@index([period, bucketStart])
 }

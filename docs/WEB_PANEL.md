@@ -1,12 +1,65 @@
 # Web Control Panel — SBR Guild Platform
 
-Design for `apps/web-panel` — the Discord-OAuth control suite that configures both bots and surfaces analytics/ops. Built on Next.js; all logic delegated to shared packages (`identity`, `config`, `community`, `moderation`, `analytics`, `hypixel`). The panel is **stateless** — sessions live in Redis (`sess:*`), the source of truth is Postgres, and hot config/permissions are cache-backed.
+Design for `apps/web-panel` — the Discord-OAuth control suite that configures both bots and surfaces analytics/ops. All logic delegated to shared packages (`identity`, `config`, `community`, `moderation`, `analytics`, `hypixel`). The panel is **stateless** — sessions live in Redis (`sess:*`), the source of truth is Postgres, and hot config/permissions are cache-backed.
 
 **Core principles**
 - **Discord OAuth is the only login.** No local passwords.
 - **You only see guilds you can manage** (Discord `MANAGE_GUILD`) *and* where our platform has a `Guild` record.
 - **Depth of configuration follows the bot.** If a bot isn't present / lacks permissions in a guild, the panel shows what it can and gates the rest behind a clear "bot not installed / missing permission" state — it never lets you configure something the bot can't enforce.
 - **The panel commands, it doesn't bypass.** Writes go through the same domain services the bots use; changes propagate via Redis cache invalidation + pub/sub so bots pick them up without redeploy.
+
+---
+
+## 0. Serving Model
+
+One Node process (`apps/web-panel/src/server.ts`, zero-dependency `node:http`) serves three things: the OAuth routes, the guild-scoped JSON API over `PanelService`, and the browser UI that reads it.
+
+**Why not Next.js.** The session is an `HttpOnly` cookie this server issues and resolves against Redis. A second runtime in front of it would mean either duplicating that auth or proxying every request through it, for a UI whose job is to render view models the API already computes. The panel stays dependency-free instead.
+
+**The UI** is plain ES modules in `apps/web-panel/client/`, compiled by `tsc -p tsconfig.client.json` into `public/app/` and served verbatim — no bundler, so what the browser loads is what tsc emitted. It shares the `PanelService` view-model types with the server via `import type`, which erases at emit, so the client ships no runtime import of `@sbr/panel-core` while still failing the build if a view model changes shape.
+
+- **Routing is hash-based** (`#/g/{guildId}/{page}`) so the server needs exactly one HTML route and deep links need no server-side rewrite table to drift out of sync.
+- **Rendering goes through the DOM API**, never `innerHTML` (`client/dom.ts`). Guild names, Discord usernames, and job error strings therefore cannot become markup.
+- **`index.html` carries no inline script or style**, which is what lets the server send a CSP with no `'unsafe-inline'`.
+- **Static serving is allowlisted by extension** and containment-checked against the asset root (`src/static.ts`); compiled client tests are not served.
+- The JSON API remains independently usable — the UI is a second consumer of it, not a wrapper around it.
+
+- **Charts are drawn as inline SVG** (`client/chart.ts`) over series the server has already zero-filled and grouped (`panel-core/src/series.ts`). Shaping happens server-side so the raw rollup rows stay the API's contract, the browser receives arrays it can draw without re-deriving the bucket grid, and the zero-filling is unit-tested under `node --test` rather than in a browser.
+- **The chart list is discovered from the data**, not hardcoded: a metric appears on the page the day something starts emitting it. Today that is only `command.used`.
+
+**Built so far:** every page in §3 — Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Recruitment + Tickets (§3.7), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4) and Mapping (§3.9) — each with the writes its section describes, over the pipeline below.
+
+Partial within the built pages, and deliberate: the recruitment queue shows applicants' answers but not their fetched Skyblock stats; Mapping takes role and channel ids by hand rather than through a live Discord picker, which needs the bot to enumerate; Health reports process liveness and job freshness but not queue depths or the Hypixel budget; the operational actions of §3.11 (requeue, force sync) are not wired; and Events schedules and cancels but does not announce, edit or mark attendance — see §3.8 for why.
+
+**The editing unit is a field, not a form.** Each control saves itself and carries its own status line, because every domain service underneath takes one value (`setChannel`, `setFeature`, `setBridgeSuspended`) and a page-wide submit would report "saved" for a write that applied four of its five parts. The two exceptions submit as a unit because their parts are not separately storable: the moderation action form (§3.6), where a type without a reason is a row the audit log should never hold, and the event scheduler (§3.8), where a title without a start time is not an event. Controls that write on change (toggles, the role dropdown) snap back when the server refuses, so a widget never displays a value that was never stored.
+
+### Write path
+
+Writes live in `PanelMutations` (`panel-core/src/mutations.ts`), a sibling of `PanelService` rather than more methods on it, because every write shares a pipeline the reads don't have: **authorize → rate-limit → validate → call the shared domain service → audit**. No SQL and no enforcement logic lives there; the panel commands the same services the bots do.
+
+- **One route shape, one verb.** `POST /api/guilds/{guildId}/actions/{name}` is the only path that accepts a body, so "which URLs mutate" is answerable from the URL alone. Everything else still rejects any method but `GET`/`HEAD`.
+- **CSRF is double-submit with a server-side check.** Login mints a token beside the session and sets it in a readable (non-`HttpOnly`) `sbr_csrf` cookie; the client echoes it in `x-csrf-token`, and the server compares that against the copy **in the session**, constant-time. Comparing header against cookie would pass for anyone able to write cookies for the domain. A present-but-foreign `Origin` is rejected outright. A session minted before writes existed has no token: it may still read, and a write asks it to sign in again.
+- **Bodies are bounded while being read** (16 KB), not trusted from `content-length`, which a chunked request can omit or lie about.
+- **Tiers are per mutation, not per page** (`MUTATION_TIERS`). Bridge suspend/unsuspend is an Officer control that no Officer-tier page owns; config writes are Admin.
+- **Rate limit** is per user and per mutation on `cd:web:{mutation}:{discordId}` — a guard against a stuck key or a double-clicked toggle, not a quota.
+- **Audit.** Every authorized attempt is captured as `CommandUsage(surface=WEB_PANEL)`, failures included, so a burst of refused writes is visible. Config changes additionally go through a `ConfigAuditSink`; they are *not* written as `ModerationAction`s, whose `type` enum describes actions taken on a person. Today the sink emits a typed analytics event; the port is what makes a durable `ConfigAudit` table a wiring change later.
+
+Available now: `config.channel`, `config.role-mapping`, `config.feature`, `config.recruitment`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.cancel`, `member.role`, `member.unlink`.
+
+**The actor is handed to each mutation, not read by it.** `run()` passes the authenticated `discordId` into the mutation body, so an action cannot be attributed to anyone but the signed-in user even if the request body claims otherwise — a body-supplied `actorDiscordId` is ignored, and there is a test that says so.
+
+**Where this layer stops.** Validation here is shape and policy only: it never re-derives a rule a domain service already owns. `applyModeration` does not compare ranks, because `ModerationService.applyAction` already refuses a target who outranks the actor, and a second copy of that comparison is one that drifts.
+
+Four deliberate departures from the sections below:
+
+- **`member.role` is Admin, not Officer** (§3.10 says Officer+ for member edits). Role assignment is the one member edit that hands out authority: at Officer tier an officer could promote themselves to ADMIN and reach the config pages. Self-targeting is refused outright for the mirror-image reason — an admin demoting themselves locks themselves out of the page they did it from.
+- **OWNER is not assignable** from the panel at all, and is absent from the dropdown. Handing over ownership stays a deliberate act elsewhere.
+- **`ROLE_CHANGE` and `GUILD_EXPEL` are not panel actions.** They describe events the platform records when they happen; exposing them as a write would let staff hand-feed the audit log entries about events that never occurred.
+- **Force re-verify (§3.10) is not implemented.** `IdentityService.linkByIgn` requires the actor to be the person linking, so there is no service call for "re-read someone else's Hypixel social" — adding one is domain work, not panel wiring.
+
+### CSV export
+
+`GET /api/guilds/{id}/analytics?format=csv` returns `text/csv` with a `Content-Disposition: attachment` filename stamped from the window's end date; `&table=commands` switches from the rollup rows to the per-command stats. Both go through the same `loadAnalytics` call as the on-screen page, so the access decision on a download is provably the one the reader already passed — an unauthorized request gets the ordinary JSON denial envelope, never a file. Cells beginning `=`, `+`, `-`, `@`, tab, or CR are prefixed with an apostrophe: the export's destination is Excel or Sheets, which would otherwise evaluate them.
 
 ---
 
@@ -103,6 +156,14 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 - **Reminders:** schedule reminder pings (enqueued to workers) at offsets before start.
 - **Access:** Officer+ (create/manage); Staff can mark attendance.
 
+**Built:** the schedule (title, type, start, capacity, description → `event.create`), the upcoming list with its RSVP counts, a per-event roster of who is going / waitlisted / maybe / declined, cancellation (`event.cancel`), and a history of finished and cancelled events. Both writes sit at Officer.
+
+- **The host comes from the session, never the body.** `CommunityService.cancelEvent` refuses anyone but the host, so a form that let you name someone else would create events their supposed host could not call off.
+- **That host check is the domain's, not the panel's.** An Officer cancelling a colleague's event gets `NOT_HOST` back and sees it. The panel surfaces the refusal rather than working around it — the same reasoning as the moderation rank check (§3.6).
+- **Start times are converted in the browser.** The `datetime-local` control holds local wall time with no zone; the client resolves it to an instant before sending, because a zone-less string would be read as UTC and move every event by the scheduler's offset.
+- **The roster travels on the events read** (`?event={id}`), the way Moderation carries `?target=`. One round trip means the counts in the list and the names in the roster can never disagree about the same event.
+- **Not built, because the domain has no method for it:** editing a scheduled event, marking who actually turned up, the attendance report, reminder scheduling, and the Discord announcement with RSVP buttons. `CommunityService` exposes `createEvent`, `getEvent`, `cancelEvent`, `rsvp` and `getAttendance` and nothing else; the announcement in particular needs a gateway connection this process does not hold. A button that silently did nothing would be worse than its absence.
+
 ### 3.9 Feature Flags & Role/Channel Mapping
 - **Feature flags:** per-guild toggles from `GuildConfig.features` (e.g. in-game commands, LFG, networth, antiraid). Toggling invalidates cache + pub/sub to bots.
 - **Role mapping:** map platform roles (`MODERATOR`/`OFFICER`/`ADMIN`) → Discord role IDs, and set the verified-member role. Uses a live Discord role picker (needs bot present to enumerate roles).
@@ -148,10 +209,11 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 
 ## 5. Propagation & Consistency
 
-- **Config writes** → Postgres (durable) → invalidate `cfg:guild:*` / `perm:guild:*` → publish `chan:config:{guildId}`; bots subscribe and reload effective config without redeploy.
-- **Moderation writes** → DB audit + Redis enforcement mirror (`mute:*`/`ban:*`) so the bot enforces immediately.
-- **Bot heartbeats & worker state** are published to Redis; the Health page reads live, so it reflects reality within seconds.
-- **Eventual-but-fast:** the panel never assumes a write is enforced until the responsible surface acknowledges (e.g. channel mapping shows "pending bot reload" briefly, then "active").
+- **Config writes** → Postgres (durable) → invalidate `cfg:guild:*` / `perm:guild:*` → publish `chan:config:{guildId}`; bots subscribe and reload effective config without redeploy. Implemented in `GuildConfigServiceImpl`: every write publishes the guild id after the row lands, and **a failed publish does not fail the write** — the durable change is done, and the subscribers' own TTLs are the fallback. Every process that reads config also subscribes, the panel included: an admin-bot `/set-channel` has to clear the panel's cache too, or the page that just showed the old value would keep showing it for the rest of the TTL.
+- **Moderation writes** → DB audit + Redis enforcement mirror (`mute:*`/`ban:*`) so the bot enforces immediately. The panel holds the same `ModerationServiceImpl` the admin bot does, pointed at the same mirror — a panel mute and a `/mute` are one code path with two front doors.
+- **Bot heartbeats & worker state** are published to Redis; the Health page reads live, so it reflects reality within seconds. Every process beats to `hb:{service}:{instance}` every 15s with a 45s TTL, so **absence is the signal**: a service that stops writing disappears from the keyspace and reads as DOWN rather than as a stale-but-present row. `EXPECTED_SERVICES` is a list, not a discovery, for the same reason — a dead bot has to look different from a bot that was never deployed. A beat older than 30s (between the interval and the TTL) reads STALE, which is where a process that is alive but wedged lands.
+- **Reads are re-issued after a write, not patched.** A control that saved successfully re-reads the page it changed instead of splicing its new value into the rendered list, so the screen always shows what the server would answer with rather than what the browser hoped.
+- **Eventual-but-fast:** the panel never assumes a write is enforced until the responsible surface acknowledges (e.g. channel mapping shows "pending bot reload" briefly, then "active"). *Not yet built* — today a saved write reports "Saved" on the strength of the service's own result.
 
 ---
 

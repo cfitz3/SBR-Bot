@@ -167,6 +167,16 @@ Who may do what through the chat bridge (e.g. run commands, use @mentions, bypas
 **Enum — `BridgeCapability`:** `RELAY_MESSAGE`, `RUN_COMMAND`, `MENTION`, `BYPASS_FILTER`, `BYPASS_COOLDOWN`, `ADMIN`.
 **Relationships:** N—1 `Guild`. Effective permissions cached in Redis for fast checks.
 
+**Resolution order** (`packages/identity`): explicit deny → explicit grant (an `ADMIN`
+grant carries every capability) → **`GuildMember.role` floor**. The floor exists because
+this table starts empty: a freshly onboarded guild has no rows, so resolving from rows
+alone would deny every command to everyone including the owner. Floors are
+`RELAY_MESSAGE`/`RUN_COMMAND` → `MEMBER`, `MENTION` → `MODERATOR`, `BYPASS_COOLDOWN` →
+`OFFICER`, `BYPASS_FILTER`/`ADMIN` → `ADMIN`. Deny is checked first so a capability can be
+taken from someone who holds it by rank without demoting them. Only `DISCORD_USER` rows
+are resolved today — `DISCORD_ROLE` and `GUILD_RANK` subjects need the caller's Discord
+roles or in-game rank, which the check does not yet receive.
+
 #### WordlistEntry
 Filter/wordlist rules for bridge content moderation.
 

@@ -5,22 +5,41 @@
  * (need the libs + a bot token).
  */
 import { loadConfig, type AppConfig } from "@sbr/config";
-import { disconnectDb, guildRepository, identityRepository } from "@sbr/db";
+import {
+  communityRepository,
+  disconnectDb,
+  guildConfigRepository,
+  guildRepository,
+  identityRepository,
+  progressionRepository,
+  rankResolver,
+} from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { HypixelClient } from "@sbr/hypixel";
-import { NetworthServiceImpl, type NetworthEngine } from "@sbr/pricing";
-import { ProgressionServiceImpl, type ProfileProvider } from "@sbr/progression";
+import { HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
+import { CommunityServiceImpl } from "@sbr/community";
+import { GuildConfigServiceImpl } from "@sbr/guild-config";
+import {
+  ItemCatalog,
+  MarketServiceImpl,
+  NetworthServiceImpl,
+  PricingServiceImpl,
+  type NetworthEngine,
+} from "@sbr/pricing";
+import { ProgressionServiceImpl, type ProfileProvider, type SkyblockProfileData } from "@sbr/progression";
 import { AnalyticsServiceImpl } from "@sbr/analytics";
 import {
   CommandDispatcher,
+  InGameDispatcher,
   buildBridgeRegistry,
   type CapabilityChecker,
+  type HandlerDeps,
   type UsageSink,
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
 import { createLogger, type Logger } from "@sbr/observability";
-import { closeRedis, createRedisAdapters, getRedis } from "@sbr/redis";
-import { err, ok } from "@sbr/shared-types";
+import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
+import { randomUUID } from "node:crypto";
+import { err, ok, type GuildRosterSource, type PlayerLookup } from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 
@@ -28,12 +47,46 @@ export interface BridgeApp {
   readonly config: AppConfig;
   readonly log: Logger;
   readonly dispatcher: CommandDispatcher;
+  /**
+   * The same services the slash handlers get. Exposed because persistent
+   * buttons (RSVP, run sign-up) bypass the dispatcher — there is no command
+   * name to look up — but must reach identical code paths.
+   */
+  readonly handlerDeps: HandlerDeps;
+  /**
+   * Guild-chat `!` commands. A separate object from `dispatcher` because the
+   * in-game surface is an allow-listed, per-IGN-cooled, one-line-output subset
+   * of it — not another caller of the same entry point.
+   */
+  readonly inGame: InGameDispatcher;
   /** The relay pipeline used by the Discord/in-game transport adapters. */
   readonly bridge: BridgeService;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
+  /**
+   * Hand the composition the live `/g online` reader once the Mineflayer
+   * session exists.
+   *
+   * Late-bound because the dependency runs backwards from everything else here:
+   * the transport is built *from* the app, so it cannot be a constructor
+   * argument. Until it is set — and whenever the bridge is down — `/online`
+   * reports that honestly rather than showing an empty guild.
+   */
+  setRosterSource(source: GuildRosterSource | null): void;
+  /**
+   * Hand the composition a live view of the two sockets, for the heartbeat.
+   *
+   * Late-bound for the same reason as the roster: the transport is built from
+   * the app. Until it is set the heartbeat still fires — a process that is up
+   * but not yet connected is exactly what the Health page should show, and
+   * withholding the beat until ready would render that as DOWN.
+   */
+  setStatusSource(source: (() => BridgeStatusDetails) | null): void;
   shutdown(): Promise<void>;
 }
+
+/** Whatever the transport can say about itself; forwarded verbatim to Redis. */
+export type BridgeStatusDetails = Readonly<Record<string, string | number | boolean | null>>;
 
 export async function createBridgeApp(): Promise<BridgeApp> {
   const config = loadConfig();
@@ -48,7 +101,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
 
-  const identity = new IdentityServiceImpl({ repo: identityRepository, social: hypixel, logger: log });
+  const identity = new IdentityServiceImpl({ repo: identityRepository, social: hypixel, roles: rankResolver, logger: log });
 
   // Real networth via skyhelper-networth (museum omitted here ⇒ honest estimate).
   const engine: NetworthEngine = {
@@ -65,44 +118,131 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   };
   const networth = new NetworthServiceImpl({ engine, logger: log });
 
-  // Profile provider over the real Skyblock profiles endpoint.
+  // Profile provider over the real Skyblock profiles endpoint. Stats are not
+  // computed here — the provider hands over the raw member blob and the
+  // progression service derives skills/slayers/dungeons/weight from it.
+  const toProfileData = (p: SkyblockProfileDTO): SkyblockProfileData => ({
+    profileId: p.profileId,
+    cuteName: p.cuteName,
+    gameMode: p.gameMode,
+    rawMember: p.member,
+    networthEngineInput: { profile: p.member, bankBalance: p.bankBalance },
+    readableSections: p.readableSections,
+    // Museum isn't fetched here, so an exact valuation always requires it.
+    requiredSections: [...p.readableSections, "museum"],
+  });
+
   const profiles: ProfileProvider = {
-    async getSelectedProfile(uuid) {
-      const profile = await hypixel.getSkyblockProfile(uuid);
+    async getSelectedProfile(uuid, profileId) {
+      const profile = await hypixel.getSkyblockProfile(uuid, profileId);
       if (!profile.ok) return err(profile.error);
-      const p = profile.value.data;
-      return ok({
-        data: {
-          profileId: p.profileId,
-          cuteName: p.cuteName,
-          gameMode: p.gameMode,
-          skillAverage: null,
-          catacombsLevel: null,
-          senitherWeight: null,
-          networthEngineInput: { profile: p.member, bankBalance: p.bankBalance },
-          readableSections: p.readableSections,
-          // Museum isn't fetched here, so an exact valuation always requires it.
-          requiredSections: [...p.readableSections, "museum"],
-        },
-        freshness: profile.value.freshness,
-        source: profile.value.source,
-        fetchedAt: profile.value.fetchedAt,
-      });
+      return ok({ ...profile.value, data: toProfileData(profile.value.data) });
+    },
+    async listProfiles(uuid) {
+      const all = await hypixel.getSkyblockProfiles(uuid);
+      if (!all.ok) return err(all.error);
+      return ok({ ...all.value, data: all.value.data.map(toProfileData) });
     },
   };
-  const progression = new ProgressionServiceImpl({ profiles, networth, logger: log });
+  const progression = new ProgressionServiceImpl({
+    profiles,
+    networth,
+    repo: progressionRepository,
+    // Upgrade advice reads prices out of the sweep cache only. A cold cache
+    // costs a price tag, not the advice — never a live auction call, which
+    // would put a Hypixel round-trip behind every suggestion.
+    prices: {
+      async lowestBin(itemId) {
+        return (await adapters.bins.get(itemId))?.price ?? null;
+      },
+    },
+    logger: log,
+  });
+
+  // IGN → uuid, so `/stats <someone else>` works without a link on file.
+  const players: PlayerLookup = {
+    async resolveIgn(ign) {
+      const found = await hypixel.resolveUuid(ign);
+      // Mojang's casing wins over whatever the member typed.
+      return found === null ? null : { uuid: found.uuid, ign: found.name };
+    },
+  };
+
+  // Prices come only from the worker-populated cache — a bazaar sweep per
+  // `/price` invocation would blow the Hypixel budget in minutes.
+  const pricing = new PricingServiceImpl({ source: adapters.priceSource, logger: log });
+
+  // The bazaar is one cached upstream call so it can be read live; BIN data
+  // comes only from what the auction-sweep job left behind.
+  const market = new MarketServiceImpl({
+    bazaar: hypixel,
+    bins: adapters.bins,
+    auctions: hypixel,
+    catalog: new ItemCatalog({ resources: hypixel }),
+    logger: log,
+  });
+  const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
+  // The bridge asks "am I suspended?" on every relayed line, so its config is
+  // cached hard. Publishing and subscribing is what keeps that cache from being
+  // the reason a panel toggle appears to do nothing for ten seconds.
+  const guildConfig = new GuildConfigServiceImpl({
+    repo: guildConfigRepository,
+    broadcast: adapters.configBus,
+    logger: log,
+  });
 
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
   const capabilities: CapabilityChecker = { can: (g, u, c) => identity.hasCapability(g, u, c) };
   const usage: UsageSink = { capture: (u) => analytics.capture(u) };
 
+  // Indirection, not a mutable dep: the handlers hold this object for the life
+  // of the process while the session behind it comes and goes with reconnects.
+  let liveRoster: GuildRosterSource | null = null;
+  const roster: GuildRosterSource = {
+    async online() {
+      return liveRoster === null ? null : liveRoster.online();
+    },
+  };
+
+  const handlerDeps: HandlerDeps = {
+    identity,
+    progression,
+    players,
+    pricing,
+    market,
+    community,
+    roster,
+    config: guildConfig,
+    analytics,
+    logger: log,
+  };
+
   const dispatcher = new CommandDispatcher({
     registry: buildBridgeRegistry(),
     cooldowns: adapters.cooldowns,
     capabilities,
-    handlerDeps: { identity, progression, logger: log },
+    handlerDeps,
     logger: log,
     usage,
+  });
+
+  // Guild chat gets its own dispatcher rather than sharing the Discord one,
+  // because its authorization model is different: InGameDispatcher decides what
+  // is reachable (the `inGame` allow-list) and who has to be linked, so the
+  // capability gate underneath it is already satisfied by the time a command
+  // gets here. Registry, handlers and services are the same objects.
+  const inGame = new InGameDispatcher({
+    dispatcher: new CommandDispatcher({
+      registry: dispatcher.commands,
+      cooldowns: adapters.cooldowns,
+      capabilities: { async can() { return true; } },
+      handlerDeps,
+      logger: log,
+      usage,
+    }),
+    identity: { resolveDiscordIdByIgn: identityRepository.findDiscordIdByIgn },
+    cooldowns: adapters.cooldowns,
+    logger: log,
   });
 
   const bridge = new BridgeService({
@@ -112,14 +252,39 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
 
+  const unsubscribe = await adapters.configBus.subscribe((guildId) => {
+    guildConfig.invalidate(guildId);
+    log.debug("guild config invalidated by broadcast", { guildId });
+  });
+
+  let liveStatus: (() => BridgeStatusDetails) | null = null;
+  const stopHeartbeat = startHeartbeat(adapters.heartbeat, () => ({
+    service: "bridge-bot",
+    instance: INSTANCE_ID,
+    details: liveStatus?.() ?? { connected: false },
+  }));
+
   return {
     config,
     log,
     dispatcher,
+    handlerDeps,
+    inGame,
     bridge,
     resolveGuild: guildRepository.resolveInternalId,
+    setRosterSource(source) {
+      liveRoster = source;
+    },
+    setStatusSource(source) {
+      liveStatus = source;
+    },
     async shutdown() {
+      stopHeartbeat();
+      await unsubscribe().catch(() => undefined);
       await Promise.allSettled([closeRedis(), disconnectDb()]);
     },
   };
 }
+
+/** Per-boot identity in the heartbeat keyspace; see the panel's copy for why. */
+const INSTANCE_ID = randomUUID().slice(0, 8);

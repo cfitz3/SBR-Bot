@@ -1,0 +1,19 @@
+{
+  "//": "Browser half of the panel. Separate from tsconfig.json because it targets the DOM, not Node, and emits into public/ where the server serves it verbatim — no bundler, no framework, the modules the browser loads are the ones tsc wrote.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "client",
+    "outDir": "public/app",
+    "lib": ["esnext", "dom"],
+    // No .js.map: the server's asset allowlist doesn't serve them, so emitting
+    // them only buys a 404 per module in devtools. The output targets esnext
+    // and is close enough to the source to read directly.
+    "sourceMap": false,
+    // "node" is here for the *.test.ts files beside the modules they cover,
+    // which run under `node --test`. The app code itself is DOM-only; nothing in
+    // client/ may reach for a Node API.
+    "types": ["node"]
+  },
+  "include": ["client/**/*.ts"],
+  "references": [{ "path": "../../packages/panel-core" }]
+}

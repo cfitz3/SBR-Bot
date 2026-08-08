@@ -20,35 +20,59 @@ export interface RedisContext {
 }
 
 const globalForRedis = globalThis as typeof globalThis & {
-  __sbrRedis?: RedisContext;
+  __sbrRedis?: Promise<RedisContext>;
 };
 
-/** Create (or reuse) the shared, connected Redis context. */
+/**
+ * Create (or reuse) the shared, connected Redis context.
+ *
+ * The in-flight *promise* is memoised, not the resolved context. Caching the
+ * context would leave a window between the guard and the assignment spanning an
+ * `await connect()` — and since every `setJson`/`getJson` call goes through
+ * here, concurrent callers at boot are the normal case, not a corner. Two of
+ * them racing that window each open a connection, one of which is then orphaned:
+ * never returned to a caller, never closed by `closeRedis`, and still counted
+ * against the server's client limit.
+ */
 export async function getRedis(options: RedisOptions = {}): Promise<RedisContext> {
-  if (globalForRedis.__sbrRedis) return globalForRedis.__sbrRedis;
+  const existing = globalForRedis.__sbrRedis;
+  if (existing) return existing;
 
-  const cfg = loadConfig();
-  const url = options.url ?? cfg.redis.url;
-  const keyPrefix = options.keyPrefix ?? cfg.redis.keyPrefix;
+  const pending = (async (): Promise<RedisContext> => {
+    const cfg = loadConfig();
+    const url = options.url ?? cfg.redis.url;
+    const keyPrefix = options.keyPrefix ?? cfg.redis.keyPrefix;
 
-  const client: RedisClientType = createClient({ url });
-  client.on("error", (error) => {
-    // Never throw from the error listener; connection retries are handled by node-redis.
-    console.error("[redis] client error:", error instanceof Error ? error.message : error);
-  });
-  await client.connect();
+    const client: RedisClientType = createClient({ url });
+    client.on("error", (error) => {
+      // Never throw from the error listener; connection retries are handled by node-redis.
+      console.error("[redis] client error:", error instanceof Error ? error.message : error);
+    });
+    await client.connect();
 
-  const ctx: RedisContext = { client, keys: createKeyFactory(keyPrefix) };
-  globalForRedis.__sbrRedis = ctx;
-  return ctx;
+    return { client, keys: createKeyFactory(keyPrefix) };
+  })();
+
+  globalForRedis.__sbrRedis = pending;
+  try {
+    return await pending;
+  } catch (error) {
+    // A failed connect must not be memoised, or the process is permanently
+    // poisoned: every later call would re-await the same rejection and never
+    // retry, turning a transient Redis blip into a required restart.
+    if (globalForRedis.__sbrRedis === pending) delete globalForRedis.__sbrRedis;
+    throw error;
+  }
 }
 
 export async function closeRedis(): Promise<void> {
-  const ctx = globalForRedis.__sbrRedis;
-  if (ctx) {
-    await ctx.client.quit();
-    delete globalForRedis.__sbrRedis;
-  }
+  const pending = globalForRedis.__sbrRedis;
+  if (!pending) return;
+  delete globalForRedis.__sbrRedis;
+  // Await the connect that may still be in flight, so a shutdown racing a boot
+  // closes the client rather than leaving it to connect into an empty process.
+  const ctx = await pending.catch(() => null);
+  if (ctx) await ctx.client.quit().catch(() => undefined);
 }
 
 // ─────────────────────────── JSON helpers ───────────────────────────

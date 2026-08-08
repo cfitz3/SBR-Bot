@@ -3,8 +3,9 @@
  * over Redis + Prisma. `guildId` is the internal Guild.id.
  */
 import type { BridgeGuard, FilterVerdict, FloodControl, WordlistFilter } from "@sbr/bridge";
-import type { IdentityService } from "@sbr/shared-types";
-import { guildConfigRepository, wordlistRepository, type WordlistEntryRow } from "@sbr/db";
+import type { IdentityService, WordlistRuleDTO } from "@sbr/shared-types";
+import { guildConfigRepository, wordlistRepository } from "@sbr/db";
+import { evaluateText } from "@sbr/moderation";
 import type { RedisContext } from "@sbr/redis";
 
 const FLOOD_LIMIT = 6;
@@ -33,59 +34,36 @@ export class BridgeGuardImpl implements BridgeGuard {
   }
 }
 
-type Matcher = (content: string) => boolean;
-
-function compile(entry: WordlistEntryRow): Matcher {
-  const p = entry.pattern;
-  switch (entry.matchType) {
-    case "EXACT":
-      return (c) => c.toLowerCase() === p.toLowerCase();
-    case "SUBSTRING":
-      return (c) => c.toLowerCase().includes(p.toLowerCase());
-    case "REGEX":
-      try {
-        const re = new RegExp(p, "i");
-        return (c) => re.test(c);
-      } catch {
-        return () => false;
-      }
-    case "WILDCARD": {
-      const re = new RegExp("^" + p.split("*").map(escapeRegex).join(".*") + "$", "i");
-      return (c) => re.test(c);
-    }
-  }
-}
-
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
+/**
+ * The relay's chat filter. Evaluation is delegated to `evaluateText` from
+ * @sbr/moderation — the same function behind `/filter-test` — so a rule a
+ * staffer verifies in Discord behaves identically on the next relayed message.
+ * A filter that disagrees with its own test harness is worse than no test.
+ *
+ * Rules are cached briefly because the relay evaluates every message; a
+ * `/wordlist-add` therefore takes effect within one TTL rather than instantly,
+ * which is the trade the relay's message volume demands.
+ */
 export class WordlistFilterImpl implements WordlistFilter {
-  private cache = new Map<string, { matchers: Array<{ m: Matcher; action: WordlistEntryRow["action"] }>; expiry: number }>();
+  private cache = new Map<string, { rules: readonly WordlistRuleDTO[]; expiry: number }>();
   constructor(private readonly ttlMs = 30_000) {}
 
-  private async load(guildId: string) {
+  private async load(guildId: string): Promise<readonly WordlistRuleDTO[]> {
     const cached = this.cache.get(guildId);
-    if (cached && cached.expiry > Date.now()) return cached.matchers;
-    const rows = await wordlistRepository.listEnabled(guildId);
-    const matchers = rows.map((r) => ({ m: compile(r), action: r.action }));
-    this.cache.set(guildId, { matchers, expiry: Date.now() + this.ttlMs });
-    return matchers;
+    if (cached && cached.expiry > Date.now()) return cached.rules;
+    // `list` rather than `listEnabled`: evaluateText skips disabled rules
+    // itself, and this keeps the relay's input identical to `/filter-test`'s.
+    const rules = await wordlistRepository.list(guildId);
+    this.cache.set(guildId, { rules, expiry: Date.now() + this.ttlMs });
+    return rules;
   }
 
   async check(guildId: string, content: string): Promise<FilterVerdict> {
-    const matchers = await this.load(guildId);
-    let flagged = false;
-    let replaced: string | null = null;
-    for (const { m, action } of matchers) {
-      if (!m(content)) continue;
-      if (action === "BLOCK" || action === "SHADOW_MUTE") return { action };
-      if (action === "REPLACE") replaced = (replaced ?? content).replace(/\S/g, "*");
-      if (action === "FLAG") flagged = true;
+    const result = evaluateText(await this.load(guildId), content);
+    if (result.action === "REPLACE") {
+      return { action: "REPLACE", replacement: result.replacement ?? content };
     }
-    if (replaced !== null) return { action: "REPLACE", replacement: replaced };
-    if (flagged) return { action: "FLAG" };
-    return { action: "ALLOW" };
+    return { action: result.action };
   }
 }
 

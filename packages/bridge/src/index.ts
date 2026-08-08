@@ -3,6 +3,7 @@
  */
 export { BridgeService, type BridgeServiceDeps } from "./service.js";
 export { formatRelay, flattenForGame, stripMinecraftColors } from "./format.js";
+export { EchoLedger, echoKey, type EchoLedgerOptions } from "./echo.js";
 export type {
   RelayDirection,
   InboundMessage,

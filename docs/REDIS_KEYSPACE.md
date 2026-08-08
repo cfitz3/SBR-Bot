@@ -25,6 +25,7 @@ The canonical Redis key layout for the platform. Redis is the shared coordinatio
 | Cached Hypixel responses | `cache:` | hypixel client / workers | seconds–hours | JSON(+meta) |
 | Worker locks | `lock:` | workers | short (auto-expire) | token string |
 | Deduplication keys | `dedup:` | emitters (bots/workers) | short window | bit / int / string |
+| Service heartbeats | `hb:` | every process | 45s (3 beats) | JSON |
 
 ---
 
@@ -173,7 +174,24 @@ dedup:reminder:evt42:1h      SET NX EX 7200
 
 ---
 
-## 10. Ownership & Lifecycle Summary
+## 10. Service Heartbeats (`hb:`)
+
+- **Naming:** `hb:{service}:{instance}` — service is one of `bridge-bot`, `admin-bot`, `workers`, `web-panel`; instance is a random id minted per boot, *not* a hostname, so two replicas on one host don't overwrite each other's key and report as one process.
+- **TTL:** 45s, rewritten every 15s — three beats of headroom. **The TTL is the mechanism, not a cleanup detail:** absence is how a dead process is detected, so nothing ever deletes these keys and no process needs to announce its own shutdown.
+- **Serialization:** small **JSON** — `{ service, instance, at, pid, details }`, where `details` is a flat map of whatever that process can cheaply say about itself (port, guild count, gateway ping).
+- **Ownership:** written by every process via `startHeartbeat`; read only by the panel's Health page.
+- **Invalidation:** self-expiring. A flush blanks the Health page for one beat interval and then it refills — the keys are a live view, never a record.
+
+The Health page grades what it reads against a list of expected services rather than reporting whatever answered: a service with no key at all is **DOWN**, one whose freshest beat is older than 30s (between the interval and the TTL) is **STALE** — alive but wedged — and anything fresher is **UP**. Deriving the service list from the keyspace instead would make a crashed bot indistinguishable from one that was never deployed, which is the exact distinction someone opens that page to make.
+
+```
+hb:web-panel:3f9a21c8    SET EX 45 {"service":"web-panel","instance":"3f9a21c8","at":"…","pid":41,"details":{"port":8080}}
+hb:workers:0b17de44      SET EX 45 {…,"details":{"queues":6}}
+```
+
+---
+
+## 11. Ownership & Lifecycle Summary
 
 | Category | Authoritative? | Survives Redis flush? | How restored |
 |----------|----------------|-----------------------|--------------|
@@ -186,6 +204,7 @@ dedup:reminder:evt42:1h      SET NX EX 7200
 | `cache:hypixel/pricing/ah` | No | No | Repopulated on demand + by workers |
 | `lock:` | No | No | Auto-expire; jobs idempotent |
 | `dedup:` | No (DB-backed for durable ones) | Partially | DB flags prevent durable double-posts |
+| `hb:` heartbeats | No (live view only) | No | Refilled by the next beat (≤15s) |
 
 **Guiding rules**
 - **Redis is a coordination/cache layer, not the database.** Everything enforceable (mutes, bans, suspensions) is mirrored from Postgres and **rehydrated on startup**, so a Redis flush degrades performance, never correctness.

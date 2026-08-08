@@ -2,7 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    // Test files only — the package itself stays dependency-free (ARCHITECTURE.md).
+    "types": ["node"]
   },
   "include": ["src/**/*.ts"]
 }

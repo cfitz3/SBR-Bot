@@ -1,7 +1,7 @@
 import type { ModerationError } from "@sbr/shared-types";
 
 /** Parse durations like "1h", "30m", "45s", "2d" into seconds. */
-export function parseDurationSeconds(input: string | undefined): number | undefined {
+export function parseDurationSeconds(input: string | null | undefined): number | undefined {
   if (!input) return undefined;
   const m = /^(\d+)\s*([smhd])$/i.exec(input.trim());
   if (!m) return undefined;

@@ -1,0 +1,829 @@
+/*
+ * Panel styles. One stylesheet, system fonts, no build step — the panel is an
+ * operations tool read on a laptop between other tasks, so it optimises for
+ * scanning density over decoration.
+ *
+ * Both colour schemes are defined because staff open this at all hours and the
+ * OS preference is the only signal we have.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e2e5ea;
+  --text: #16181d;
+  --muted: #6b7280;
+  --accent: #4b5bd7;
+  --accent-text: #ffffff;
+
+  --ok-bg: #e7f6ec;
+  --ok-text: #1a7f3c;
+  --warn-bg: #fdf1dc;
+  --warn-text: #8a5a08;
+  --bad-bg: #fdeaea;
+  --bad-text: #a52222;
+  --neutral-bg: #eef0f4;
+  --neutral-text: #4b5563;
+
+  --radius: 10px;
+  --gap: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --border: #262b35;
+    --text: #e8eaee;
+    --muted: #98a0ae;
+    --accent: #7b88f0;
+    --accent-text: #0f1115;
+
+    --ok-bg: #12301f;
+    --ok-text: #6ede9a;
+    --warn-bg: #33270e;
+    --warn-text: #f0c46a;
+    --bad-bg: #351718;
+    --bad-text: #f08a8a;
+    --neutral-bg: #232833;
+    --neutral-text: #aab2c0;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ── shell ─────────────────────────────────────────────────────────────── */
+
+.shell-head {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.nav {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.nav-title {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.nav-back,
+.signout {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.nav-back:hover,
+.signout:hover,
+.brand:hover {
+  color: var(--accent);
+}
+
+.nav-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tab {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.tab:hover {
+  background: var(--neutral-bg);
+  color: var(--text);
+}
+
+.tab-active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.view {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+/* ── page furniture ────────────────────────────────────────────────────── */
+
+.page-head {
+  margin-bottom: 20px;
+}
+
+.page-head h2 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.015em;
+}
+
+.muted {
+  color: var(--muted);
+  margin: 4px 0 0;
+  font-size: 14px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: var(--gap);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.card-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.banner {
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: var(--gap);
+  border: 1px solid transparent;
+}
+
+.banner-warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  border-color: currentColor;
+}
+
+/* ── tiles ─────────────────────────────────────────────────────────────── */
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  background: var(--bg);
+  border-radius: 8px;
+}
+
+.tile-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tile-value {
+  font-size: 20px;
+  font-weight: 650;
+  /* Tabular figures so a column of counts lines up on the decimal. */
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-note {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── guild selector ────────────────────────────────────────────────────── */
+
+.guild-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.guild-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.guild-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.guild-name {
+  font-size: 16px;
+  font-weight: 620;
+}
+
+.guild-meta {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── badges ────────────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.badge-warn {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.badge-bad {
+  background: var(--bad-bg);
+  color: var(--bad-text);
+}
+
+.badge-neutral {
+  background: var(--neutral-bg);
+  color: var(--neutral-text);
+}
+
+/* ── tables ────────────────────────────────────────────────────────────── */
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.job-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.job-error {
+  font-size: 12px;
+  color: var(--bad-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Stack traces and driver errors are long; let them wrap rather than
+     stretching the table past the viewport. */
+  overflow-wrap: anywhere;
+  max-width: 44ch;
+}
+
+/* ── states ────────────────────────────────────────────────────────────── */
+
+.state {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.state-error {
+  color: var(--bad-text);
+  border-color: var(--bad-text);
+}
+
+.state-denied p {
+  margin: 0 0 12px;
+}
+
+.button {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.button-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+/* ── analytics controls & export ───────────────────────────────────────── */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap);
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.control-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.control {
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.export-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: var(--gap);
+}
+
+.export-link {
+  font-size: 13px;
+  color: var(--accent);
+  border-bottom: 1px solid transparent;
+}
+
+.export-link:hover {
+  border-bottom-color: var(--accent);
+}
+
+.note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── line chart ────────────────────────────────────────────────────────── */
+
+.chart-svg {
+  display: block;
+  width: 100%;
+  /* The viewBox is 720×220; the height keeps that aspect at any width so the
+     chart never grows taller than the fold on a wide monitor. */
+  height: auto;
+  max-height: 260px;
+  overflow: visible;
+}
+
+.grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.axis {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: system-ui, sans-serif;
+}
+
+.axis-y {
+  text-anchor: end;
+}
+
+.axis-x {
+  text-anchor: middle;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 13px;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  /* Background colour is assigned per series from the chart palette. */
+  flex: none;
+}
+
+.legend-total {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── bar chart ─────────────────────────────────────────────────────────── */
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bar-row {
+  display: grid;
+  /* Label, bar, count — the note wraps underneath the bar on its own row. */
+  grid-template-columns: minmax(6ch, 14ch) 1fr auto;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.bar-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.bar-track {
+  background: var(--neutral-bg);
+  border-radius: 4px;
+  height: 12px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+}
+
+.bar-value {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.bar-note {
+  grid-column: 2 / 4;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ── editable fields ───────────────────────────────────────────────────── */
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.field-label-inline {
+  font-weight: 500;
+  /* Beside a switch the label is the click target, so it gets the pointer the
+     switch itself has rather than a text cursor. */
+  cursor: pointer;
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.control-text {
+  /* Wide enough for a 20-digit snowflake without truncating it mid-id. */
+  flex: 1 1 26ch;
+  min-width: 0;
+  max-width: 44ch;
+  font-variant-numeric: tabular-nums;
+}
+
+.field-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+.field-status {
+  font-size: 12px;
+  min-height: 1.2em;
+}
+
+.field-status-saving {
+  color: var(--muted);
+}
+
+.field-status-saved {
+  color: var(--ok-text);
+}
+
+.field-status-error {
+  color: var(--bad-text);
+}
+
+.button:disabled {
+  /* Disabled means "nothing to save" far more often than "you may not"; keep it
+     legible rather than ghosted so the row doesn't read as broken. */
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── switch ────────────────────────────────────────────────────────────── */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  cursor: pointer;
+}
+
+.switch-input {
+  /* Hidden visually, not from assistive tech or the keyboard: this is still the
+     checkbox that gets focus and reports its own state. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+
+.switch-track {
+  display: block;
+  width: 40px;
+  height: 22px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--neutral-bg);
+  border: 1px solid var(--border);
+  transition: background 120ms ease;
+}
+
+.switch-thumb {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+  transition: transform 120ms ease;
+}
+
+.switch-input:checked + .switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch-input:checked + .switch-track .switch-thumb {
+  transform: translateX(18px);
+}
+
+.switch-input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switch-input:disabled + .switch-track {
+  opacity: 0.5;
+}
+
+.job-detail {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
+/* ── action pages: queues, row controls, destructive buttons ───────────── */
+
+.control-select {
+  padding: 6px 10px;
+}
+
+.control-short {
+  flex: 0 0 14ch;
+  max-width: 14ch;
+}
+
+.control-area {
+  flex: 1 1 100%;
+  min-height: 60px;
+  resize: vertical;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.button-danger {
+  border-color: var(--bad-text);
+  color: var(--bad-text);
+}
+
+/* Armed destructive button: filled, so a second click is clearly a commitment. */
+.button-armed {
+  background: var(--bad-bg);
+  border-color: var(--bad-text);
+  color: var(--bad-text);
+  font-weight: 600;
+}
+
+.field-inline {
+  gap: 4px;
+}
+
+.field-inline .field-row {
+  margin: 0;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* One card, many independently resolvable items. */
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.queue-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.queue-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.answers {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, 22ch) 1fr;
+  gap: 4px 12px;
+  font-size: 14px;
+}
+
+.answers dt {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.answers dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.answer-value {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .answers {
+    grid-template-columns: 1fr;
+  }
+
+  .answers dd {
+    margin-bottom: 6px;
+  }
+}
+
+/* Attendance: four side-by-side lists, so each count reads off the top. */
+.roster {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.roster-col h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.roster-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.roster-list li {
+  overflow-wrap: anywhere;
+}

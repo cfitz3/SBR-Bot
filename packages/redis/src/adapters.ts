@@ -5,7 +5,13 @@
  * these where the port type is expected.
  */
 import { randomUUID } from "node:crypto";
-import type { AnalyticsEvent, ModerationActionDTO } from "@sbr/shared-types";
+import type {
+  AnalyticsEvent,
+  AntiRaidStateDTO,
+  LockdownStateDTO,
+  ModerationActionDTO,
+  PriceDTO,
+} from "@sbr/shared-types";
 import type { RedisContext } from "./client.js";
 
 const RELEASE_LOCK = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`;
@@ -105,6 +111,179 @@ export class RedisAnalyticsBuffer {
   }
 }
 
+/** One buffered event, with the stream id needed to acknowledge it. */
+export interface BufferedAnalyticsEvent {
+  readonly id: string;
+  readonly guildId: string | null;
+  readonly discordId: string | null;
+  readonly surface: string;
+  readonly type: string;
+  readonly props: Readonly<Record<string, unknown>>;
+  readonly ts: string;
+}
+
+/**
+ * Drain side of the analytics buffer, read by the `analytics-ingest` job.
+ *
+ * XRANGE + XDEL rather than a consumer group: exactly one locked worker drains
+ * this stream, so the delivery tracking a group provides would be bookkeeping
+ * for a concurrency that cannot happen — and XDEL is what actually reclaims the
+ * memory, which acknowledging in a group alone does not.
+ */
+export class RedisAnalyticsDrain {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async read(count: number): Promise<readonly BufferedAnalyticsEvent[]> {
+    const entries = await this.ctx.client.xRange(this.ctx.keys.analyticsBuffer(), "-", "+", {
+      COUNT: count,
+    });
+    return entries.map((entry) => {
+      const m = entry.message;
+      let props: Record<string, unknown> = {};
+      try {
+        // A malformed props blob costs that event its dimensions, not its count.
+        props = m["props"] ? (JSON.parse(m["props"]) as Record<string, unknown>) : {};
+      } catch {
+        props = {};
+      }
+      return {
+        id: entry.id,
+        guildId: m["guildId"] ? m["guildId"] : null,
+        discordId: m["discordId"] ? m["discordId"] : null,
+        surface: m["surface"] ?? "SYSTEM",
+        type: m["type"] ?? "unknown",
+        props,
+        ts: m["ts"] ?? new Date().toISOString(),
+      };
+    });
+  }
+
+  async ack(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.ctx.client.xDel(this.ctx.keys.analyticsBuffer(), [...ids]);
+  }
+}
+
+/**
+ * ConfigBus — the fan-out that makes a panel edit visible to a running bot.
+ *
+ * Every process caches guild config in memory for a few seconds so the bridge
+ * isn't doing a database round trip per relayed line. That cache is what this
+ * exists to punch through: without it a staffer's toggle appears to do nothing
+ * until the TTL lapses, and "did my change save?" becomes a support question.
+ *
+ * Publishing is a plain PUBLISH on the shared client. Subscribing needs its own
+ * connection — a node-redis client in subscriber mode will not serve ordinary
+ * commands — so `subscribe` duplicates rather than borrowing the shared one.
+ */
+export class RedisConfigBus {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async publish(guildId: string): Promise<void> {
+    await this.ctx.client.publish(
+      this.ctx.keys.chanConfig(guildId),
+      JSON.stringify({ guildId, at: new Date().toISOString() }),
+    );
+  }
+
+  /**
+   * Listen for every guild's config changes, and return the unsubscribe.
+   *
+   * Pattern-subscribed rather than one channel per guild: a bot's guild set is
+   * discovered as it runs, so a per-guild subscription would have to be managed
+   * alongside it and would miss any guild onboarded after boot.
+   */
+  async subscribe(onChange: (guildId: string) => void): Promise<() => Promise<void>> {
+    const sub = this.ctx.client.duplicate();
+    sub.on("error", () => {
+      // node-redis reconnects on its own; an unhandled 'error' would take the
+      // process down over a blip in a channel that only carries cache hints.
+    });
+    await sub.connect();
+
+    const pattern = this.ctx.keys.chanConfig("*");
+    await sub.pSubscribe(pattern, (message: string) => {
+      try {
+        const parsed = JSON.parse(message) as { guildId?: unknown };
+        if (typeof parsed.guildId === "string") onChange(parsed.guildId);
+      } catch {
+        // A malformed message is not worth crashing a listener over.
+      }
+    });
+
+    return async () => {
+      await sub.pUnsubscribe(pattern).catch(() => undefined);
+      await sub.quit().catch(() => undefined);
+    };
+  }
+}
+
+/** What one process last reported about itself. */
+export interface HeartbeatRecord {
+  readonly service: string;
+  readonly instance: string;
+  readonly at: string;
+  readonly pid: number;
+  /** Service-specific liveness detail — gateway latency, session state, etc. */
+  readonly details: Readonly<Record<string, string | number | boolean | null>>;
+}
+
+/**
+ * Heartbeat — liveness by presence.
+ *
+ * Each process writes its own key on a timer with a TTL of several beats, so a
+ * process that dies stops appearing without anything having to detect the death
+ * and mark it down. That makes the absent case the reliable one, which is the
+ * opposite of a status flag someone has to remember to clear.
+ */
+export class RedisHeartbeat {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async beat(record: Omit<HeartbeatRecord, "at" | "pid">, ttlSeconds: number): Promise<void> {
+    const value: HeartbeatRecord = { ...record, at: new Date().toISOString(), pid: process.pid };
+    await this.ctx.client.set(
+      this.ctx.keys.heartbeat(record.service, record.instance),
+      JSON.stringify(value),
+      { EX: Math.max(1, Math.ceil(ttlSeconds)) },
+    );
+  }
+
+  async list(): Promise<readonly HeartbeatRecord[]> {
+    const out: HeartbeatRecord[] = [];
+    for await (const key of this.ctx.client.scanIterator({ MATCH: this.ctx.keys.heartbeatScan(), COUNT: 100 })) {
+      const raw = await this.ctx.client.get(String(key));
+      if (!raw) continue; // expired between the scan and the read — simply gone
+      try {
+        out.push(JSON.parse(raw) as HeartbeatRecord);
+      } catch {
+        // Unreadable liveness is the same as none: leave the service absent.
+      }
+    }
+    return out;
+  }
+}
+
+/**
+ * Beat now, then on a timer, until the returned stop function is called.
+ *
+ * `unref` so a heartbeat never becomes the reason a process refuses to exit —
+ * liveness reporting should not keep a shutting-down service alive.
+ */
+export function startHeartbeat(
+  heartbeat: RedisHeartbeat,
+  record: () => Omit<HeartbeatRecord, "at" | "pid">,
+  intervalMs = 15_000,
+): () => void {
+  const ttlSeconds = Math.ceil((intervalMs * 3) / 1000);
+  const send = (): void => {
+    void heartbeat.beat(record(), ttlSeconds).catch(() => undefined);
+  };
+  send();
+  const timer = setInterval(send, intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
 /** EnforcementMirror — reflect active mute/ban into Redis for fast checks. */
 export class RedisEnforcementMirror {
   constructor(private readonly ctx: RedisContext) {}
@@ -146,13 +325,178 @@ export class RedisEnforcementMirror {
   }
 }
 
+/** What the pricing jobs write to `cache:pricing:item:<id>`. */
+export interface CachedItemPrice {
+  readonly bazaarInstantSell: number | null;
+  readonly bazaarInstantBuy: number | null;
+  readonly lowestBin: number | null;
+  readonly estimatedValue: number | null;
+  /** Epoch ms; anything older than the job's cadence is served as stale. */
+  readonly fetchedAt: number;
+}
+
+/**
+ * PriceSource — read-only view of the worker-populated market cache.
+ *
+ * Commands never call Hypixel for prices: a bazaar sweep is far too expensive
+ * to run per invocation, so the jobs own refreshing and commands only read. An
+ * absent item yields null (the service turns that into "unknown", never zero).
+ */
+export class RedisPriceSource {
+  /** Older than this and the reading is reported as stale rather than current. */
+  private static readonly STALE_AFTER_MS = 5 * 60_000;
+
+  constructor(private readonly ctx: RedisContext) {}
+
+  async getItem(itemId: string): Promise<{ price: PriceDTO; stale: boolean } | null> {
+    const raw = await this.ctx.client.get(this.ctx.keys.cachePriceItem(itemId));
+    if (!raw) return null;
+
+    let cached: CachedItemPrice;
+    try {
+      cached = JSON.parse(raw) as CachedItemPrice;
+    } catch {
+      // A corrupt entry is indistinguishable from no data as far as the caller
+      // is concerned, and pretending otherwise would surface a parse error to a
+      // user asking for an item price.
+      return null;
+    }
+
+    return {
+      price: {
+        itemId,
+        bazaarInstantSell: cached.bazaarInstantSell,
+        bazaarInstantBuy: cached.bazaarInstantBuy,
+        lowestBin: cached.lowestBin,
+        estimatedValue: cached.estimatedValue,
+      },
+      stale: Date.now() - cached.fetchedAt > RedisPriceSource.STALE_AFTER_MS,
+    };
+  }
+}
+
+/** One item's lowest-BIN reading, as the auction sweep job writes it. */
+export interface CachedBinEntry {
+  readonly price: number | null;
+  readonly listings: number;
+  readonly cheapest: readonly {
+    readonly auctionId: string;
+    readonly itemName: string | null;
+    readonly price: number | null;
+    readonly bin: boolean;
+    readonly endsAt: number | null;
+  }[];
+  readonly fetchedAt: number;
+}
+
+/**
+ * BinSource — read side of the auction-house sweep cache.
+ *
+ * Commands may not paginate the AH themselves, so everything here comes from
+ * whatever the sweep job last wrote. A missing key means "not swept yet", which
+ * the market service reports as unknown rather than as a price of zero.
+ */
+export class RedisBinSource {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async get(itemId: string): Promise<CachedBinEntry | null> {
+    const raw = await this.ctx.client.get(this.ctx.keys.cacheLowestBin(itemId));
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as CachedBinEntry;
+    } catch {
+      // A corrupt entry is indistinguishable from no data to the caller.
+      return null;
+    }
+  }
+
+  /** Write side, used only by the sweep job. */
+  async put(itemId: string, entry: CachedBinEntry, ttlMs: number): Promise<void> {
+    await this.ctx.client.set(this.ctx.keys.cacheLowestBin(itemId), JSON.stringify(entry), {
+      PX: ttlMs,
+    });
+  }
+}
+
+/**
+ * SafetyStateStore — the live record of `/lockdown` and `/antiraid-on`.
+ *
+ * Reads tolerate a corrupt or hand-edited value by treating it as absent: a
+ * posture nobody can parse is one nobody can lift either, and reporting "no
+ * lockdown" at least lets an officer set a fresh one.
+ */
+export class RedisSafetyStore {
+  constructor(private readonly ctx: RedisContext) {}
+
+  private async read<T>(key: string): Promise<T | null> {
+    const raw = await this.ctx.client.get(key);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  private async scan<T>(pattern: string): Promise<readonly T[]> {
+    const out: T[] = [];
+    for await (const key of this.ctx.client.scanIterator({ MATCH: pattern, COUNT: 100 })) {
+      const value = await this.read<T>(String(key));
+      if (value) out.push(value);
+    }
+    return out;
+  }
+
+  async getLockdown(guildId: string): Promise<LockdownStateDTO | null> {
+    return this.read<LockdownStateDTO>(this.ctx.keys.lockdown(guildId));
+  }
+
+  async putLockdown(state: LockdownStateDTO, ttlSeconds: number): Promise<void> {
+    await this.ctx.client.set(this.ctx.keys.lockdown(state.guildId), JSON.stringify(state), {
+      EX: ttlSeconds,
+    });
+  }
+
+  async clearLockdown(guildId: string): Promise<void> {
+    await this.ctx.client.del(this.ctx.keys.lockdown(guildId));
+  }
+
+  async listLockdowns(): Promise<readonly LockdownStateDTO[]> {
+    return this.scan<LockdownStateDTO>(this.ctx.keys.lockdownScan());
+  }
+
+  async getAntiRaid(guildId: string): Promise<AntiRaidStateDTO | null> {
+    return this.read<AntiRaidStateDTO>(this.ctx.keys.antiRaid(guildId));
+  }
+
+  async putAntiRaid(state: AntiRaidStateDTO, ttlSeconds: number): Promise<void> {
+    await this.ctx.client.set(this.ctx.keys.antiRaid(state.guildId), JSON.stringify(state), {
+      EX: ttlSeconds,
+    });
+  }
+
+  async clearAntiRaid(guildId: string): Promise<void> {
+    await this.ctx.client.del(this.ctx.keys.antiRaid(guildId));
+  }
+
+  async listAntiRaid(): Promise<readonly AntiRaidStateDTO[]> {
+    return this.scan<AntiRaidStateDTO>(this.ctx.keys.antiRaidScan());
+  }
+}
+
 export function createRedisAdapters(ctx: RedisContext) {
   return {
+    bins: new RedisBinSource(ctx),
+    safety: new RedisSafetyStore(ctx),
     lock: new RedisLock(ctx),
     cooldowns: new RedisCooldownGate(ctx),
     hypixelCache: new RedisHypixelCache(ctx),
     rateGate: new RedisRateGate(ctx),
     analyticsBuffer: new RedisAnalyticsBuffer(ctx),
+    analyticsDrain: new RedisAnalyticsDrain(ctx),
     enforcement: new RedisEnforcementMirror(ctx),
+    priceSource: new RedisPriceSource(ctx),
+    configBus: new RedisConfigBus(ctx),
+    heartbeat: new RedisHeartbeat(ctx),
   };
 }

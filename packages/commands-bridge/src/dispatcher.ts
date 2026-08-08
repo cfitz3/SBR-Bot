@@ -3,8 +3,10 @@
  * Order: resolve spec → capability → cooldown → run handler → capture usage.
  * Never throws: every path returns a CommandReply so the adapter can respond.
  */
+import { isUpstreamUnavailable, UPSTREAM_UNAVAILABLE_MESSAGE } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type {
+  AutocompleteContext,
   CapabilityChecker,
   CommandContext,
   CommandReply,
@@ -35,6 +37,36 @@ export class CommandDispatcher {
     this.now = deps.now ?? (() => Date.now());
   }
 
+  /** The wired registry — the transport derives its registration payload from this. */
+  get commands(): ReadonlyMap<string, CommandSpec> {
+    return this.d.registry;
+  }
+
+  /**
+   * Autocomplete for a focused option. Deliberately skips the capability and
+   * cooldown gates: Discord allows 3 seconds and fires a request per keystroke,
+   * so the gates would both blow the budget and burn the user's cooldown before
+   * they ever ran the command. Suggestions expose nothing the command wouldn't.
+   */
+  async autocomplete(
+    name: string,
+    focused: { readonly name: string; readonly value: string },
+    ctx: AutocompleteContext,
+  ): Promise<readonly { name: string; value: string }[]> {
+    const handler = this.d.registry.get(name)?.autocomplete;
+    if (!handler) return [];
+    try {
+      // Discord rejects a response with more than 25 choices outright.
+      return (await handler(focused, ctx, this.d.handlerDeps)).slice(0, 25);
+    } catch (error) {
+      this.log.warn("autocomplete threw", {
+        command: name,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+      return [];
+    }
+  }
+
   async dispatch(name: string, ctx: CommandContext): Promise<CommandReply> {
     const spec = this.d.registry.get(name);
     if (!spec) return { ephemeral: true, text: `Unknown command: ${name}` };
@@ -62,7 +94,14 @@ export class CommandDispatcher {
         command: name,
         error: error instanceof Error ? error.message : "unknown",
       });
-      reply = { ephemeral: true, text: "Something went wrong fetching that — try again shortly." };
+      // Degrade honestly: an unreachable data source is a different situation
+      // from a bug, and the user can act on the difference.
+      reply = {
+        ephemeral: true,
+        text: isUpstreamUnavailable(error)
+          ? UPSTREAM_UNAVAILABLE_MESSAGE
+          : "Something went wrong fetching that — try again shortly.",
+      };
     }
 
     await this.captureUsage(name, ctx, success, this.now() - started);

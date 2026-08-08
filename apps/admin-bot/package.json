@@ -11,13 +11,20 @@
     "test": "node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
+    "@sbr/analytics": "*",
     "@sbr/commands-admin": "*",
+    "@sbr/community": "*",
     "@sbr/config": "*",
     "@sbr/db": "*",
+    "@sbr/guild-config": "*",
+    "@sbr/hypixel": "*",
+    "@sbr/identity": "*",
     "@sbr/moderation": "*",
     "@sbr/observability": "*",
     "@sbr/redis": "*",
     "@sbr/shared-types": "*",
-    "discord.js": "^14.27.0"
+    "@sbr/discord-kit": "*",
+    "discord.js": "^14.27.0",
+    "@sbr/jobs": "*"
   }
 }

@@ -10,6 +10,7 @@ Discord-OAuth web control panel all sharing one typed domain core.
 [Domain model](./docs/DOMAIN_MODEL.md) ·
 [Hypixel data layer](./docs/HYPIXEL_DATA_LAYER.md) ·
 [Commands](./docs/COMMANDS.md) ·
+[Command inventory (as built)](./docs/COMMAND_INVENTORY.md) ·
 [Bridge bot](./docs/BRIDGE_BOT.md) ·
 [Admin bot](./docs/ADMIN_BOT.md) ·
 [Web panel](./docs/WEB_PANEL.md) ·
@@ -61,42 +62,67 @@ the domain packages are unit-tested offline with fakes.
 ## Prerequisites
 
 - Node.js ≥ 20
-- Docker (local Postgres + Redis via `docker-compose.yml`)
+- Docker Desktop (for local Postgres + Redis — optional if you host your own)
 
 ## Quickstart
 
 ```bash
-cp .env.example .env          # fill in secrets — DATABASE_URL + REDIS_URL required
-docker compose up -d          # start postgres + redis
-npm install                   # install + link workspaces
-npm run build                 # prisma generate + tsc -b across the graph
-npm run migrate:deploy -w @sbr/db   # apply the schema to your db
-npm test                      # run the full suite (offline, no infra needed)
+npm run setup     # scaffold .env, start postgres+redis, install, build, migrate
+npm start         # run every app that's configured, in one terminal
 ```
+
+That's it. `npm run setup` is idempotent — re-run it any time (after a `git
+pull`, say) and it will reconcile whatever drifted.
+
+On the first run it creates `.env` from `.env.example` and generates a random
+`SESSION_SECRET`. Everything else — Discord tokens, the Hypixel key — is
+optional: apps whose credentials are missing are simply skipped, and `setup`
+prints exactly which variable unlocks each one. Fill in what you need in `.env`
+and run `npm start` again.
+
+If anything looks wrong, `npm run doctor` checks your toolchain, `.env`,
+datastore reachability, build output and migration state, then names the command
+that fixes each problem.
 
 ## Running the apps
 
 ```bash
-npm run start -w @sbr/app-workers     # BullMQ scheduler        (needs Redis)
-npm run start -w @sbr/app-web-panel    # OAuth + API on :3000    (needs Redis+DB)
-npm run start -w @sbr/app-admin-bot    # needs DISCORD_ADMIN_TOKEN
-npm run start -w @sbr/app-bridge-bot   # needs DISCORD_BRIDGE_TOKEN (+ MC account)
+npm start                 # everything that's configured
+npm run dev               # same, plus rebuild-and-restart on save
+npm start -- workers      # just one app (or several: `npm start -- workers web-panel`)
 ```
 
-Each app boots its composition and validates config; the bots start their
-gateways only when their token is present, otherwise they log and exit
-(boot-ready). The centralised environment (one root `.env`) is resolved by
-`@sbr/env` regardless of the directory a process starts from.
+`npm start` starts the Docker datastores itself if they aren't already
+listening, builds if `dist/` is missing, then runs the apps in a single terminal
+with colour-coded log prefixes. Ctrl+C stops all of them.
+
+| App | Needs | Does |
+|-----|-------|------|
+| `workers` | Redis + DB | BullMQ scheduled jobs |
+| `web-panel` | Redis + DB | Discord-OAuth HTTP API on `:3000` |
+| `admin-bot` | `DISCORD_ADMIN_TOKEN` | staff moderation/governance |
+| `bridge-bot` | `DISCORD_BRIDGE_TOKEN` (+ MC account) | member Discord ↔ in-game bridge |
+
+Each app validates its config at boot and fails fast. The centralised
+environment (one root `.env`) is resolved by `@sbr/env` regardless of the
+directory a process starts from.
 
 ## Common scripts (root)
 
 | Script | Does |
 |--------|------|
+| `npm run setup` | full bootstrap — env, infra, install, build, migrate |
+| `npm start` | run the configured apps (add `-- <app>` to pick) |
+| `npm run dev` | same, with `tsc --watch` + auto-restart |
+| `npm run doctor` | diagnose config, infra, build and schema state |
 | `npm run build` | `prisma generate` then `tsc -b` (whole workspace) |
 | `npm run typecheck` | type-check all projects |
-| `npm test` | run every package's test suite |
-| `npm run db:generate` | regenerate the Prisma client |
-| `npm run db:validate` | validate the Prisma schema |
+| `npm test` | run every package's test suite (offline, no infra needed) |
+| `npm run infra:up` / `infra:down` | start / stop Postgres + Redis |
+| `npm run infra:reset` | destroy the containers **and their volumes**, then recreate |
+| `npm run db:migrate` | apply migrations to your database |
+| `npm run db:studio` | open Prisma Studio |
+| `npm run db:reset` | **drop and rebuild** the database from migrations |
 | `npm run clean` | clear TS build outputs |
 
 ## Status
@@ -105,3 +131,9 @@ Domain services and app transports are implemented and green
 (`tsc -b` clean, full test suite passing). Workers (BullMQ) and the web panel
 run against live Postgres/Redis; the Discord bots and Mineflayer bridge are
 boot-ready and start once real tokens/credentials are provided.
+
+The web panel serves a working operations UI — guild selector, overview,
+analytics with CSV export, health, recruitment/tickets, events and attendance,
+moderation, members, settings and mapping — with writes going through the same
+domain services the bots use. See `docs/WEB_PANEL.md` §0 for what is
+deliberately partial within those pages.

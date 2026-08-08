@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  Panel shell. Deliberately inert: no inline script, no inline style, no external
+  origin. Everything below `#view` is built by app/main.js through the DOM API,
+  which is what lets the server send a CSP with no 'unsafe-inline'.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>SBR Panel</title>
+    <link rel="stylesheet" href="/app.css" />
+    <link rel="icon" href="data:," />
+    <script type="module" src="/app/main.js"></script>
+  </head>
+  <body>
+    <header class="shell-head">
+      <a class="brand" href="#/">SBR Guild Platform</a>
+      <div id="nav" class="nav"></div>
+      <a class="signout" href="/logout">Sign out</a>
+    </header>
+
+    <main id="view" class="view">
+      <div class="state state-loading">Loading…</div>
+    </main>
+
+    <noscript>
+      <p class="state state-error">
+        The control panel needs JavaScript. The underlying data is also available as JSON under
+        <code>/api/guilds</code>.
+      </p>
+    </noscript>
+  </body>
+</html>
