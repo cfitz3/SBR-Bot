@@ -14,7 +14,9 @@
     "@sbr/analytics": "*",
     "@sbr/bridge": "*",
     "@sbr/commands-bridge": "*",
+    "@sbr/community": "*",
     "@sbr/config": "*",
+    "@sbr/guild-config": "*",
     "@sbr/db": "*",
     "@sbr/hypixel": "*",
     "@sbr/identity": "*",
@@ -23,8 +25,10 @@
     "@sbr/progression": "*",
     "@sbr/redis": "*",
     "@sbr/shared-types": "*",
+    "@sbr/discord-kit": "*",
     "discord.js": "^14.27.0",
     "mineflayer": "^4.37.1",
-    "skyhelper-networth": "^2.7.2"
+    "skyhelper-networth": "^2.7.2",
+    "@sbr/moderation": "*"
   }
 }

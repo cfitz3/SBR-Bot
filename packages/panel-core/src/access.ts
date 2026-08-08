@@ -11,17 +11,48 @@ export interface PanelSession {
   readonly discordId: string;
   /** Guilds the user can manage AND that the platform knows about. */
   readonly manageableGuildIds: readonly string[];
+  /**
+   * Double-submit CSRF token, minted at login and mirrored into a readable
+   * cookie the client echoes back in a header.
+   *
+   * Optional because sessions issued before writes existed carry none. Such a
+   * session may still read; a write is refused and the caller signs in again,
+   * which is the safe direction — the alternative is trusting a session that
+   * never had a token to compare against.
+   */
+  readonly csrfToken?: string;
 }
 
-export type PanelPage = "overview" | "moderation" | "recruitment" | "analytics" | "settings";
+export type PanelPage =
+  | "overview"
+  | "moderation"
+  | "recruitment"
+  | "analytics"
+  | "settings"
+  | "events"
+  | "members"
+  | "mapping"
+  | "health";
 
-/** Minimum platform role per page. */
+/**
+ * Minimum platform role per page (WEB_PANEL.md §2). Staff read, Officers decide
+ * on people and events, Admins hold configuration and operations.
+ *
+ * `health` sits at ADMIN because the page carries operational actions (requeue,
+ * force-sync). The doc allows a read-only subset for Staff; that would be a
+ * separate page id rather than a softer tier here, so the gate stays one
+ * comparison with no special cases.
+ */
 export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   overview: "MODERATOR",
   moderation: "MODERATOR",
   analytics: "MODERATOR",
+  events: "MODERATOR",
+  members: "MODERATOR",
   recruitment: "OFFICER",
   settings: "ADMIN",
+  mapping: "ADMIN",
+  health: "ADMIN",
 };
 
 export type DenyReason = "NOT_AUTHENTICATED" | "NOT_MANAGEABLE" | "INSUFFICIENT_ROLE";
@@ -40,11 +71,28 @@ export async function authorize(
   page: PanelPage,
   roles: RoleResolver,
 ): Promise<AccessDecision> {
+  return authorizeRole(session, guildId, PAGE_TIERS[page], roles);
+}
+
+/**
+ * The same two gates against an explicit role floor rather than a page's.
+ *
+ * Writes need this because a mutation's tier is not always its page's: bridge
+ * suspend/unsuspend is an Officer control (WEB_PANEL.md §2) that no Officer-tier
+ * page owns, and forcing it through a page id would either invent a page or
+ * quietly hand Officers the whole Admin surface.
+ */
+export async function authorizeRole(
+  session: PanelSession | null,
+  guildId: string,
+  minRole: MemberRole,
+  roles: RoleResolver,
+): Promise<AccessDecision> {
   if (!session) return { allowed: false, reason: "NOT_AUTHENTICATED" };
   if (!session.manageableGuildIds.includes(guildId)) return { allowed: false, reason: "NOT_MANAGEABLE" };
 
   const role = await roles.getRole(guildId, session.discordId);
-  if (rankOf(role) < rankOf(PAGE_TIERS[page])) return { allowed: false, reason: "INSUFFICIENT_ROLE" };
+  if (rankOf(role) < rankOf(minRole)) return { allowed: false, reason: "INSUFFICIENT_ROLE" };
 
   return { allowed: true, role };
 }

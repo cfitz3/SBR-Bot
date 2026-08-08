@@ -1,15 +1,11 @@
-import type { MemberRole, ModActionType } from "@sbr/shared-types";
+import { rankOfRole, type MemberRole, type ModActionType } from "@sbr/shared-types";
 
-const RANK_ORDER: Record<MemberRole, number> = {
-  MEMBER: 0,
-  MODERATOR: 1,
-  OFFICER: 2,
-  ADMIN: 3,
-  OWNER: 4,
-};
-
+/**
+ * Re-exported under this package's own name — the ordering itself moved to
+ * @sbr/shared-types once identity needed it too, and one order is the point.
+ */
 export function rankOf(role: MemberRole): number {
-  return RANK_ORDER[role];
+  return rankOfRole(role);
 }
 
 /** Actions that punish a person — subject to rank-hierarchy and self-target guards. */

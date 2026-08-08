@@ -1,7 +1,8 @@
 /**
- * Prisma reads for the bridge relay: wordlist entries and guild config.
- * `guildId` is the internal Guild.id.
+ * Prisma reads and writes for the bridge relay: wordlist entries and guild
+ * config. `guildId` is the internal Guild.id.
  */
+import type { WordlistRuleDTO } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
 export type WordMatchType = "EXACT" | "SUBSTRING" | "REGEX" | "WILDCARD";
@@ -13,6 +14,38 @@ export interface WordlistEntryRow {
   action: WordAction;
   severity: number;
 }
+
+interface WordlistRuleRow {
+  id: string;
+  guildId: string;
+  pattern: string;
+  matchType: string;
+  action: string;
+  severity: number;
+  enabled: boolean;
+}
+
+function mapRule(r: WordlistRuleRow): WordlistRuleDTO {
+  return {
+    id: r.id,
+    guildId: r.guildId,
+    pattern: r.pattern,
+    matchType: r.matchType as WordlistRuleDTO["matchType"],
+    action: r.action as WordlistRuleDTO["action"],
+    severity: r.severity,
+    enabled: r.enabled,
+  };
+}
+
+const RULE_FIELDS = {
+  id: true,
+  guildId: true,
+  pattern: true,
+  matchType: true,
+  action: true,
+  severity: true,
+  enabled: true,
+} as const;
 
 export const wordlistRepository = {
   async listEnabled(guildId: string): Promise<WordlistEntryRow[]> {
@@ -27,14 +60,153 @@ export const wordlistRepository = {
       severity: r.severity,
     }));
   },
+
+  /** Every rule, enabled or not — `/filter-test` must show why a disabled rule didn't fire. */
+  async list(guildId: string): Promise<readonly WordlistRuleDTO[]> {
+    const rows = await prisma.wordlistEntry.findMany({
+      where: { guildId },
+      orderBy: { createdAt: "asc" },
+      select: RULE_FIELDS,
+    });
+    return rows.map(mapRule);
+  },
+
+  async add(input: {
+    guildId: string;
+    pattern: string;
+    matchType: string;
+    action: string;
+    severity: number;
+    addedByDiscordId: string;
+    note: string | null;
+  }): Promise<WordlistRuleDTO> {
+    const row = await prisma.wordlistEntry.create({
+      data: {
+        guildId: input.guildId,
+        pattern: input.pattern,
+        matchType: input.matchType as WordMatchType,
+        action: input.action as WordAction,
+        severity: input.severity,
+        addedById: input.addedByDiscordId,
+        note: input.note,
+      },
+      select: RULE_FIELDS,
+    });
+    return mapRule(row);
+  },
+
+  async removeById(guildId: string, id: string): Promise<WordlistRuleDTO | null> {
+    // Delete scoped by guild as well as id: a rule id from another guild must
+    // not be removable by pasting it into this one.
+    const rows = await prisma.wordlistEntry.findMany({ where: { guildId, id }, select: RULE_FIELDS });
+    const row = rows[0];
+    if (!row) return null;
+    await prisma.wordlistEntry.delete({ where: { id: row.id } });
+    return mapRule(row);
+  },
+
+  async removeByPattern(guildId: string, pattern: string): Promise<WordlistRuleDTO | null> {
+    const rows = await prisma.wordlistEntry.findMany({ where: { guildId, pattern }, select: RULE_FIELDS });
+    const row = rows[0];
+    if (!row) return null;
+    await prisma.wordlistEntry.delete({ where: { id: row.id } });
+    return mapRule(row);
+  },
 };
 
+export interface GuildConfigRow {
+  bridgeChannelId: string | null;
+  staffChannelId: string | null;
+  logChannelId: string | null;
+  applicationsChannelId: string | null;
+  eventsChannelId: string | null;
+  prefixes: string[];
+  timezone: string;
+  applicationsOpen: boolean;
+  bridgeSuspended: boolean;
+  features: Record<string, boolean>;
+  minWeight: number | null;
+  minNetworth: number | null;
+  roleMappings: Record<string, string>;
+}
+
+/** `features` is a Json column, so coerce defensively rather than trusting its shape. */
+function toFeatureMap(value: unknown): Record<string, boolean> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const out: Record<string, boolean> = {};
+  for (const [key, flag] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof flag === "boolean") out[key] = flag;
+  }
+  return out;
+}
+
+/** Same defensive coercion for the `roleMappings` Json column. */
+function toRoleMap(value: unknown): Record<string, string> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [role, id] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof id === "string") out[role] = id;
+  }
+  return out;
+}
+
 export const guildConfigRepository = {
-  async get(guildId: string): Promise<{ bridgeSuspended: boolean; bridgeChannelId: string | null } | null> {
-    const cfg = await prisma.guildConfig.findUnique({
+  async get(guildId: string): Promise<GuildConfigRow | null> {
+    const cfg = await prisma.guildConfig.findUnique({ where: { guildId } });
+    if (!cfg) return null;
+    return {
+      bridgeChannelId: cfg.bridgeChannelId,
+      staffChannelId: cfg.staffChannelId,
+      logChannelId: cfg.logChannelId,
+      applicationsChannelId: cfg.applicationsChannelId,
+      eventsChannelId: cfg.eventsChannelId,
+      prefixes: cfg.prefixes,
+      timezone: cfg.timezone,
+      applicationsOpen: cfg.applicationsOpen,
+      bridgeSuspended: cfg.bridgeSuspended,
+      features: toFeatureMap(cfg.features),
+      minWeight: cfg.minWeight,
+      // BigInt in Postgres, plain number here: guild networth bars are billions
+      // of coins, comfortably inside the safe-integer range.
+      minNetworth: cfg.minNetworth === null ? null : Number(cfg.minNetworth),
+      roleMappings: toRoleMap(cfg.roleMappings),
+    };
+  },
+
+  /**
+   * Upsert a partial config. Creating on demand matters: a guild seeded without
+   * a GuildConfig row would otherwise make every `/set-channel` fail with a
+   * foreign-key error rather than doing the obvious thing.
+   */
+  async update(guildId: string, patch: Partial<Omit<GuildConfigRow, "features" | "roleMappings">>): Promise<void> {
+    await prisma.guildConfig.upsert({
       where: { guildId },
-      select: { bridgeSuspended: true, bridgeChannelId: true },
+      create: { guildId, ...patch },
+      update: patch,
     });
-    return cfg ? { bridgeSuspended: cfg.bridgeSuspended, bridgeChannelId: cfg.bridgeChannelId } : null;
+  },
+
+  /** Flip one feature flag, preserving the rest of the map. */
+  async setFeature(guildId: string, feature: string, enabled: boolean): Promise<void> {
+    const current = await prisma.guildConfig.findUnique({ where: { guildId }, select: { features: true } });
+    const features = { ...toFeatureMap(current?.features), [feature]: enabled };
+    await prisma.guildConfig.upsert({
+      where: { guildId },
+      create: { guildId, features },
+      update: { features },
+    });
+  },
+
+  /** Bind or clear one platform role's Discord role, preserving the other bindings. */
+  async setRoleMapping(guildId: string, role: string, discordRoleId: string | null): Promise<void> {
+    const current = await prisma.guildConfig.findUnique({ where: { guildId }, select: { roleMappings: true } });
+    const roleMappings = toRoleMap(current?.roleMappings);
+    if (discordRoleId === null) delete roleMappings[role];
+    else roleMappings[role] = discordRoleId;
+    await prisma.guildConfig.upsert({
+      where: { guildId },
+      create: { guildId, roleMappings },
+      update: { roleMappings },
+    });
   },
 };

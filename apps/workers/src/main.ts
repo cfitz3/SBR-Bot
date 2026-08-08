@@ -7,10 +7,13 @@
  * (used for verification).
  */
 import { Queue, Worker, type Job } from "bullmq";
+import { installLifecycle } from "@sbr/observability";
 import { createWorkerContext } from "./composition.js";
 import { buildJobDefinitions } from "./jobs.js";
+import { SCHEDULE, reconcileSchedule } from "./schedule.js";
 
 const QUEUE = "sbr-worker";
+
 
 function redisConnection(url: string): { host: string; port: number } {
   const u = new URL(url);
@@ -37,29 +40,28 @@ async function main(): Promise<void> {
   worker.on("failed", (job, err) => ctx.log.error("bullmq job failed", { name: job?.name, error: err.message }));
 
   const queue = new Queue(QUEUE, { connection });
-  // Repeatable schedule (off-minute cadence in prod; short here for liveness).
-  await queue.add("heartbeat", {}, { repeat: { every: 5_000 }, jobId: "heartbeat" });
-  await queue.add("bazaar-refresh", {}, { repeat: { every: 5_000 }, jobId: "bazaar" });
-  // Kick one of each immediately.
-  await queue.add("heartbeat", {});
-  await queue.add("bazaar-refresh", {});
+  await reconcileSchedule(queue, ctx.log);
+  // Kick the cold-start set immediately, so a fresh process has data before the
+  // first scheduled tick rather than serving "not swept yet" for five minutes.
+  for (const entry of SCHEDULE) {
+    if (entry.warm) await queue.add(entry.name, {}, { priority: entry.priority });
+  }
 
   ctx.log.info("workers scheduler started", { queue: QUEUE, jobs: [...defs.keys()] });
 
-  const shutdown = async (): Promise<void> => {
-    ctx.log.info("workers shutting down");
-    await worker.close();
-    await queue.close();
-    await ctx.shutdown();
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  const drainMs = Number(process.env.WORKER_DRAIN_MS ?? 0);
-  if (drainMs > 0) {
-    setTimeout(() => void shutdown(), drainMs);
-  }
+  installLifecycle({
+    logger: ctx.log,
+    drainMs: Number(process.env.WORKER_DRAIN_MS ?? 0),
+    // Worker close is the slow one: it waits for in-flight jobs to finish, and
+    // an AH sweep can legitimately still be running. Give it more room than the
+    // default before the watchdog decides it is hung rather than busy.
+    timeoutMs: 30_000,
+    async shutdown() {
+      await worker.close();
+      await queue.close();
+      await ctx.shutdown();
+    },
+  });
 }
 
 main().catch((error: unknown) => {

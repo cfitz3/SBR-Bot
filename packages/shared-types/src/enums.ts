@@ -14,6 +14,29 @@ export const MemberRole = {
 } as const;
 export type MemberRole = (typeof MemberRole)[keyof typeof MemberRole];
 
+const MEMBER_ROLE_RANK: Record<MemberRole, number> = {
+  MEMBER: 0,
+  MODERATOR: 1,
+  OFFICER: 2,
+  ADMIN: 3,
+  OWNER: 4,
+};
+
+/**
+ * Authority ordering for `MemberRole`.
+ *
+ * Lives in the contract layer because more than one service compares roles —
+ * moderation for its rank-hierarchy guards, identity for capability floors — and
+ * two copies of this order would eventually disagree about who outranks whom.
+ *
+ * Roles arrive from the database as strings, so an unrecognised value is floored
+ * at MEMBER rather than producing NaN, which compares false against everything
+ * and would silently grant nothing.
+ */
+export function rankOfRole(role: MemberRole): number {
+  return MEMBER_ROLE_RANK[role] ?? 0;
+}
+
 export const MemberStatus = {
   ACTIVE: "ACTIVE",
   INACTIVE: "INACTIVE",
@@ -106,6 +129,44 @@ export const RSVPState = {
 } as const;
 export type RSVPState = (typeof RSVPState)[keyof typeof RSVPState];
 
+export const EventType = {
+  DUNGEON: "DUNGEON",
+  SLAYER: "SLAYER",
+  FISHING: "FISHING",
+  MINING: "MINING",
+  GIVEAWAY: "GIVEAWAY",
+  MEETING: "MEETING",
+  CUSTOM: "CUSTOM",
+} as const;
+export type EventType = (typeof EventType)[keyof typeof EventType];
+
+export const LFGActivity = {
+  DUNGEONS: "DUNGEONS",
+  SLAYERS: "SLAYERS",
+  KUUDRA: "KUUDRA",
+  FISHING: "FISHING",
+  MINING: "MINING",
+  OTHER: "OTHER",
+} as const;
+export type LFGActivity = (typeof LFGActivity)[keyof typeof LFGActivity];
+
+export const TicketCategory = {
+  SUPPORT: "SUPPORT",
+  REPORT: "REPORT",
+  APPEAL: "APPEAL",
+  APPLICATION: "APPLICATION",
+  OTHER: "OTHER",
+} as const;
+export type TicketCategory = (typeof TicketCategory)[keyof typeof TicketCategory];
+
+export const TicketStatus = {
+  OPEN: "OPEN",
+  PENDING: "PENDING",
+  RESOLVED: "RESOLVED",
+  CLOSED: "CLOSED",
+} as const;
+export type TicketStatus = (typeof TicketStatus)[keyof typeof TicketStatus];
+
 export const LFGStatus = {
   OPEN: "OPEN",
   FULL: "FULL",
@@ -141,3 +202,29 @@ export const JobStatus = {
   CANCELLED: "CANCELLED",
 } as const;
 export type JobStatus = (typeof JobStatus)[keyof typeof JobStatus];
+
+/** How a wordlist rule is matched against a message (`/wordlist-add match_type:`). */
+export const WordMatchType = {
+  EXACT: "EXACT",
+  SUBSTRING: "SUBSTRING",
+  REGEX: "REGEX",
+  WILDCARD: "WILDCARD",
+} as const;
+export type WordMatchType = (typeof WordMatchType)[keyof typeof WordMatchType];
+
+/** What the relay does when a wordlist rule matches. */
+export const WordAction = {
+  BLOCK: "BLOCK",
+  FLAG: "FLAG",
+  REPLACE: "REPLACE",
+  SHADOW_MUTE: "SHADOW_MUTE",
+} as const;
+export type WordAction = (typeof WordAction)[keyof typeof WordAction];
+
+/** How aggressively `/antiraid-on` gates joins and caps message rates. */
+export const RaidSensitivity = {
+  LOW: "LOW",
+  MEDIUM: "MEDIUM",
+  HIGH: "HIGH",
+} as const;
+export type RaidSensitivity = (typeof RaidSensitivity)[keyof typeof RaidSensitivity];

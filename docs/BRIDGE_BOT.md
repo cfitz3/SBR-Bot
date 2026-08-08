@@ -26,6 +26,7 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 | F10 | **Reminders & news** | Skyblock news, mayor/firesale/bingo notifications, and event reminders pushed to subscribers/channels. |
 | F11 | **Anti-spam / flood control** | Per-user + global rate limiting, dedup, mute-aware relay. |
 | F12 | **Bridge health & degradation** | Detects in-game disconnects, reconnects with backoff, and switches to a documented degraded mode. |
+| F13 | **Live guild roster** | `/online` reads `/g online` through the in-game session and reports who's on, grouped by guild rank. |
 
 ---
 
@@ -78,10 +79,37 @@ Any stage may drop the message (with a reason logged); only messages passing all
 - **In-game → Discord:** delivered via **webhook** so each message shows the player's **IGN as username + avatar** (Crafatar/Mojang head). Prefix guild **rank** (`[MVP+] IGN [GuildRank]`). Officer chat routes to the staff channel if mapped. Hypixel colour codes (`§x`) stripped; system/join/leave lines styled distinctly (see F9/events).
 - **Names never spoofed:** relayed Discord users are clearly marked as coming from Discord (e.g. a `‹D›` tag or the bot's webhook), so in-game players can tell a bridged message from a real in-game one.
 
+### 3.2.1 Echo suppression (self-authored guild chat)
+
+Hypixel reflects the bridge account's own guild chat back to it, so every line
+the bot sends with `/gc` arrives moments later as an ordinary
+`Guild > BotIGN [rank]: …` message — indistinguishable from a player's, because
+it *is* the same chat. Relayed naively that put every Discord message in the
+channel twice: once from its author and once from the bridge wearing the bot's
+name.
+
+The rule is therefore **self-authored guild chat is not relayed to Discord**,
+identified by comparing the speaking IGN against the session's own
+(`bot.username` — the configured `MC_USERNAME` is an email under Microsoft auth
+and never matches what Hypixel prints).
+
+That rule alone would also swallow the one piece of bot output Discord genuinely
+wants: the answer to an in-game `!command`, which Discord watched get asked but
+would never see answered. So outbound lines can be registered on a short-lived
+**echo ledger** (`packages/bridge/echo.ts`) before they are sent, and their echo
+is claimed once on arrival and relayed. In-game command answers register;
+Discord→game relays do not.
+
+Matching is on the text Hypixel will display — colour codes stripped, whitespace
+collapsed — and a miss fails *closed*: an unclaimed echo is dropped. A missed
+match therefore costs one answer in Discord rather than reintroducing the
+duplicate, which is the cheaper of the two failures by a wide margin.
+
 ### 3.3 Role-gated speaking
 - Default: any **linked, non-muted** member with `RELAY_MESSAGE` may talk across the bridge.
 - `RUN_COMMAND`, `MENTION`, `BYPASS_FILTER`, `BYPASS_COOLDOWN` are separate capabilities granted per Discord role / guild rank via `BridgePermission`.
 - Unlinked users' Discord messages in the bridge channel are **not relayed** (optional gentle nudge to `/link`); their messages stay in Discord only.
+- With no `BridgePermission` rows written, capabilities fall back to a **`GuildMember.role` floor** so an unconfigured guild is still usable — `RELAY_MESSAGE`/`RUN_COMMAND` from `MEMBER` up, `MENTION` from `MODERATOR`, `BYPASS_COOLDOWN` from `OFFICER`, `BYPASS_FILTER`/`ADMIN` from `ADMIN`. A row still wins over the floor, and a deny row wins over everything (see `DOMAIN_MODEL.md` → BridgePermission).
 
 ### 3.4 Announcements, reminders & news (F9–F10)
 - **Milestones (F9):** the `profile-snapshot` worker detects crossings (skill/cata/slayer/networth thresholds) and publishes an event; the bot announces to the configured channel (`🎉 Steve just hit Catacombs 45!`) and optionally to guild chat. Deduped via `Milestone.announced`.

@@ -18,12 +18,19 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/link` | Link a Discord user to a Minecraft account by matching Hypixel's in-game social Discord field against the caller's Discord ID | Public | `ign` (string) | On match: success embed + role grant. On mismatch: instructions to set the Discord social link in-game (`/api`→profile→social) and rerun | IGN not found; **Hypixel social Discord field empty/unset** → reject; **social field ≠ caller's Discord ID** → reject; another user already owns this MC account | Live (resolve UUID + read Hypixel social field) + DB (create `LinkedAccount` `VERIFIED`) + Cache |
+| `/link` | Link a Discord user to a Minecraft account by matching Hypixel's in-game social Discord field against the caller | Public | `ign` (string) | On match: success embed + role grant. On mismatch: instructions to set the Discord social link in-game (`/api`→profile→social) and rerun | IGN not found; **Hypixel social Discord field empty/unset** → reject; **social field ≠ caller** → reject; another user already owns this MC account | Live (resolve UUID + read Hypixel social field) + DB (create `LinkedAccount` `VERIFIED`) + Cache |
 | `/verify` | Re-run the Hypixel social check to (re)confirm or repair an existing/pending link | Public | `ign?` | Success embed + role sync, or the same mismatch guidance as `/link` | No account to verify; social field unset or mismatched | Live (re-check Hypixel social) + DB (set `VERIFIED`) + Cache |
 | `/unlink` | Remove a linked Minecraft account | Linked | `account?` (if multiple) | Confirmation embed | No linked account; not owner | DB (set `UNLINKED`) + Cache invalidation |
 | `/me` | Show the caller's own linked profile summary | Linked | *(none)* | Embed: IGN, selected profile, key stats, weight, networth | Not linked; no selected profile | Cache→Live + DB (selection) |
 | `/profile` | View any member's Skyblock profile overview | Public | `player?` (IGN/@mention), `profile?` | Embed: profile summary for target | Player not found; profile API disabled by target | Cache→Live |
 | `/setprofile` | Choose which Skyblock profile to track | Linked | `profile` (cute name / autocomplete) | Confirmation of active profile | Profile not found on account; not linked | Live (list profiles) + DB (`SelectedSkyblockProfile`) |
+
+> **What the social field actually contains.** `player.socialMedia.links.DISCORD` holds a
+> Discord **username**, not a snowflake — verified against the live API, which returns
+> modern handles (`refraction`) and legacy tagged ones (`boblovespi#9817`). `/link` and
+> `/verify` therefore compare it against the caller's username, case-insensitively and
+> ignoring any `#discriminator`, and accept a raw id as well for the players who paste
+> one. The in-game surface knows only an IGN, so it can match the id form only.
 
 ---
 
@@ -94,6 +101,15 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/help` | List commands / show help for one | Public | `command?` | Embed: command catalog or detail | Unknown command | Static + DB (feature flags to hide disabled cmds) |
+| `/online` | Who's in the guild right now, by rank | Public | — | Embed: rank sections + online/total counts | Bridge offline (temporary); no in-game bridge configured (permanent) — reported separately | In-game `/g online` via the bridge session (20s shared cache) |
+
+`/online` reads the **live** roster from the Mineflayer session rather than the
+Hypixel API: the guild endpoint lists members but carries no presence, and
+resolving that would cost one `/status` call per member. Discord-only — in-game
+the answer is `/g online`, which any player can type without spending the bridge
+account's command budget. Every invocation inside the cache window shares one
+answer, because a spammed command gets the bridge account silenced and that
+takes the whole relay down, not just this command.
 
 ---
 

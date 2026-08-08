@@ -4,10 +4,21 @@
  */
 import type {
   ApplicationDTO,
+  ApplicationStatus,
+  AttendanceDTO,
   EventDTO,
   EventStatus,
+  LFGActivity,
+  LFGPostDTO,
+  LFGStatus,
+  MemberRole,
   MemberSummaryDTO,
+  NewEvent,
+  NewLfgPost,
+  NewTicket,
   RSVPState,
+  RsvpEntryDTO,
+  TicketDTO,
 } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
@@ -17,6 +28,112 @@ interface EventRsvpInfo {
   goingCount: number;
 }
 
+/** Row shapes are structural, so a local alias keeps the mappers readable. */
+type EventRow = {
+  id: string;
+  guildId: string;
+  title: string;
+  description: string | null;
+  type: string;
+  status: string;
+  startsAt: Date;
+  endsAt: Date | null;
+  capacity: number | null;
+  hostDiscordId: string | null;
+};
+
+function toEventDTO(r: EventRow, rsvpCount: number): EventDTO {
+  return {
+    id: r.id,
+    guildId: r.guildId,
+    title: r.title,
+    status: r.status as EventDTO["status"],
+    startsAt: r.startsAt.toISOString(),
+    capacity: r.capacity,
+    rsvpCount,
+    description: r.description,
+    type: r.type as NonNullable<EventDTO["type"]>,
+    endsAt: r.endsAt ? r.endsAt.toISOString() : null,
+    hostDiscordId: r.hostDiscordId,
+  };
+}
+
+function toLfgDTO(r: {
+  id: string;
+  guildId: string;
+  authorDiscordId: string;
+  activity: string;
+  details: string | null;
+  slotsTotal: number;
+  slotsFilled: number;
+  status: string;
+  expiresAt: Date | null;
+  createdAt: Date;
+  members: string[];
+}): LFGPostDTO {
+  return {
+    id: r.id,
+    guildId: r.guildId,
+    authorDiscordId: r.authorDiscordId,
+    activity: r.activity as LFGActivity,
+    details: r.details,
+    slotsTotal: r.slotsTotal,
+    slotsFilled: r.slotsFilled,
+    status: r.status as LFGStatus,
+    expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
+    createdAt: r.createdAt.toISOString(),
+    members: r.members,
+  };
+}
+
+function toTicketDTO(r: {
+  id: string;
+  guildId: string;
+  openerDiscordId: string;
+  assigneeDiscordId: string | null;
+  category: string;
+  status: string;
+  subject: string | null;
+  closeReason: string | null;
+  createdAt: Date;
+  closedAt: Date | null;
+}): TicketDTO {
+  return {
+    id: r.id,
+    guildId: r.guildId,
+    openerDiscordId: r.openerDiscordId,
+    assigneeDiscordId: r.assigneeDiscordId,
+    category: r.category as TicketDTO["category"],
+    status: r.status as TicketDTO["status"],
+    subject: r.subject,
+    closeReason: r.closeReason,
+    createdAt: r.createdAt.toISOString(),
+    closedAt: r.closedAt ? r.closedAt.toISOString() : null,
+  };
+}
+
+function toApplicationDTO(r: {
+  id: string;
+  guildId: string;
+  applicantDiscordId: string;
+  status: string;
+  submittedAt: Date | null;
+  reviewerDiscordId: string | null;
+  decisionReason: string | null;
+  decidedAt: Date | null;
+}): ApplicationDTO {
+  return {
+    id: r.id,
+    guildId: r.guildId,
+    applicantDiscordId: r.applicantDiscordId,
+    status: r.status as ApplicationDTO["status"],
+    submittedAt: r.submittedAt ? r.submittedAt.toISOString() : null,
+    reviewerDiscordId: r.reviewerDiscordId,
+    decisionReason: r.decisionReason,
+    decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
+  };
+}
+
 export const communityRepository = {
   async listUpcomingEvents(guildId: string): Promise<readonly EventDTO[]> {
     const rows = await prisma.event.findMany({
@@ -24,15 +141,7 @@ export const communityRepository = {
       orderBy: { startsAt: "asc" },
       include: { _count: { select: { rsvps: true } } },
     });
-    return rows.map((r) => ({
-      id: r.id,
-      guildId: r.guildId,
-      title: r.title,
-      status: r.status as EventDTO["status"],
-      startsAt: r.startsAt.toISOString(),
-      capacity: r.capacity,
-      rsvpCount: r._count.rsvps,
-    }));
+    return rows.map((r) => toEventDTO(r, r._count.rsvps));
   },
 
   async listMembers(guildId: string): Promise<readonly MemberSummaryDTO[]> {
@@ -66,13 +175,23 @@ export const communityRepository = {
       where: { guildId, status: { in: ["SUBMITTED", "UNDER_REVIEW"] } },
       orderBy: { createdAt: "asc" },
     });
-    return rows.map((r) => ({
-      id: r.id,
-      guildId: r.guildId,
-      applicantDiscordId: r.applicantDiscordId,
-      status: r.status as ApplicationDTO["status"],
-      submittedAt: r.submittedAt ? r.submittedAt.toISOString() : null,
-    }));
+    return rows.map(toApplicationDTO);
+  },
+
+  /**
+   * `/set-role type:member`. Scoped by the Discord id rather than the internal
+   * DiscordUser row id, since that is what the command carries.
+   */
+  async setMemberRole(guildId: string, discordId: string, role: MemberRole): Promise<MemberSummaryDTO | null> {
+    const user = await prisma.discordUser.findUnique({ where: { discordId }, select: { id: true } });
+    if (!user) return null;
+    const updated = await prisma.guildMember.updateMany({
+      where: { guildId, discordUserId: user.id },
+      data: { role },
+    });
+    if (updated.count === 0) return null;
+    const members = await this.listMembers(guildId);
+    return members.find((m) => m.discordId === discordId) ?? null;
   },
 
   async getEventForRsvp(eventId: string): Promise<EventRsvpInfo | null> {
@@ -88,5 +207,171 @@ export const communityRepository = {
       create: { eventId, discordId, state },
       update: { state },
     });
+  },
+
+  // ─────────────────────────────── Events ───────────────────────────────
+
+  async createEvent(input: NewEvent): Promise<EventDTO> {
+    const row = await prisma.event.create({
+      data: {
+        guildId: input.guildId,
+        title: input.title,
+        description: input.description ?? null,
+        type: input.type,
+        startsAt: new Date(input.startsAt),
+        capacity: input.capacity ?? null,
+        hostDiscordId: input.hostDiscordId,
+        tracksProgression: input.tracksProgression ?? false,
+      },
+    });
+    return toEventDTO(row, 0);
+  },
+
+  async getEvent(eventId: string): Promise<EventDTO | null> {
+    const row = await prisma.event.findUnique({
+      where: { id: eventId },
+      include: { _count: { select: { rsvps: true } } },
+    });
+    return row ? toEventDTO(row, row._count.rsvps) : null;
+  },
+
+  async setEventStatus(eventId: string, status: EventStatus): Promise<EventDTO | null> {
+    const row = await prisma.event
+      .update({ where: { id: eventId }, data: { status }, include: { _count: { select: { rsvps: true } } } })
+      .catch(() => null);
+    return row ? toEventDTO(row, row._count.rsvps) : null;
+  },
+
+  async getAttendance(eventId: string): Promise<AttendanceDTO | null> {
+    const event = await this.getEvent(eventId);
+    if (!event) return null;
+    const rows = await prisma.eventRSVP.findMany({ where: { eventId }, orderBy: { respondedAt: "asc" } });
+    const entries: RsvpEntryDTO[] = rows.map((r) => ({
+      discordId: r.discordId,
+      state: r.state as RSVPState,
+      respondedAt: r.respondedAt.toISOString(),
+    }));
+    const of = (state: RSVPState): RsvpEntryDTO[] => entries.filter((e) => e.state === state);
+    return {
+      event,
+      going: of("GOING"),
+      maybe: of("MAYBE"),
+      declined: of("NOT_GOING"),
+      waitlist: of("WAITLIST"),
+    };
+  },
+
+  // ──────────────────────────────── LFG ────────────────────────────────
+
+  async createLfg(input: NewLfgPost): Promise<LFGPostDTO> {
+    const expiresAt =
+      input.expiresInMinutes === undefined ? null : new Date(Date.now() + input.expiresInMinutes * 60_000);
+    const row = await prisma.lFGPost.create({
+      data: {
+        guildId: input.guildId,
+        authorDiscordId: input.authorDiscordId,
+        activity: input.activity,
+        details: input.details ?? null,
+        slotsTotal: input.slotsTotal,
+        // The author holds the first slot, so a fresh post reads 1/5 not 0/5.
+        slotsFilled: 1,
+        members: [input.authorDiscordId],
+        expiresAt,
+      },
+    });
+    return toLfgDTO(row);
+  },
+
+  async getLfg(postId: string): Promise<LFGPostDTO | null> {
+    const row = await prisma.lFGPost.findUnique({ where: { id: postId } });
+    return row ? toLfgDTO(row) : null;
+  },
+
+  async listLfg(guildId: string, activity?: LFGActivity): Promise<readonly LFGPostDTO[]> {
+    const rows = await prisma.lFGPost.findMany({
+      where: {
+        guildId,
+        status: { in: ["OPEN", "FULL"] },
+        ...(activity === undefined ? {} : { activity }),
+        // Expiry is lazy: rather than a sweeper job, posts past their time are
+        // simply filtered out of every read.
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+    });
+    return rows.map(toLfgDTO);
+  },
+
+  async setLfgMembers(postId: string, members: readonly string[], status: LFGStatus): Promise<LFGPostDTO | null> {
+    const row = await prisma.lFGPost
+      .update({ where: { id: postId }, data: { members: [...members], slotsFilled: members.length, status } })
+      .catch(() => null);
+    return row ? toLfgDTO(row) : null;
+  },
+
+  // ─────────────────────────────── Tickets ───────────────────────────────
+
+  async createTicket(input: NewTicket): Promise<TicketDTO> {
+    const row = await prisma.ticket.create({
+      data: {
+        guildId: input.guildId,
+        openerDiscordId: input.openerDiscordId,
+        category: input.category,
+        subject: input.subject ?? null,
+        channelId: input.channelId ?? null,
+      },
+    });
+    return toTicketDTO(row);
+  },
+
+  async getTicket(ticketId: string): Promise<TicketDTO | null> {
+    const row = await prisma.ticket.findUnique({ where: { id: ticketId } });
+    return row ? toTicketDTO(row) : null;
+  },
+
+  async closeTicket(ticketId: string, actorDiscordId: string, reason: string | null): Promise<TicketDTO | null> {
+    const row = await prisma.ticket
+      .update({
+        where: { id: ticketId },
+        data: { status: "CLOSED", closeReason: reason, closedAt: new Date(), assigneeDiscordId: actorDiscordId },
+      })
+      .catch(() => null);
+    return row ? toTicketDTO(row) : null;
+  },
+
+  async listTickets(guildId: string, openerDiscordId?: string): Promise<readonly TicketDTO[]> {
+    const rows = await prisma.ticket.findMany({
+      where: {
+        guildId,
+        status: { in: ["OPEN", "PENDING"] },
+        ...(openerDiscordId === undefined ? {} : { openerDiscordId }),
+      },
+      orderBy: { createdAt: "desc" },
+      take: 25,
+    });
+    return rows.map(toTicketDTO);
+  },
+
+  // ───────────────────────────── Applications ─────────────────────────────
+
+  async getApplication(applicationId: string): Promise<ApplicationDTO | null> {
+    const row = await prisma.application.findUnique({ where: { id: applicationId } });
+    return row ? toApplicationDTO(row) : null;
+  },
+
+  async decideApplication(
+    applicationId: string,
+    status: ApplicationStatus,
+    reviewerDiscordId: string,
+    reason: string | null,
+  ): Promise<ApplicationDTO | null> {
+    const row = await prisma.application
+      .update({
+        where: { id: applicationId },
+        data: { status, reviewerDiscordId, decisionReason: reason, decidedAt: new Date() },
+      })
+      .catch(() => null);
+    return row ? toApplicationDTO(row) : null;
   },
 };

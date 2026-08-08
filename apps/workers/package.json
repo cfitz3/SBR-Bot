@@ -8,13 +8,18 @@
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "start": "node dist/main.js",
+    "test": "node --test \"dist/**/*.test.js\"",
     "healthcheck": "node dist/healthcheck.js"
   },
   "dependencies": {
+    "@sbr/analytics": "*",
     "@sbr/config": "*",
     "@sbr/db": "*",
+    "@sbr/hypixel": "*",
     "@sbr/jobs": "*",
     "@sbr/observability": "*",
+    "@sbr/pricing": "*",
+    "@sbr/progression": "*",
     "@sbr/redis": "*",
     "@sbr/shared-types": "*",
     "bullmq": "^5.34.0",

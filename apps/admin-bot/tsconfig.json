@@ -7,10 +7,17 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../../packages/analytics" },
     { "path": "../../packages/commands-admin" },
+    { "path": "../../packages/community" },
     { "path": "../../packages/config" },
     { "path": "../../packages/db" },
+    { "path": "../../packages/guild-config" },
+    { "path": "../../packages/hypixel" },
+    { "path": "../../packages/identity" },
     { "path": "../../packages/moderation" },
+    { "path": "../../packages/discord-kit" },
+    { "path": "../../packages/jobs" },
     { "path": "../../packages/observability" },
     { "path": "../../packages/redis" },
     { "path": "../../packages/shared-types" }

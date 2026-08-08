@@ -2,25 +2,27 @@
  * @sbr/app-web-panel entrypoint — starts the OAuth + JSON API server over the
  * panel composition. Set PANEL_DRAIN_MS to auto-stop after N ms (verification).
  */
+import { installLifecycle } from "@sbr/observability";
+import { closeRedis } from "@sbr/redis";
 import { createPanelApp } from "./composition.js";
 import { startPanelServer } from "./server.js";
 
 async function main(): Promise<void> {
-  const app = createPanelApp();
+  const app = await createPanelApp();
   const server = await startPanelServer(app);
   app.log.info("web-panel listening", { port: app.config.web.port });
 
-  const shutdown = async (): Promise<void> => {
-    app.log.info("web-panel shutting down");
-    await server.close();
-    await app.shutdown();
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-
-  const drainMs = Number(process.env.PANEL_DRAIN_MS ?? 0);
-  if (drainMs > 0) setTimeout(() => void shutdown(), drainMs);
+  installLifecycle({
+    logger: app.log,
+    drainMs: Number(process.env.PANEL_DRAIN_MS ?? 0),
+    async shutdown() {
+      await server.close();
+      await app.shutdown();
+      // The panel opens Redis for sessions but never closed it, so the process
+      // relied on exit() to reap the socket rather than quitting cleanly.
+      await closeRedis();
+    },
+  });
 }
 
 main().catch((error: unknown) => {

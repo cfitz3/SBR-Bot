@@ -16,14 +16,18 @@ const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 
 const REQUIRED = ["inventory", "armor", "museum", "bank"];
 
+/** One readable skill at 50 and maxed catacombs — enough to exercise the derivation. */
+const MAXED_MEMBER = {
+  player_data: { experience: { SKILL_MINING: 55_172_425 } },
+  dungeons: { dungeon_types: { catacombs: { experience: 569_809_640 } } },
+};
+
 function profileData(over: Partial<SkyblockProfileData> = {}): SkyblockProfileData {
   return {
     profileId: "prof-1",
     cuteName: "Mango",
     gameMode: "NORMAL",
-    skillAverage: 45.3,
-    catacombsLevel: 42,
-    senitherWeight: 12_340,
+    rawMember: MAXED_MEMBER,
     networthEngineInput: { profile: {} },
     readableSections: REQUIRED,
     requiredSections: REQUIRED,
@@ -33,11 +37,17 @@ function profileData(over: Partial<SkyblockProfileData> = {}): SkyblockProfileDa
 
 function providerOk(data: SkyblockProfileData, freshness: "LIVE" | "STALE" = "LIVE"): ProfileProvider {
   const env: DataEnvelope<SkyblockProfileData> = { data, freshness, source: "LIVE", fetchedAt: "t" };
-  return { async getSelectedProfile() { return ok(env); } };
+  return {
+    async getSelectedProfile() { return ok(env); },
+    async listProfiles() { return ok({ ...env, data: [data] }); },
+  };
 }
 
 function providerFail(state: "MISSING_PROFILE" | "RATE_LIMITED"): ProfileProvider {
-  return { async getSelectedProfile(): Promise<HypixelResult<SkyblockProfileData>> { return hypixelFailure(state); } };
+  return {
+    async getSelectedProfile(): Promise<HypixelResult<SkyblockProfileData>> { return hypixelFailure(state); },
+    async listProfiles(): Promise<HypixelResult<readonly SkyblockProfileData[]>> { return hypixelFailure(state); },
+  };
 }
 
 const networthStub = (dto: NetworthDTO): NetworthService => ({
@@ -54,8 +64,11 @@ test("getProfileSummary maps fields and preserves freshness", async () => {
   assert.equal(r.ok, true);
   if (r.ok) {
     assert.equal(r.value.freshness, "STALE");
-    assert.equal(r.value.data.senitherWeight, 12_340);
-    assert.equal(r.value.data.catacombsLevel, 42);
+    // The summary is derived from the raw member, not passed in — so these
+    // assert the parse, not a fixture echo.
+    assert.equal(r.value.data.catacombsLevel, 50);
+    assert.equal(r.value.data.skillAverage, 50);
+    assert.ok((r.value.data.senitherWeight ?? 0) > 0);
   }
 });
 

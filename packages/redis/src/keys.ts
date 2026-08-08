@@ -28,6 +28,12 @@ export function createKeyFactory(prefix: string) {
     chanMod: (guildId: string) => p(`chan:mod:${guildId}`),
     analyticsBuffer: () => p(`buf:analytics`),
 
+    // 3b. Liveness. One key per service instance, written on a timer and given a
+    // TTL of a few beats: absence is the signal, so a crashed process stops
+    // reporting healthy without anything having to notice it died.
+    heartbeat: (service: string, instance: string) => p(`hb:${service}:${instance}`),
+    heartbeatScan: () => p(`hb:*`),
+
     // 4. Rate-limit buckets
     rlHypixel: () => p(`rl:hypixel`),
     rlHypixelEndpoint: (endpoint: string) => p(`rl:hypixel:${endpoint}`),
@@ -41,6 +47,14 @@ export function createKeyFactory(prefix: string) {
     mute: (guildId: string, userId: string) => p(`mute:${guildId}:${userId}`),
     ban: (guildId: string, userId: string) => p(`ban:${guildId}:${userId}`),
     suspendBridge: (guildId: string) => p(`suspend:bridge:${guildId}`),
+
+    // 6b. Safety postures. These outlive the posture itself: the record is what
+    // says which channels to reopen, so expiry is decided by `expiresAt` inside
+    // the value rather than by letting the key evaporate.
+    lockdown: (guildId: string) => p(`safety:lockdown:${guildId}`),
+    lockdownScan: () => p(`safety:lockdown:*`),
+    antiRaid: (guildId: string) => p(`safety:antiraid:${guildId}`),
+    antiRaidScan: () => p(`safety:antiraid:*`),
 
     // 7. Cached Hypixel responses
     cacheProfile: (uuid: string, profileId: string) =>

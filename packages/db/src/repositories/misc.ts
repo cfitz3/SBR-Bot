@@ -23,6 +23,33 @@ export const guildRepository = {
     const guild = await prisma.guild.findUnique({ where: { discordGuildId }, select: { id: true } });
     return guild?.id ?? null;
   },
+
+  /**
+   * The reverse: internal Guild.id → Discord snowflake. Discord-side effects
+   * (`/kick`, `/purge`, `/lockdown`) receive the internal id from the command
+   * layer and need the snowflake to talk to the gateway.
+   */
+  async resolveDiscordId(guildId: string): Promise<string | null> {
+    const guild = await prisma.guild.findUnique({ where: { id: guildId }, select: { discordGuildId: true } });
+    return guild?.discordGuildId ?? null;
+  },
+
+  /**
+   * Every active guild — the iteration set for guild-scoped worker jobs.
+   *
+   * `hypixelGuildId` comes back nullable because a Discord server can be onboarded
+   * before its Hypixel guild is known; jobs that need it skip those rows rather
+   * than guessing.
+   */
+  async listActive(): Promise<
+    readonly { id: string; discordGuildId: string; hypixelGuildId: string | null; name: string }[]
+  > {
+    return prisma.guild.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true, discordGuildId: true, hypixelGuildId: true, name: true },
+      orderBy: { createdAt: "asc" },
+    });
+  },
 };
 
 export interface WorkerJobLogEntry {

@@ -15,14 +15,17 @@
     { "path": "packages/bridge" },
     { "path": "packages/moderation" },
     { "path": "packages/community" },
+    { "path": "packages/guild-config" },
     { "path": "packages/analytics" },
     { "path": "packages/commands-bridge" },
     { "path": "packages/commands-admin" },
+    { "path": "packages/discord-kit" },
     { "path": "packages/panel-core" },
     { "path": "packages/jobs" },
     { "path": "apps/workers" },
     { "path": "apps/bridge-bot" },
     { "path": "apps/admin-bot" },
-    { "path": "apps/web-panel" }
+    { "path": "apps/web-panel" },
+    { "path": "apps/web-panel/tsconfig.client.json" }
   ]
 }

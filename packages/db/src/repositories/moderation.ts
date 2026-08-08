@@ -4,6 +4,7 @@
  * a Discord guild id to it via guildRepository.
  */
 import type {
+  AuditQuery,
   InfractionDTO,
   ModActionType,
   ModerationActionDTO,
@@ -115,5 +116,25 @@ export const moderationRepository = {
       orderBy: { createdAt: "desc" },
     });
     return rows.map(mapInfraction);
+  },
+
+  /**
+   * `/audit`. Filters are additive and each is applied only when supplied, so
+   * an officer opening the log with no arguments sees everything recent.
+   */
+  async listActions(query: AuditQuery): Promise<readonly ModerationActionDTO[]> {
+    const where: Record<string, unknown> = { guildId: query.guildId };
+    if (query.actorDiscordId) where.actorDiscordId = query.actorDiscordId;
+    if (query.targetDiscordId) where.targetDiscordId = query.targetDiscordId;
+    if (query.type) where.type = query.type;
+    if (query.sinceDays && query.sinceDays > 0) {
+      where.createdAt = { gte: new Date(Date.now() - query.sinceDays * 24 * 60 * 60 * 1000) };
+    }
+    const rows = await prisma.moderationAction.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: Math.min(query.limit ?? 100, 500),
+    });
+    return rows.map(mapAction);
   },
 };

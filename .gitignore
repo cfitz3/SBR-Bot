@@ -3,6 +3,9 @@ build/
 dist/
 *.tsbuildinfo
 
+# panel client bundle (tsc output; the hand-written assets beside it are tracked)
+apps/web-panel/public/app/
+
 # env
 .env
 .env.local

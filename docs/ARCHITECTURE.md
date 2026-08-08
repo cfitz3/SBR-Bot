@@ -20,7 +20,7 @@ sbr-platform/
 ├── docker-compose.yml           # local: postgres, redis, apps
 │
 ├── apps/
-│   ├── web-panel/               # Next.js control panel (Discord OAuth)
+│   ├── web-panel/               # Control panel — node:http + Discord OAuth
 │   │   ├── src/
 │   │   │   ├── app/             # routes: config, analytics, ops
 │   │   │   ├── api/             # route handlers → shared services
@@ -95,7 +95,7 @@ Each package owns one domain and exposes a **service interface** + **DTOs**. Cro
 - **`packages/analytics`** — ingests events (command usage, moderation actions, bridge health), aggregates them (often via workers), and answers reporting queries for the panel.
 
 ### Apps (thin shells)
-- **`apps/web-panel`** — Next.js. Owns HTTP transport, OAuth callback, and UI. Delegates all logic to services.
+- **`apps/web-panel`** — zero-dep `node:http`. Owns HTTP transport, OAuth callback, and the static browser UI (`client/` → `public/app/`). Delegates all logic to services. See WEB_PANEL.md §0.
 - **`apps/bridge-bot`** — owns Discord gateway + in-game connectors; delegates relay/command logic to `bridge`, `progression`, `pricing`.
 - **`apps/admin-bot`** — owns staff Discord surface; delegates to `moderation`, `community`, `identity`.
 - **`apps/workers`** — owns queue processing/scheduling; runs long/periodic work for `hypixel`, `pricing`, `progression`, `analytics`.
@@ -115,7 +115,7 @@ flowchart TB
     end
 
     subgraph Apps
-        WEB[apps/web-panel<br/>Next.js + OAuth]
+        WEB[apps/web-panel<br/>node:http + OAuth]
         BBOT[apps/bridge-bot]
         ABOT[apps/admin-bot]
         WORK[apps/workers<br/>BullMQ]

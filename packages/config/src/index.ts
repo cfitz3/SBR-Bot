@@ -39,6 +39,13 @@ export interface AppConfig {
     readonly host: string;
     readonly port: number;
     readonly username: string | undefined;
+    /**
+     * Protocol version to speak. Pinned rather than negotiated: Hypixel's
+     * status ping advertises protocol 774 (1.21.11) while the server is natively
+     * 1.8.9 behind ViaVersion, so auto-detection connects on a protocol that
+     * never reaches PLAY and is dropped a few seconds later with no kick packet.
+     */
+    readonly version: string;
   };
   readonly web: { readonly port: number };
 }
@@ -139,6 +146,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       host: v.optionalString("MC_HOST") ?? "mc.hypixel.net",
       port: v.int("MC_PORT", 25565),
       username: v.optionalString("MC_USERNAME"),
+      version: v.optionalString("MC_VERSION") ?? "1.8.9",
     },
     web: { port: v.int("WEB_PANEL_PORT", 3000) },
   };

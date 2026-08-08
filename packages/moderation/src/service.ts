@@ -8,6 +8,7 @@ import {
   err,
   ok,
   type ApplyActionInput,
+  type AuditQuery,
   type InfractionDTO,
   type ModerationActionDTO,
   type ModerationError,
@@ -59,6 +60,10 @@ export class ModerationServiceImpl implements ModerationService {
 
   async listInfractions(guildId: string, discordId: string): Promise<Result<readonly InfractionDTO[]>> {
     return ok(await this.repo.listInfractions(guildId, discordId));
+  }
+
+  async listActions(query: AuditQuery): Promise<Result<readonly ModerationActionDTO[]>> {
+    return ok(await this.repo.listActions(query));
   }
 
   async applyAction(input: ApplyActionInput): Promise<Result<ModerationActionDTO, ModerationError>> {

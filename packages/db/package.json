@@ -16,14 +16,19 @@
     "validate": "prisma validate",
     "migrate:dev": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
+    "migrate:status": "prisma migrate status",
+    "migrate:reset": "prisma migrate reset --force",
+    "seed": "node dist/seed.js",
     "studio": "prisma studio",
     "build": "prisma generate && tsc -b",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "test": "node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
     "@sbr/env": "*",
+    "@sbr/jobs": "*",
     "@sbr/shared-types": "*",
     "dotenv": "^17.4.2",
     "pg": "^8.22.0"

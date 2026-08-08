@@ -9,10 +9,33 @@ export { pingDb, type DbPingResult } from "./health.js";
 export { identityRepository } from "./repositories/identity.js";
 export { moderationRepository } from "./repositories/moderation.js";
 export { communityRepository } from "./repositories/community.js";
+export { progressionRepository } from "./repositories/progression.js";
 export { rankResolver, guildRepository, workerJobLogSink, type WorkerJobLogEntry } from "./repositories/misc.js";
+export {
+  analyticsJobRepository,
+  eventJobRepository,
+  maintenanceJobRepository,
+  snapshotJobRepository,
+  type AnalyticsEventRow,
+  type MetricRollupRow,
+} from "./repositories/jobs.js";
+export {
+  panelRepository,
+  type GuildCardRow,
+  type OverviewCountsRow,
+  type FreshnessRow,
+  type LinkedMemberRow,
+  type RollupPoint,
+  type CommandUsageRow,
+  type EventRow,
+  type TicketRow,
+  type ApplicationRow,
+  type JobHealthRow,
+} from "./repositories/panel.js";
 export {
   wordlistRepository,
   guildConfigRepository,
+  type GuildConfigRow,
   type WordlistEntryRow,
   type WordMatchType,
   type WordAction,

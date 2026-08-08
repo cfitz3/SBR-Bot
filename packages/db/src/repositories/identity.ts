@@ -53,6 +53,17 @@ export const identityRepository: IdentityRepository = {
     return link?.discordUser.discordId ?? null;
   },
 
+  async findDiscordIdByIgn(ign) {
+    const link = await prisma.linkedAccount.findFirst({
+      // Hypixel names are case-preserving but case-insensitive, and guild chat
+      // reports whatever casing the player registered — matching exactly would
+      // leave people unlinked for a capital letter.
+      where: { status: "VERIFIED", minecraftAccount: { currentIgn: { equals: ign, mode: "insensitive" } } },
+      include: { discordUser: true },
+    });
+    return link?.discordUser.discordId ?? null;
+  },
+
   async createVerifiedLink(input) {
     return prisma.$transaction(async (tx) => {
       const user = await tx.discordUser.upsert({
@@ -112,17 +123,21 @@ export const identityRepository: IdentityRepository = {
     return result.count > 0;
   },
 
-  async getUserCapabilities(guildId, discordId) {
+  async getCapabilityGrants(guildId, discordId) {
     // guildId is the internal Guild.id (composition resolves the Discord snowflake).
+    //
+    // Only DISCORD_USER rows are read here. DISCORD_ROLE and GUILD_RANK subjects
+    // need the caller's Discord roles or in-game rank, neither of which reaches
+    // this layer — until the panel can write those rows there is nothing to
+    // resolve, and the service's role floors cover the cases that matter.
     const perms = await prisma.bridgePermission.findMany({
       where: {
         guildId,
         subjectType: "DISCORD_USER",
         subjectId: discordId,
-        allow: true,
       },
-      select: { capability: true },
+      select: { capability: true, allow: true },
     });
-    return perms.map((p) => p.capability as BridgeCapability);
+    return perms.map((p) => ({ capability: p.capability as BridgeCapability, allow: p.allow }));
   },
 };

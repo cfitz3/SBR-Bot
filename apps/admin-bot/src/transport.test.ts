@@ -1,25 +1,32 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildArgs, type OptionReader } from "./transport.js";
+import { buildAdminRegistry } from "@sbr/commands-admin";
+import { buildCommands } from "./transport.js";
 
-function reader(over: Partial<Record<string, string | boolean>> = {}): OptionReader {
-  return {
-    getUserId: (n) => (typeof over[n] === "string" ? (over[n] as string) : null),
-    getString: (n) => (typeof over[n] === "string" ? (over[n] as string) : null),
-    getBoolean: (n) => (typeof over[n] === "boolean" ? (over[n] as boolean) : null),
-  };
+interface Payload {
+  name: string;
+  description: string;
+  options?: { name: string; required?: boolean }[];
 }
 
-test("buildArgs maps target/reason/duration", () => {
-  const args = buildArgs(reader({ target: "123", reason: "spam", duration: "1h" }));
-  assert.deepEqual(args, { target: "123", reason: "spam", duration: "1h" });
+const payload = (): Payload[] => buildCommands() as Payload[];
+
+test("every registered command has a handler behind it", () => {
+  const registry = buildAdminRegistry();
+  const names = payload().map((c) => c.name);
+  assert.deepEqual([...names].sort(), [...registry.keys()].sort());
 });
 
-test("buildArgs sets confirm only when boolean true", () => {
-  assert.equal(buildArgs(reader({ target: "1", confirm: true })).confirm, "true");
-  assert.equal(buildArgs(reader({ target: "1", confirm: false })).confirm, undefined);
+test("required options precede optional ones (Discord rejects otherwise)", () => {
+  for (const command of payload()) {
+    const flags = (command.options ?? []).map((o) => o.required ?? false);
+    const sorted = [...flags].sort((a, b) => Number(b) - Number(a));
+    assert.deepEqual(flags, sorted, `${command.name} has a required option after an optional one`);
+  }
 });
 
-test("buildArgs omits absent options", () => {
-  assert.deepEqual(buildArgs(reader({ target: "1" })), { target: "1" });
+test("ban is published with a confirm option, matching the destructive gate", () => {
+  const ban = payload().find((c) => c.name === "ban");
+  assert.ok(ban, "ban should be registered");
+  assert.ok(ban.options?.some((o) => o.name === "confirm"));
 });

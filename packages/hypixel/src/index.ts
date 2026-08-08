@@ -5,6 +5,7 @@
 export { HypixelClient, HypixelUnavailableError, type HypixelClientOptions } from "./client.js";
 export { InMemoryHypixelCache, InMemoryRateGate } from "./memory.js";
 export { fetchHttp } from "./http.js";
+export { decodeItemBytes, type DecodedItem } from "./nbt.js";
 export {
   realSleep,
   type HttpFetcher,
@@ -15,4 +16,24 @@ export {
   type RateAcquire,
   type Sleeper,
 } from "./ports.js";
-export type { HypixelPlayerDTO, SkyblockProfileDTO } from "./types.js";
+export type {
+  AuctionDTO,
+  AuctionPageDTO,
+  BazaarDTO,
+  BazaarProductDTO,
+  BingoDTO,
+  BingoGoalDTO,
+  ElectionCandidateDTO,
+  ElectionDTO,
+  EndedAuctionDTO,
+  EndedAuctionsDTO,
+  FiresaleDTO,
+  FiresalesDTO,
+  GuildDTO,
+  GuildMemberDTO,
+  HypixelPlayerDTO,
+  MayorDTO,
+  MuseumDTO,
+  ResourceDTO,
+  SkyblockProfileDTO,
+} from "./types.js";

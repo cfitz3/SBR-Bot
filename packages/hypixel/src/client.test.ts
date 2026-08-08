@@ -181,3 +181,176 @@ test("getPlayer throws HypixelUnavailableError on persistent error with no cache
   const client = new HypixelClient({ logger: silentLogger, http: f.fetcher, sleep: noopSleep, maxRetries: 1 });
   await assert.rejects(() => client.getPlayer("uuid-aria"), HypixelUnavailableError);
 });
+
+test("concurrent misses for one key collapse into a single upstream call", async () => {
+  const f = fakeFetcher(() => hypixelPlayer("x"));
+  const client = new HypixelClient({
+    logger: silentLogger,
+    http: f.fetcher,
+    cache: new InMemoryHypixelCache(),
+    sleep: noopSleep,
+  });
+  const [a, b, c] = await Promise.all([
+    client.getPlayer("uuid-aria"),
+    client.getPlayer("uuid-aria"),
+    client.getPlayer("uuid-aria"),
+  ]);
+  assert.equal(a.ok && b.ok && c.ok, true);
+  assert.equal(f.count("hypixel"), 1);
+});
+
+// ── Endpoints added in the data-layer build-out ─────────────────────────────
+
+function client(json: unknown, status = 200): HypixelClient {
+  const { fetcher } = fakeFetcher(() => res(status, json));
+  return new HypixelClient({ logger: silentLogger, http: fetcher, sleep: noopSleep, maxRetries: 0 });
+}
+
+/** Unwrap a successful result, failing the test with the state otherwise. */
+function data<T>(result: { ok: true; value: { data: T } } | { ok: false; error: { state: string } }): T {
+  assert.equal(result.ok, true, result.ok ? "" : `expected success, got ${result.error.state}`);
+  if (!result.ok) throw new Error("unreachable");
+  return result.value.data;
+}
+
+test("getBazaar maps quick-status from the player's point of view", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      lastUpdated: 1_700_000_000_000,
+      products: {
+        ENCHANTED_DIAMOND: {
+          product_id: "ENCHANTED_DIAMOND",
+          quick_status: { buyPrice: 120.5, sellPrice: 110.25, buyVolume: 4000, sellVolume: 5000 },
+        },
+      },
+    }).getBazaar(),
+  );
+  const product = dto.products.ENCHANTED_DIAMOND;
+  assert.equal(product?.instantBuy, 120.5);
+  assert.equal(product?.instantSell, 110.25);
+});
+
+test("getBazaar leaves an absent price unknown rather than zero", async () => {
+  const dto = data(
+    await client({ success: true, products: { COBBLESTONE: { quick_status: {} } } }).getBazaar(),
+  );
+  assert.equal(dto.products.COBBLESTONE?.instantBuy, null);
+  assert.equal(dto.products.COBBLESTONE?.instantSell, null);
+});
+
+test("getAuctions reports the page count so a sweep can drive its own loop", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      page: 0,
+      totalPages: 42,
+      totalAuctions: 41_000,
+      auctions: [
+        { uuid: "a1", auctioneer: "seller", item_name: "Hyperion", bin: true, starting_bid: 900, end: 5 },
+        { uuid: "a2", auctioneer: "seller", item_name: "Terminator", starting_bid: 100, highest_bid_amount: 250 },
+      ],
+    }).getAuctions(0),
+  );
+  assert.equal(dto.totalPages, 42);
+  assert.equal(dto.auctions[0]?.price, 900); // BIN ⇒ the ask
+  assert.equal(dto.auctions[1]?.price, 250); // live auction ⇒ the standing bid
+});
+
+test("an unbid auction falls back to its opening bid", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      auctions: [{ uuid: "a3", starting_bid: 700, highest_bid_amount: 0 }],
+    }).getAuctions(),
+  );
+  assert.equal(dto.auctions[0]?.price, 700);
+});
+
+test("getEndedAuctions surfaces the sold price and buyer", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      lastUpdated: 1,
+      auctions: [{ auction_id: "e1", seller: "s", buyer: "b", price: 1_000_000, bin: true, timestamp: 9 }],
+    }).getEndedAuctions(),
+  );
+  assert.equal(dto.auctions[0]?.price, 1_000_000);
+  assert.equal(dto.auctions[0]?.buyerUuid, "b");
+});
+
+test("getElection reads the sitting mayor, perks and minister", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      mayor: {
+        key: "DERPY",
+        name: "Derpy",
+        perks: [{ name: "TURBO MINIONS" }, { name: "MOAR SKILLZ" }],
+        minister: { name: "Cole" },
+      },
+      current: { year: 400, candidates: [{ name: "Diana", votes: 120 }] },
+    }).getElection(),
+  );
+  assert.equal(dto.mayor?.name, "Derpy");
+  assert.deepEqual(dto.mayor?.perks, ["TURBO MINIONS", "MOAR SKILLZ"]);
+  assert.equal(dto.ministerName, "Cole");
+  assert.equal(dto.candidates[0]?.votes, 120);
+});
+
+test("getElection tolerates the gap between terms (no mayor)", async () => {
+  const dto = data(await client({ success: true }).getElection());
+  assert.equal(dto.mayor, null);
+  assert.deepEqual(dto.candidates, []);
+});
+
+test("getFiresales and getBingo normalize their lists", async () => {
+  const sales = data(
+    await client({ success: true, sales: [{ item_id: "KAT_FLOWER", start: 1, end: 2, amount: 5, price: 300 }] }).getFiresales(),
+  );
+  assert.equal(sales.sales[0]?.itemId, "KAT_FLOWER");
+
+  const bingo = data(
+    await client({ success: true, id: 33, name: "August", goals: [{ id: "g", name: "Kill 100", requiredAmount: 100 }] }).getBingo(),
+  );
+  assert.equal(bingo.goals[0]?.requiredAmount, 100);
+});
+
+test("getResources passes the reference payload through untouched", async () => {
+  const dto = data(await client({ success: true, lastUpdated: 7, skills: { COMBAT: {} } }).getResources("skills"));
+  assert.equal(dto.name, "skills");
+  assert.equal(dto.lastUpdated, 7);
+  assert.ok("skills" in dto.data);
+});
+
+test("getGuild orders ranks by priority, highest first", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      guild: {
+        _id: "g1",
+        name: "SBR",
+        tag: "SBR",
+        members: [{ uuid: "m1", rank: "Guild Master", joined: 4 }],
+        ranks: [{ name: "Member", priority: 1 }, { name: "Officer", priority: 5 }],
+      },
+    }).getGuild("g1"),
+  );
+  assert.deepEqual(dto.ranks, ["Officer", "Member"]);
+  assert.equal(dto.members[0]?.uuid, "m1");
+});
+
+test("a guild that does not exist is MISSING_PROFILE, not an error", async () => {
+  const result = await client({ success: true, guild: null }).getGuild("nope");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.state, "MISSING_PROFILE");
+});
+
+test("a 403 on any endpoint is API_DISABLED and is not retried", async () => {
+  const f = fakeFetcher(() => res(403, { success: false }));
+  const c = new HypixelClient({ logger: silentLogger, http: f.fetcher, sleep: noopSleep, maxRetries: 3 });
+  const result = await c.getBazaar();
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.state, "API_DISABLED");
+  assert.equal(f.count("hypixel"), 1);
+});

@@ -4,11 +4,26 @@
 export { AdminDispatcher, type AdminDispatcherDeps } from "./dispatcher.js";
 export { buildAdminRegistry } from "./handlers.js";
 export { parseDurationSeconds, renderModError } from "./util.js";
+export {
+  paginate,
+  relativeTs,
+  renderAuditPages,
+  renderEffectError,
+  renderFilterTestEmbed,
+  renderInfractionPages,
+  renderSafetyError,
+  renderSafetyStatusEmbed,
+  renderWordlistEmbed,
+} from "./render.js";
 export type {
+  AdminAutocompleteContext,
+  AdminAutocompleteHandler,
   AdminContext,
   AdminReply,
   AdminCommandSpec,
   AdminHandler,
   AdminHandlerDeps,
+  AdminOptionSpec,
+  Choice,
   RoleResolver,
 } from "./types.js";

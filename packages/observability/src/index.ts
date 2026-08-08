@@ -9,3 +9,9 @@ export {
   type LoggerOptions,
 } from "./logger.js";
 export { HealthRegistry, pingCheck } from "./health.js";
+export {
+  installLifecycle,
+  DEFAULT_SHUTDOWN_TIMEOUT_MS,
+  type LifecycleHandle,
+  type LifecycleOptions,
+} from "./lifecycle.js";

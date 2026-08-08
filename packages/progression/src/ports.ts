@@ -12,14 +12,30 @@ export interface SkyblockProfileData {
   readonly profileId: string;
   readonly cuteName: string | null;
   readonly gameMode: SkyblockGameMode;
-  readonly skillAverage: number | null;
-  readonly catacombsLevel: number | null;
-  readonly senitherWeight: number | null;
+  /**
+   * The member blob exactly as Hypixel returned it. Skills, slayers, dungeons
+   * and weight are *derived* from this by the service rather than passed in —
+   * that keeps every caller's numbers consistent and means a wiring adapter
+   * cannot accidentally supply nulls for stats the profile actually contains.
+   */
+  readonly rawMember: unknown;
   readonly networthEngineInput: NetworthEngineInput;
   readonly readableSections: readonly string[];
   readonly requiredSections: readonly string[];
 }
 
+/**
+ * Port: what an upgrade suggestion costs. Optional at wiring time — advice is
+ * still worth giving when the auction sweep is cold, it just arrives without
+ * price tags rather than not at all.
+ */
+export interface UpgradePriceSource {
+  /** Lowest BIN in coins, or null when the item is unpriced or unknown. */
+  lowestBin(itemId: string): Promise<number | null>;
+}
+
 export interface ProfileProvider {
   getSelectedProfile(uuid: string, profileId?: string): Promise<HypixelResult<SkyblockProfileData>>;
+  /** Every profile on the account, for `/profile` and `/setprofile`. */
+  listProfiles(uuid: string): Promise<HypixelResult<readonly SkyblockProfileData[]>>;
 }

@@ -4,6 +4,7 @@
  * Mineflayer connector). Without a token it boots the composition and exits
  * (boot-ready) so it can be verified without credentials.
  */
+import { installLifecycle } from "@sbr/observability";
 import { createBridgeApp } from "./composition.js";
 import { startBridge } from "./transport.js";
 
@@ -18,26 +19,34 @@ async function main(): Promise<void> {
   }
 
   const mc = app.config.minecraft.username
-    ? { host: app.config.minecraft.host, port: app.config.minecraft.port, username: app.config.minecraft.username }
+    ? {
+        host: app.config.minecraft.host,
+        port: app.config.minecraft.port,
+        username: app.config.minecraft.username,
+        version: app.config.minecraft.version,
+      }
     : null;
   if (!mc) app.log.warn("MC_USERNAME not set — Discord side only, no in-game bridge");
 
   const handles = await startBridge(app, {
     discordToken: token,
-    clientId: app.config.discord.clientId,
     discordGuildId: process.env.DISCORD_GUILD_ID,
     bridgeChannelId: process.env.BRIDGE_CHANNEL_ID,
     mc,
   });
+  // Only meaningful with an in-game session; without one `/online` should keep
+  // saying "no bridge here" rather than waiting out a request that can't be sent.
+  if (mc) app.setRosterSource(handles.roster);
+  app.setStatusSource(() => ({ ...handles.status() }));
   app.log.info("bridge-bot serving");
 
-  const shutdown = async (): Promise<void> => {
-    await handles.destroy();
-    await app.shutdown();
-    process.exit(0);
-  };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  installLifecycle({
+    logger: app.log,
+    async shutdown() {
+      await handles.destroy();
+      await app.shutdown();
+    },
+  });
 }
 
 main().catch((error: unknown) => {

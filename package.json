@@ -13,12 +13,34 @@
     "apps/*"
   ],
   "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "start": "node scripts/start.mjs",
+    "dev": "node scripts/start.mjs --watch",
+    "doctor": "node scripts/doctor.mjs",
+
+    "start:workers": "node scripts/start.mjs workers",
+    "start:web-panel": "node scripts/start.mjs web-panel",
+    "start:admin-bot": "node scripts/start.mjs admin-bot",
+    "start:bridge-bot": "node scripts/start.mjs bridge-bot",
+
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v && docker compose up -d --wait",
+    "infra:logs": "docker compose logs -f",
+
     "db:generate": "npm run generate -w @sbr/db",
     "db:validate": "npm run validate -w @sbr/db",
+    "db:migrate": "npm run migrate:deploy -w @sbr/db",
+    "db:migrate:dev": "npm run migrate:dev -w @sbr/db",
+    "db:seed": "npm run build && npm run seed -w @sbr/db",
+    "db:reset": "npm run migrate:reset -w @sbr/db",
+    "db:studio": "npm run studio -w @sbr/db",
+
     "build": "npm run db:generate && tsc -b",
     "typecheck": "npm run db:generate && tsc -b",
     "clean": "tsc -b --clean && node -e \"require('fs').rmSync('node_modules/.cache',{recursive:true,force:true})\"",
-    "test": "npm run build && npm run test --workspaces --if-present",
+    "test": "npm run build && npm run test --workspaces --if-present && npm run test:scripts",
+    "test:scripts": "node --test \"scripts/*.test.mjs\"",
     "healthcheck": "npm run healthcheck -w @sbr/app-workers --if-present"
   },
   "devDependencies": {
