@@ -499,14 +499,26 @@ A point-in-time capture of a Skyblock profile's stats (time-series for progressi
 |-------|-------|
 | `minecraftAccountId` | FK |
 | `profileId` | Skyblock profile uuid |
+| `captureDate`, `seq` | day bucket + intra-day sequence; normal snapshots are seq 0 (one/day), the event-tracked cohort writes many |
 | `capturedAt` | timestamp (indexed) |
-| `networth` | numeric |
-| `skillAverages` | JSON |
-| `slayerXp`, `catacombsLevel`, etc. | JSON blob of tracked metrics |
-| `source` | see enum |
+| `networth` | BigInt, nullable |
+| `skillAverage`, `catacombsLevel`, `senitherWeight` | Float, nullable |
+| `slayerXp` | BigInt, nullable — total slayer XP across all bosses |
+| `metrics` | JSON blob for everything not promoted to a column |
+| `source`, `eventId` | see enum; `eventId` set for event-tracked captures |
 
 **Enum — `SnapshotSource`:** `SCHEDULED`, `ON_DEMAND`, `EVENT_TRIGGERED`, `BACKFILL`.
 **Relationships:** N—1 `MinecraftAccount`. Append-only; drives milestone detection and progression charts.
+
+**Why the promoted columns.** The ranked figures — networth, skill average,
+catacombs, slayer — are columns rather than keys inside `metrics` because the
+leaderboards sort and page on them, and Postgres cannot index a JSON path as
+cheaply as a scalar. `slayerXp` was added last (migration
+`20260810120000_snapshot_slayer_xp`) and is **nullable with no backfill**:
+writing 0 into historical rows would put long-standing members at the bottom of
+the slayer board, which is a false claim about them rather than a missing one.
+Capturing it costs nothing — the summary already parses slayers for the Senither
+weight.
 
 #### Milestone
 A recognized achievement/threshold crossed by a member.

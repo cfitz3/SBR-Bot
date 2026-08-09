@@ -54,7 +54,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **S** | **Join screening & auto-accept** *(shipped, out of band)* | SkyKings client, `GuildJoinScreening`, `@sbr/screening` policy engine, bridge join wiring, panel policy editor | 1 |
 | **4** | **LFG rework** *(shipped)* | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + close, message tracking | 1, 3 |
 | **5** | **XP & standing** *(shipped)* | XP ledger + balances, source weights/caps config, anti-abuse gates, `xp-aggregate` job, `/standing` + `/me` (see §3 for the `/profile` deviation) | 1, 2 |
-| **6** | **Leaderboards** | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
+| **6** | **Leaderboards** *(shipped)* | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
 | **7** | **Milestones/achievements** | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
 | **8** | **Stat command expansion** | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
 | **9** | **Ticketing config** | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
@@ -353,7 +353,48 @@ made during implementation:
   Each run re-derives yesterday as well as today, since a scan straddling
   midnight can still add a late GEXP row. See `WORKERS.md` §2.10b.
 
-### 2.6 Milestones (Phase 7)
+### 2.6 Leaderboards (Phase 6) — *shipped*
+
+One new column, because seven of the eight boards rank data the platform
+already stores:
+
+```prisma
+model ProfileSnapshot {
+  // ...
+  /// Total slayer XP across all bosses. BigInt because a maxed account clears
+  /// nine figures, and the leaderboard ranks on the sum, not the tiers.
+  slayerXp BigInt?
+}
+```
+
+Migration `20260810120000_snapshot_slayer_xp`. Nullable with **no backfill**:
+writing 0 into historical rows would rank long-standing members last on the
+slayer board, and "unknown" is the honest reading of a row captured before the
+column existed. Capture was free — `toSummary` already parses slayers for the
+Senither weight.
+
+`packages/leaderboards` holds ranking and paging only. The joins that turn four
+tables into `{ key, label, value, at }` live in `packages/db`, and the shared
+vocabulary (category ids, labels, aliases, DTOs) lives in `@sbr/shared-types` so
+`packages/commands-bridge` can render a board without depending on the domain
+package.
+
+**Documented assumptions:**
+
+- **Tenure is `GuildMember.joinedAt`** — the same column `xpRepository.tenureForDay`
+  awards from, so a member's tenure rank and their tenure XP can never disagree.
+  A member with no recorded join date is simply not ranked.
+- **Snapshot boards are as stale as their oldest row**, and the footer says so
+  rather than quoting the newest reading. Up to one snapshot cycle (~6–12h).
+- **Non-positive and null values are not ranked at all.** A profile with its API
+  off is unknown, not poorest; zero guild chat is absent, not last.
+- **Only active members of the guild appear.** History is never rewritten for
+  someone who left — they simply stop being ranked.
+- **No panel surface.** Leaderboards are member-facing and the panel is
+  admin-only, so there is deliberately no leaderboard page and no staff control
+  over who appears on one.
+
+### 2.7 Milestones (Phase 7)
 
 ```prisma
 model MilestoneDefinition {
@@ -373,7 +414,7 @@ model MilestoneDefinition {
 ```
 `Milestone` gains `definitionId String?` and `discordId String?`.
 
-### 2.7 Tickets (Phase 9)
+### 2.8 Tickets (Phase 9)
 
 ```prisma
 model TicketPanelConfig {
@@ -418,7 +459,7 @@ model TicketTypeConfig {
 | `/perm action:roster-remove perm: ign: role:` | Discord + `!perm` | *Shipped.* |
 | `/perm action:disband perm:` | Discord + `!perm` | Owner or staff. Status change, never a delete. *Shipped.* |
 | `/perm action:default perm:` | Discord + `!perm` | Marks the perm `/lfg perm:true` autofills from. Owner only. *Shipped.* |
-| `/leaderboard <category>` | Discord + bridge | wealth, tenure, skill-average, catacombs, slayer, discord-activity, guild-chat, xp. |
+| `/leaderboard [category] [page] [days]` | Discord + `!leaderboard`/`!top` | Eight boards: wealth, tenure, skill-average, catacombs, slayer, discord-activity, guild-chat, xp. Competition ranking, active members only, non-positive values unranked. *Shipped.* |
 | `/standing [member]` | Discord + `!standing` | XP, level, source breakdown, tenure, rank in guild. Takes a **Discord member**, not a player: XP is attributed to a Discord account. Public for yourself, ephemeral for someone else. *Shipped.* |
 
 ### Changed

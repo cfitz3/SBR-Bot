@@ -337,6 +337,66 @@ have hit a limit, because that is an instruction on how to farm just under it.
 
 ---
 
+## 19. Member Bot — Leaderboards
+
+Eight boards over data the platform already keeps. Nothing here fetches from
+Hypixel at command time: every value is read from a table some job has already
+filled, which is why a board answers in one query and why it can be honest about
+how old its numbers are.
+
+| Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
+|---------|---------|-------|------------------|--------|-------------------------|------|
+| `/leaderboard` | Guild rankings across eight categories | Member | `category?` (choice, default `xp`), `page?`, `days?` (1–365, activity boards only) | Embed: ranked page with 🥇🥈🥉, the viewer's own row appended, footer with page, total ranked, window and staleness | Leaderboards not enabled; unknown category (lists the real ones) | DB (`ProfileSnapshot`, `GuildMember`, `ActivityDaily`, `XpBalance`) |
+
+**The catalog is closed.** `wealth`, `tenure`, `skill-average`, `catacombs`,
+`slayer`, `discord-activity`, `guild-chat`, `xp`. A leaderboard is a claim about
+the guild, and each of these has a stated source and a stated freshness — an
+open-ended "rank by any metric" surface could make neither promise. Common
+spellings are accepted (`nw`, `cata`, `sa`, `gc`, `top`), so guild chat does not
+have to type the canonical id.
+
+**Sources and freshness.**
+
+| Family | Source | How fresh |
+|--------|--------|-----------|
+| `SNAPSHOT` — wealth, skill average, catacombs, slayer | newest `ProfileSnapshot` per linked account | up to one snapshot cycle behind (~6–12h) — the *only* family that can be stale |
+| `TENURE` — tenure | `GuildMember.joinedAt` | exact, derived at read time |
+| `ACTIVITY` — Discord activity, guild chat | summed `ActivityDaily` over a rolling window (default 30d) | same counters XP is derived from |
+| `XP` — guild XP | `XpBalance`, rebuilt by `xp-aggregate` | up to three hours behind |
+
+The footer reports the **oldest** reading on the page, never the newest: the
+page is only as current as its stalest row, and quoting the freshest would
+overstate it.
+
+**Ranking rules.**
+
+- **Competition ranking** — 1, 2, 2, 4. Tied members share a rank and consume
+  the ones after it, so "third place" is never two different people.
+- **Ties break by label ascending**, purely so repeated calls return the same
+  order. It is not a claim that one tied member is ahead of the other.
+- **Non-positive values are not ranked at all.** A member with zero guild chat
+  is absent from the guild-chat board rather than ranked last, and a profile
+  with its API off is *unknown*, not "poorest in the guild".
+- **Only active members of the guild are ranked.** Someone who left keeps their
+  history — the ledger and the snapshots are not rewritten — but a leaderboard
+  is a statement about the guild as it stands.
+
+**Where am I.** The caller's own row is appended below the page rather than
+merged into it: it answers a different question, and slotting a rank-41 row into
+the top ten would misrepresent the ranking. A caller who is not ranked simply
+has no such line — including an unlinked caller on a snapshot board, whose
+values are keyed by uuid.
+
+**In guild chat**, `!leaderboard` / `!top` returns the top five on one line. The
+`page` and `days` options are Discord-only: in-game args are positional, and a
+second number would make `!top wealth 2` ambiguous with a category.
+
+**No panel surface.** Leaderboards are member-facing, and the web panel is
+admin-only — there is deliberately no leaderboard page, and no staff control
+over who appears on one.
+
+---
+
 ## Cross-Cutting Behaviors (all commands)
 
 - **Cooldowns & rate limits:** enforced in Redis before execution (`cd:{surface}:{command}:{user}`); bridge/in-game tiers are stricter than Discord.

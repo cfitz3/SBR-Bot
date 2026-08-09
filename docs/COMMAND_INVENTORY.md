@@ -8,13 +8,13 @@ end lists every difference, which is the working list for the tightening pass.
 
 Sources of truth for this file:
 
-- `packages/commands-bridge/src/handlers.ts` — 23 member specs
+- `packages/commands-bridge/src/handlers.ts` — 24 member specs
 - `packages/commands-bridge/src/handlers-community.ts` — 9 community specs + 2 button routes
 - `packages/commands-bridge/src/ingame.ts` — the `!` surface and its aliases
 - `packages/commands-admin/src/handlers.ts` — 26 staff specs
 - the two dispatchers, for the gates every command passes through
 
-**Totals: 32 member commands, 26 staff commands, 14 reachable in-game, 2 button routes.**
+**Totals: 33 member commands, 26 staff commands, 15 reachable in-game, 2 button routes.**
 
 ---
 
@@ -27,7 +27,7 @@ handler → usage capture. Never throws.
 
 - **Capability** is checked only when the spec declares one. Exactly ten do
   (`RUN_COMMAND`): `stats`, `skills`, `slayer`, `dungeons`, `networth`,
-  `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 22 are
+  `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 23 are
   ungated — any member can run them. Denial reads *"You don't have permission to
   use that command."*
 - **Cooldown** is per `surface:command:user` in Redis, from the spec's
@@ -56,7 +56,7 @@ success, latency), best-effort.
 
 ---
 
-## 2. Bridge bot — member commands (32)
+## 2. Bridge bot — member commands (33)
 
 `player?` defaults to the caller's linked account; unlinked and no `player`
 given replies with the NOT_LINKED failure. `profile?` defaults to the member's
@@ -123,6 +123,16 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 | `/online` | — | 30s | Guild roster read live from the Mineflayer session (the Hypixel guild endpoint carries no presence) | Roster embed by rank. **Two failures kept distinct**: no bridge configured here (permanent) vs bridge offline right now (retryable) |
 | `/standing` | `member?` (user) | 10s | Guild XP, level, rank and the per-source breakdown behind it | Standing embed; text `{name}: level N ({xp} xp)`. **Public for yourself, ephemeral for anyone else** |
 
+| `/leaderboard` | `category?` (choice of 8), `page?`, `days?` | 15s | Guild rankings over wealth, tenure, skill average, catacombs, slayer, Discord activity, guild chat and XP | Ranked embed with the caller's own row appended; text = top five on one line |
+
+`/leaderboard` ranks **only active members**, and **only positive values** —
+zero and unknown are both absent from a board rather than sitting at the bottom,
+because "no data" and "worst in the guild" are different claims. Ties share a
+rank (1, 2, 2, 4) and the footer quotes the **oldest** reading on the page, not
+the newest. The four snapshot-backed boards are keyed by Minecraft uuid, so an
+unlinked caller gets the board but no "you are here" line. Full rules in
+`COMMANDS.md` §19.
+
 `/standing` is keyed by **Discord id, not IGN** — XP is attributed to a person
 on the platform, so an unlinked speaker has no standing to report. Three answers
 are kept apart on purpose: XP not wired here says *"Guild XP isn't switched on
@@ -179,7 +189,7 @@ cannot drift.
 
 ---
 
-## 3. In-game surface (`!`) — 14 commands
+## 3. In-game surface (`!`) — 15 commands
 
 A translation layer over the same dispatcher, not a second implementation. What
 it adds: prefix parsing, positional→named argument mapping, an allow-list, IGN
@@ -187,7 +197,8 @@ identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 
 - **Allow-list is the authorization boundary.** Only specs carrying `inGame`
   are reachable: `help`, `profile`, `stats`, `skills`, `slayer`, `dungeons`,
-  `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs` (all `true`), and
+  `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs`, `leaderboard`
+  (all `true`), and
   `lfg` and `standing` (`"linked"` — `lfg` is the only in-game write and is
   attributed to its author, and `standing` is keyed by Discord id, so both need
   the speaking IGN to resolve to a Discord account first). Everything else is
