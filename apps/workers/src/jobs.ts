@@ -15,6 +15,8 @@ import {
   snapshotJobRepository,
   guildRepository,
   guildScanRepository,
+  xpRepository,
+  activitySink,
 } from "@sbr/db";
 import {
   defineAnalyticsIngestJob,
@@ -31,6 +33,7 @@ import {
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
   defineRosterSyncJob,
+  defineXpAggregateJob,
   detectAndRecord,
   dispatchReminders,
   ingestAnalytics,
@@ -46,6 +49,7 @@ import {
   transitionEvents,
   type JobDefinition,
 } from "@sbr/jobs";
+import { XpService } from "@sbr/xp";
 import type { WorkerContext } from "./composition.js";
 
 /** How long a swept BIN reading stays readable before the key expires. */
@@ -59,6 +63,17 @@ const RESOURCE_TTL_SECONDS = 12 * 60 * 60;
 const RESOURCE_NAMES = ["skills", "collections", "items"] as const;
 /** Cap on accounts examined for milestones per run, to bound a cold start. */
 const MILESTONE_BATCH = 200;
+
+/**
+ * `YYYY-MM-DD`, `offsetDays` from today, in UTC. XP's day grain is UTC
+ * everywhere — counters, awards and this job all have to agree on where the
+ * boundary is, and UTC is the only clock all three can read without a guild
+ * timezone.
+ */
+function dayString(offsetDays: number): string {
+  const at = new Date(Date.now() + offsetDays * 24 * 60 * 60_000);
+  return at.toISOString().slice(0, 10);
+}
 
 export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefinition<number>> {
   const { keys, client } = ctx.redis;
@@ -212,6 +227,47 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
       return recorded;
     }),
     lockKey: keys.lockJob("milestones"),
+  };
+
+  const xpAggregate: JobDefinition<number> = {
+    ...defineXpAggregateJob(async () => {
+      // Built per run rather than per registry, because every job body here is
+      // a closure that touches the context only when the queue invokes it — the
+      // service is cheap and stateless, and constructing it eagerly would make
+      // this the one definition that needs live adapters just to be listed.
+      // The cooldown gate is passed because the service takes one, not because
+      // aggregation consults it; nothing on this path is rate-limited.
+      const xp = new XpService({
+        repo: xpRepository,
+        activity: activitySink,
+        cooldowns: ctx.adapters.cooldowns,
+        logger: ctx.log,
+      });
+      const guilds = await guildRepository.listActive();
+      // Yesterday as well as today, for the same reason the analytics rollup
+      // recomputes its previous partition: today's counters are still climbing,
+      // and yesterday can still gain a late GEXP row from a guild scan that
+      // straddled midnight. Both passes overwrite by dedupe key, so re-deriving
+      // a day converges rather than double-crediting it.
+      const days = [dayString(-1), dayString(0)];
+      let written = 0;
+      for (const guild of guilds) {
+        for (const day of days) {
+          try {
+            const summary = await xp.aggregate(guild.id, day);
+            written += summary.awardsWritten;
+            ctx.log.debug("xp aggregated", { guildId: guild.id, ...summary });
+          } catch (error) {
+            // One guild's bad day must not cost every other guild its run —
+            // the next pass re-derives this day from counters that are still
+            // sitting in the database untouched.
+            ctx.log.warn("xp aggregate failed", { guildId: guild.id, day, error: String(error) });
+          }
+        }
+      }
+      return written;
+    }),
+    lockKey: keys.lockJob("xp-aggregate"),
   };
 
   // ───────────────────────────── community ─────────────────────────────
@@ -453,6 +509,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     rosterSync,
     guildScan,
     inactivity,
+    xpAggregate,
     analyticsIngest,
     analyticsRollup,
     configInvalidation,

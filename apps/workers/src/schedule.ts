@@ -71,6 +71,13 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // rather than at the same instant as every other daily job on the box.
   { name: "guild-scan", repeat: { pattern: "26 1,7,13,19 * * *" }, priority: LANE.bulk },
   { name: "analytics-rollup", repeat: { pattern: "13 * * * *" }, priority: LANE.bulk },
+  // Every three hours rather than nightly: a member who asks for their standing
+  // should not be told about the person they were yesterday. Not more often than
+  // that, because each run rebuilds every balance by reading a guild's whole
+  // ledger — cheap at guild scale, but it grows with time, and there is no
+  // member-visible difference between "an hour stale" and "three hours stale".
+  // 48 past the hour keeps it clear of the roster and snapshot passes.
+  { name: "xp-aggregate", repeat: { pattern: "48 */3 * * *" }, priority: LANE.bulk },
   // Daily, at hours nobody is playing and nothing else is scheduled.
   { name: "resources-refresh", repeat: { pattern: "17 4 * * *" }, priority: LANE.bulk },
   { name: "inactivity-scan", repeat: { pattern: "23 5 * * *" }, priority: LANE.bulk },

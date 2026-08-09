@@ -69,6 +69,30 @@ export function defineAnalyticsRollupJob(rollup: () => Promise<number>): JobDefi
 }
 
 /**
+ * xp-aggregate: weight a day's activity counters into ledger entries and
+ * rebuild every balance from the ledger.
+ *
+ * Retries once and holds a long lock. Both follow from the job being
+ * idempotent by construction — derived awards carry a dedupe key and the
+ * repository upserts on it, so a retry converges on the same ledger rather than
+ * double-crediting. The lock matters more than the retry does: two overlapping
+ * runs would each rebuild balances from a ledger the other is still writing,
+ * and the loser's totals would win.
+ *
+ * Returns the number of ledger rows written across every guild.
+ */
+export function defineXpAggregateJob(aggregate: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "xp-aggregate",
+    queue: "progression",
+    lockKey: "lock:job:xp-aggregate",
+    lockTtlMs: 10 * 60_000,
+    maxRetries: 1,
+    handler: aggregate,
+  };
+}
+
+/**
  * ah-ended-ingest: fold completed sales into per-item statistics.
  *
  * No retries. The endpoint is a rolling 60-minute window, so a retry two minutes

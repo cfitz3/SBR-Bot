@@ -36,6 +36,8 @@ import {
   type ProgressSeriesDTO,
   type SkillsDTO,
   type SlayersDTO,
+  type XpService,
+  type XpStandingDTO,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { CommandDispatcher } from "./dispatcher.js";
@@ -373,6 +375,7 @@ function makeDispatcher(over: {
   roster?: GuildRosterSource;
   usage?: UsageSink;
   lfgBoard?: LfgBoard;
+  xp?: XpService;
   now?: () => number;
 } = {}) {
   return new CommandDispatcher({
@@ -391,6 +394,7 @@ function makeDispatcher(over: {
       config: guildConfig,
       analytics,
       ...(over.lfgBoard ? { lfgBoard: over.lfgBoard } : {}),
+      ...(over.xp ? { xp: over.xp } : {}),
       logger: silent,
     },
     logger: silent,
@@ -1366,4 +1370,79 @@ test("online reports an empty guild plainly", async () => {
 
 test("online is not reachable from guild chat", () => {
   assert.equal(buildBridgeRegistry().get("online")?.inGame, undefined);
+});
+
+// ── /standing ──
+
+const standingDto: XpStandingDTO = {
+  discordId: "111",
+  totalXp: 1_250,
+  level: 4,
+  intoLevel: 250,
+  levelSpan: 500,
+  bySource: { GEXP: 900, DISCORD_MESSAGE: 300, MANUAL: -50, EVENT: 0 },
+  tenureDays: 61,
+  lastAwardAt: new Date("2026-08-08T00:00:00.000Z"),
+  rank: 3,
+};
+
+function xpService(over: Partial<XpService> = {}): XpService {
+  return {
+    async recordMessage() { return true; },
+    async recordCommand() { return true; },
+    async standing() { return standingDto; },
+    async leaderboard() { return [standingDto]; },
+    async adjust() { return standingDto; },
+    ...over,
+  };
+}
+
+test("standing shows the level, the rank and where the XP came from", async () => {
+  const r = await makeDispatcher({ xp: xpService() }).dispatch("standing", ctx());
+  assert.match(r.embed?.description ?? "", /Level 4/);
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Rank")?.value, "#3");
+
+  const breakdown = r.embed?.fields?.find((f) => f.name === "Where it came from")?.value ?? "";
+  // Highest-paying source first, and a source that paid nothing is left out
+  // entirely rather than listed as a zero.
+  assert.match(breakdown, /^Guild XP — 900/);
+  assert.doesNotMatch(breakdown, /Events/);
+  // A deduction is still shown — hiding it would make the total unexplainable.
+  assert.match(breakdown, /Staff adjustment — -50/);
+});
+
+test("standing is public for yourself and ephemeral for someone else", async () => {
+  const mine = await makeDispatcher({ xp: xpService() }).dispatch("standing", ctx());
+  assert.equal(mine.ephemeral, false);
+
+  const theirs = await makeDispatcher({ xp: xpService() }).dispatch(
+    "standing",
+    ctx({ args: recordArgs({ member: "222222222222222222" }) }),
+  );
+  assert.equal(theirs.ephemeral, true);
+});
+
+test("standing says XP is off rather than reporting a zero", async () => {
+  const r = await makeDispatcher().dispatch("standing", ctx());
+  assert.match(r.text, /isn't switched on/);
+  assert.equal(r.embed, undefined);
+});
+
+test("a member who has earned nothing is told how to start, not shown a zero", async () => {
+  const none = xpService({ async standing() { return null; } });
+  const r = await makeDispatcher({ xp: none }).dispatch("standing", ctx());
+  assert.match(r.text, /haven't earned any guild XP yet/);
+});
+
+test("me folds guild standing into the stats card", async () => {
+  const r = await makeDispatcher({ xp: xpService() }).dispatch("me", ctx());
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Guild standing")?.value, "Level 4 · 1,250 XP · #3");
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Tenure")?.value, "61 days");
+});
+
+test("me still renders when the XP lookup fails", async () => {
+  const broken = xpService({ async standing() { throw new Error("db down"); } });
+  const r = await makeDispatcher({ xp: broken }).dispatch("me", ctx());
+  assert.match(r.embed?.title ?? "", /Aria/);
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Guild standing"), undefined);
 });

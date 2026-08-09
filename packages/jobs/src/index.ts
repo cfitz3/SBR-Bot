@@ -22,6 +22,7 @@ export {
   defineResourcesRefreshJob,
   defineRosterSyncJob,
   defineSafetyExpiryJob,
+  defineXpAggregateJob,
 } from "./jobs.js";
 export {
   blendEstimate,

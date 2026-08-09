@@ -61,6 +61,7 @@ export const STALE_AFTER_MS: Readonly<Record<string, number>> = {
   "event-transition": 15 * 60_000,
   "config-cache-invalidation": 30 * 60_000,
   "inactivity-scan": 3 * 86_400_000,
+  "xp-aggregate": 9 * 60 * 60_000,
 };
 
 /** The jobs whose freshness the Overview strip summarises. */

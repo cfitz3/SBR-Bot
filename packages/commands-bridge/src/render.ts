@@ -23,6 +23,8 @@ import type {
   ProgressSeriesDTO,
   SkillsDTO,
   SlayersDTO,
+  XpSource,
+  XpStandingDTO,
 } from "@sbr/shared-types";
 
 /** One decimal is enough for a level; two would imply precision we don't have. */
@@ -291,6 +293,12 @@ export function renderStatsEmbed(
   slayers: HypixelResult<SlayersDTO>,
   dungeons: HypixelResult<DungeonsDTO>,
   networth: HypixelResult<NetworthDTO>,
+  /**
+   * Guild standing, for the surfaces that know whose card this is. Optional
+   * because `/stats <player>` addresses an IGN and standing is keyed by Discord
+   * id — only `/me` can be certain the two are the same person.
+   */
+  standing?: XpStandingDTO | null,
 ): EmbedView {
   if (!profile.ok) {
     return { title: ign, description: renderFailure(profile.error.state), color: "NEUTRAL" };
@@ -318,8 +326,100 @@ export function renderStatsEmbed(
         value: slayers.ok ? formatNumber(slayers.value.data.totalExperience) : "—",
         inline: true,
       },
+      // Appended rather than interleaved: the Hypixel numbers describe an
+      // account, these two describe a guild member, and keeping them at the end
+      // means the card reads the same whether or not standing was available.
+      ...(standing
+        ? [
+            {
+              name: "Guild standing",
+              value: `Level ${standing.level} · ${formatNumber(standing.totalXp)} XP${
+                standing.rank === null ? "" : ` · #${standing.rank}`
+              }`,
+              inline: true,
+            },
+            {
+              name: "Tenure",
+              value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
+              inline: true,
+            },
+          ]
+        : []),
     ],
     footer: stalenessFooter(profile.value),
+    color: "INFO",
+  };
+}
+
+// ── Standing (COMMANDS.md §18) ──────────────────────────────────────────────
+
+/**
+ * How each XP source is named to a member. Deliberately in the member's terms
+ * rather than the enum's: nobody earns "GUILD_CHAT_MESSAGE", they talk in guild
+ * chat. `MANUAL` says "staff adjustment" because pretending an adjustment was
+ * earned is exactly the kind of thing that makes people distrust the number.
+ */
+const XP_SOURCE_LABELS: Readonly<Record<XpSource, string>> = {
+  GEXP: "Guild XP",
+  DISCORD_MESSAGE: "Discord chat",
+  GUILD_CHAT_MESSAGE: "Guild chat",
+  TENURE: "Tenure",
+  COMMAND_USAGE: "Command use",
+  EVENT: "Events",
+  MANUAL: "Staff adjustment",
+};
+
+/** `▰▰▰▱▱▱▱▱▱▱`. Built from the DTO's own numbers so this file needs no engine. */
+function xpProgressBar(intoLevel: number, levelSpan: number, width = 10): string {
+  const ratio = levelSpan <= 0 ? 0 : intoLevel / levelSpan;
+  const filled = Math.max(0, Math.min(width, Math.round(ratio * width)));
+  return "▰".repeat(filled) + "▱".repeat(width - filled);
+}
+
+/**
+ * `/standing` — level, progress, and where the XP came from.
+ *
+ * The breakdown lists only sources that actually paid, and always states the
+ * total it adds up to. A member who disagrees with their standing should be able
+ * to point at the line they think is wrong, which is the whole reason the ledger
+ * carries raw values in the first place.
+ */
+export function renderStandingEmbed(name: string, standing: XpStandingDTO): EmbedView {
+  const earned = (Object.entries(standing.bySource) as Array<[XpSource, number]>)
+    .filter(([, amount]) => amount !== 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  const breakdown =
+    earned.length === 0
+      ? "Nothing yet."
+      : earned.map(([source, amount]) => `${XP_SOURCE_LABELS[source]} — ${formatNumber(amount)}`).join("\n");
+
+  const bar = xpProgressBar(standing.intoLevel, standing.levelSpan);
+  const toNext = Math.max(0, standing.levelSpan - standing.intoLevel);
+
+  return {
+    title: `${name} — standing`,
+    description: `**Level ${standing.level}** · ${formatNumber(standing.totalXp)} XP\n${bar} ${formatNumber(
+      standing.intoLevel,
+    )}/${formatNumber(standing.levelSpan)} · ${formatNumber(toNext)} to level ${standing.level + 1}`,
+    fields: [
+      { name: "Rank", value: standing.rank === null ? "—" : `#${standing.rank}`, inline: true },
+      {
+        name: "Tenure",
+        value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
+        inline: true,
+      },
+      {
+        name: "Last earned",
+        value: standing.lastAwardAt === null ? "—" : describeAge(standing.lastAwardAt.toISOString()),
+        inline: true,
+      },
+      { name: "Where it came from", value: breakdown, inline: false },
+    ],
+    // Not a staleness footer: standing is recomputed on a cadence rather than
+    // fetched, so what a member needs to know is that today is still counting,
+    // not how old some upstream read was.
+    footer: "XP is totalled a few times a day — today's activity may not be in yet.",
     color: "INFO",
   };
 }
