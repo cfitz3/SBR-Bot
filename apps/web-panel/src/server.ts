@@ -9,8 +9,10 @@
  * proxying every request through it.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer as createTlsServer } from "node:https";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { panelOrigin } from "@sbr/config";
 import { pingDb } from "@sbr/db";
 import { getRedis, setJson, getJson, pingRedis } from "@sbr/redis";
 import {
@@ -225,29 +227,44 @@ async function readJsonBody(req: IncomingMessage): Promise<{ ok: true; value: un
 export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
   const cfg = app.config;
   const ctx = await getRedis();
-  // Derived from the configured redirect URI rather than NODE_ENV: what decides
-  // whether a Secure cookie survives is the scheme the browser actually used.
-  const secureCookies = cfg.oauth.redirectUri?.startsWith("https://") ?? false;
+  // Declared by WEB_PANEL_SCHEME rather than sniffed from the redirect URI: the
+  // scheme is the one place an operator states how the panel is reached, and a
+  // browser drops a Secure cookie over http regardless of what we intended.
+  const secureCookies = cfg.web.secureCookies;
   if (!secureCookies) {
-    app.log.warn("session cookies will not be marked Secure — OAUTH_REDIRECT_URI is not https");
+    app.log.warn(
+      'WEB_PANEL_SCHEME="http" — session cookies are not marked Secure and travel in plaintext. Use https once a certificate is available.',
+    );
   }
-  // The origin writes must come from. Derived from the same setting the browser
-  // was actually sent to; null when unconfigured, which turns the origin check
-  // into a no-op rather than rejecting every write on a half-set-up box.
-  const selfOrigin = originOf(cfg.oauth.redirectUri);
-  if (selfOrigin === null) {
-    app.log.warn("panel write origin check disabled — OAUTH_REDIRECT_URI is unset or unparseable");
-  }
+  // The origin writes must come from. Resolved from the public URL, falling back
+  // to the redirect URI and then the local bind address, so the check is active
+  // on a bare-IP box instead of silently disabled.
+  const selfOrigin = panelOrigin(cfg);
 
-  const server = createServer((req, res) => {
+  const handler = (req: IncomingMessage, res: ServerResponse): void => {
     void route(req, res).catch((error: unknown) => {
       app.log.error("panel request failed", { error: error instanceof Error ? error.message : "unknown" });
       if (!res.headersSent) send(res, 500, { error: "internal_error" });
     });
-  });
+  };
+
+  // TLS in-process only when cert material was supplied; the common shape is a
+  // reverse proxy terminating TLS and forwarding plaintext to this port, which
+  // is still `scheme=https` as far as cookies and origins are concerned.
+  const server = cfg.web.tls
+    ? createTlsServer(
+        {
+          cert: await readFile(cfg.web.tls.certPath),
+          key: await readFile(cfg.web.tls.keyPath),
+        },
+        handler,
+      )
+    : createServer(handler);
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const url = new URL(req.url ?? "/", `http://localhost:${cfg.web.port}`);
+    // Base only exists to make a relative request target parseable; the origin
+    // that matters for security decisions is `selfOrigin`, checked separately.
+    const url = new URL(req.url ?? "/", selfOrigin);
     const path = url.pathname;
     const method = req.method ?? "GET";
 
@@ -519,7 +536,7 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
   function checkCsrf(req: IncomingMessage, session: PanelSession): string | null {
     const origin = req.headers.origin;
     // Absent on same-origin fetch in some browsers; present and wrong is fatal.
-    if (typeof origin === "string" && selfOrigin !== null && origin !== selfOrigin) return "bad_origin";
+    if (typeof origin === "string" && origin !== selfOrigin) return "bad_origin";
 
     if (!session.csrfToken) return "csrf_stale_session";
     const header = req.headers[CSRF_HEADER];
@@ -539,15 +556,6 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
-}
-
-function originOf(uri: string | undefined): string | null {
-  if (!uri) return null;
-  try {
-    return new URL(uri).origin;
-  } catch {
-    return null;
-  }
 }
 
 function denyStatus(reason: string): number {

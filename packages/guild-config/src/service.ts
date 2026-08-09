@@ -32,8 +32,13 @@ export interface GuildConfigServiceDeps {
   readonly broadcast?: ConfigBroadcaster;
 }
 
-/** Column behind each `/set-channel` slot name. */
-const CHANNEL_COLUMNS: Record<ConfigChannelSlot, string> = {
+/**
+ * Legacy column behind a slot name, for the five slots that predate
+ * GuildChannelBinding. Writes are mirrored into these so a process still reading
+ * `config.bridgeChannelId` (or a rollback to the previous release) sees the
+ * current value; the columns are dropped once no reader remains.
+ */
+const LEGACY_CHANNEL_COLUMNS: Partial<Record<ConfigChannelSlot, string>> = {
   bridge: "bridgeChannelId",
   staff: "staffChannelId",
   log: "logChannelId",
@@ -98,8 +103,38 @@ export class GuildConfigServiceImpl implements GuildConfigService {
     return config.value.features[feature] === true;
   }
 
+  async getChannel(guildId: string, slot: ConfigChannelSlot): Promise<string | null> {
+    const config = await this.get(guildId);
+    if (!config.ok || config.value === null) return null;
+    return config.value.channels[slot] ?? null;
+  }
+
   async setChannel(guildId: string, slot: ConfigChannelSlot, channelId: string | null): Promise<Result<void>> {
-    return this.write(guildId, () => this.repo.update(guildId, { [CHANNEL_COLUMNS[slot]]: channelId }));
+    const legacyColumn = LEGACY_CHANNEL_COLUMNS[slot];
+    return this.write(guildId, async () => {
+      // The binding is authoritative and written first: if the mirror below
+      // fails, the value that every reader now resolves through is already
+      // correct, and the stale column is the copy nobody is meant to trust.
+      await this.repo.setChannelBinding(guildId, slot, channelId);
+      if (legacyColumn) await this.repo.update(guildId, { [legacyColumn]: channelId });
+    });
+  }
+
+  async getSetting<T>(guildId: string, key: string): Promise<T | null> {
+    try {
+      return ((await this.repo.getSetting(guildId, key)) as T | null) ?? null;
+    } catch (error) {
+      this.log.error("guild setting read failed", {
+        guildId,
+        key,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+      return null;
+    }
+  }
+
+  async setSetting(guildId: string, key: string, value: unknown): Promise<Result<void>> {
+    return this.write(guildId, () => this.repo.setSetting(guildId, key, value));
   }
 
   async setFeature(guildId: string, feature: string, enabled: boolean): Promise<Result<void>> {

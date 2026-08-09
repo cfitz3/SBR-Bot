@@ -13,9 +13,11 @@ loadRootEnv();
 
 export type NodeEnv = "development" | "test" | "production";
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
+export type WebScheme = "http" | "https";
 
 const LOG_LEVELS: readonly LogLevel[] = ["trace", "debug", "info", "warn", "error"];
 const NODE_ENVS: readonly NodeEnv[] = ["development", "test", "production"];
+const WEB_SCHEMES: readonly WebScheme[] = ["http", "https"];
 
 export interface AppConfig {
   readonly nodeEnv: NodeEnv;
@@ -47,13 +49,46 @@ export interface AppConfig {
      */
     readonly version: string;
   };
-  readonly web: { readonly port: number };
+  readonly web: {
+    readonly port: number;
+    /**
+     * How the panel is reached by a browser. Drives cookie `Secure`, the origin
+     * the CSRF check compares against, and whether this process terminates TLS
+     * itself. Defaults to https so the insecure mode is always a deliberate act.
+     */
+    readonly scheme: WebScheme;
+    /**
+     * Absolute origin the panel is served on, e.g. `http://203.0.113.10:3000`.
+     * Set this when the panel sits behind a proxy or on a bare IP; when unset it
+     * is derived from the OAuth redirect URI, which is the only other place the
+     * public address is already written down.
+     */
+    readonly publicUrl: string | undefined;
+    /**
+     * `Secure` on session cookies. Derived from the scheme rather than NODE_ENV:
+     * a browser silently drops a Secure cookie over http, which presents as
+     * "login succeeds but I'm never logged in" — the exact failure the HTTP mode
+     * exists to avoid.
+     */
+    readonly secureCookies: boolean;
+    /**
+     * In-process TLS material. Optional because the usual production shape is a
+     * reverse proxy terminating TLS and forwarding plaintext to this port; these
+     * are for the case where the panel is the edge.
+     */
+    readonly tls: { readonly certPath: string; readonly keyPath: string } | undefined;
+  };
 }
 
 /** Collects validation errors so we can report them all at once. */
 class Validator {
   private readonly errors: string[] = [];
   constructor(private readonly env: NodeJS.ProcessEnv) {}
+
+  /** Record a problem the typed helpers can't express (cross-field rules). */
+  push(message: string): void {
+    this.errors.push(message);
+  }
 
   requireString(key: string): string {
     const v = this.env[key]?.trim();
@@ -120,6 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   const v = new Validator(env);
   const nodeEnv = v.enum("NODE_ENV", NODE_ENVS, "development");
+  const web = webConfig(v, env, nodeEnv);
 
   const config: AppConfig = {
     nodeEnv,
@@ -148,12 +184,109 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       username: v.optionalString("MC_USERNAME"),
       version: v.optionalString("MC_VERSION") ?? "1.8.9",
     },
-    web: { port: v.int("WEB_PANEL_PORT", 3000) },
+    web,
   };
 
   v.throwIfInvalid();
   cached = config;
   return config;
+}
+
+/**
+ * Resolve the panel's transport settings.
+ *
+ * Split out because this is the one part of the config with rules rather than
+ * just types: HTTP is a real operational mode (a VPS on a bare IP with no
+ * certificate yet), but it must never become the accidental production shape, so
+ * it costs one explicit opt-in and never happens by omission.
+ */
+function webConfig(v: Validator, env: NodeJS.ProcessEnv, nodeEnv: NodeEnv): AppConfig["web"] {
+  const scheme = v.enum("WEB_PANEL_SCHEME", WEB_SCHEMES, "https");
+  const port = v.int("WEB_PANEL_PORT", 3000);
+  const publicUrl = v.optionalString("WEB_PANEL_PUBLIC_URL");
+
+  if (publicUrl !== undefined) {
+    const parsed = parseOrigin(publicUrl);
+    if (parsed === null) {
+      v.push(`Invalid WEB_PANEL_PUBLIC_URL="${publicUrl}" (expected an absolute URL)`);
+    } else if (parsed.protocol !== `${scheme}:`) {
+      // A public URL disagreeing with the scheme is how you get a Secure cookie
+      // over http, or a CSRF origin check that rejects every write.
+      v.push(
+        `WEB_PANEL_PUBLIC_URL="${publicUrl}" does not match WEB_PANEL_SCHEME="${scheme}" — the scheme decides cookie and origin handling`,
+      );
+    }
+  }
+
+  if (scheme === "http") {
+    // Production over plaintext means session cookies cross the network in the
+    // clear. Allowed, because "temporarily, on a VPS I control" is a real
+    // situation — but only when someone has said so in as many words.
+    const allowInsecure = env["WEB_PANEL_ALLOW_INSECURE"]?.trim() === "true";
+    if (nodeEnv === "production" && !allowInsecure) {
+      v.push(
+        'WEB_PANEL_SCHEME="http" with NODE_ENV=production sends session cookies in plaintext — set WEB_PANEL_ALLOW_INSECURE=true to accept that',
+      );
+    }
+    const redirect = v.optionalString("DISCORD_OAUTH_REDIRECT_URI");
+    if (redirect?.startsWith("https://")) {
+      v.push('DISCORD_OAUTH_REDIRECT_URI is https but WEB_PANEL_SCHEME="http" — the OAuth callback would never reach the panel');
+    }
+  } else {
+    // The mirror image: https marks cookies Secure, and a browser drops those
+    // over a plaintext origin. Loopback is exempt because browsers treat
+    // http://localhost as a secure context, which is what makes the default
+    // scheme work on a dev box with no certificate.
+    const redirect = parseOrigin(v.optionalString("DISCORD_OAUTH_REDIRECT_URI") ?? "");
+    if (redirect?.protocol === "http:" && !isLoopback(redirect.hostname)) {
+      v.push(
+        `DISCORD_OAUTH_REDIRECT_URI="${redirect.href}" is plaintext but WEB_PANEL_SCHEME defaults to https — Secure cookies would be dropped. Set WEB_PANEL_SCHEME=http to run without TLS.`,
+      );
+    }
+  }
+
+  const certPath = v.optionalString("WEB_PANEL_TLS_CERT");
+  const keyPath = v.optionalString("WEB_PANEL_TLS_KEY");
+  if ((certPath === undefined) !== (keyPath === undefined)) {
+    v.push("WEB_PANEL_TLS_CERT and WEB_PANEL_TLS_KEY must be set together (or neither, to run behind a TLS-terminating proxy)");
+  }
+  if (certPath !== undefined && scheme === "http") {
+    v.push('WEB_PANEL_TLS_CERT is set but WEB_PANEL_SCHEME="http" — pick one');
+  }
+
+  return {
+    port,
+    scheme,
+    publicUrl,
+    secureCookies: scheme === "https",
+    tls: certPath !== undefined && keyPath !== undefined ? { certPath, keyPath } : undefined,
+  };
+}
+
+/** Hosts browsers treat as a secure context even over plaintext. */
+function isLoopback(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+function parseOrigin(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The origin a browser reaches the panel on — what the CSRF origin check compares
+ * against and what OAuth redirects are built from. Prefers the explicit setting,
+ * then the redirect URI (the only other place the public address is recorded),
+ * and finally the local bind address so a dev box works with neither set.
+ */
+export function panelOrigin(config: AppConfig): string {
+  const explicit = config.web.publicUrl ?? config.oauth.redirectUri;
+  const parsed = explicit === undefined ? null : parseOrigin(explicit);
+  if (parsed) return parsed.origin;
+  return `${config.web.scheme}://localhost:${config.web.port}`;
 }
 
 /**

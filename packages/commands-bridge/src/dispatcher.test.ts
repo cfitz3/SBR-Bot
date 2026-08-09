@@ -309,6 +309,9 @@ function community(over: Partial<CommunityService> = {}): CommunityService {
 const guildConfig: GuildConfigService = {
   async get() { return ok(null); },
   async isFeatureEnabled() { return true; },
+  async getChannel() { return null; },
+  async getSetting() { return null; },
+  async setSetting() { return ok(undefined); },
   async setChannel() { return ok(undefined); },
   async setFeature() { return ok(undefined); },
   async setBridgeSuspended() { return ok(undefined); },

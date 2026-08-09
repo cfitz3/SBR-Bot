@@ -294,6 +294,12 @@ export type ModerationError =
 export interface GuildConfigService {
   get(guildId: string): Promise<Result<GuildRuntimeConfig | null>>;
   isFeatureEnabled(guildId: string, feature: string): Promise<boolean>;
+  /**
+   * The channel bound to a slot, or null when the guild has not set one. Goes
+   * through the same cached read as `get`, so a hot path (the bridge asking
+   * where to relay) costs no query.
+   */
+  getChannel(guildId: string, slot: ConfigChannelSlot): Promise<string | null>;
   /** `/set-channel` — assign one of the platform's well-known channels. */
   setChannel(guildId: string, slot: ConfigChannelSlot, channelId: string | null): Promise<Result<void>>;
   /** `/feature-toggle` — flip a named flag without disturbing the others. */
@@ -302,6 +308,14 @@ export interface GuildConfigService {
   setBridgeSuspended(guildId: string, suspended: boolean): Promise<Result<void>>;
   /** `/set-recruitment` — open or close applications and set the entry bar. */
   setRecruitment(guildId: string, input: RecruitmentSettings): Promise<Result<void>>;
+  /**
+   * Admin config that isn't worth a column — embed templates, dropdown layouts,
+   * per-feature payloads. Callers own the shape and validate what comes back;
+   * an unreadable or absent setting is null, so a caller falls back to its
+   * platform default instead of failing.
+   */
+  getSetting<T>(guildId: string, key: string): Promise<T | null>;
+  setSetting(guildId: string, key: string, value: unknown): Promise<Result<void>>;
   /** `/set-role type:mapping` — bind a platform role to a Discord role id. */
   setRoleMapping(guildId: string, role: MemberRole, discordRoleId: string | null): Promise<Result<void>>;
 }
@@ -318,11 +332,60 @@ export interface RecruitmentSettings {
   readonly minNetworth?: number | null;
 }
 
-/** The channels the platform knows how to use, as `/set-channel` names them. */
-export type ConfigChannelSlot = "bridge" | "staff" | "log" | "applications" | "events";
+/**
+ * The channels the platform knows how to use, as `/set-channel` and the panel
+ * name them.
+ *
+ * A runtime array rather than only a type, because the panel has to validate a
+ * slot name arriving over HTTP and render one control per slot — deriving both
+ * from this list is what keeps "slots the API accepts" and "slots the UI offers"
+ * from drifting apart, which is how a control ends up saving into nothing.
+ *
+ * The first five are backed by legacy columns on GuildConfig and are mirrored on
+ * write until those columns are dropped; the rest live only as bindings.
+ */
+export const CONFIG_CHANNEL_SLOTS = [
+  "bridge",
+  "staff",
+  "log",
+  "applications",
+  "events",
+  "lfg",
+  "tickets",
+  "milestones",
+  "leaderboard",
+  "modlog",
+] as const;
+
+export type ConfigChannelSlot = (typeof CONFIG_CHANNEL_SLOTS)[number];
+
+/** Narrow an untrusted string (a panel body, a command option) to a known slot. */
+export function isConfigChannelSlot(value: unknown): value is ConfigChannelSlot {
+  return typeof value === "string" && (CONFIG_CHANNEL_SLOTS as readonly string[]).includes(value);
+}
+
+/** Human labels for the slots, for panel controls and command replies. */
+export const CONFIG_CHANNEL_SLOT_LABELS: Readonly<Record<ConfigChannelSlot, string>> = {
+  bridge: "Guild bridge",
+  staff: "Staff",
+  log: "Bot log",
+  applications: "Applications",
+  events: "Events",
+  lfg: "Looking for group",
+  tickets: "Ticket panel",
+  milestones: "Milestone announcements",
+  leaderboard: "Leaderboards",
+  modlog: "Moderation log",
+};
 
 export interface GuildRuntimeConfig {
   readonly guildId: string;
+  /**
+   * Every configured channel, keyed by slot. The canonical source: a slot with
+   * no binding is absent, and the five legacy `*ChannelId` fields below are a
+   * compatibility view over the same data for call sites not yet migrated.
+   */
+  readonly channels: Readonly<Partial<Record<ConfigChannelSlot, string>>>;
   readonly bridgeChannelId: string | null;
   readonly staffChannelId: string | null;
   readonly logChannelId: string | null;

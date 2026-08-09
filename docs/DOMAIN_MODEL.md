@@ -20,6 +20,8 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | GuildMember | Postgres | Persistent |
 | SelectedSkyblockProfile | Postgres | Persistent (choice); live profile data is cached |
 | GuildConfig | Postgres (cached in Redis) | Persistent |
+| GuildChannelBinding | Postgres (cached with GuildConfig) | Persistent |
+| GuildSetting | Postgres | Persistent |
 | BridgePermission | Postgres (cached in Redis) | Persistent |
 | Infraction | Postgres | Persistent (audit) |
 | ModerationAction | Postgres | Persistent (audit) |
@@ -142,8 +144,8 @@ Per-guild settings and feature flags. Single row per guild; hot-read → cached 
 | Field | Notes |
 |-------|-------|
 | `guildId` | FK, unique |
-| `bridgeChannelId` | Discord channel for relay |
-| `staffChannelId`, `logChannelId` | routing |
+| `bridgeChannelId` | **deprecated** — mirrored from the `bridge` binding; dropped once no reader remains |
+| `staffChannelId`, `logChannelId`, `applicationsChannelId`, `eventsChannelId` | **deprecated**, same |
 | `prefixes` | command prefixes |
 | `features` | JSON feature-flag map |
 | `cooldownDefaults` | JSON |
@@ -151,6 +153,40 @@ Per-guild settings and feature flags. Single row per guild; hot-read → cached 
 | `timezone` | for events |
 
 **Relationships:** 1—1 `Guild`.
+
+#### GuildChannelBinding
+One Discord channel per named slot, per guild. Replaces the fixed `*ChannelId`
+columns so a new destination (LFG, tickets, milestones, leaderboards, modlog) is a
+row rather than a migration, and so nothing guild-specific has to live in `.env`.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `slot` | free-form string; the known set is `ConfigChannelSlot` in `@sbr/shared-types` |
+| `channelId` | Discord channel id |
+
+Unique on (`guildId`, `slot`). Deliberately not a Prisma enum: the panel derives
+both its validation and its rendered controls from the same `const` list, and a
+slot written by a newer release is ignored by an older one rather than crashing it.
+
+Reads merge binding rows over the legacy columns (see `guildConfigRepository.get`);
+writes go to the binding first and then mirror the legacy column where one exists,
+so a partial failure leaves the authoritative value correct.
+
+**Relationships:** N—1 `Guild`.
+
+#### GuildSetting
+Arbitrary per-guild admin configuration keyed by dotted string (`xp.weights`,
+`lfg.autoExpireMinutes`, …), value is JSON. The escape hatch that keeps
+panel-editable knobs out of `.env` without a migration per knob.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `key` | dotted namespace, unique per guild |
+| `value` | JSON; an absent row means "use the code default" |
+
+**Relationships:** N—1 `Guild`.
 
 #### BridgePermission
 Who may do what through the chat bridge (e.g. run commands, use @mentions, bypass filters).
@@ -405,6 +441,8 @@ erDiagram
     DiscordUser ||--o{ GuildMember : joins
     Guild ||--o{ GuildMember : contains
     Guild ||--|| GuildConfig : configures
+    Guild ||--o{ GuildChannelBinding : routes
+    Guild ||--o{ GuildSetting : tunes
     Guild ||--o{ BridgePermission : grants
     Guild ||--o{ WordlistEntry : filters
     MinecraftAccount ||--o{ SelectedSkyblockProfile : selects
@@ -426,7 +464,7 @@ erDiagram
 
 ## Persistent vs. Ephemeral — Guidance
 
-- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, ProfileSnapshot, Milestone, WorkerJobLog. These are records of fact, audit, or configuration.
+- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, GuildChannelBinding, GuildSetting, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, ProfileSnapshot, Milestone, WorkerJobLog. These are records of fact, audit, or configuration.
 - **Persistent record + ephemeral live-state mirror in Redis:**
   - `ModerationAction` → active mute/ban with TTL for fast enforcement checks.
   - `LFGPost` → open posts with TTL for live listings + auto-expiry.

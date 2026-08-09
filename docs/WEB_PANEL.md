@@ -33,6 +33,19 @@ Partial within the built pages, and deliberate: the recruitment queue shows appl
 
 **The editing unit is a field, not a form.** Each control saves itself and carries its own status line, because every domain service underneath takes one value (`setChannel`, `setFeature`, `setBridgeSuspended`) and a page-wide submit would report "saved" for a write that applied four of its five parts. The two exceptions submit as a unit because their parts are not separately storable: the moderation action form (§3.6), where a type without a reason is a row the audit log should never hold, and the event scheduler (§3.8), where a title without a start time is not an event. Controls that write on change (toggles, the role dropdown) snap back when the server refuses, so a widget never displays a value that was never stored.
 
+### Transport: HTTP or HTTPS
+
+`WEB_PANEL_SCHEME` decides how the panel is reached, and **defaults to `https`** — running without TLS is always a deliberate act, never the result of an omitted setting. The scheme is a declaration by the operator rather than something the server sniffs, because the three things that depend on it disagree about what they can observe: a cookie's `Secure` flag has to be decided before any request arrives, the CSRF origin check needs the public address (which behind a proxy is not the address this process bound), and only the operator knows whether something in front is terminating TLS.
+
+| Setting | Effect |
+| --- | --- |
+| `WEB_PANEL_SCHEME=https` (default) | Session and CSRF cookies are marked `Secure`. TLS is terminated by a reverse proxy in front of this port, or in-process when `WEB_PANEL_TLS_CERT`/`WEB_PANEL_TLS_KEY` are both set. |
+| `WEB_PANEL_SCHEME=http` | Cookies are issued without `Secure`, and the server logs a startup warning naming the tradeoff. For a VPS on a bare IP with no certificate yet. |
+| `WEB_PANEL_PUBLIC_URL` | The origin the CSRF check compares against. Falls back to `DISCORD_OAUTH_REDIRECT_URI`, then to the local bind address — so the check is *active* on a bare-IP box rather than silently disabled, which is what the previous derivation did when the redirect URI was unset. |
+| `WEB_PANEL_ALLOW_INSECURE=true` | Required to run `http` under `NODE_ENV=production`. |
+
+`packages/config` rejects the combinations that would otherwise fail invisibly at login time, since each presents as "login succeeds but I'm never logged in" rather than as an error: a public URL whose scheme contradicts `WEB_PANEL_SCHEME`, an `https` callback under an `http` panel (the callback never arrives), a plaintext callback on a non-loopback host under the `https` default (the browser drops the `Secure` cookie), TLS material supplied alone or alongside `http`, and plaintext production without the acknowledgement. Loopback callbacks are exempt from the plaintext check because browsers treat `http://localhost` as a secure context, which is what lets the secure default work on a dev box with no certificate.
+
 ### Write path
 
 Writes live in `PanelMutations` (`panel-core/src/mutations.ts`), a sibling of `PanelService` rather than more methods on it, because every write shares a pipeline the reads don't have: **authorize → rate-limit → validate → call the shared domain service → audit**. No SQL and no enforcement logic lives there; the panel commands the same services the bots do.

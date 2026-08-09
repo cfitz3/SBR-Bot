@@ -108,6 +108,9 @@ function guildConfig(over: Partial<GuildConfigService> = {}): GuildConfigService
   return {
     async get() { return ok(null); },
     async isFeatureEnabled() { return true; },
+    async getChannel() { return null; },
+    async getSetting() { return null; },
+    async setSetting() { return ok(undefined); },
     async setChannel() { return ok(undefined); },
     async setFeature() { return ok(undefined); },
     async setBridgeSuspended() { return ok(undefined); },

@@ -129,7 +129,7 @@ const configService = (over: Partial<GuildRuntimeConfig> = {}): GuildConfigServi
   const partial: Partial<GuildConfigService> = {
     async get() {
       return ok({
-        guildId: "g1", bridgeChannelId: null, staffChannelId: null, logChannelId: null,
+        guildId: "g1", channels: {}, bridgeChannelId: null, staffChannelId: null, logChannelId: null,
         applicationsChannelId: null, eventsChannelId: null, prefixes: ["!"], timezone: "UTC",
         applicationsOpen: true, bridgeSuspended: false, features: {}, minWeight: null,
         minNetworth: null, roleMappings: {}, ...over,

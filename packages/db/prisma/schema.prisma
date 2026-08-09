@@ -290,6 +290,8 @@ model Guild {
   updatedAt      DateTime    @updatedAt
 
   config        GuildConfig?
+  channels      GuildChannelBinding[]
+  settings      GuildSetting[]
   members       GuildMember[]
   permissions   BridgePermission[]
   wordlist      WordlistEntry[]
@@ -343,6 +345,48 @@ model SelectedSkyblockProfile {
 }
 
 // ─────────────────────────── Config & Permissions ───────────────────────────
+
+/// One channel binding per (guild, slot).
+///
+/// Replaces the fixed `*ChannelId` columns on GuildConfig: adding a slot is a
+/// row rather than a migration, which is what lets the panel own the full set of
+/// guild-specific channels instead of some of them living in `.env`. The five
+/// legacy columns are still written for now (see LEGACY_CHANNEL_COLUMNS in
+/// @sbr/guild-config) and are dropped once nothing reads them.
+model GuildChannelBinding {
+  id        String   @id @default(cuid())
+  guildId   String
+  /// See CONFIG_CHANNEL_SLOTS in @sbr/shared-types. Deliberately a string rather
+  /// than an enum: a new slot should not need a database migration, and the
+  /// value is narrowed by `isConfigChannelSlot` at every entry point.
+  slot      String
+  channelId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, slot])
+  @@index([guildId])
+}
+
+/// Typed-at-the-edge admin settings: embed templates, dropdown layouts, and the
+/// other per-guild payloads that would each otherwise be a column. Rows are
+/// written only by the panel and the admin bot; readers own the shape and treat
+/// an absent or malformed value as "use the platform default".
+model GuildSetting {
+  id        String   @id @default(cuid())
+  guildId   String
+  key       String
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, key])
+  @@index([guildId])
+}
 
 model GuildConfig {
   id               String   @id @default(cuid())

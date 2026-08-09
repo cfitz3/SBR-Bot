@@ -51,7 +51,17 @@ async function main(): Promise<void> {
     update: { bridgeChannelId },
     create: { guildId: guild.id, bridgeChannelId },
   });
-  process.stdout.write(`guild config ready: bridgeChannelId=${bridgeChannelId ?? "(unset)"}\n`);
+  // Seed the binding too, since that is what the running bot actually reads.
+  // `update` is deliberately omitted from the upsert: re-seeding must not stomp
+  // a channel someone has since changed from the panel.
+  if (bridgeChannelId) {
+    await prisma.guildChannelBinding.upsert({
+      where: { guildId_slot: { guildId: guild.id, slot: "bridge" } },
+      update: {},
+      create: { guildId: guild.id, slot: "bridge", channelId: bridgeChannelId },
+    });
+  }
+  process.stdout.write(`guild config ready: bridge channel=${bridgeChannelId ?? "(unset)"}\n`);
 
   if (ownerDiscordId) {
     const user = await prisma.discordUser.upsert({

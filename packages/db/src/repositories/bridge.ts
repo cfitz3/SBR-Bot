@@ -2,7 +2,8 @@
  * Prisma reads and writes for the bridge relay: wordlist entries and guild
  * config. `guildId` is the internal Guild.id.
  */
-import type { WordlistRuleDTO } from "@sbr/shared-types";
+import { Prisma } from "@prisma/client";
+import { isConfigChannelSlot, type ConfigChannelSlot, type WordlistRuleDTO } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
 export type WordMatchType = "EXACT" | "SUBSTRING" | "REGEX" | "WILDCARD";
@@ -115,6 +116,7 @@ export const wordlistRepository = {
 };
 
 export interface GuildConfigRow {
+  channels: Partial<Record<ConfigChannelSlot, string>>;
   bridgeChannelId: string | null;
   staffChannelId: string | null;
   logChannelId: string | null;
@@ -150,11 +152,55 @@ function toRoleMap(value: unknown): Record<string, string> {
   return out;
 }
 
+/**
+ * Merge the two places a channel can be recorded, newest wins.
+ *
+ * A binding row is authoritative; a legacy column fills in for the five slots
+ * that predate the table, covering a guild whose config was written by an older
+ * release and never re-saved since. Keeping the fallback here rather than in the
+ * service means the compatibility window is one function to delete.
+ */
+function mergeChannels(
+  cfg: {
+    bridgeChannelId: string | null;
+    staffChannelId: string | null;
+    logChannelId: string | null;
+    applicationsChannelId: string | null;
+    eventsChannelId: string | null;
+  },
+  bindings: readonly { slot: string; channelId: string }[],
+): Partial<Record<ConfigChannelSlot, string>> {
+  const channels: Partial<Record<ConfigChannelSlot, string>> = {};
+
+  const legacy: [ConfigChannelSlot, string | null][] = [
+    ["bridge", cfg.bridgeChannelId],
+    ["staff", cfg.staffChannelId],
+    ["log", cfg.logChannelId],
+    ["applications", cfg.applicationsChannelId],
+    ["events", cfg.eventsChannelId],
+  ];
+  for (const [slot, channelId] of legacy) {
+    if (channelId !== null) channels[slot] = channelId;
+  }
+
+  for (const binding of bindings) {
+    // An unrecognised slot is a row from a newer release than this process;
+    // ignoring it is correct, and better than widening the typed map with it.
+    if (isConfigChannelSlot(binding.slot)) channels[binding.slot] = binding.channelId;
+  }
+
+  return channels;
+}
+
 export const guildConfigRepository = {
   async get(guildId: string): Promise<GuildConfigRow | null> {
-    const cfg = await prisma.guildConfig.findUnique({ where: { guildId } });
+    const [cfg, bindings] = await Promise.all([
+      prisma.guildConfig.findUnique({ where: { guildId } }),
+      prisma.guildChannelBinding.findMany({ where: { guildId }, select: { slot: true, channelId: true } }),
+    ]);
     if (!cfg) return null;
     return {
+      channels: mergeChannels(cfg, bindings),
       bridgeChannelId: cfg.bridgeChannelId,
       staffChannelId: cfg.staffChannelId,
       logChannelId: cfg.logChannelId,
@@ -178,7 +224,10 @@ export const guildConfigRepository = {
    * a GuildConfig row would otherwise make every `/set-channel` fail with a
    * foreign-key error rather than doing the obvious thing.
    */
-  async update(guildId: string, patch: Partial<Omit<GuildConfigRow, "features" | "roleMappings">>): Promise<void> {
+  async update(
+    guildId: string,
+    patch: Partial<Omit<GuildConfigRow, "features" | "roleMappings" | "channels">>,
+  ): Promise<void> {
     await prisma.guildConfig.upsert({
       where: { guildId },
       create: { guildId, ...patch },
@@ -207,6 +256,45 @@ export const guildConfigRepository = {
       where: { guildId },
       create: { guildId, roleMappings },
       update: { roleMappings },
+    });
+  },
+
+  /**
+   * Bind or clear one channel slot. Clearing deletes the row rather than storing
+   * an empty string, so "never configured" and "deliberately cleared" resolve to
+   * the same absent value instead of one of them reading as a channel id of "".
+   */
+  async setChannelBinding(guildId: string, slot: ConfigChannelSlot, channelId: string | null): Promise<void> {
+    if (channelId === null) {
+      await prisma.guildChannelBinding.deleteMany({ where: { guildId, slot } });
+      return;
+    }
+    await prisma.guildChannelBinding.upsert({
+      where: { guildId_slot: { guildId, slot } },
+      create: { guildId, slot, channelId },
+      update: { channelId },
+    });
+  },
+
+  async getSetting(guildId: string, key: string): Promise<unknown> {
+    const row = await prisma.guildSetting.findUnique({
+      where: { guildId_key: { guildId, key } },
+      select: { value: true },
+    });
+    return row?.value ?? null;
+  },
+
+  /** Upsert one setting; null deletes it, restoring the caller's own default. */
+  async setSetting(guildId: string, key: string, value: unknown): Promise<void> {
+    if (value === null || value === undefined) {
+      await prisma.guildSetting.deleteMany({ where: { guildId, key } });
+      return;
+    }
+    const json = value as Prisma.InputJsonValue;
+    await prisma.guildSetting.upsert({
+      where: { guildId_key: { guildId, key } },
+      create: { guildId, key, value: json },
+      update: { value: json },
     });
   },
 };

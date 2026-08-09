@@ -8,6 +8,7 @@ const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 
 function row(over: Partial<GuildConfigRow> = {}): GuildConfigRow {
   return {
+    channels: { bridge: "chan-1" },
     bridgeChannelId: "chan-1",
     staffChannelId: null,
     logChannelId: null,
@@ -31,6 +32,9 @@ function repo(over: Partial<GuildConfigRepository> = {}): GuildConfigRepository 
     async update() {},
     async setFeature() {},
     async setRoleMapping() {},
+    async setChannelBinding() {},
+    async getSetting() { return null; },
+    async setSetting() {},
     ...over,
   };
 }
@@ -110,16 +114,84 @@ test("with no cached value at all, an outage is reported as an error", async () 
   assert.equal((await svc.get("g1")).ok, false);
 });
 
-test("setChannel maps the slot name to its column", async () => {
+test("setChannel writes the binding and mirrors the legacy column, in that order", async () => {
+  const calls: string[] = [];
   const patches: Record<string, unknown>[] = [];
+  const bound: [string, string | null][] = [];
   const svc = new GuildConfigServiceImpl({
-    repo: repo({ async update(_g, patch) { patches.push(patch); } }),
+    repo: repo({
+      async update(_g, patch) { calls.push("update"); patches.push(patch); },
+      async setChannelBinding(_g, slot, id) { calls.push("bind"); bound.push([slot, id]); },
+    }),
     logger: silent,
   });
 
   await svc.setChannel("g1", "staff", "chan-9");
   await svc.setChannel("g1", "events", null);
+  assert.deepEqual(bound, [["staff", "chan-9"], ["events", null]]);
   assert.deepEqual(patches, [{ staffChannelId: "chan-9" }, { eventsChannelId: null }]);
+  // The authoritative row must land before the copy nobody is meant to trust.
+  assert.deepEqual(calls, ["bind", "update", "bind", "update"]);
+});
+
+test("a slot with no legacy column is written to the binding table only", async () => {
+  const calls: string[] = [];
+  const bound: [string, string | null][] = [];
+  const svc = new GuildConfigServiceImpl({
+    repo: repo({
+      async update() { calls.push("update"); },
+      async setChannelBinding(_g, slot, id) { calls.push("bind"); bound.push([slot, id]); },
+    }),
+    logger: silent,
+  });
+
+  await svc.setChannel("g1", "lfg", "chan-7");
+  assert.deepEqual(bound, [["lfg", "chan-7"]]);
+  assert.deepEqual(calls, ["bind"], "no column exists to mirror into");
+});
+
+test("getChannel resolves through the merged channel map", async () => {
+  const svc = new GuildConfigServiceImpl({
+    repo: repo({ async get() { return row({ channels: { bridge: "chan-1", lfg: "chan-7" } }); } }),
+    logger: silent,
+  });
+
+  assert.equal(await svc.getChannel("g1", "lfg"), "chan-7");
+  assert.equal(await svc.getChannel("g1", "tickets"), null, "an unbound slot is absent, not an error");
+});
+
+test("an unconfigured guild has no channels rather than throwing", async () => {
+  const svc = new GuildConfigServiceImpl({ repo: repo({ async get() { return null; } }), logger: silent });
+  assert.equal(await svc.getChannel("g1", "bridge"), null);
+});
+
+test("settings round-trip through the repository and invalidate the cache", async () => {
+  let reads = 0;
+  const store = new Map<string, unknown>();
+  const svc = new GuildConfigServiceImpl({
+    repo: repo({
+      async get() { reads += 1; return row(); },
+      async getSetting(_g, key) { return store.get(key) ?? null; },
+      async setSetting(_g, key, value) { store.set(key, value); },
+    }),
+    logger: silent,
+  });
+
+  await svc.get("g1");
+  assert.equal(await svc.getSetting("g1", "xp.weights"), null);
+  const written = await svc.setSetting("g1", "xp.weights", { message: 2 });
+  assert.equal(written.ok, true);
+  assert.deepEqual(await svc.getSetting<{ message: number }>("g1", "xp.weights"), { message: 2 });
+  await svc.get("g1");
+  assert.equal(reads, 2, "the write must invalidate the cached read");
+});
+
+test("a failed setting read degrades to null instead of throwing at the caller", async () => {
+  const svc = new GuildConfigServiceImpl({
+    repo: repo({ async getSetting() { throw new Error("db down"); } }),
+    logger: silent,
+  });
+  assert.equal(await svc.getSetting("g1", "xp.weights"), null);
 });
 
 test("opening recruitment leaves an unspecified threshold alone", async () => {

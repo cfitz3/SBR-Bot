@@ -112,6 +112,11 @@ export function registerCommunityButtons(app: BridgeApp, components: ComponentRo
 export interface BridgeTransportOptions {
   readonly discordToken: string;
   readonly discordGuildId: string | undefined;
+  /**
+   * Bootstrap fallback only, used until the guild has a `bridge` channel binding.
+   * The binding wins whenever it exists, so a running bot follows a panel change
+   * without a restart.
+   */
   readonly bridgeChannelId: string | undefined;
   readonly mc: { host: string; port: number; username: string; version: string } | null;
 }
@@ -246,6 +251,19 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       });
     }
     return internalGuildId;
+  }
+
+  /**
+   * Where the relay lands, resolved per message rather than captured at boot.
+   *
+   * The binding is the source of truth and is changed from the panel or
+   * `/set-channel` while the bot is running; `BRIDGE_CHANNEL_ID` survives only as
+   * a bootstrap fallback for an install whose config row has never been saved.
+   * The service caches, so this is not a query per chat line.
+   */
+  async function resolveBridgeChannel(guildId: string): Promise<string | null> {
+    const bound = await app.handlerDeps.config.getChannel(guildId, "bridge");
+    return bound ?? opts.bridgeChannelId ?? null;
   }
 
   const discord = new Client({
@@ -442,7 +460,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
 
       relay("game→discord", async () => {
         const guildId = await resolveInternalGuild();
-        if (guildId) await relayGameToDiscord(app, discord, opts.bridgeChannelId, guildId, parsed);
+        if (guildId) await relayGameToDiscord(app, discord, await resolveBridgeChannel(guildId), guildId, parsed);
       });
       // A `!` line is still chat, so it relays above as well as running here —
       // otherwise Discord sees an answer to a question it never saw asked.
@@ -504,10 +522,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   discord.on(Events.MessageCreate, (msg: Message) => {
     const bot = session.bot;
     if (msg.author.bot || !bot) return;
-    if (opts.bridgeChannelId && msg.channelId !== opts.bridgeChannelId) return;
     relay("discord→game", async () => {
       const guildId = await resolveInternalGuild();
       if (!guildId) return;
+      // Channel check moved inside the hop because the binding is per guild and
+      // read asynchronously; an unbound guild relays nothing rather than
+      // relaying every channel it can see.
+      const bridgeChannelId = await resolveBridgeChannel(guildId);
+      if (bridgeChannelId === null || msg.channelId !== bridgeChannelId) return;
       if (!spawned) {
         app.log.warn("dropped discord→game message: not connected in-game yet", { messageId: msg.id });
         return;
@@ -620,7 +642,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
 async function relayGameToDiscord(
   app: BridgeApp,
   discord: Client,
-  bridgeChannelId: string | undefined,
+  bridgeChannelId: string | null,
   guildId: string,
   parsed: GuildChatLine,
 ): Promise<void> {

@@ -1,8 +1,17 @@
+import type { ConfigChannelSlot } from "@sbr/shared-types";
+
 /**
  * Port: guild-config persistence. Implemented by `@sbr/db`
  * (`guildConfigRepository`) so neither side depends on the other.
  */
 export interface GuildConfigRow {
+  /**
+   * Channel bindings by slot, already merged by the repository: a binding row
+   * wins, and a legacy `*ChannelId` column fills in for the five slots that
+   * predate the table. Merging in the repository rather than the service keeps
+   * the compatibility window in one place to delete later.
+   */
+  readonly channels: Readonly<Partial<Record<ConfigChannelSlot, string>>>;
   readonly bridgeChannelId: string | null;
   readonly staffChannelId: string | null;
   readonly logChannelId: string | null;
@@ -36,4 +45,13 @@ export interface GuildConfigRepository {
   setFeature(guildId: string, feature: string, enabled: boolean): Promise<void>;
   /** Bind or clear one platform role's Discord role id, leaving the rest alone. */
   setRoleMapping(guildId: string, role: string, discordRoleId: string | null): Promise<void>;
+  /**
+   * Bind or clear one channel slot. Null deletes the binding rather than storing
+   * an empty string, so "unset" and "set to nothing" cannot diverge.
+   */
+  setChannelBinding(guildId: string, slot: ConfigChannelSlot, channelId: string | null): Promise<void>;
+  /** Read one admin setting; null when the guild has never set it. */
+  getSetting(guildId: string, key: string): Promise<unknown>;
+  /** Upsert one admin setting. Null deletes it, restoring the platform default. */
+  setSetting(guildId: string, key: string, value: unknown): Promise<void>;
 }
