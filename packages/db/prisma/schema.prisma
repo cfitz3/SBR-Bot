@@ -988,6 +988,9 @@ model ProfileSnapshot {
   networth           BigInt?
   skillAverage       Float?
   catacombsLevel     Float?
+  /// Total slayer XP across all bosses. BigInt because a maxed account clears
+  /// nine figures, and the leaderboard ranks on the sum, not the tiers.
+  slayerXp           BigInt?
   senitherWeight     Float?
   metrics            Json           @default("{}")
   createdAt          DateTime       @default(now())

@@ -17,6 +17,7 @@
     { "path": "../../packages/guild-config" },
     { "path": "../../packages/hypixel" },
     { "path": "../../packages/identity" },
+    { "path": "../../packages/leaderboards" },
     { "path": "../../packages/discord-kit" },
     { "path": "../../packages/moderation" },
     { "path": "../../packages/observability" },

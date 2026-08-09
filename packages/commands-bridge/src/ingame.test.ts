@@ -274,7 +274,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // The documented §17 set. Pinned exactly, because widening it is a security
   // decision — guild chat proves guild membership and nothing else.
   assert.deepEqual(names, [
-    "bazaar", "dungeons", "events", "help", "lfg", "lowestbin",
+    "bazaar", "dungeons", "events", "help", "leaderboard", "lfg", "lowestbin",
     "networth", "perm", "price", "profile", "runs", "skills", "slayer", "standing", "stats",
   ]);
 

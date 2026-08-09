@@ -25,6 +25,7 @@ export interface SnapshotMetrics {
   readonly networth: number | null;
   readonly skillAverage: number | null;
   readonly catacombsLevel: number | null;
+  readonly slayerXp: number | null;
   readonly senitherWeight: number | null;
 }
 

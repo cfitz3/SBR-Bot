@@ -12,6 +12,7 @@ import {
   guildMemberDirectory,
   guildRepository,
   identityRepository,
+  leaderboardSource,
   linkDirectory,
   memberProgressSource,
   permRepository,
@@ -30,6 +31,7 @@ import { ScreeningService } from "@sbr/screening";
 import { CommunityServiceImpl } from "@sbr/community";
 import { PermServiceImpl } from "@sbr/perms";
 import { XpService } from "@sbr/xp";
+import { LeaderboardService } from "@sbr/leaderboards";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import {
   ItemCatalog,
@@ -253,6 +255,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // Redis one the dispatcher uses, under its own `xp:` key space, so an XP
   // cooldown can never eat a command cooldown or vice versa.
   const xp = new XpService({ repo: xpRepository, activity: activitySink, cooldowns: adapters.cooldowns, logger: log });
+  // Read-only over data the other services already maintain, so it needs no
+  // cooldown gate of its own beyond the command cooldown.
+  const leaderboards = new LeaderboardService(leaderboardSource);
   const capabilities: CapabilityChecker = { can: (g, u, c) => identity.hasCapability(g, u, c) };
   const usage: UsageSink = {
     async capture(u) {
@@ -300,6 +305,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     analytics,
     lfgBoard,
     xp,
+    leaderboards,
     logger: log,
   };
 

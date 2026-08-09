@@ -46,6 +46,7 @@ export {
   linkDirectory,
 } from "./repositories/perms.js";
 export { xpRepository, activitySink } from "./repositories/xp.js";
+export { leaderboardSource } from "./repositories/leaderboards.js";
 export {
   wordlistRepository,
   guildConfigRepository,

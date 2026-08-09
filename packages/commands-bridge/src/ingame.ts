@@ -52,6 +52,10 @@ const ALIASES: Readonly<Record<string, string>> = {
   lbin: "lowestbin",
   lb: "lowestbin",
   weight: "stats",
+  // Not `lb` — that has meant `lowestbin` since long before the boards existed,
+  // and quietly repointing a live shorthand is worse than having no shorthand.
+  top: "leaderboard",
+  leaderboards: "leaderboard",
   s: "stats",
   sk: "skills",
   sl: "slayer",

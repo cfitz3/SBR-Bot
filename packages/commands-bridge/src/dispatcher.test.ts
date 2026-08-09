@@ -78,6 +78,7 @@ const summary: ProfileSummaryDTO = {
   gameMode: "NORMAL",
   skillAverage: 42.5,
   catacombsLevel: 36,
+  slayerXp: 2_400_000,
   senitherWeight: 8_120,
 };
 

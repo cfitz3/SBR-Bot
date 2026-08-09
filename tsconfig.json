@@ -19,6 +19,7 @@
     { "path": "packages/community" },
     { "path": "packages/perms" },
     { "path": "packages/xp" },
+    { "path": "packages/leaderboards" },
     { "path": "packages/guild-config" },
     { "path": "packages/analytics" },
     { "path": "packages/commands-bridge" },

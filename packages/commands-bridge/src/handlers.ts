@@ -3,7 +3,7 @@
  * render. The registry wires these with capability + cooldown metadata, and the
  * Discord registration payload is derived from the same specs.
  */
-import { flattenEmbed } from "@sbr/shared-types";
+import { categoryFor, flattenEmbed, LEADERBOARD_CATEGORIES, LEADERBOARD_LABELS } from "@sbr/shared-types";
 import type { AdviceDTO, HypixelResult, LinkActor, ProgressMetric } from "@sbr/shared-types";
 import type {
   AutocompleteHandler,
@@ -21,6 +21,8 @@ import {
   renderBazaarEmbed,
   renderDungeonsEmbed,
   renderFailure,
+  renderLeaderboardEmbed,
+  renderLeaderboardLine,
   renderLinkError,
   renderLowestBinEmbed,
   renderMilestonesEmbed,
@@ -229,6 +231,41 @@ const standing: CommandHandler = async (ctx, deps) => {
   // command that prints a member's rank into a channel on request invites
   // exactly the comparison nobody asked for.
   return { ephemeral: !self, text: flattenEmbed(embed), embed };
+};
+
+/**
+ * `/leaderboard` — one category, one page.
+ *
+ * Every category is DB-local: snapshots, counters, balances and join dates. The
+ * command makes no Hypixel call at all, which is why it can afford a short
+ * cooldown and a public reply where `/stats` cannot.
+ */
+const leaderboard: CommandHandler = async (ctx, deps) => {
+  if (deps.leaderboards === undefined) {
+    return { ephemeral: true, text: "Leaderboards aren't switched on here." };
+  }
+
+  const raw = ctx.args.getString("category") ?? "xp";
+  const category = categoryFor(raw);
+  if (category === null) {
+    // Names the whole catalog rather than guessing: a member who typed
+    // something close wants to see the list, not a board they didn't ask for.
+    return {
+      ephemeral: true,
+      text: `No leaderboard called "${raw}". Try: ${LEADERBOARD_CATEGORIES.join(", ")}.`,
+    };
+  }
+
+  const days = ctx.args.getNumber("days");
+  const page = await deps.leaderboards.page({
+    guildId: ctx.guildId,
+    category,
+    discordId: ctx.userId,
+    page: ctx.args.getNumber("page") ?? 1,
+    ...(days === null ? {} : { windowDays: days }),
+  });
+
+  return { ephemeral: false, text: renderLeaderboardLine(page), embed: renderLeaderboardEmbed(page) };
 };
 
 const skills: CommandHandler = async (ctx, deps) => {
@@ -647,6 +684,44 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       // exactly the identity standing is keyed by.
       inGame: "linked",
       handler: standing,
+    },
+    {
+      name: "leaderboard",
+      description: "Guild rankings — wealth, tenure, skills, activity and XP",
+      options: [
+        {
+          name: "category",
+          description: "Which board to show (defaults to guild XP)",
+          type: "string",
+          choices: LEADERBOARD_CATEGORIES.map((id) => ({
+            name: LEADERBOARD_LABELS[id],
+            value: id,
+          })),
+        },
+        {
+          name: "page",
+          description: "Page of results",
+          type: "number",
+          minValue: 1,
+          // Discord-only. Guild chat gets the top five on one line, and a second
+          // positional would make `!top wealth 2` ambiguous with a category.
+          inGamePositional: false,
+        },
+        {
+          name: "days",
+          description: "Window for the activity boards (default 30)",
+          type: "number",
+          minValue: 1,
+          maxValue: 365,
+          inGamePositional: false,
+        },
+      ],
+      cooldownMs: 15_000,
+      // A read-only view of the guild's own numbers, keyed by nothing the caller
+      // has to prove — the viewer line is the only personalised part, and it is
+      // simply absent for an unlinked speaker.
+      inGame: true,
+      handler: leaderboard,
     },
     {
       name: "profile",

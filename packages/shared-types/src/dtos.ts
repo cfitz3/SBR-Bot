@@ -81,6 +81,11 @@ export interface ProfileSummaryDTO {
   readonly gameMode: SkyblockGameMode;
   readonly skillAverage: number | null;
   readonly catacombsLevel: number | null;
+  /**
+   * Total slayer XP across every boss. Already parsed for the Senither weight,
+   * so carrying it costs nothing and saves the snapshot job a second read.
+   */
+  readonly slayerXp: number | null;
   readonly senitherWeight: number | null;
 }
 

@@ -789,6 +789,150 @@ export interface XpSourcePolicyDTO {
   readonly minLength: number;
 }
 
+/**
+ * Leaderboards (packages/leaderboards).
+ *
+ * Member-facing and nothing else: the bots and the in-game surface read these,
+ * and the panel deliberately has no leaderboard page. Ranking the guild is
+ * something the guild does, not something staff administers.
+ */
+export const LEADERBOARD_CATEGORIES = [
+  "wealth",
+  "tenure",
+  "skill-average",
+  "catacombs",
+  "slayer",
+  "discord-activity",
+  "guild-chat",
+  "xp",
+] as const;
+
+export type LeaderboardCategory = (typeof LEADERBOARD_CATEGORIES)[number];
+
+/**
+ * Human labels for the categories.
+ *
+ * Here rather than beside the specs in `@sbr/leaderboards` because the Discord
+ * registration payload is built from static data — the choice list for
+ * `/leaderboard` is assembled long before any page is fetched — and the bots
+ * cannot reach the domain package. `CATEGORY_SPECS` reads its labels from this
+ * map, so the two can't drift.
+ */
+export const LEADERBOARD_LABELS: Readonly<Record<LeaderboardCategory, string>> = {
+  wealth: "Wealth",
+  tenure: "Tenure",
+  "skill-average": "Skill average",
+  catacombs: "Catacombs",
+  slayer: "Slayer",
+  "discord-activity": "Discord activity",
+  "guild-chat": "Guild chat",
+  xp: "Guild XP",
+};
+
+/**
+ * Spellings people actually type, mapped to the canonical id. The in-game
+ * surface is the reason this exists: `!leaderboard nw` is what someone writes
+ * in guild chat, and answering "unknown category" to it would be pedantry.
+ */
+const LEADERBOARD_ALIASES: Readonly<Record<string, LeaderboardCategory>> = {
+  nw: "wealth",
+  networth: "wealth",
+  money: "wealth",
+  coins: "wealth",
+  rich: "wealth",
+  days: "tenure",
+  oldest: "tenure",
+  sa: "skill-average",
+  skills: "skill-average",
+  skill: "skill-average",
+  cata: "catacombs",
+  dungeons: "catacombs",
+  dungeon: "catacombs",
+  slayers: "slayer",
+  discord: "discord-activity",
+  messages: "discord-activity",
+  activity: "discord-activity",
+  chat: "guild-chat",
+  gc: "guild-chat",
+  level: "xp",
+  standing: "xp",
+};
+
+/** Canonical category for anything a member might type, or null. */
+export function categoryFor(raw: string): LeaderboardCategory | null {
+  const key = raw.trim().toLowerCase();
+  const direct = LEADERBOARD_CATEGORIES.find((c) => c === key);
+  if (direct !== undefined) return direct;
+  // Punctuation-insensitive: "skill average", "skill_average" and "skillaverage"
+  // are all the same request.
+  const squashed = key.replace(/[\s_-]+/g, "");
+  const canonical = LEADERBOARD_CATEGORIES.find((c) => c.replace(/-/g, "") === squashed);
+  return canonical ?? LEADERBOARD_ALIASES[squashed] ?? null;
+}
+
+/**
+ * Where a category's numbers come from, which is also how stale they can be.
+ * `SNAPSHOT` is the only family that can lag — it reads the newest profile
+ * capture, up to a snapshot cycle old.
+ */
+export type LeaderboardSourceKind = "SNAPSHOT" | "TENURE" | "ACTIVITY" | "XP";
+
+/** How the transport should print a ranked value. The domain never formats. */
+export type LeaderboardValueFormat = "coins" | "count" | "level" | "days";
+
+export interface LeaderboardCategorySpec {
+  readonly id: LeaderboardCategory;
+  readonly label: string;
+  readonly format: LeaderboardValueFormat;
+  readonly source: LeaderboardSourceKind;
+  /** Honest one-liner about what is being measured. */
+  readonly description: string;
+  /** True when the ranking covers a rolling window rather than all time. */
+  readonly windowed: boolean;
+}
+
+export interface LeaderboardEntryDTO {
+  /** Identity in that category's own space — a uuid or a Discord snowflake. */
+  readonly key: string;
+  /** An IGN where one is known, else a Discord mention. Never a raw id. */
+  readonly label: string;
+  readonly value: number;
+  /** When the reading was taken; null for values derived at read time. */
+  readonly at: string | null;
+  /** 1-based competition rank: two members tied for 2nd are followed by 4th. */
+  readonly rank: number;
+  readonly isViewer: boolean;
+}
+
+export interface LeaderboardPageDTO {
+  readonly category: LeaderboardCategory;
+  readonly spec: LeaderboardCategorySpec;
+  readonly entries: readonly LeaderboardEntryDTO[];
+  readonly page: number;
+  readonly pageCount: number;
+  readonly totalRanked: number;
+  /** Days covered, for windowed categories; null for the rest. */
+  readonly windowDays: number | null;
+  /** The caller's own row, only when it falls outside the shown page. */
+  readonly viewer: LeaderboardEntryDTO | null;
+  /** Oldest reading on the page: worst-case staleness, not best. */
+  readonly oldestReadingAt: string | null;
+}
+
+export interface LeaderboardQuery {
+  readonly guildId: string;
+  readonly category: LeaderboardCategory;
+  /** The caller, so their own row can be found. */
+  readonly discordId: string;
+  readonly page?: number;
+  readonly pageSize?: number;
+  readonly windowDays?: number;
+}
+
+export interface LeaderboardService {
+  page(query: LeaderboardQuery): Promise<LeaderboardPageDTO>;
+}
+
 /** Analytics capture + reporting (packages/analytics). */
 export interface AnalyticsService {
   capture(usage: CommandUsageDTO): Promise<void>;

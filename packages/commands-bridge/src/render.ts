@@ -14,6 +14,9 @@ import type {
   GuildRosterDTO,
   HypixelFailureState,
   HypixelResult,
+  LeaderboardEntryDTO,
+  LeaderboardPageDTO,
+  LeaderboardValueFormat,
   LinkError,
   LowestBinDTO,
   MilestoneDTO,
@@ -422,6 +425,84 @@ export function renderStandingEmbed(name: string, standing: XpStandingDTO): Embe
     footer: "XP is totalled a few times a day — today's activity may not be in yet.",
     color: "INFO",
   };
+}
+
+// ── Leaderboards (COMMANDS.md §19) ──────────────────────────────────────────
+
+/** One ranked value, printed the way its category means it. */
+function formatValue(value: number, format: LeaderboardValueFormat): string {
+  switch (format) {
+    case "coins":
+      return formatCoins(value);
+    case "level":
+      return formatLevel(value);
+    case "days":
+      return `${formatNumber(value)}d`;
+    case "count":
+      return formatNumber(value);
+  }
+}
+
+/**
+ * `#1 Alice — 8.20b`. Medals for the top three because they are the only ranks
+ * anyone reads at a glance; everything below is a number and reads better as
+ * one.
+ */
+function leaderboardLine(entry: LeaderboardEntryDTO, format: LeaderboardValueFormat): string {
+  const medal = entry.rank === 1 ? "🥇" : entry.rank === 2 ? "🥈" : entry.rank === 3 ? "🥉" : `\`#${entry.rank}\``;
+  const name = entry.isViewer ? `**${entry.label}**` : entry.label;
+  return `${medal} ${name} — ${formatValue(entry.value, format)}`;
+}
+
+/**
+ * `/leaderboard` — one category, one page, and an honest footer.
+ *
+ * The footer is where most of the care goes. A wealth board is built from
+ * snapshots that can be half a day old, an activity board covers a window, and
+ * an XP board is only as current as the last aggregation. Printing a ranking
+ * without saying which of those it is invites an argument the numbers cannot
+ * settle.
+ */
+export function renderLeaderboardEmbed(page: LeaderboardPageDTO, now = Date.now()): EmbedView {
+  const { spec } = page;
+
+  const body =
+    page.entries.length === 0
+      ? "Nobody is ranked here yet."
+      : page.entries.map((e) => leaderboardLine(e, spec.format)).join("\n");
+
+  // Appended rather than merged into the list: the viewer's row is an answer to
+  // a different question ("where am I"), and slotting it into the top ten would
+  // misrepresent the ranking.
+  const yours =
+    page.viewer === null ? "" : `\n\nYou: \`#${page.viewer.rank}\` — ${formatValue(page.viewer.value, spec.format)}`;
+
+  const parts: string[] = [];
+  if (page.pageCount > 1) parts.push(`page ${page.page}/${page.pageCount}`);
+  parts.push(`${formatNumber(page.totalRanked)} ranked`);
+  if (page.windowDays !== null) parts.push(`last ${page.windowDays}d`);
+  if (page.oldestReadingAt !== null) parts.push(`oldest reading ${describeAge(page.oldestReadingAt, now)}`);
+
+  return {
+    title: `${spec.label} — guild leaderboard`,
+    description: `${spec.description}\n\n${body}${yours}`,
+    footer: parts.join(" · "),
+    color: "INFO",
+  };
+}
+
+/**
+ * The one-line form for guild chat: the top few and nothing else. Built here
+ * rather than by flattening the embed, because a flattened description would
+ * spend the 252-character budget on the category blurb before reaching a name.
+ */
+export function renderLeaderboardLine(page: LeaderboardPageDTO, top = 5): string {
+  if (page.entries.length === 0) return `${page.spec.label}: nobody ranked yet`;
+  const shown = page.entries
+    .slice(0, top)
+    .map((e) => `${e.rank}. ${e.label} ${formatValue(e.value, page.spec.format)}`)
+    .join(" | ");
+  return `${page.spec.label}: ${shown}`;
 }
 
 // ── Optimization (COMMANDS.md §5) ───────────────────────────────────────────

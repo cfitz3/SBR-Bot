@@ -14,6 +14,7 @@ import type {
   GuildConfigService,
   GuildRosterSource,
   IdentityService,
+  LeaderboardService,
   LFGPostDTO,
   MarketService,
   OptionType,
@@ -96,6 +97,14 @@ export interface HandlerDeps {
    * as "you have earned nothing" and is a different claim.
    */
   readonly xp?: XpService;
+  /**
+   * Guild leaderboards. Optional for the same reason as `xp`: several boards are
+   * derived from XP and activity, and a deployment without those should say the
+   * boards are off rather than publish a table of zeroes.
+   *
+   * Member-facing only — there is no panel surface for leaderboards by design.
+   */
+  readonly leaderboards?: LeaderboardService;
   readonly logger: Logger;
 }
 

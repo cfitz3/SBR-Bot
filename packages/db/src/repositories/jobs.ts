@@ -158,6 +158,7 @@ export const snapshotJobRepository = {
       networth: toBigInt(snapshot.networth),
       skillAverage: snapshot.skillAverage,
       catacombsLevel: snapshot.catacombsLevel,
+      slayerXp: toBigInt(snapshot.slayerXp),
       senitherWeight: snapshot.senitherWeight,
     };
     await prisma.profileSnapshot.upsert({
@@ -173,12 +174,19 @@ export const snapshotJobRepository = {
       where: { minecraftAccountId },
       orderBy: { capturedAt: "desc" },
       take: 2,
-      select: { networth: true, skillAverage: true, catacombsLevel: true, senitherWeight: true },
+      select: {
+        networth: true,
+        skillAverage: true,
+        catacombsLevel: true,
+        slayerXp: true,
+        senitherWeight: true,
+      },
     });
     return rows.map((r) => ({
       networth: toNumber(r.networth),
       skillAverage: r.skillAverage,
       catacombsLevel: r.catacombsLevel,
+      slayerXp: toNumber(r.slayerXp),
       senitherWeight: r.senitherWeight,
     }));
   },

@@ -14,7 +14,7 @@ import {
 const NOW = new Date("2026-08-07T12:00:00.000Z");
 
 function metrics(over: Partial<SnapshotMetrics> = {}): SnapshotMetrics {
-  return { networth: null, skillAverage: null, catacombsLevel: null, senitherWeight: null, ...over };
+  return { networth: null, skillAverage: null, catacombsLevel: null, slayerXp: null, senitherWeight: null, ...over };
 }
 
 function account(over: Partial<TrackedAccount> = {}): TrackedAccount {

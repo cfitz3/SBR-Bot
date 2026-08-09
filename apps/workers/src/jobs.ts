@@ -202,6 +202,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
               networth: networth.ok ? networth.value.data.total : null,
               skillAverage: summary.value.data.skillAverage,
               catacombsLevel: summary.value.data.catacombsLevel,
+              slayerXp: summary.value.data.slayerXp,
               senitherWeight: summary.value.data.senitherWeight,
             },
           };

@@ -326,6 +326,7 @@ function toSummary(p: SkyblockProfileData): ProfileSummaryDTO {
     gameMode: p.gameMode,
     skillAverage: skills.average,
     catacombsLevel: dungeons.catacombsLevel,
+    slayerXp: slayers.totalExperience,
     senitherWeight: senitherWeight(skills, slayers, dungeons),
   };
 }

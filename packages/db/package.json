@@ -30,6 +30,7 @@
     "@sbr/community": "*",
     "@sbr/env": "*",
     "@sbr/jobs": "*",
+    "@sbr/leaderboards": "*",
     "@sbr/perms": "*",
     "@sbr/screening": "*",
     "@sbr/xp": "*",
