@@ -311,6 +311,7 @@ model Guild {
   activityDaily ActivityDaily[]
   screenings    GuildJoinScreening[]
   subscriptions NotificationSubscription[]
+  milestoneDefs MilestoneDefinition[]
 
   @@index([discordGuildId])
 }
@@ -858,6 +859,8 @@ enum XpSource {
   COMMAND_USAGE
   /// Event attendance, from EventRSVP.
   EVENT
+  /// A milestone's configured reward, credited once when it is announced.
+  MILESTONE
   /// Staff adjustment, positive or negative. Always carries a reason in `meta`.
   MANUAL
 }
@@ -1004,10 +1007,49 @@ model ProfileSnapshot {
   @@index([eventId, minecraftAccountId, capturedAt]) // event leaderboard: latest per member
 }
 
+/// A threshold a guild considers worth recognising.
+///
+/// Staff-editable so a guild can set its own bar — the built-in defaults in
+/// `@sbr/jobs` are what a guild with no definitions is measured against, not a
+/// floor it has to keep.
+model MilestoneDefinition {
+  id          String        @id @default(cuid())
+  guildId     String
+  /// Stable identifier, e.g. "networth:10b". The detector keys replays off this
+  /// rather than the label, so renaming a milestone never re-announces it.
+  key         String
+  label       String
+  description String?
+  type        MilestoneType
+  /// Which snapshot field to compare — must be one the detector knows.
+  metric      String
+  threshold   BigInt
+  /// Guild XP credited once, when the milestone is announced. 0 = recognition
+  /// only, which is the default: a guild opts into paying for progress.
+  xpReward    Int           @default(0)
+  announce    Boolean       @default(true)
+  enabled     Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  milestones Milestone[]
+
+  @@unique([guildId, key])
+  @@index([guildId, enabled])
+}
+
 model Milestone {
   id                 String        @id @default(cuid())
   minecraftAccountId String
   guildId            String?
+  /// The definition that recognised this, when one did. Null for a milestone
+  /// from the built-in defaults, and SetNull on delete — deleting a definition
+  /// must not erase the fact that someone reached it.
+  definitionId       String?
+  /// Denormalized at detection time so the announcer can mention a person
+  /// without re-resolving a link that may since have changed.
+  discordId          String?
   type               MilestoneType
   metric             String
   thresholdValue     BigInt
@@ -1016,12 +1058,14 @@ model Milestone {
   announced          Boolean       @default(false)
   createdAt          DateTime      @default(now())
 
-  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
-  snapshot         ProfileSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+  minecraftAccount MinecraftAccount     @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+  snapshot         ProfileSnapshot?     @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+  definition       MilestoneDefinition? @relation(fields: [definitionId], references: [id], onDelete: SetNull)
 
   @@unique([minecraftAccountId, type, metric, thresholdValue])
   @@index([minecraftAccountId, achievedAt])
-  @@index([announced])
+  /// The announcer's sweep: unannounced rows, oldest first.
+  @@index([announced, achievedAt])
 }
 
 model CommandUsage {
