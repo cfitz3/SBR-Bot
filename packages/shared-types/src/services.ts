@@ -709,6 +709,79 @@ export type GuildEffectError =
   | { readonly kind: "NOT_FOUND" }
   | { readonly kind: "FAILED"; readonly detail: string };
 
+/**
+ * XP & standing (packages/xp).
+ *
+ * Member-facing to read, admin-facing to configure — the same split as
+ * moderation. `/standing` and the leaderboards live in the bots; weights, caps
+ * and manual adjustments live in the panel. Nothing here exposes another
+ * member's activity counters, only the XP they produced.
+ */
+export interface XpService {
+  /**
+   * Count a message towards XP, if it counts. Returns whether it did, for
+   * diagnostics — no caller is expected to branch on it, and this never throws:
+   * a member's message must not fail because the bookkeeping did.
+   */
+  recordMessage(
+    guildId: string,
+    discordId: string,
+    source: "DISCORD_MESSAGE" | "GUILD_CHAT_MESSAGE",
+    text: string,
+  ): Promise<boolean>;
+  recordCommand(guildId: string, discordId: string): Promise<boolean>;
+  /** Null when the member has never earned anything — not a zeroed standing. */
+  standing(guildId: string, discordId: string): Promise<XpStandingDTO | null>;
+  leaderboard(guildId: string, limit: number): Promise<readonly XpStandingDTO[]>;
+  /** Staff adjustment, signed and always reasoned. Rebuilds the balance now. */
+  adjust(
+    guildId: string,
+    discordId: string,
+    amount: number,
+    reason: string,
+    byDiscordId: string,
+  ): Promise<XpStandingDTO | null>;
+}
+
+/** Where a unit of XP came from. Mirrors the `XpSource` DB enum. */
+export type XpSource =
+  | "GEXP"
+  | "DISCORD_MESSAGE"
+  | "GUILD_CHAT_MESSAGE"
+  | "TENURE"
+  | "COMMAND_USAGE"
+  | "EVENT"
+  | "MANUAL";
+
+/** A member's standing, as the bots render it. */
+export interface XpStandingDTO {
+  readonly discordId: string;
+  readonly totalXp: number;
+  readonly level: number;
+  /** XP into the current level, and what the next one costs. */
+  readonly intoLevel: number;
+  readonly levelSpan: number;
+  readonly bySource: Readonly<Partial<Record<XpSource, number>>>;
+  readonly tenureDays: number;
+  readonly lastAwardAt: Date | null;
+  /** 1-based position in the guild by total XP; null when unranked. */
+  readonly rank: number | null;
+}
+
+/** Per-source weight and anti-abuse limits. Panel-configured. */
+export interface XpSourcePolicyDTO {
+  readonly source: XpSource;
+  readonly enabled: boolean;
+  /** XP per unit of raw value. Fractional: GEXP is thousands a day, XP is not. */
+  readonly weight: number;
+  /** Most XP this source may award one member in one day. Null = uncapped. */
+  readonly dailyCap: number | null;
+  /** Minimum gap between two countable actions, in seconds. */
+  readonly cooldownSec: number;
+  /** Minimum message length to count at all. */
+  readonly minLength: number;
+}
+
 /** Analytics capture + reporting (packages/analytics). */
 export interface AnalyticsService {
   capture(usage: CommandUsageDTO): Promise<void>;

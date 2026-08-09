@@ -21,6 +21,7 @@ import type {
   PlayerLookup,
   PricingService,
   ProgressionService,
+  XpService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 
@@ -89,6 +90,12 @@ export interface HandlerDeps {
    * the channel the command was run in.
    */
   readonly lfgBoard?: LfgBoard;
+  /**
+   * XP and standing. Optional so a deployment can run with XP switched off
+   * entirely — `/standing` then says so rather than reporting zero, which reads
+   * as "you have earned nothing" and is a different claim.
+   */
+  readonly xp?: XpService;
   readonly logger: Logger;
 }
 

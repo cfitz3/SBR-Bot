@@ -553,6 +553,13 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
         const guildId = await resolveInternalGuild();
         if (guildId) await relayGameToDiscord(app, discord, await resolveBridgeChannel(guildId), guildId, parsed);
       });
+      // Guild chat counts towards XP whether or not it relays anywhere — the
+      // bridge channel binding is a routing decision, not a statement about who
+      // was talking.
+      relay("xp:guild-chat", async () => {
+        const guildId = await resolveInternalGuild();
+        if (guildId) await app.creditGuildChat(guildId, parsed.name, parsed.message);
+      });
       // A `!` line is still chat, so it relays above as well as running here —
       // otherwise Discord sees an answer to a question it never saw asked.
       relay("ingame-command", async () => {
@@ -613,6 +620,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   discord.on(Events.MessageCreate, (msg: Message) => {
     const bot = session.bot;
     if (msg.author.bot || !bot) return;
+    relay("xp:discord-message", async () => {
+      const guildId = await resolveInternalGuild();
+      // Counted before the bridge-channel check on purpose: a message anywhere
+      // in the server is Discord activity, and only the *relay* cares which
+      // channel it was in.
+      if (guildId) await app.creditDiscordMessage(guildId, msg.author.id, msg.content);
+    });
+
     relay("discord→game", async () => {
       const guildId = await resolveInternalGuild();
       if (!guildId) return;

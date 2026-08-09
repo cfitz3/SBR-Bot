@@ -45,6 +45,7 @@ export {
   memberProgressSource,
   linkDirectory,
 } from "./repositories/perms.js";
+export { xpRepository, activitySink } from "./repositories/xp.js";
 export {
   wordlistRepository,
   guildConfigRepository,

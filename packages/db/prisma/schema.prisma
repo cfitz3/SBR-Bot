@@ -305,6 +305,10 @@ model Guild {
   events        Event[]
   lfgPosts      LFGPost[]
   perms         PermGroup[]
+  xpEvents      XpEvent[]
+  xpBalances    XpBalance[]
+  xpSources     XpSourceConfig[]
+  activityDaily ActivityDaily[]
   screenings    GuildJoinScreening[]
   subscriptions NotificationSubscription[]
 
@@ -839,6 +843,120 @@ model PermMember {
 
   @@unique([permGroupId, ign, role])
   @@index([permGroupId, slot])
+}
+
+/// Where a unit of XP came from. The set is closed on purpose: every source
+/// needs a weight, a cap and a place in the `/standing` breakdown, so adding one
+/// is a deliberate change rather than a free-form string somebody invents.
+enum XpSource {
+  /// Hypixel guild experience, from GuildGexpDaily.
+  GEXP
+  DISCORD_MESSAGE
+  GUILD_CHAT_MESSAGE
+  /// Days as a platform member. Awarded per day, not as a lump.
+  TENURE
+  COMMAND_USAGE
+  /// Event attendance, from EventRSVP.
+  EVENT
+  /// Staff adjustment, positive or negative. Always carries a reason in `meta`.
+  MANUAL
+}
+
+/// Append-only XP ledger. Every award records the raw quantity it came from and
+/// the weight applied, so a balance is explainable ("2,400 GEXP × 0.05") and
+/// rebuildable from scratch — a weight change re-derives history rather than
+/// silently disagreeing with it.
+model XpEvent {
+  id        String   @id @default(cuid())
+  guildId   String
+  discordId String
+  source    XpSource
+  /// Awarded XP, after weight and caps. Signed: MANUAL may take XP away.
+  amount    Int
+  /// What the amount was computed from — GEXP earned, messages sent, days.
+  rawValue  Int      @default(0)
+  day       DateTime @db.Date
+  /// Idempotency key, e.g. `gexp:<uuid>:2026-08-09`. Null for awards that are
+  /// genuinely one-off (MANUAL), where re-running is not a concern. Unique when
+  /// present, which is what makes a re-run of the aggregation job a no-op
+  /// instead of a second credit.
+  dedupeKey String?  @unique
+  meta      Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, discordId, day])
+  @@index([guildId, source, day])
+}
+
+/// Denormalized standing, rebuilt from the ledger by the xp-aggregate job. This
+/// is what `/standing` and the leaderboards read: a command must never sum the
+/// ledger live, or a busy guild turns a 60 ms reply into a table scan.
+model XpBalance {
+  id          String    @id @default(cuid())
+  guildId     String
+  discordId   String
+  totalXp     Int       @default(0)
+  level       Int       @default(0)
+  /// Per-source totals, keyed by XpSource. Denormalized for the breakdown so one
+  /// row answers the whole of `/standing`.
+  bySource    Json      @default("{}")
+  tenureDays  Int       @default(0)
+  lastAwardAt DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, discordId])
+  @@index([guildId, totalXp])
+}
+
+/// Panel-configured weight and anti-abuse limits per source. A missing row means
+/// the source is disabled — a guild that has configured nothing earns nothing,
+/// which is the safe direction for a system people will try to farm.
+model XpSourceConfig {
+  id          String   @id @default(cuid())
+  guildId     String
+  source      XpSource
+  enabled     Boolean  @default(true)
+  /// XP per unit of `rawValue`. Fractional (GEXP is thousands per day, XP is not).
+  weight      Float    @default(1)
+  /// Most XP this source may award one member in one day. Null = uncapped, which
+  /// only makes sense for sources bounded by something else (GEXP, TENURE).
+  dailyCap    Int?
+  /// Minimum gap between two countable actions, in seconds. Spam control for the
+  /// message sources; ignored by the aggregated ones.
+  cooldownSec Int      @default(0)
+  /// Minimum message length to count at all. Defeats "a" × 200.
+  minLength   Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, source])
+}
+
+/// Raw per-day activity counters. The hot path increments these (via Redis,
+/// drained by a job) and XP is derived from them afterwards — never awarded
+/// inline from a message event. That split is what makes caps enforceable: a
+/// counter can be re-read and re-weighted, an award already handed out cannot.
+model ActivityDaily {
+  id                String   @id @default(cuid())
+  guildId           String
+  discordId         String
+  day               DateTime @db.Date
+  discordMessages   Int      @default(0)
+  guildChatMessages Int      @default(0)
+  commandsUsed      Int      @default(0)
+  /// `/g online` hits. The playtime proxy — presence is sampled, never measured.
+  presenceSamples   Int      @default(0)
+  updatedAt         DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, discordId, day])
+  @@index([guildId, day])
 }
 
 model NotificationSubscription {

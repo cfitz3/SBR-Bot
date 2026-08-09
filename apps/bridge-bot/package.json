@@ -16,6 +16,7 @@
     "@sbr/commands-bridge": "*",
     "@sbr/community": "*",
     "@sbr/perms": "*",
+    "@sbr/xp": "*",
     "@sbr/config": "*",
     "@sbr/guild-config": "*",
     "@sbr/db": "*",

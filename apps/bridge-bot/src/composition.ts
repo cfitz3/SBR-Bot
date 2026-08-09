@@ -20,6 +20,8 @@ import {
   screeningHistorySource,
   screeningPolicySource,
   screeningRepository,
+  xpRepository,
+  activitySink,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { fetchHttp, HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
@@ -27,6 +29,7 @@ import { SkykingsClient } from "@sbr/skykings";
 import { ScreeningService } from "@sbr/screening";
 import { CommunityServiceImpl } from "@sbr/community";
 import { PermServiceImpl } from "@sbr/perms";
+import { XpService } from "@sbr/xp";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import {
   ItemCatalog,
@@ -81,6 +84,17 @@ export interface BridgeApp {
   readonly screening: ScreeningService;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
+  /**
+   * Count a Discord message towards XP. Separate from the relay so a message
+   * anywhere in the server counts, not only one in the bridge channel.
+   */
+  creditDiscordMessage(guildId: string, discordId: string, text: string): Promise<void>;
+  /**
+   * Count a guild-chat line towards XP, resolving the speaker's IGN to a linked
+   * account first. An unlinked IGN earns nothing: XP is attributed to a platform
+   * member and a chat line alone cannot name one.
+   */
+  creditGuildChat(guildId: string, ign: string, text: string): Promise<void>;
   /**
    * Hand the composition the live `/g online` reader once the Mineflayer
    * session exists.
@@ -235,8 +249,20 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   });
 
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
+  // XP counts activity; it never awards inline. The cooldown gate is the same
+  // Redis one the dispatcher uses, under its own `xp:` key space, so an XP
+  // cooldown can never eat a command cooldown or vice versa.
+  const xp = new XpService({ repo: xpRepository, activity: activitySink, cooldowns: adapters.cooldowns, logger: log });
   const capabilities: CapabilityChecker = { can: (g, u, c) => identity.hasCapability(g, u, c) };
-  const usage: UsageSink = { capture: (u) => analytics.capture(u) };
+  const usage: UsageSink = {
+    async capture(u) {
+      await analytics.capture(u);
+      // Command XP hangs off the usage sink rather than the dispatcher so both
+      // surfaces are covered by one hook — and only successful, attributed
+      // invocations count, so a failed command cannot be farmed.
+      if (u.success && u.guildId !== null && u.discordId !== null) await xp.recordCommand(u.guildId, u.discordId);
+    },
+  };
 
   // Indirection, not a mutable dep: the handlers hold this object for the life
   // of the process while the session behind it comes and goes with reconnects.
@@ -273,6 +299,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     config: guildConfig,
     analytics,
     lfgBoard,
+    xp,
     logger: log,
   };
 
@@ -332,6 +359,14 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     bridge,
     screening,
     resolveGuild: guildRepository.resolveInternalId,
+    async creditDiscordMessage(guildId, discordId, text) {
+      await xp.recordMessage(guildId, discordId, "DISCORD_MESSAGE", text);
+    },
+    async creditGuildChat(guildId, ign, text) {
+      const discordId = await identityRepository.findDiscordIdByIgn(ign).catch(() => null);
+      if (discordId === null) return;
+      await xp.recordMessage(guildId, discordId, "GUILD_CHAT_MESSAGE", text);
+    },
     setRosterSource(source) {
       liveRoster = source;
     },
