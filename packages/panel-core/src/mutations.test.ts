@@ -16,6 +16,8 @@ import {
   type MemberRole,
   type ModerationService,
   type Result,
+  type XpService,
+  type XpSourcePolicyDTO,
 } from "@sbr/shared-types";
 import type { AnalyticsService, CommandUsageDTO } from "@sbr/shared-types";
 import { DEFAULT_POLICY, SCREENING_POLICY_KEY, serializePolicy } from "@sbr/screening";
@@ -89,6 +91,23 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
   return { moderation, community, identity };
 }
 
+/**
+ * XP, recorded the same way — but note it is *not* a Result service: its
+ * methods return values and throw on failure, which is exactly the difference
+ * the mutation layer has to absorb before the shared pipeline sees it.
+ */
+function xpRecorder(recorded: Recorded, throws = false): XpService {
+  const record = (method: string) => async (...args: unknown[]): Promise<unknown> => {
+    recorded.calls.push({ method, args });
+    if (throws) throw new Error("xp store unavailable");
+    return null;
+  };
+  return {
+    setSourcePolicy: record("setSourcePolicy"),
+    adjust: record("adjust"),
+  } as unknown as XpService;
+}
+
 /** Allows everything unless the key is in `blocked` — the real gate is Redis. */
 function limiter(recorded: Recorded, blocked: readonly string[] = []): MutationLimiter {
   return {
@@ -100,7 +119,14 @@ function limiter(recorded: Recorded, blocked: readonly string[] = []): MutationL
 }
 
 function make(
-  over: { roleMap?: Record<string, MemberRole>; result?: Result<void>; blocked?: readonly string[] } = {},
+  over: {
+    roleMap?: Record<string, MemberRole>;
+    result?: Result<void>;
+    blocked?: readonly string[];
+    /** Leave XP unwired, as a deployment that runs without it does. */
+    noXp?: boolean;
+    xpThrows?: boolean;
+  } = {},
 ) {
   const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
   const analytics: AnalyticsService = {
@@ -111,6 +137,7 @@ function make(
     roles: roles(over.roleMap ?? { "111": "ADMIN" }),
     config: configRecorder(recorded, over.result ?? ok(undefined)),
     ...actionRecorders(recorded, over.result ?? ok(undefined)),
+    ...(over.noXp === true ? {} : { xp: xpRecorder(recorded, over.xpThrows === true) }),
     limiter: limiter(recorded, over.blocked ?? []),
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
@@ -672,5 +699,145 @@ test("an officer cannot change the entry bar", async () => {
   const result = await mutations.setScreeningPolicy(session(), "g1", policyBody());
 
   assert.equal(result.access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+// ── xp ──
+
+const sourceBody = (over: Partial<XpSourcePolicyDTO> = {}): Record<string, unknown> => ({
+  source: "DISCORD_MESSAGE",
+  enabled: true,
+  weight: 1.5,
+  dailyCap: 200,
+  cooldownSec: 60,
+  minLength: 8,
+  ...over,
+});
+
+test("a source policy reaches the XP service whole, and the audit records it in full", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setXpSource(session(), "g1", sourceBody());
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    {
+      method: "setSourcePolicy",
+      args: [
+        "g1",
+        { source: "DISCORD_MESSAGE", enabled: true, weight: 1.5, dailyCap: 200, cooldownSec: 60, minLength: 8 },
+      ],
+    },
+  ]);
+  assert.equal(recorded.audits[0]?.mutation, "xp.source");
+  assert.equal(recorded.audits[0]?.change["weight"], 1.5);
+});
+
+test("null is an uncapped source, not a missing field", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.setXpSource(session(), "g1", sourceBody({ dailyCap: null }))).ok, true);
+  assert.equal((recorded.calls[0]?.args[1] as XpSourcePolicyDTO).dailyCap, null);
+});
+
+test("a fractional weight is allowed but a fractional cooldown is not", async () => {
+  const { mutations } = make();
+
+  assert.equal((await mutations.setXpSource(session(), "g1", sourceBody({ weight: 0.01 }))).ok, true);
+  const bad = await mutations.setXpSource(session(), "g1", sourceBody({ cooldownSec: 1.5 }));
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error?.kind, "INVALID_INPUT");
+});
+
+test("an out-of-range weight is refused before it reaches the service", async () => {
+  // The realistic accident: a cap typed into the weight box. Ten thousand XP
+  // per message would put one member permanently at the top of a ladder nobody
+  // else could catch, and no later config change takes it back.
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setXpSource(session(), "g1", sourceBody({ weight: 10_000 }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("an unknown source name is refused rather than stored as a row nothing reads", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setXpSource(session(), "g1", sourceBody({ source: "VOICE" as never }));
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("an adjustment carries the actor, and its reason reaches the ledger", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.adjustXp(session(), "g1", {
+    discordId: "222222222222222222",
+    amount: -250,
+    reason: "  duplicate event payout  ",
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    { method: "adjust", args: ["g1", "222222222222222222", -250, "duplicate event payout", "111"] },
+  ]);
+  assert.equal(recorded.audits[0]?.mutation, "xp.adjust");
+  assert.equal(recorded.audits[0]?.change["amount"], -250);
+});
+
+test("an adjustment of zero, or without a reason, writes nothing", async () => {
+  const { mutations, recorded } = make();
+  const target = "222222222222222222";
+
+  const zero = await mutations.adjustXp(session(), "g1", { discordId: target, amount: 0, reason: "x" });
+  const unreasoned = await mutations.adjustXp(session(), "g1", { discordId: target, amount: 10, reason: "   " });
+
+  assert.equal(zero.ok, false);
+  assert.equal(unreasoned.ok, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a throwing XP service is reported as a service error, not an unhandled rejection", async () => {
+  // XpService is not a Result service — it throws. If this layer let that
+  // escape, the panel's write endpoint would answer 500 with a stack trace
+  // where every other refusal answers with a sentence.
+  const { mutations, recorded } = make({ xpThrows: true });
+
+  const result = await mutations.setXpSource(session(), "g1", sourceBody());
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "SERVICE_ERROR");
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("with XP unwired, both writes refuse instead of crashing the request", async () => {
+  const { mutations, recorded } = make({ noXp: true });
+
+  const source = await mutations.setXpSource(session(), "g1", sourceBody());
+  const adjust = await mutations.adjustXp(session(), "g1", {
+    discordId: "222222222222222222", amount: 5, reason: "test",
+  });
+
+  assert.equal(source.ok, false);
+  assert.equal(source.error?.kind, "SERVICE_ERROR");
+  assert.equal(adjust.ok, false);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("an officer can neither reweight XP nor adjust a balance", async () => {
+  // Both are ADMIN because the page is: XP weights decide what the whole
+  // guild's standing means, and an adjustment is the one award no counter can
+  // explain afterwards.
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const source = await mutations.setXpSource(session(), "g1", sourceBody());
+  const adjust = await mutations.adjustXp(session(), "g1", {
+    discordId: "222222222222222222", amount: 5, reason: "test",
+  });
+
+  assert.equal(source.access.allowed, false);
+  assert.equal(adjust.access.allowed, false);
   assert.deepEqual(recorded.calls, []);
 });

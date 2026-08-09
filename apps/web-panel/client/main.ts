@@ -18,6 +18,7 @@ import { renderOverview } from "./pages/overview.js";
 import { renderRecruitment } from "./pages/recruitment.js";
 import { renderSelector } from "./pages/selector.js";
 import { renderSettings } from "./pages/settings.js";
+import { renderXp } from "./pages/xp.js";
 
 interface GuildRoute {
   readonly guildId: string;
@@ -38,6 +39,7 @@ const GUILD_PAGES = [
   { id: "members", label: "Members", render: renderMembers },
   { id: "settings", label: "Settings", render: renderSettings },
   { id: "mapping", label: "Mapping", render: renderMapping },
+  { id: "xp", label: "XP", render: renderXp },
 ] as const;
 
 const viewEl = document.getElementById("view");

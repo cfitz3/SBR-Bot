@@ -16,6 +16,9 @@ import type {
   ModerationActionDTO,
   ModerationService,
   RsvpEntryDTO,
+  XpService,
+  XpSource,
+  XpSourcePolicyDTO,
 } from "@sbr/shared-types";
 import {
   parsePolicy,
@@ -164,6 +167,31 @@ export interface SettingsVM {
   readonly screening: ScreeningPolicyView;
 }
 
+/**
+ * Every XP source, in the order the page lists them, so the form is stable
+ * across guilds and across reloads. Mirrors the `XpSource` enum; a source
+ * missing from this list would be invisible in the panel while still paying out.
+ */
+export const XP_SOURCE_ORDER: readonly XpSource[] = [
+  "GEXP",
+  "DISCORD_MESSAGE",
+  "GUILD_CHAT_MESSAGE",
+  "TENURE",
+  "COMMAND_USAGE",
+  "EVENT",
+  "MANUAL",
+];
+
+export interface XpVM {
+  /** False when the deployment has no XP service at all — not "all sources off". */
+  readonly installed: boolean;
+  /**
+   * One row per source, always all of them. An unconfigured source is rendered
+   * as disabled with zero weight, which is exactly what the engine does with it.
+   */
+  readonly sources: readonly XpSourcePolicyDTO[];
+}
+
 export interface MappingVM {
   readonly roleMappings: Readonly<Record<string, string>>;
   readonly channels: Readonly<Record<string, string | null>>;
@@ -216,6 +244,12 @@ export interface PanelServiceDeps {
   readonly moderation: ModerationService;
   readonly reads: PanelReads;
   readonly config: GuildConfigService;
+  /**
+   * Optional: a deployment can run with XP switched off entirely, and the page
+   * then says so rather than showing seven disabled sources, which would read
+   * as "configured off" instead of "not installed".
+   */
+  readonly xp?: XpService;
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
   readonly logger: Logger;
@@ -518,6 +552,44 @@ export class PanelService {
         // page shows what screening will actually do with the stored value
         // rather than a prettier version of what is in the row.
         screening: serializePolicy(parsePolicy(policy)),
+      },
+    };
+  }
+
+  /**
+   * The XP configuration page: every source, whether it pays, and by how much.
+   *
+   * Deliberately no member standings, no leaderboard and no activity counters.
+   * The panel is admin-only and XP is member-facing (WEB_PANEL.md §3), so what
+   * belongs here is the rules — reading a member's standing is `/standing`,
+   * theirs to run.
+   */
+  async loadXp(session: PanelSession | null, guildId: string): Promise<PageResult<XpVM>> {
+    const access = await authorize(session, guildId, "xp", this.d.roles);
+    if (!access.allowed) return this.denied(access, "xp", guildId);
+
+    const xp = this.d.xp;
+    if (xp === undefined) return { access, data: { installed: false, sources: [] } };
+
+    const policy = await xp.policy(guildId);
+    return {
+      access,
+      data: {
+        installed: true,
+        // Filled out to the full list here rather than in the client: what an
+        // unconfigured source does is the engine's rule, and the page should
+        // show that rule rather than a second guess at it.
+        sources: XP_SOURCE_ORDER.map(
+          (source) =>
+            policy[source] ?? {
+              source,
+              enabled: false,
+              weight: 0,
+              dailyCap: null,
+              cooldownSec: 0,
+              minLength: 0,
+            },
+        ),
       },
     };
   }

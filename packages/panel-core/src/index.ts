@@ -33,6 +33,8 @@ export {
   type MembersVM,
   type SettingsVM,
   type MappingVM,
+  type XpVM,
+  XP_SOURCE_ORDER,
   type HealthVM,
   type FreshnessVM,
 } from "./service.js";

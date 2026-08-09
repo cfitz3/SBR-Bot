@@ -8,11 +8,12 @@ import {
   type GuildRuntimeConfig,
   type MemberRole,
   type ModerationService,
+  type XpService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { authorize, type PanelSession, type RoleResolver } from "./access.js";
 import type { HeartbeatReader, PanelReads, ServiceHeartbeat } from "./reads.js";
-import { EXPECTED_SERVICES, HEARTBEAT_STALE_MS, PanelService } from "./service.js";
+import { EXPECTED_SERVICES, HEARTBEAT_STALE_MS, PanelService, XP_SOURCE_ORDER } from "./service.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -153,6 +154,7 @@ function svc(
     reads?: PanelReads;
     config?: GuildConfigService;
     heartbeats?: HeartbeatReader;
+    xp?: XpService;
   } = {},
 ) {
   return new PanelService({
@@ -162,6 +164,7 @@ function svc(
     reads: over.reads ?? reads(),
     config: over.config ?? configService(),
     ...(over.heartbeats ? { heartbeats: over.heartbeats } : {}),
+    ...(over.xp ? { xp: over.xp } : {}),
     logger: silent,
   });
 }
@@ -418,4 +421,46 @@ test("a bound slot comes back from the canonical map, not from a legacy column",
     config: configService({ channels: { lfg: "123456789012345678" } }),
   }).loadMapping(session(), "g1");
   assert.equal(r.data?.channels["lfg"], "123456789012345678");
+});
+
+// ── xp ──
+
+/** Only the two sources the guild has actually configured. */
+const xpService = (): XpService =>
+  ({
+    async policy() {
+      return {
+        DISCORD_MESSAGE: {
+          source: "DISCORD_MESSAGE", enabled: true, weight: 1, dailyCap: 200, cooldownSec: 60, minLength: 8,
+        },
+        GEXP: { source: "GEXP", enabled: true, weight: 0.01, dailyCap: null, cooldownSec: 0, minLength: 0 },
+      };
+    },
+  }) as unknown as XpService;
+
+test("the XP page lists every source, with unconfigured ones off rather than guessed", async () => {
+  // A source with no row is disabled, and the page has to say so: inventing a
+  // default weight would show an admin a number nobody chose and no job reads.
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: xpService() }).loadXp(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.sources.map((s) => s.source), [...XP_SOURCE_ORDER]);
+  assert.equal(r.data?.sources.find((s) => s.source === "GEXP")?.weight, 0.01);
+  const tenure = r.data?.sources.find((s) => s.source === "TENURE");
+  assert.equal(tenure?.enabled, false);
+  assert.equal(tenure?.weight, 0);
+});
+
+test("with XP unwired the page says so instead of showing seven dead controls", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadXp(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.sources, []);
+});
+
+test("an officer cannot open the XP page at all", async () => {
+  const r = await svc({ xp: xpService() }).loadXp(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
 });

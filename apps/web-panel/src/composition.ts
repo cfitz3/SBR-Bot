@@ -14,6 +14,8 @@ import {
   moderationRepository,
   panelRepository,
   rankResolver,
+  activitySink,
+  xpRepository,
 } from "@sbr/db";
 import { AnalyticsServiceImpl } from "@sbr/analytics";
 import { CommunityServiceImpl } from "@sbr/community";
@@ -22,6 +24,7 @@ import { HypixelClient } from "@sbr/hypixel";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { ModerationServiceImpl } from "@sbr/moderation";
 import { PanelMutations, PanelService, type ConfigAuditSink } from "@sbr/panel-core";
+import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
 import { createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
@@ -102,8 +105,26 @@ export async function createPanelApp(): Promise<PanelApp> {
     logger: log,
   });
 
+  /**
+   * XP, for the admin config page and for hand-written adjustments.
+   *
+   * The cooldown gate is the same Redis adapter the bots pass, and for the same
+   * reason the identity service gets a live Hypixel client: the panel commands
+   * the service, it does not reimplement a slimmer one. Nothing the panel calls
+   * consults the gate today — configuration and adjustment are not rate-limited
+   * activity — but a service built with a stub would start lying the moment one
+   * of them did.
+   */
+  const xp = new XpService({
+    repo: xpRepository,
+    activity: activitySink,
+    cooldowns: adapters.cooldowns,
+    logger: log,
+  });
+
   const panel = new PanelService({
     roles: rankResolver,
+    xp,
     community,
     moderation,
     reads: panelRepository,
@@ -138,6 +159,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     moderation,
     community,
     identity,
+    xp,
     limiter: adapters.cooldowns,
     audit,
     analytics,

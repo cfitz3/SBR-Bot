@@ -32,6 +32,7 @@ export type PanelPage =
   | "events"
   | "members"
   | "mapping"
+  | "xp"
   | "health";
 
 /**
@@ -52,6 +53,10 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   recruitment: "OFFICER",
   settings: "ADMIN",
   mapping: "ADMIN",
+  // Weights and caps decide what every member's standing is worth, and the
+  // manual adjustment on the same page writes to the ledger by hand. Both are
+  // configuration in the strict sense, so the page sits with the other config.
+  xp: "ADMIN",
   health: "ADMIN",
 };
 

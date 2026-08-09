@@ -379,6 +379,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(res, await app.panel.loadSettings(session, guildId));
         case "mapping":
           return sendPage(res, await app.panel.loadMapping(session, guildId));
+        case "xp":
+          return sendPage(res, await app.panel.loadXp(session, guildId));
         case "health":
           return sendPage(res, await app.panel.loadHealth(session, guildId));
         default:
@@ -505,6 +507,10 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.setRecruitment(session, guildId, b));
       case "config.screening":
         return sendMutation(res, await m.setScreeningPolicy(session, guildId, b));
+      case "xp.source":
+        return sendMutation(res, await m.setXpSource(session, guildId, b));
+      case "xp.adjust":
+        return sendMutation(res, await m.adjustXp(session, guildId, b));
       case "bridge.suspend":
         return sendMutation(res, await m.setBridgeSuspended(session, guildId, b["suspended"]));
       case "moderation.action":

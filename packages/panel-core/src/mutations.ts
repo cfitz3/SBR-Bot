@@ -19,10 +19,14 @@ import type {
   ModActionType,
   ModerationService,
   RecruitmentSettings,
+  XpService,
+  XpSource,
+  XpSourcePolicyDTO,
 } from "@sbr/shared-types";
 import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
+import { XP_SOURCE_ORDER } from "./service.js";
 
 /** Every write the panel can perform, and the platform role it requires. */
 export const MUTATION_TIERS = {
@@ -45,6 +49,15 @@ export const MUTATION_TIERS = {
    * than an opaque JSON blob.
    */
   "config.screening": "ADMIN",
+  /**
+   * XP source weights and anti-abuse limits, and hand-written ledger
+   * adjustments. Both are Admin because the XP page itself is Admin: a write
+   * reachable only from a page an Officer cannot open would be a tier nobody
+   * could exercise, and the two settings decide what the whole guild's
+   * standing means rather than what one member's does.
+   */
+  "xp.source": "ADMIN",
+  "xp.adjust": "ADMIN",
   /** Bridge control is an Officer power in WEB_PANEL.md §2, not an Admin one. */
   "bridge.suspend": "OFFICER",
   /**
@@ -145,6 +158,12 @@ export interface PanelMutationsDeps {
   readonly moderation: ModerationService;
   readonly community: CommunityService;
   readonly identity: IdentityService;
+  /**
+   * Optional for the same reason the read side is: a deployment can run with
+   * XP switched off, and the page then says so. A missing service refuses the
+   * write rather than crashing the request.
+   */
+  readonly xp?: XpService;
   readonly limiter: MutationLimiter;
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
@@ -243,6 +262,37 @@ const MAX_CAPACITY = 1_000;
  * rather than a checkbox in a web form.
  */
 const ASSIGNABLE_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "ADMIN"];
+
+/**
+ * Bounds on an XP source's weight.
+ *
+ * Fractional and small at the top end, because the raw values these multiply
+ * differ by orders of magnitude: GEXP arrives in the thousands per day and
+ * wants a weight well under one, while a message is a single unit and wants a
+ * weight above it. A ceiling of 1000 is far past any sane setting and still
+ * catches the accident this guards against — a weight typed into the cap field
+ * or a stray extra zero turning one member's chatter into a permanent lead.
+ */
+const MAX_SOURCE_WEIGHT = 1_000;
+
+/** A day's ceiling for one member from one source. Generous; not unbounded. */
+const MAX_DAILY_CAP = 1_000_000;
+
+/** A day. Anything longer is a disabled source expressed the confusing way. */
+const MAX_COOLDOWN_SEC = 24 * 60 * 60;
+
+/** Message length gate. Above this a source would count nothing anyone types. */
+const MAX_MIN_LENGTH = 500;
+
+/**
+ * Ceiling on one hand-written ledger adjustment, either direction.
+ *
+ * Adjustments exist to correct a mistake or to pay out an event, not to seed a
+ * standing from nothing — and unlike every other award on the ledger, nothing
+ * derived this one from an activity that can be re-counted, so an error here is
+ * only ever fixed by a second adjustment somebody has to notice first.
+ */
+const MAX_ADJUSTMENT = 1_000_000;
 
 export class PanelMutations {
   private readonly d: PanelMutationsDeps;
@@ -433,6 +483,126 @@ export class PanelMutations {
       // "who lowered the bar, and to what" is the question this audit exists to
       // answer.
       return { result, change: { ...stored } };
+    });
+  }
+
+  // ─────────────────────────── xp ───────────────────────────
+
+  /**
+   * Configure one XP source: whether it counts, what it is worth, and the
+   * anti-abuse limits that bound it.
+   *
+   * One source per write, unlike the screening policy's whole-form save. The
+   * difference is that the sources are independent — nothing about the GEXP
+   * weight is invalidated by someone else changing the message cooldown, so a
+   * per-row save costs no consistency and lets the page save a toggle without
+   * re-posting six settings it did not touch.
+   *
+   * Nothing here is retroactive, and the UI should say so: the weights are read
+   * when `xp-aggregate` derives a day, so a change lands on today's still-open
+   * counters and on everything after, while yesterday keeps the numbers it was
+   * scored under.
+   */
+  async setXpSource(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "xp.source", async () => {
+      const xp = this.d.xp;
+      if (xp === undefined) return unavailable("XP is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const source = body["source"];
+      if (typeof source !== "string" || !XP_SOURCE_ORDER.includes(source as XpSource)) {
+        return invalid(`source must be one of ${XP_SOURCE_ORDER.join(", ")}`);
+      }
+      if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+
+      // Fractional, so this one is bounded rather than integer-checked.
+      const weight = body["weight"];
+      if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > MAX_SOURCE_WEIGHT) {
+        return invalid(`weight must be between 0 and ${MAX_SOURCE_WEIGHT}`);
+      }
+      // null is "uncapped", which is a real choice for GEXP and tenure — those
+      // are already bounded by what Hypixel reports and by the calendar.
+      const dailyCap = body["dailyCap"];
+      if (dailyCap !== null && !isCount(dailyCap, MAX_DAILY_CAP)) {
+        return invalid(`dailyCap must be a whole number up to ${MAX_DAILY_CAP}, or null for uncapped`);
+      }
+      const cooldownSec = body["cooldownSec"];
+      if (!isCount(cooldownSec, MAX_COOLDOWN_SEC)) {
+        return invalid(`cooldownSec must be a whole number of seconds up to ${MAX_COOLDOWN_SEC}`);
+      }
+      const minLength = body["minLength"];
+      if (!isCount(minLength, MAX_MIN_LENGTH)) {
+        return invalid(`minLength must be a whole number up to ${MAX_MIN_LENGTH}`);
+      }
+
+      const policy: XpSourcePolicyDTO = {
+        source: source as XpSource,
+        enabled: body["enabled"],
+        weight,
+        dailyCap,
+        cooldownSec,
+        minLength,
+      };
+      try {
+        await xp.setSourcePolicy(guildId, policy);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // Recorded in full, like the screening policy and for the same reason:
+      // these are numbers and switches with nobody's words in them, and "who
+      // made chat worth ten times more, and when" is the question this answers.
+      return { result: { ok: true }, change: { ...policy } };
+    });
+  }
+
+  /**
+   * Credit or debit a member's XP by hand.
+   *
+   * The amount is signed and the reason is required, because this is the one
+   * award on the ledger that no counter can explain: every other row can be
+   * re-derived from the activity that produced it, while this one exists only
+   * because a person decided it should. The reason is that person's account of
+   * why, and it is stored on the ledger row itself, not merely in the audit
+   * trail — a member asking where 5,000 XP came from should be answerable from
+   * their own history.
+   *
+   * Zero is refused rather than accepted as a no-op: an adjustment of nothing
+   * is a typo in the amount field, and writing it would put a ledger row and an
+   * audit entry in front of anyone reviewing the guild for no reason at all.
+   */
+  async adjustXp(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "xp.adjust", async (actorDiscordId) => {
+      const xp = this.d.xp;
+      if (xp === undefined) return unavailable("XP is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const discordId = body["discordId"];
+      if (typeof discordId !== "string" || !SNOWFLAKE.test(discordId)) {
+        return invalid("discordId must be a Discord id");
+      }
+      const amount = body["amount"];
+      if (typeof amount !== "number" || !Number.isInteger(amount) || amount === 0) {
+        return invalid("amount must be a non-zero whole number");
+      }
+      if (Math.abs(amount) > MAX_ADJUSTMENT) {
+        return invalid(`amount must be within ±${MAX_ADJUSTMENT}`);
+      }
+      const reason = typeof body["reason"] === "string" ? body["reason"].trim() : "";
+      if (reason.length === 0) return invalid("a reason is required");
+      if (reason.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
+
+      try {
+        // The returned standing is discarded on purpose. `adjust` writes the
+        // ledger row before it reads a standing back, so a null here would mean
+        // the read found nothing — not that the write failed — and reporting
+        // that as an error would tell the admin to retry a change that landed.
+        await xp.adjust(guildId, discordId, amount, reason, actorDiscordId);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { discordId, amount, reason } };
     });
   }
 
@@ -780,6 +950,22 @@ type Step =
 
 function invalid(detail: string): Step {
   return { error: { kind: "INVALID_INPUT", detail } };
+}
+
+/**
+ * A write whose service isn't wired into this deployment.
+ *
+ * SERVICE_ERROR rather than INVALID_INPUT: nothing is wrong with what the
+ * caller sent, and telling them to fix their input would send them editing a
+ * form that was never going to save.
+ */
+function unavailable(detail: string): Step {
+  return { error: { kind: "SERVICE_ERROR", detail } };
+}
+
+/** A whole number in `[0, max]` — the shape every XP limit shares. */
+function isCount(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= max;
 }
 
 /** Domain errors are tagged unions or Errors; either way the audit wants a word. */

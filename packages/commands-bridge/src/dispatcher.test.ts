@@ -1393,6 +1393,8 @@ function xpService(over: Partial<XpService> = {}): XpService {
     async standing() { return standingDto; },
     async leaderboard() { return [standingDto]; },
     async adjust() { return standingDto; },
+    async policy() { return {}; },
+    async setSourcePolicy(_guildId, policy) { return policy; },
     ...over,
   };
 }

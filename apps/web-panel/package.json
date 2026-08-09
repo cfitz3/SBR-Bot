@@ -23,6 +23,7 @@
     "@sbr/panel-core": "*",
     "@sbr/redis": "*",
     "@sbr/screening": "*",
-    "@sbr/shared-types": "*"
+    "@sbr/shared-types": "*",
+    "@sbr/xp": "*"
   }
 }

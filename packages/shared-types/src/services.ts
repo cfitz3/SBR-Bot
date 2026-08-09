@@ -741,6 +741,13 @@ export interface XpService {
     reason: string,
     byDiscordId: string,
   ): Promise<XpStandingDTO | null>;
+  /**
+   * The guild's configured sources. A source with no row is absent from the
+   * map, which means disabled — the panel renders those as off rather than
+   * inventing a default, because a guessed default is a weight nobody chose.
+   */
+  policy(guildId: string): Promise<Readonly<Partial<Record<XpSource, XpSourcePolicyDTO>>>>;
+  setSourcePolicy(guildId: string, policy: XpSourcePolicyDTO): Promise<XpSourcePolicyDTO>;
 }
 
 /** Where a unit of XP came from. Mirrors the `XpSource` DB enum. */
