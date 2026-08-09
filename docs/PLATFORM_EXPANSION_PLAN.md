@@ -53,7 +53,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **3** | **Perms** *(shipped)* | `PermGroup`/`PermMember`/`PermRoster`, `PermService`, `/perm create\|info\|roster add\|roster remove\|disband`, roster autofill + stats | 2 |
 | **S** | **Join screening & auto-accept** *(shipped, out of band)* | SkyKings client, `GuildJoinScreening`, `@sbr/screening` policy engine, bridge join wiring, panel policy editor | 1 |
 | **4** | **LFG rework** *(shipped)* | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + close, message tracking | 1, 3 |
-| **5** | **XP & standing** | XP ledger + balances, source weights/caps config, anti-abuse gates, aggregation jobs, `/me` & `/profile` rework | 1, 2 |
+| **5** | **XP & standing** *(shipped)* | XP ledger + balances, source weights/caps config, anti-abuse gates, `xp-aggregate` job, `/standing` + `/me` (see §3 for the `/profile` deviation) | 1, 2 |
 | **6** | **Leaderboards** | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
 | **7** | **Milestones/achievements** | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
 | **8** | **Stat command expansion** | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
@@ -268,7 +268,7 @@ Two decisions worth carrying forward:
   them off the guild-chat shape; anything added to an `inGame` spec from here needs
   the same consideration.
 
-### 2.5 XP & standing (Phase 5)
+### 2.5 XP & standing (Phase 5) — *shipped*
 
 ```prisma
 enum XpSource { GEXP DISCORD_MESSAGE GUILD_CHAT_MESSAGE TENURE COMMAND_USAGE EVENT MANUAL }
@@ -338,6 +338,21 @@ model ActivityDaily {
 }
 ```
 
+Migration `20260810000000_xp_standing`. Shipped as planned, with three decisions
+made during implementation:
+
+- **Counters on the hot path, awards in a job.** Nothing that runs while a member
+  is typing computes XP. The message path increments a counter behind a Redis
+  cooldown gate; `xp-aggregate` weights the day's counters into the ledger. This
+  is what lets a weight change apply to a day already in progress.
+- **Upsert on `dedupeKey`, not skip-if-present.** A day still climbing has to
+  *converge*, not freeze at the first pass's partial figure. That in turn is why
+  the balance rebuild reads the whole ledger instead of applying a delta.
+- **Aggregation is three-hourly, not nightly** (`48 */3 * * *`). A member asking
+  for their standing should not be told about the person they were yesterday.
+  Each run re-derives yesterday as well as today, since a scan straddling
+  midnight can still add a late GEXP row. See `WORKERS.md` §2.10b.
+
 ### 2.6 Milestones (Phase 7)
 
 ```prisma
@@ -404,14 +419,15 @@ model TicketTypeConfig {
 | `/perm action:disband perm:` | Discord + `!perm` | Owner or staff. Status change, never a delete. *Shipped.* |
 | `/perm action:default perm:` | Discord + `!perm` | Marks the perm `/lfg perm:true` autofills from. Owner only. *Shipped.* |
 | `/leaderboard <category>` | Discord + bridge | wealth, tenure, skill-average, catacombs, slayer, discord-activity, guild-chat, xp. |
-| `/standing [player]` | Discord | XP, level, source breakdown, tenure, rank in guild. |
+| `/standing [member]` | Discord + `!standing` | XP, level, source breakdown, tenure, rank in guild. Takes a **Discord member**, not a player: XP is attributed to a Discord account. Public for yourself, ephemeral for someone else. *Shipped.* |
 
 ### Changed
 
 | Command | Change |
 | --- | --- |
 | `/lfg` | Posts an **embed** into the configured LFG channel; adds `title`, `perm` boolean and `permname`; `/editrun` + `/closerun` and a Close button for author or staff; tracks `messageId`. *Shipped.* |
-| `/me`, `/profile` | Combined standing: Hypixel stats + guild standing (GEXP, tenure) + Discord activity + XP/level + open infractions. |
+| `/me` | Gained "Guild standing" (level, total XP, rank) and "Tenure" fields. *Shipped, with two deviations below.* |
+| `/profile` | Unchanged. See the deviation note. |
 | `/slayer` → `/slayers` | Renamed with `/slayer` kept as a deprecated alias for one release; per-tier boss kill breakdown. |
 | `/skills` | New skills + current caps, capped-skill markers. |
 | `/dungeons` | Boss completions per floor, cata progress to next level, class averages. |
@@ -419,6 +435,20 @@ model TicketTypeConfig {
 | `/auctions` | Split into active / expired / unclaimed with claim value total. |
 | `/milestones` | Definition-driven, shows earned + next-up with progress. |
 | `/ticket` | Reads `TicketTypeConfig` instead of the hard-coded category list. |
+
+**Two deviations from the plan's `/me`, `/profile` line, both deliberate:**
+
+- **`/profile` carries no standing.** It addresses a *player* by IGN, standing is
+  keyed by Discord id, and `IdentityService` exposes no IGN → Discord id
+  resolution (only `identityRepository.findDiscordIdByIgn`, one layer below).
+  Widening the service interface for a decorative field would have touched every
+  fake of it across sixteen files. Standing therefore lands on `/me` — the one
+  lookup certain the account and the person are the same — and on
+  `/standing member:`.
+- **`/me` shows no open infractions.** The member `HandlerDeps` carries no
+  moderation service, by design: the member bot does not read the moderation log.
+  Adding the dependency for a count would hand every member-facing handler a
+  reach it has no business having.
 
 ### Bridge fun commands (Phase 11)
 `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank`, `!cringe` — rate-limited
@@ -434,7 +464,7 @@ New/changed pages, all behind the existing `MANAGE_GUILD` session check:
 | --- | --- |
 | **Mapping** (existing, extended) *(shipped)* | Channel bindings for *every* slot (bridge, staff, log, applications, events, LFG, tickets, milestones, leaderboard, modlog), role mappings, feature toggles. The slots landed on Mapping rather than Settings because the existing split is by what a change *does*: Mapping changes where the platform points, Settings changes how it behaves. |
 | **Settings** (existing) | Bridge suspend, recruitment, prefixes and timezone (the last two read-only until a mutation exists). |
-| **XP** (new) | Per-source enable/weight/daily cap/cooldown/min-length, level curve, manual adjustment with audit trail. |
+| **XP** (new) *(shipped)* | Per-source enable/weight/daily cap/cooldown/min-length and manual adjustment with audit trail, both Admin+. No level-curve control: the curve is triangular with a closed-form inverse, and a per-guild curve would make every stored `level` a function of a setting that can change under it. No standings or leaderboard on the page — those are member-facing, and the panel owns the rules, not the scores. |
 | **Milestones** (new) | CRUD over `MilestoneDefinition`, XP reward, announce toggle. |
 | **Tickets** (new) | Panel embed editor, ticket types/categories, staff roles, parent channel, dropdown ordering. |
 | **Wordlist** (new) | CRUD over `WordlistEntry`, match type/action/severity, auto-warn escalation thresholds. |

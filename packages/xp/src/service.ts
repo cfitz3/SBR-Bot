@@ -256,7 +256,10 @@ export class XpService {
     cooldownSec: number,
   ): Promise<boolean> {
     if (cooldownSec <= 0) return true;
-    const gate = await this.cooldowns.consume(`xp:${guildId}:${source}:${discordId}`, cooldownSec * 1000);
+    // `cd:` because the gate adapter takes a whole key and writes it verbatim —
+    // the namespace is the caller's job, and an unprefixed `xp:*` would be the
+    // one cooldown key in the keyspace nobody could find by prefix.
+    const gate = await this.cooldowns.consume(`cd:xp:${guildId}:${source}:${discordId}`, cooldownSec * 1000);
     return gate.allowed;
   }
 

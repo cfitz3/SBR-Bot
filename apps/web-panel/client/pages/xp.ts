@@ -1,5 +1,5 @@
 /**
- * XP (WEB_PANEL.md §3.11) — what activity is worth, and the limits that stop
+ * XP (WEB_PANEL.md §3.12) — what activity is worth, and the limits that stop
  * one member farming it.
  *
  * Admin-only, and deliberately configuration only: there is no leaderboard and

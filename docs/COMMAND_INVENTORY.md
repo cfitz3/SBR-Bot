@@ -8,13 +8,13 @@ end lists every difference, which is the working list for the tightening pass.
 
 Sources of truth for this file:
 
-- `packages/commands-bridge/src/handlers.ts` — 22 member specs
+- `packages/commands-bridge/src/handlers.ts` — 23 member specs
 - `packages/commands-bridge/src/handlers-community.ts` — 9 community specs + 2 button routes
 - `packages/commands-bridge/src/ingame.ts` — the `!` surface and its aliases
 - `packages/commands-admin/src/handlers.ts` — 26 staff specs
 - the two dispatchers, for the gates every command passes through
 
-**Totals: 31 member commands, 26 staff commands, 13 reachable in-game, 2 button routes.**
+**Totals: 32 member commands, 26 staff commands, 14 reachable in-game, 2 button routes.**
 
 ---
 
@@ -27,7 +27,7 @@ handler → usage capture. Never throws.
 
 - **Capability** is checked only when the spec declares one. Exactly ten do
   (`RUN_COMMAND`): `stats`, `skills`, `slayer`, `dungeons`, `networth`,
-  `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 21 are
+  `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 22 are
   ungated — any member can run them. Denial reads *"You don't have permission to
   use that command."*
 - **Cooldown** is per `surface:command:user` in Redis, from the spec's
@@ -56,7 +56,7 @@ success, latency), best-effort.
 
 ---
 
-## 2. Bridge bot — member commands (31)
+## 2. Bridge bot — member commands (32)
 
 `player?` defaults to the caller's linked account; unlinked and no `player`
 given replies with the NOT_LINKED failure. `profile?` defaults to the member's
@@ -70,7 +70,7 @@ line — the text is what the in-game surface renders.
 | `/link` | `ign*` | 10s | Bind a Discord account to an IGN by matching Hypixel's Discord social field against the caller's handle | Ephemeral `Linked to {ign}. ✅`, or the specific link failure (social unset, mismatch, already owned) |
 | `/verify` | `ign?` | 10s | Re-run the same social check; with no argument it re-checks the account already on file — the repair path for a stale link | Ephemeral `Verified as {ign}. ✅`, or `Nothing to verify — use /link <ign> first.` |
 | `/unlink` | — | 10s | Drop the caller's linked account | Ephemeral `Unlinked {ign}.` |
-| `/me` | — | 10s | The caller's own summary; never accepts a player | **Ephemeral** stats embed (skills, slayers, dungeons, networth) |
+| `/me` | — | 10s | The caller's own summary; never accepts a player | **Ephemeral** stats embed (skills, slayers, dungeons, networth, and — when XP is wired — a guild standing line reading level, total XP and tenure) |
 | `/profile` | `player?` `profile?` | 10s | With `profile:` shows that one; without, lists every profile on the account so the member can see what `/setprofile` accepts | Profile embed, or profile-list embed |
 | `/setprofile` | `profile*` (autocomplete) | 10s | Choose the profile all the caller's lookups default to | Ephemeral `Your lookups now default to {name}.`; `No profile called "x" on your account.` when unknown |
 
@@ -121,6 +121,15 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 |---|---|---|---|---|
 | `/help` | — | 3s | Static catalog, grouped Account / Stats / Optimize / Market / Guild / Events / Groups / Help | Ephemeral 8-line list |
 | `/online` | — | 30s | Guild roster read live from the Mineflayer session (the Hypixel guild endpoint carries no presence) | Roster embed by rank. **Two failures kept distinct**: no bridge configured here (permanent) vs bridge offline right now (retryable) |
+| `/standing` | `member?` (user) | 10s | Guild XP, level, rank and the per-source breakdown behind it | Standing embed; text `{name}: level N ({xp} xp)`. **Public for yourself, ephemeral for anyone else** |
+
+`/standing` is keyed by **Discord id, not IGN** — XP is attributed to a person
+on the platform, so an unlinked speaker has no standing to report. Three answers
+are kept apart on purpose: XP not wired here says *"Guild XP isn't switched on
+here."* (never "0", which would be a different and untrue claim), a member with
+no ledger rows gets the encouraging empty state, and everyone else gets the
+embed. Someone else's standing stays ephemeral because printing a member's rank
+into a channel on request invites exactly the comparison nobody asked for.
 
 `/online` is Discord-only by design — in-game the answer is `/g online`, which
 costs the bridge account nothing. The 30s cooldown and the transport's shared
@@ -170,7 +179,7 @@ cannot drift.
 
 ---
 
-## 3. In-game surface (`!`) — 13 commands
+## 3. In-game surface (`!`) — 14 commands
 
 A translation layer over the same dispatcher, not a second implementation. What
 it adds: prefix parsing, positional→named argument mapping, an allow-list, IGN
@@ -179,9 +188,13 @@ identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 - **Allow-list is the authorization boundary.** Only specs carrying `inGame`
   are reachable: `help`, `profile`, `stats`, `skills`, `slayer`, `dungeons`,
   `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs` (all `true`), and
-  `lfg` (`"linked"` — the only in-game write, attributed to its author, so the
-  speaking IGN must resolve to a Discord account first). Everything else is
+  `lfg` and `standing` (`"linked"` — `lfg` is the only in-game write and is
+  attributed to its author, and `standing` is keyed by Discord id, so both need
+  the speaking IGN to resolve to a Discord account first). Everything else is
   silently unknown; naming Discord-only commands would just invite attempts.
+  `!standing` takes **no positional argument** — guild chat proves which
+  *player* is speaking but not which Discord account they mean by a name, so it
+  only ever answers for the speaker.
 - **Silence is the default answer** — a non-command, an unknown word, or a
   cooldown all reply with nothing rather than chat noise Hypixel counts against
   the bridge account. A bare prefix and `! stats` (space) are not triggers.

@@ -27,6 +27,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
+| `xp-aggregate` | Repeatable (cron) | every 3 h (`48 */3 * * *`) | Derived awards upsert on `XpEvent.dedupeKey`; balances rebuilt from the whole ledger | 1 retry; global lock, 10 min TTL | Standings lag by up to a pass; nothing is lost — counters are re-derived next run |
 | `config-cache-invalidation` | Event (on write) + reconcile cron | on config change / 5–10 min | Version-stamped keys; last-writer-wins | Backoff; reconcile pass | Bots read stale config until reconcile |
 | `guild-roster-sync` | Repeatable | 5–15 min | Diff-based reconcile to DB | Backoff; per-guild lock | Roster/rank drift until next run |
 | `guild-scan` | Repeatable (cron) | every 6 h (`26 1,7,13,19 * * *`) | Upsert on `(guildId,uuid)`; GEXP upsert on `(guildId,uuid,day)` overwrites | 1 retry; global lock, 10 min TTL | Member cache ages past its 6 h TTL; a missed day of GEXP is unrecoverable |
@@ -126,6 +127,18 @@ guild-scan is the in-game counterpart to both — see §2.14.)*
 - **Idempotency:** ingest dedups by event id + consumer-group offsets; rollups are **rebuildable per `(guildId, metric, period)`** — delete partition + re-run reconstructs from raw.
 - **Retry:** ingest reclaims pending stream entries; rollups recompute the whole period (never incremental-partial).
 - **Failure impact:** analytics/charts lag by a period; no impact on live operation. (See `ANALYTICS.md`.)
+
+### 2.10b `xp-aggregate`
+- **Trigger / frequency:** repeatable cron `48 */3 * * *` — every three hours, 48 past the hour to keep clear of the roster and snapshot passes.
+- **Inputs:** `ActivityDaily` counters, `GuildGexpDaily`, `GuildMember` join dates, and the guild's `XpSourceConfig` rows.
+- **Outputs:** derived `XpEvent` rows, then a full rebuild of every `XpBalance` for the guild.
+- **Idempotency:** every derived award carries a `dedupeKey` and is **upserted**, not skipped. A day still in progress therefore *converges* — the next pass overwrites this morning's partial figure rather than adding to it — and a retry cannot double-credit.
+- **Window:** each run re-derives **yesterday and today**, for the same reason the analytics rollup recomputes its previous partition: today's counters are still climbing, and yesterday can still gain a late GEXP row from a scan that straddled midnight.
+- **Retry:** 1 retry, and a 10-minute global lock. The lock matters more than the retry: two overlapping runs would each rebuild balances from a ledger the other was still writing, and the loser's totals would win.
+- **Isolation:** one guild's failure is logged and skipped, never fatal to the pass — its counters are still sitting in the database for the next run to re-derive.
+- **Why not nightly:** a member who asks for their standing should not be told about the person they were yesterday. Not more often than three-hourly either, because each run rebuilds balances by reading a guild's whole ledger, and there is no member-visible difference between "an hour stale" and "three hours stale".
+- **Failure impact:** standings and the leaderboard lag; the ledger and the counters are untouched, so nothing needs repairing beyond the next successful run.
+- **Anti-abuse split:** daily caps are applied *here*, at aggregation; message length and per-user cooldowns are applied at capture, on the hot path. See `DOMAIN_MODEL.md` → `ActivityDaily` for why the two limits cannot live in the same place.
 
 ### 2.11 `config-cache-invalidation`
 - **Trigger / frequency:** event-driven on any config/permission/wordlist write; plus a reconcile cron every 5–10 min as a safety net.

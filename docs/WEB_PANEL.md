@@ -27,7 +27,7 @@ One Node process (`apps/web-panel/src/server.ts`, zero-dependency `node:http`) s
 - **Charts are drawn as inline SVG** (`client/chart.ts`) over series the server has already zero-filled and grouped (`panel-core/src/series.ts`). Shaping happens server-side so the raw rollup rows stay the API's contract, the browser receives arrays it can draw without re-deriving the bucket grid, and the zero-filling is unit-tested under `node --test` rather than in a browser.
 - **The chart list is discovered from the data**, not hardcoded: a metric appears on the page the day something starts emitting it. Today that is only `command.used`.
 
-**Built so far:** every page in §3 — Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Recruitment + Tickets (§3.7), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4) and Mapping (§3.9) — each with the writes its section describes, over the pipeline below.
+**Built so far:** every page in §3 — Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Recruitment + Tickets (§3.7), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4), Mapping (§3.9) and XP (§3.12) — each with the writes its section describes, over the pipeline below.
 
 Partial within the built pages, and deliberate: the recruitment queue shows applicants' answers but not their fetched Skyblock stats; Mapping takes role and channel ids by hand rather than through a live Discord picker, which needs the bot to enumerate; Health reports process liveness and job freshness but not queue depths or the Hypixel budget; the operational actions of §3.11 (requeue, force sync) are not wired; and Events schedules and cancels but does not announce, edit or mark attendance — see §3.8 for why.
 
@@ -207,6 +207,14 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 - Operational actions (Admin+): retry/requeue a failed job, force a sync, restart bridge session (where safe).
 - **Access:** Admin+ (Staff may get a read-only subset).
 
+### 3.12 Guild XP
+- **Per-source rules:** for each `XpSource` — whether it counts, its weight, its daily cap (blank = uncapped), its cooldown in seconds, and, for the two message sources, the minimum message length. Sources with no stored row render as **off**: a missing row *is* "disabled", and showing a guessed default would put a number on screen that nobody chose and no job reads.
+- **Manual adjustment:** a signed amount against one member, with a **required reason** that is stored on the ledger row itself, not only in the audit trail — a member asking where 5,000 XP came from should be answerable from their own history. Armed-then-confirmed, and the form clears on success, because an adjustment is not a setting that can be corrected by typing a different value; the only way back is a second adjustment.
+- **Not retroactive, and the page says so.** Weights are read when `xp-aggregate` derives a day, so a change lands on today's still-open counters and everything after; already-scored days keep the numbers they were scored under.
+- **No standings, no leaderboard, no activity counters.** Those are member-facing and live behind `/standing` and `/leaderboard`. The panel owns the *rules* everyone is scored by, not the scores.
+- **Degrades to a sentence** when XP is not wired into the deployment: the page says it is not enabled rather than rendering seven dead controls.
+- **Access:** Admin+ (both writes, matching the page — an Officer-tier write behind an Admin-only page would be a permission nobody could exercise).
+
 ---
 
 ## 4. Data Sources per Page
@@ -224,6 +232,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 | Flags/Mapping | `config` + live Discord roles/channels (bot) | `config` → DB + cache + pub/sub |
 | Linked Members | DB (`GuildMember`,`LinkedAccount`) + `hypixel` | DB + Redis (re-verify) |
 | Health | `WorkerJobLog` + live BullMQ + bot heartbeats + `rl:hypixel` | Requeue/force-sync (workers) |
+| XP | `xp` (`XpSourceConfig`) | `xp` → `XpSourceConfig`, `XpEvent` (adjustments) + audit |
 
 ---
 

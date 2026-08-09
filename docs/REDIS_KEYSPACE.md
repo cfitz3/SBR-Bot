@@ -41,7 +41,15 @@ The canonical Redis key layout for the platform. Redis is the shared coordinatio
 cd:BRIDGE_BOT:networth:214...901      SET NX EX 30
 cd:ingame:stats:AriaMC                SET NX EX 15
 cd:relay:BRIDGE_BOT:214...901         (token bucket window)
+cd:xp:{guildId}:{source}:{discordId}  SET NX EX <XpSourceConfig.cooldownSec>
 ```
+
+The XP gate rides the same adapter but is not a command cooldown: it decides
+whether a *message* counts towards XP, not whether a command may run. Presence
+means "already counted recently", so a member inside the window is silently not
+counted — never refused or told. It is only written when the source's
+`cooldownSec > 0`, and its TTL comes from that per-guild setting rather than
+from a command spec.
 
 ---
 

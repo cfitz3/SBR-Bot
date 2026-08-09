@@ -285,9 +285,55 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 | `!weight` | `progression` (Senither/farming) | Run cmd | Cache→Live |
 | `!lfg`, `!runs` | `/lfg`,`/runs` | Run cmd (linked) | DB + Cache |
 | `!perm` | `/perm` | Run cmd (linked) | DB + member cache |
+| `!standing` | `/standing` | Run cmd (linked) | DB (`XpBalance`, `XpEvent`) |
 | `!help` | `/help` (condensed) | Public | Static |
 
+`!standing` is `"linked"` although it writes nothing. XP is attributed to a
+Discord account, so an IGN that resolves to no link has no standing to report —
+here the link is the *lookup key*, not a permission.
+
 **In-game error handling:** invalid command → short usage hint; on cooldown → silent or `⌛` reply; API failure → `⚠ data unavailable, try later`; unauthorized → `no permission` one-liner. Errors never dump stack traces into guild chat.
+
+---
+
+## 18. Member Bot — Guild XP & Standing
+
+Guild XP is a **platform-side** progression track: it measures participation in
+*this guild* (guild XP contributed, chat, commands, events, tenure), not
+Skyblock progress. Nothing here reads Hypixel except the GEXP figure the roster
+scan already stores.
+
+| Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
+|---------|---------|-------|------------------|--------|-------------------------|------|
+| `/standing` | A member's guild XP, level, rank and where the XP came from | Linked | `member?` | Embed: level + progress bar, rank, tenure, per-source breakdown | XP not enabled; member has never earned any | DB (`XpBalance`, `XpEvent`) |
+| `/me` | Personal summary; now also carries level, total XP and rank | Linked | — | Existing embed + "Guild standing" and "Tenure" fields | (standing failures degrade silently) | DB |
+
+**Visibility.** `/standing` with no argument is public in-channel; `/standing
+member:` is **ephemeral**. Someone else's standing is theirs to publish, and a
+command that posts it for them turns a lookup into an announcement.
+
+**Freshness.** Standings are derived, not live: the `xp-aggregate` job weights
+each day's activity counters into the ledger every three hours (see
+`WORKERS.md`). The embed says so in its footer rather than implying today's
+chat is already counted.
+
+**Two documented deviations from the original plan (Phase 5):**
+
+- **`/profile` shows no standing.** `/profile` addresses a *player* by IGN,
+  while standing is keyed by Discord id, and `IdentityService` exposes no
+  IGN → Discord id resolution. Widening that interface for a decorative field
+  would have touched every fake of it in the test suite. Standing therefore
+  lands on `/me` — the one lookup certain the account and the person are the
+  same — and on `/standing member:`.
+- **`/me` shows no open infractions.** The member `HandlerDeps` carries no
+  moderation service, by design: the member bot is not a surface that reads the
+  moderation log. Adding one for a count would give member-facing handlers a
+  dependency the rest of them have no business holding.
+
+**Anti-abuse** is split across the two moments it can be enforced (see
+`DOMAIN_MODEL.md`): per-message length and per-user cooldown at *capture*, daily
+caps at *aggregation*. A capped day is silently capped — no member is told they
+have hit a limit, because that is an instruction on how to farm just under it.
 
 ---
 

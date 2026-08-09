@@ -38,6 +38,10 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | PermMember | Postgres | Persistent |
 | ProfileSnapshot | Postgres | Persistent (time-series) |
 | Milestone | Postgres | Persistent |
+| XpEvent | Postgres | Persistent (ledger; the source of truth for XP) |
+| XpBalance | Postgres | Derived (rebuildable from `XpEvent`) |
+| XpSourceConfig | Postgres | Persistent (config) |
+| ActivityDaily | Postgres (counters buffered via Redis) | Persistent (time-series) |
 | CommandUsage | Postgres (buffered via Redis) | Persistent (analytics) |
 | WorkerJobLog | Postgres | Persistent (operational) |
 
@@ -519,6 +523,89 @@ A recognized achievement/threshold crossed by a member.
 
 **Enum — `MilestoneType`:** `SKILL_LEVEL`, `CATACOMBS_LEVEL`, `SLAYER_TIER`, `NETWORTH_THRESHOLD`, `COLLECTION`, `CUSTOM`.
 **Relationships:** N—1 `MinecraftAccount`, N—1 `ProfileSnapshot`.
+
+#### XpEvent
+One awarded (or deducted) amount of guild XP. **The ledger is the truth**;
+`XpBalance` is a cache of it.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `discordId` | who, in which guild |
+| `source` | see enum |
+| `amount` | awarded XP after weight and caps. **Signed** — `MANUAL` may take XP away |
+| `rawValue` | what the amount was computed from (GEXP earned, messages sent, days) |
+| `day` | `DATE`, UTC — the same grain the counters and the job use |
+| `dedupeKey` | unique when present, e.g. `gexp:<uuid>:2026-08-09`; null for genuinely one-off awards (`MANUAL`) |
+| `meta` | JSON; for `MANUAL`, the reason and the staff member who entered it |
+
+Indexed on (`guildId`, `discordId`, `day`) and (`guildId`, `source`, `day`).
+**Relationships:** N—1 `Guild`.
+
+**Enum — `XpSource`:** `GEXP`, `DISCORD_MESSAGE`, `GUILD_CHAT_MESSAGE`, `TENURE`, `COMMAND_USAGE`, `EVENT`, `MANUAL`.
+
+`dedupeKey` is what makes re-derivation safe. Derived awards are written with
+**upsert on the key, not insert-if-absent** — a day still in progress is
+*overwritten* by the next pass as its counters climb, rather than credited twice
+or frozen at this morning's partial figure.
+
+#### XpBalance
+A member's current standing. Derived: dropping this table costs one aggregation
+pass, and the job rebuilds every row by reading the whole ledger rather than
+applying a delta, precisely so a missed or double-counted event cannot survive.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `discordId` | unique together |
+| `totalXp`, `level` | level is the closed-form inverse of the triangular curve |
+| `bySource` | JSON per-source totals, denormalized so one row answers all of `/standing` |
+| `tenureDays`, `lastAwardAt` | |
+
+Indexed on (`guildId`, `totalXp`) — the leaderboard's ordering.
+**Relationships:** N—1 `Guild`.
+
+#### XpSourceConfig
+Panel-configured weight and anti-abuse limits, one row per source per guild.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `source` | unique together |
+| `enabled`, `weight` | weight is a `Float`: GEXP arrives in the thousands per day, a message is one unit |
+| `dailyCap` | most XP one member may earn from this source in a day; null = uncapped |
+| `cooldownSec` | minimum gap between two countable actions (message sources only) |
+| `minLength` | minimum message length to count at all |
+
+**Relationships:** N—1 `Guild`.
+
+**A missing row means disabled.** A guild that has configured nothing earns
+nothing — the safe direction for a system people will try to farm, and the
+reason the panel renders unconfigured sources as off rather than inventing a
+default nobody chose.
+
+#### ActivityDaily
+Raw per-day counters. The hot path increments these; nothing on the hot path
+computes XP.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `discordId`, `day` | unique together; `day` is `DATE`, UTC |
+| `discordMessages`, `guildChatMessages`, `commandsUsed` | counters |
+| `presenceSamples` | `/g online` hits — a playtime *proxy*; presence is sampled, never measured |
+
+Indexed on (`guildId`, `day`).
+**Relationships:** N—1 `Guild`.
+
+**Where anti-abuse lives.** The two limits are enforced at the two different
+moments they can be: **at capture**, a message shorter than `minLength` is not
+counted at all and a member inside `cooldownSec` is ignored (a Redis gate, so
+the check costs no query); **at aggregation**, `dailyCap` bounds what a day's
+counters convert into. Splitting them is deliberate — a cap enforced at capture
+would need a running per-day total on the hot path, and a cooldown enforced at
+aggregation would be unenforceable, since by then the counter has already
+forgotten *when* the messages arrived.
+
+Counters are the input, never the record: they are safe to lose a day of
+(standing simply does not move), whereas losing `XpEvent` rows would silently
+rewrite everyone's history.
 
 #### CommandUsage
 A record of a command invocation (usage analytics + rate-limit auditing).
