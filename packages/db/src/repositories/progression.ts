@@ -19,6 +19,7 @@ export const progressionRepository: ProgressionRepository = {
       where: { minecraftAccount: { uuid: minecraftUuid } },
       orderBy: { achievedAt: "desc" },
       take: limit,
+      include: { definition: { select: { label: true } } },
     });
     return rows.map((r) => ({
       id: r.id,
@@ -27,6 +28,10 @@ export const progressionRepository: ProgressionRepository = {
       metric: r.metric,
       thresholdValue: Number(r.thresholdValue),
       achievedAt: r.achievedAt.toISOString(),
+      // Null for anything detected from the built-in defaults, and for a row
+      // whose definition was since deleted. The renderer already formats a
+      // metric and a threshold, so a missing label costs nothing.
+      label: r.definition?.label ?? null,
     }));
   },
 

@@ -40,6 +40,8 @@ import type {
   LowestBinDTO,
   MemberSummaryDTO,
   MilestoneDTO,
+  MilestoneDefinitionDTO,
+  MilestoneDefinitionInput,
   ModerationActionDTO,
   NetworthDTO,
   PermGroupDTO,
@@ -190,6 +192,29 @@ export interface ProgressionService {
 export type SelectProfileError =
   | { readonly kind: "NO_SUCH_PROFILE" }
   | { readonly kind: "UNAVAILABLE" };
+
+/**
+ * Milestone thresholds a guild recognises (packages/db + the panel).
+ *
+ * Configuration, not member data — which is why this one *does* have a panel
+ * surface while the achievements themselves stay in the bots. Staff decide what
+ * the guild celebrates; nobody edits who reached it.
+ */
+export interface MilestoneDefinitionService {
+  /**
+   * Every definition in effect: the built-in defaults with the guild's own rows
+   * layered over them by key. Disabled rows are included and flagged, because
+   * the panel has to render the switch it can turn back on.
+   */
+  list(guildId: string): Promise<readonly MilestoneDefinitionDTO[]>;
+  /** Create or update by `(guildId, key)`. Editing a default shadows it. */
+  upsert(guildId: string, input: MilestoneDefinitionInput): Promise<MilestoneDefinitionDTO>;
+  /**
+   * Remove a guild's row. A shadowed default reverts to the built-in; a purely
+   * custom definition disappears. Recorded milestones are untouched either way.
+   */
+  remove(guildId: string, key: string): Promise<boolean>;
+}
 
 /**
  * Port: snapshot history and profile-selection persistence, implemented by

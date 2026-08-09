@@ -441,6 +441,44 @@ export interface MilestoneDTO {
   readonly metric: string;
   readonly thresholdValue: number;
   readonly achievedAt: string;
+  /** The definition's label where one recognised it, else null. */
+  readonly label: string | null;
+}
+
+/**
+ * A guild-configured milestone threshold, as the panel edits it.
+ *
+ * `source` distinguishes the two rows the panel shows in one list: a `DEFAULT`
+ * is not stored anywhere and has no id, so the panel's edit action on one is a
+ * *create* that shadows it by key. Collapsing that distinction would let the
+ * panel issue an update against an id that does not exist.
+ */
+export interface MilestoneDefinitionDTO {
+  readonly id: string | null;
+  readonly guildId: string;
+  readonly key: string;
+  readonly label: string;
+  readonly description: string | null;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly threshold: number;
+  readonly xpReward: number;
+  readonly announce: boolean;
+  readonly enabled: boolean;
+  readonly source: "DEFAULT" | "GUILD";
+}
+
+/** What the panel may set. `key` identifies the definition and is never edited. */
+export interface MilestoneDefinitionInput {
+  readonly key: string;
+  readonly label: string;
+  readonly description?: string | null;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly threshold: number;
+  readonly xpReward: number;
+  readonly announce: boolean;
+  readonly enabled: boolean;
 }
 
 /** The tracked metrics `/progress` can chart, keyed as `ProfileSnapshot` stores them. */

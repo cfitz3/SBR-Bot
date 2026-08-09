@@ -128,6 +128,7 @@ function progression(over: Partial<ProgressionService> = {}): ProgressionService
         {
           id: "m1",
           minecraftUuid: "uuid-aria",
+          label: null,
           type: "SKILL_LEVEL",
           metric: "skillAverage",
           thresholdValue: 40,

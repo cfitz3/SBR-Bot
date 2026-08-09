@@ -198,12 +198,20 @@ export const snapshotJobRepository = {
    * the same crossing race to insert and exactly one wins, so `false` here means
    * "already recorded", not "failed".
    */
-  async record(candidate: MilestoneCandidate, guildId: string | null): Promise<boolean> {
+  async record(
+    candidate: MilestoneCandidate,
+    guildId: string | null,
+    discordId: string | null = null,
+  ): Promise<boolean> {
     try {
       await prisma.milestone.create({
         data: {
           minecraftAccountId: candidate.minecraftAccountId,
           guildId,
+          // Null for the built-in defaults: they are not rows, so there is
+          // nothing to point at.
+          definitionId: candidate.definitionId,
+          discordId,
           type: candidate.type,
           metric: candidate.metric,
           thresholdValue: BigInt(Math.round(candidate.thresholdValue)),
