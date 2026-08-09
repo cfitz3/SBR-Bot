@@ -17,9 +17,14 @@ import {
   permRepository,
   progressionRepository,
   rankResolver,
+  screeningHistorySource,
+  screeningPolicySource,
+  screeningRepository,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
+import { fetchHttp, HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
+import { SkykingsClient } from "@sbr/skykings";
+import { ScreeningService } from "@sbr/screening";
 import { CommunityServiceImpl } from "@sbr/community";
 import { PermServiceImpl } from "@sbr/perms";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
@@ -47,6 +52,7 @@ import { randomUUID } from "node:crypto";
 import { err, ok, type GuildRosterSource, type PlayerLookup } from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
+import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
 
 export interface BridgeApp {
   readonly config: AppConfig;
@@ -66,6 +72,12 @@ export interface BridgeApp {
   readonly inGame: InGameDispatcher;
   /** The relay pipeline used by the Discord/in-game transport adapters. */
   readonly bridge: BridgeService;
+  /**
+   * Join-request screening. Held by the app rather than the transport because
+   * the Mineflayer session is rebuilt on every reconnect and the screening
+   * service holds no session state — only clients and policy.
+   */
+  readonly screening: ScreeningService;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
@@ -205,6 +217,20 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
 
+  // Screening. Every dependency is optional at the domain boundary, so a
+  // missing SkyKings key degrades to "every applicant is unchecked" — recorded
+  // honestly and held for staff — rather than to an unguarded door.
+  const skykings = new SkykingsClient({ apiKey: config.skykings.apiKey, fetch: fetchHttp, logger: log });
+  const screening = new ScreeningService({
+    repo: screeningRepository,
+    scammer: skykingsScammerLookup(skykings),
+    stats: applicantStatsSource({ hypixel, progression, skykings, logger: log }),
+    history: screeningHistorySource,
+    policy: screeningPolicySource,
+    links: { discordIdForUuid: identityRepository.findMinecraftOwnerDiscordId },
+    logger: log,
+  });
+
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
   const capabilities: CapabilityChecker = { can: (g, u, c) => identity.hasCapability(g, u, c) };
   const usage: UsageSink = { capture: (u) => analytics.capture(u) };
@@ -286,6 +312,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     handlerDeps,
     inGame,
     bridge,
+    screening,
     resolveGuild: guildRepository.resolveInternalId,
     setRosterSource(source) {
       liveRoster = source;

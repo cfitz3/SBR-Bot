@@ -25,6 +25,8 @@
     "@sbr/pricing": "*",
     "@sbr/progression": "*",
     "@sbr/redis": "*",
+    "@sbr/screening": "*",
+    "@sbr/skykings": "*",
     "@sbr/shared-types": "*",
     "@sbr/discord-kit": "*",
     "discord.js": "^14.27.0",

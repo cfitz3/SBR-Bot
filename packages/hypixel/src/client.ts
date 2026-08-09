@@ -607,7 +607,14 @@ function normalizePlayer(uuid: string, raw: RawHypixelPlayer): HypixelPlayerDTO 
     ign: raw.displayname ?? null,
     // Unknown ⇒ null, never coerced.
     discordSocial: discord && discord.length > 0 ? discord : null,
+    firstLoginMs: epoch(raw.firstLogin),
+    lastLoginMs: epoch(raw.lastLogin),
   };
+}
+
+/** A usable epoch timestamp, or null. Tolerates absent and nonsensical alike. */
+function epoch(ms: number | undefined): number | null {
+  return typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : null;
 }
 
 const GAME_MODES: Record<string, SkyblockProfileDTO["gameMode"]> = {

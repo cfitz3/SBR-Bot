@@ -503,6 +503,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.setFeature(session, guildId, b["feature"], b["enabled"]));
       case "config.recruitment":
         return sendMutation(res, await m.setRecruitment(session, guildId, b));
+      case "config.screening":
+        return sendMutation(res, await m.setScreeningPolicy(session, guildId, b));
       case "bridge.suspend":
         return sendMutation(res, await m.setBridgeSuspended(session, guildId, b["suspended"]));
       case "moderation.action":

@@ -20,6 +20,7 @@ import type {
   ModerationService,
   RecruitmentSettings,
 } from "@sbr/shared-types";
+import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
 
@@ -36,6 +37,14 @@ export const MUTATION_TIERS = {
   "config.role-mapping": "ADMIN",
   "config.feature": "ADMIN",
   "config.recruitment": "ADMIN",
+  /**
+   * The join-screening policy. Stored under the same `GuildSetting` row
+   * `config.setting` could write, but given its own mutation because this is
+   * the one setting whose contents decide whether a stranger is let into the
+   * guild without a human looking: it earns a validated, named surface rather
+   * than an opaque JSON blob.
+   */
+  "config.screening": "ADMIN",
   /** Bridge control is an Officer power in WEB_PANEL.md §2, not an Admin one. */
   "bridge.suspend": "OFFICER",
   /**
@@ -386,6 +395,44 @@ export class PanelMutations {
       };
       const result = await this.d.config.setRecruitment(guildId, settings);
       return { result, change: { ...settings } };
+    });
+  }
+
+  /**
+   * Replace the guild's join-screening policy.
+   *
+   * Validated strictly, and deliberately so — the exact opposite of the
+   * evaluator's `parsePolicy`, which fills anything malformed from the defaults
+   * rather than taking screening offline. The pair is intentional: **tolerant
+   * read, strict write.** A stored policy written years ago must still evaluate;
+   * a policy being typed *now* should fail at the keyboard, where someone can
+   * fix it, rather than silently degrade into a default that quietly stops
+   * enforcing the bar they thought they had set.
+   *
+   * That is also why an unknown key is rejected instead of ignored. A typo'd
+   * `minCatacomb` accepted here would read back as "no dungeon requirement",
+   * and the admin would have no way to tell that from the setting working.
+   *
+   * The whole policy is sent on every save, not a patch: the form shows every
+   * field, and a partial write against a policy someone else just edited is a
+   * lost update nobody would notice until the wrong person got in.
+   */
+  async setScreeningPolicy(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "config.screening", async () => {
+      const parsed = readScreeningPolicy(input);
+      if (typeof parsed === "string") return invalid(parsed);
+
+      const stored = serializePolicy(parsed);
+      const result = await this.d.config.setSetting(guildId, SCREENING_POLICY_KEY, stored);
+      // Recorded in full, unlike `config.setting`, which logs only the key: a
+      // screening policy is numbers and switches with nobody's words in it, and
+      // "who lowered the bar, and to what" is the question this audit exists to
+      // answer.
+      return { result, change: { ...stored } };
     });
   }
 
@@ -746,6 +793,140 @@ function describe(error: unknown): string {
 
 // Sentinels for the tri-state thresholds. Distinct objects rather than
 // undefined/null, because both of those are meaningful *values* here.
+// ── screening policy validation ─────────────────────────────────────────────
+
+const SCREENING_FLAGS = [
+  "enabled",
+  "autoAccept",
+  "denyOnScammer",
+  "reviewOnScammerUnknown",
+  "denyOnPriorExpulsion",
+  "reviewOnUnreadable",
+] as const;
+
+/** Nullable bars. Null means "do not check this", which is not the same as 0. */
+const SCREENING_BARS = [
+  "minSkyblockLevel",
+  "minSkillAverage",
+  "minCatacombs",
+  "minSenitherWeight",
+  "minAccountAgeDays",
+  "maxInactiveDays",
+] as const;
+
+/**
+ * Upper bound on any bar.
+ *
+ * Deliberately one loose ceiling rather than a per-stat one. A table saying
+ * "skill average tops out at 60" is a piece of game trivia that goes stale with
+ * the next Skyblock update, and a stale ceiling rejects a policy that is
+ * perfectly reasonable. What this actually needs to catch is Infinity, NaN and
+ * a slipped decimal point, and one bound does that.
+ */
+const BAR_MAX = 1e9;
+
+const SCREENING_COUNTS = {
+  repeatWindowDays: { min: 1, max: 365 },
+  maxAttemptsInWindow: { min: 1, max: 100 },
+  /** A risk score, so its range is the score's range. */
+  reviewAtRisk: { min: 0, max: 100 },
+} as const;
+
+const SCREENING_KEYS: readonly string[] = [
+  ...SCREENING_FLAGS,
+  ...SCREENING_BARS,
+  ...Object.keys(SCREENING_COUNTS),
+  "minNetworth",
+];
+
+/** Coins, as the form sends them: digits in a string, so 10b survives JSON. */
+const COINS = /^\d{1,30}$/;
+
+/**
+ * Validate a screening policy payload. Returns the policy, or the message to
+ * show the admin — never a half-applied policy.
+ */
+function readScreeningPolicy(input: unknown): ScreeningPolicy | string {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return "body must be an object";
+  const body = input as Record<string, unknown>;
+
+  const unknownKeys = Object.keys(body).filter((k) => !SCREENING_KEYS.includes(k));
+  if (unknownKeys.length > 0) return `unknown field(s): ${unknownKeys.join(", ")}`;
+
+  const flags: Record<string, boolean> = {};
+  for (const key of SCREENING_FLAGS) {
+    const value = body[key];
+    if (typeof value !== "boolean") return `${key} must be a boolean`;
+    flags[key] = value;
+  }
+
+  const bars: Record<string, number | null> = {};
+  for (const key of SCREENING_BARS) {
+    const value = body[key];
+    if (value === null || value === undefined) {
+      bars[key] = null;
+      continue;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > BAR_MAX) {
+      return `${key} must be a number between 0 and ${BAR_MAX}, or null for no requirement`;
+    }
+    bars[key] = value;
+  }
+
+  const counts: Record<string, number> = {};
+  for (const [key, range] of Object.entries(SCREENING_COUNTS)) {
+    const value = body[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < range.min || value > range.max) {
+      return `${key} must be a whole number between ${range.min} and ${range.max}`;
+    }
+    counts[key] = value;
+  }
+
+  const raw = body["minNetworth"];
+  let minNetworth: bigint | null = null;
+  if (raw !== null && raw !== undefined) {
+    // A number is accepted because a small threshold typed into a number field
+    // is a reasonable thing to send; anything past 2^53 has to arrive as a
+    // string, because by then a double has already lost the digits.
+    if (typeof raw === "number") {
+      if (!Number.isFinite(raw) || raw < 0 || !Number.isSafeInteger(raw)) {
+        return "minNetworth must be a whole number of coins, or a digit string for large values";
+      }
+      minNetworth = BigInt(raw);
+    } else if (typeof raw === "string" && COINS.test(raw.trim())) {
+      minNetworth = BigInt(raw.trim());
+    } else {
+      return "minNetworth must be a string of digits, a whole number, or null";
+    }
+  }
+
+  // `autoAccept` is the switch that admits a stranger with nobody watching, so
+  // the one cross-field rule guards it: with screening off, nothing is
+  // evaluated, and an accept flag left on would mean "admit everyone".
+  if (flags["autoAccept"] && !flags["enabled"]) {
+    return "autoAccept requires enabled: with screening off, nothing is checked before accepting";
+  }
+
+  return {
+    enabled: flags["enabled"]!,
+    autoAccept: flags["autoAccept"]!,
+    denyOnScammer: flags["denyOnScammer"]!,
+    reviewOnScammerUnknown: flags["reviewOnScammerUnknown"]!,
+    denyOnPriorExpulsion: flags["denyOnPriorExpulsion"]!,
+    reviewOnUnreadable: flags["reviewOnUnreadable"]!,
+    minSkyblockLevel: bars["minSkyblockLevel"]!,
+    minSkillAverage: bars["minSkillAverage"]!,
+    minCatacombs: bars["minCatacombs"]!,
+    minSenitherWeight: bars["minSenitherWeight"]!,
+    minNetworth,
+    minAccountAgeDays: bars["minAccountAgeDays"]!,
+    maxInactiveDays: bars["maxInactiveDays"]!,
+    repeatWindowDays: counts["repeatWindowDays"]!,
+    maxAttemptsInWindow: counts["maxAttemptsInWindow"]!,
+    reviewAtRisk: counts["reviewAtRisk"]!,
+  };
+}
+
 const ABSENT = Symbol("absent");
 const INVALID = Symbol("invalid");
 

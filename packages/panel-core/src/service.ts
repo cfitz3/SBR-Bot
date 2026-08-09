@@ -17,6 +17,12 @@ import type {
   ModerationService,
   RsvpEntryDTO,
 } from "@sbr/shared-types";
+import {
+  parsePolicy,
+  serializePolicy,
+  SCREENING_POLICY_KEY,
+  type ScreeningPolicyView,
+} from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 import { authorize, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
 import { shapeAnalytics, type MetricChart } from "./series.js";
@@ -146,6 +152,15 @@ export interface MembersVM {
 
 export interface SettingsVM {
   readonly config: GuildRuntimeConfig | null;
+  /**
+   * The join-screening policy, always populated: a guild that has never saved
+   * one reads back the platform defaults, which are what screening is actually
+   * using. Showing an empty form for "unset" would misdescribe a bot that is
+   * already applying rules.
+   *
+   * Serialized (coins as a string) because it crosses the wire as JSON.
+   */
+  readonly screening: ScreeningPolicyView;
 }
 
 export interface MappingVM {
@@ -490,8 +505,20 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const config = await this.d.config.get(guildId);
-    return { access, data: { config: config.ok ? config.value : null } };
+    const [config, policy] = await Promise.all([
+      this.d.config.get(guildId),
+      this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
+    ]);
+    return {
+      access,
+      data: {
+        config: config.ok ? config.value : null,
+        // Read through the same tolerant parser the bridge bot uses, so the
+        // page shows what screening will actually do with the stored value
+        // rather than a prettier version of what is in the row.
+        screening: serializePolicy(parsePolicy(policy)),
+      },
+    };
   }
 
   async loadMapping(session: PanelSession | null, guildId: string): Promise<PageResult<MappingVM>> {

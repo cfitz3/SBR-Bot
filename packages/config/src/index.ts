@@ -37,6 +37,12 @@ export interface AppConfig {
     readonly sessionSecret: string | undefined;
   };
   readonly hypixel: { readonly apiKey: string | undefined };
+  /**
+   * SkyKings — the third-party scammer database consulted when screening join
+   * requests. Optional: without it screening still runs and still records, it
+   * just reports every applicant as unchecked rather than cleared.
+   */
+  readonly skykings: { readonly apiKey: string | undefined };
   readonly minecraft: {
     readonly host: string;
     readonly port: number;
@@ -178,6 +184,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       sessionSecret: v.optionalString("SESSION_SECRET"),
     },
     hypixel: { apiKey: v.optionalString("HYPIXEL_API_KEY") },
+    skykings: { apiKey: v.optionalString("SKYKINGS_API_KEY") },
     minecraft: {
       host: v.optionalString("MC_HOST") ?? "mc.hypixel.net",
       port: v.int("MC_PORT", 25565),

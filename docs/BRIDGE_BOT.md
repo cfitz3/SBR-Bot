@@ -27,6 +27,7 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 | F11 | **Anti-spam / flood control** | Per-user + global rate limiting, dedup, mute-aware relay. |
 | F12 | **Bridge health & degradation** | Detects in-game disconnects, reconnects with backoff, and switches to a documented degraded mode. |
 | F13 | **Live guild roster** | `/online` reads `/g online` through the in-game session and reports who's on, grouped by guild rank. |
+| F14 | **Join screening & auto-accept** | Every `/g join` request is screened against the scammer list, the applicant's stats and this guild's own history, recorded, reported to staff, and — if the guild opts in — accepted automatically. |
 
 ---
 
@@ -179,6 +180,91 @@ The in-game connection (Mineflayer) is the fragile link — it can drop from Hyp
 
 ---
 
+## 6A. Join Screening & Auto-Accept (F14)
+
+When somebody runs `/g join Skyblock and Relax`, Hypixel prints the request into
+guild chat. The bridge reads that line and screens the applicant before anyone
+has had to look at them.
+
+### 6A.1 What happens, in order
+
+1. **Parse.** `parseJoinEvent` reads `… has requested to join the Guild!` off
+   the `messagestr` stream, tolerating rank tags, colour codes and the wording
+   changes Hypixel has shipped before. `… joined the guild!` is a separate event.
+   The "Click here to accept" follow-up line is deliberately *not* a second
+   request, and a 60-second dedupe collapses the reprints Hypixel sends to every
+   member with the invite permission.
+2. **Gather**, all concurrently:
+   - **Scammer list** — SkyKings, by uuid *and* by the linked Discord id when we
+     have one. The uuid asks "is this account listed"; the Discord id asks "is
+     the person behind it listed", which still matches after a fresh alt.
+   - **Stats** — Hypixel player, profile summary, networth and profiles, with
+     SkyKings' tracker filling any gap Hypixel refused. Every field taken from
+     the fallback is marked in the record.
+   - **History** — this guild's own record: prior denials, prior kicks or bans,
+     and how many times they have asked inside the repeat window.
+3. **Evaluate** (`@sbr/screening`, a pure function). Hard refusals and holds are
+   *reason-driven*; the risk score exists to rank the staff queue and to escalate
+   a request that collected several small concerns. **The score never turns a
+   REVIEW into an ACCEPT.**
+4. **Record.** One `GuildJoinScreening` row per *attempt*, carrying the verdict,
+   the risk score, the reasons and the applicant's stats as they were at that
+   moment — which is also the metrics capture: an applicant has no
+   `ProfileSnapshot` because they are not a member yet.
+5. **Act.** On ACCEPT with `autoAccept` on, the bot sends `/guild accept <ign>`.
+   On DENY it records the refusal. On REVIEW it does nothing and waits.
+6. **Report.** A full report goes to the `staff` channel. Guild chat gets at most
+   a neutral line.
+
+### 6A.2 Rules that are not negotiable
+
+- **An outage is never an approval.** A failed scammer check is `UNKNOWN`, not
+  `CLEAR`; a thrown port is `UNKNOWN` with the error recorded; a policy source
+  that fails falls back to defaults, which have `autoAccept: false`. There is no
+  path where something breaking results in somebody being let in.
+- **"Could not read" is never "failed the bar."** A hidden dungeon API yields
+  `API_DISABLED` (a hold), never `BELOW_CATACOMBS` (a claim about the player).
+- **Nobody is publicly accused.** The guild-chat line names no database and
+  quotes no threshold. SkyKings is a third-party list, a wrong flag is possible,
+  and being called a scammer in front of a hundred players cannot be taken back.
+  Detail goes to the staff channel only.
+- **Defaults are safe rather than useful.** Out of the box screening records and
+  reports but admits nobody. `autoAccept` is opt-in, and the honest rollout is to
+  run report-only for a week and read what it *would* have done.
+
+### 6A.3 Configuration
+
+The policy lives in `GuildSetting` under **`screening.policy`**, edited on the
+panel's **Settings → Join screening** card (`config.screening`, ADMIN tier).
+Nothing about it is in `.env`: a requirement bar is exactly the kind of thing
+staff change on a Friday night without wanting a redeploy.
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Off means the bot still records every request but decides nothing. |
+| `autoAccept` | Whether an ACCEPT verdict actually sends `/guild accept`. Requires `enabled`. |
+| `denyOnScammer` | A listed scammer is refused outright rather than queued. |
+| `reviewOnScammerUnknown` | An unreachable list holds the request for a human. |
+| `denyOnPriorExpulsion` | A previous kick or ban from this guild is refused outright. |
+| `reviewOnUnreadable` | An account whose stats we cannot read holds for a human. |
+| `minSkyblockLevel`, `minSkillAverage`, `minCatacombs`, `minSenitherWeight`, `minNetworth` | Entry bars. `null` means "do not check this" — which is not the same as `0`. |
+| `minAccountAgeDays`, `maxInactiveDays` | Account age and inactivity holds. |
+| `repeatWindowDays`, `maxAttemptsInWindow` | How far back repeat attempts count, and how many are tolerated. |
+| `reviewAtRisk` | Risk score (0–100) at or above which an otherwise-passing request still waits for a human. |
+
+The read path (`parsePolicy`) is deliberately **tolerant** — a malformed or
+years-old field degrades to its default rather than taking screening offline. The
+write path (`config.screening`) is deliberately **strict**, and rejects unknown
+keys: a typo'd `minCatacomb` accepted silently would read back as "no dungeon
+requirement" and look identical to a working setting.
+
+`SKYKINGS_API_KEY` is the one `.env` value this feature needs — a credential, not
+a behaviour switch. Without it the scammer check returns `UNKNOWN` and, by
+default, every request holds for a human. The key travels in the `Authorization`
+header and never in a query string, because query strings end up in proxy logs.
+
+---
+
 ## 7. Example Message Flows
 
 ### 7.1 Discord → in-game relay (happy path)
@@ -248,4 +334,5 @@ Mineflayer session drops (Hypixel restart)
 - **Role-gated speaking** via granular `BridgePermission` capabilities.
 - **Anti-spam protects both users and the bot's own Hypixel standing** via per-user + global caps, dedup, and mute-awareness.
 - **In-game commands are the read-only subset**, one-line, stricter cooldowns.
+- **Join screening fails closed:** an unreachable scammer list, a hidden API or a broken dependency all resolve to "a human should look at this", never to an accept.
 - **Degraded mode is designed, not accidental:** Discord commands keep working, relays queue, cross-surface mutes defer, and staff get one clear signal — the bridge going down never takes the bot down.

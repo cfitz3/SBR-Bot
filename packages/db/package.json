@@ -30,6 +30,7 @@
     "@sbr/env": "*",
     "@sbr/jobs": "*",
     "@sbr/perms": "*",
+    "@sbr/screening": "*",
     "@sbr/shared-types": "*",
     "dotenv": "^17.4.2",
     "pg": "^8.22.0"

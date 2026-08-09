@@ -23,6 +23,8 @@
     { "path": "../../packages/pricing" },
     { "path": "../../packages/progression" },
     { "path": "../../packages/redis" },
+    { "path": "../../packages/screening" },
+    { "path": "../../packages/skykings" },
     { "path": "../../packages/shared-types" }
   ]
 }

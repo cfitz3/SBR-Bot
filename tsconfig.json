@@ -10,6 +10,8 @@
     { "path": "packages/observability" },
     { "path": "packages/identity" },
     { "path": "packages/hypixel" },
+    { "path": "packages/skykings" },
+    { "path": "packages/screening" },
     { "path": "packages/pricing" },
     { "path": "packages/progression" },
     { "path": "packages/bridge" },

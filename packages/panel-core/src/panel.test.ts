@@ -136,6 +136,11 @@ const configService = (over: Partial<GuildRuntimeConfig> = {}): GuildConfigServi
         minNetworth: null, roleMappings: {}, ...over,
       });
     },
+    // No stored settings: the Settings page has to work for a guild that has
+    // never saved a screening policy, which is every guild on day one.
+    async getSetting() {
+      return null;
+    },
   };
   return partial as GuildConfigService;
 };
@@ -262,6 +267,17 @@ test("recruitment surfaces the guild's thresholds alongside the queue", async ()
   assert.equal(r.access.allowed, true);
   assert.equal(r.data?.recruitmentOpen, false);
   assert.equal(r.data?.minWeight, 4000);
+});
+
+test("settings shows the screening policy in force, not an empty form", async () => {
+  // A guild that has never saved a policy is still being screened under the
+  // platform defaults. Rendering blanks would tell the admin that nothing is
+  // configured, when in fact the scammer check is already running.
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadSettings(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.screening.enabled, true);
+  assert.equal(r.data?.screening.autoAccept, false, "nobody is admitted automatically until someone opts in");
+  assert.equal(r.data?.screening.minNetworth, null);
 });
 
 // ── events + attendance ──

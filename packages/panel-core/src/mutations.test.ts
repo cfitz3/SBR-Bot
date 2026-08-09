@@ -18,6 +18,7 @@ import {
   type Result,
 } from "@sbr/shared-types";
 import type { AnalyticsService, CommandUsageDTO } from "@sbr/shared-types";
+import { DEFAULT_POLICY, SCREENING_POLICY_KEY, serializePolicy } from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 import type { PanelSession, RoleResolver } from "./access.js";
 import {
@@ -523,4 +524,153 @@ test("a refusal from the config service surfaces as SERVICE_ERROR and writes no 
   assert.equal(result.error?.detail, "NOT_CONFIGURED");
   assert.deepEqual(recorded.audits, []);
   assert.equal(recorded.usage[0]?.success, false);
+});
+
+// ── screening policy ──
+//
+// The one mutation whose contents decide whether a stranger is admitted with
+// nobody looking, so these tests are mostly about the ways a policy could be
+// *quietly wrong*: a mistyped field that reads back as "no requirement", a coin
+// threshold rounded off by a double, an auto-accept switch left on with
+// screening disabled. Each of those would save successfully and then not do
+// what the admin believed they had set.
+
+/** A complete, valid payload — the shape the settings form sends. */
+function policyBody(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return { ...serializePolicy(DEFAULT_POLICY), ...over };
+}
+
+test("a complete policy is stored under the screening key", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minSkillAverage: 30 }));
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    {
+      method: "setSetting",
+      args: ["g1", SCREENING_POLICY_KEY, { ...serializePolicy(DEFAULT_POLICY), minSkillAverage: 30 }],
+    },
+  ]);
+});
+
+test("an unknown screening field is refused rather than ignored", async () => {
+  // The whole point of the strict write surface: `minCatacomb` accepted here
+  // would read back as "no dungeon requirement", and nothing on the page would
+  // tell the admin that apart from a working setting.
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minCatacomb: 30 }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.match(result.error?.detail ?? "", /minCatacomb/);
+  assert.deepEqual(recorded.calls, [], "nothing may be written when part of the payload is rejected");
+});
+
+test("a coin threshold past 2^53 keeps every digit", async () => {
+  const huge = "123456789012345678";
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minNetworth: huge }));
+
+  assert.equal(result.ok, true);
+  assert.equal((recorded.calls[0]?.args[2] as Record<string, unknown>)["minNetworth"], huge);
+});
+
+test("a coin threshold that is not digits is refused", async () => {
+  const { mutations, recorded } = make();
+
+  for (const bad of ["10b", "1e9", "-5", "1.5", " ", "abc", 1.5, -1]) {
+    const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minNetworth: bad }));
+    assert.equal(result.ok, false, String(bad));
+  }
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a blank screening bar is null, not zero", async () => {
+  // Null means "do not check this". Zero is a bar everybody clears — the same
+  // outcome today, but a different instruction, and it reads differently in a
+  // report about why somebody was let in.
+  const { mutations, recorded } = make();
+
+  await mutations.setScreeningPolicy(session(), "g1", policyBody({ minSkillAverage: null, minCatacombs: 0 }));
+
+  const stored = recorded.calls[0]?.args[2] as Record<string, unknown>;
+  assert.equal(stored["minSkillAverage"], null);
+  assert.equal(stored["minCatacombs"], 0);
+});
+
+test("auto-accept cannot be left on with screening disabled", async () => {
+  // Otherwise the policy reads as "admit everyone without checking", which is
+  // the one configuration no admin means to save.
+  const { mutations } = make();
+
+  const result = await mutations.setScreeningPolicy(
+    session(),
+    "g1",
+    policyBody({ enabled: false, autoAccept: true }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.match(result.error?.detail ?? "", /autoAccept requires enabled/);
+});
+
+test("screening off with auto-accept off is a legitimate policy", async () => {
+  const { mutations } = make();
+
+  const result = await mutations.setScreeningPolicy(
+    session(),
+    "g1",
+    policyBody({ enabled: false, autoAccept: false }),
+  );
+
+  assert.equal(result.ok, true);
+});
+
+test("a risk threshold outside the score's range is refused", async () => {
+  const { mutations } = make();
+
+  for (const bad of [-1, 101, 12.5, "50", null]) {
+    const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ reviewAtRisk: bad }));
+    assert.equal(result.ok, false, String(bad));
+  }
+});
+
+test("a missing screening flag is refused rather than defaulted", async () => {
+  // The form sends the whole policy every time. Quietly filling an absent field
+  // from the defaults would turn a partial write into a silent rollback of
+  // somebody else's edit.
+  const { mutations } = make();
+  const body = policyBody();
+  delete body["denyOnScammer"];
+
+  const result = await mutations.setScreeningPolicy(session(), "g1", body);
+
+  assert.equal(result.ok, false);
+  assert.match(result.error?.detail ?? "", /denyOnScammer/);
+});
+
+test("the screening audit records the policy in full", async () => {
+  // Unlike config.setting, which logs only the key: a policy is numbers and
+  // switches with nobody's words in it, and "who lowered the bar, and to what"
+  // is the question this audit exists to answer.
+  const { mutations, recorded } = make();
+
+  await mutations.setScreeningPolicy(session(), "g1", policyBody({ autoAccept: true, minSkillAverage: 35 }));
+
+  assert.equal(recorded.audits.length, 1);
+  assert.equal(recorded.audits[0]?.mutation, "config.screening");
+  assert.equal(recorded.audits[0]?.actorDiscordId, "111");
+  assert.equal(recorded.audits[0]?.change["autoAccept"], true);
+  assert.equal(recorded.audits[0]?.change["minSkillAverage"], 35);
+});
+
+test("an officer cannot change the entry bar", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody());
+
+  assert.equal(result.access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
 });

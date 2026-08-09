@@ -51,6 +51,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **1** | **Config foundation** *(shipped)* | HTTP/HTTPS toggle, `GuildChannelBinding` + open channel-slot registry, `GuildSetting` KV, panel config surface | — |
 | **2** | **Guild scan & member cache** *(shipped)* | 6h guild scan job, rolling 6h in-game member cache, GEXP daily table | 1 |
 | **3** | **Perms** *(shipped)* | `PermGroup`/`PermMember`/`PermRoster`, `PermService`, `/perm create\|info\|roster add\|roster remove\|disband`, roster autofill + stats | 2 |
+| **S** | **Join screening & auto-accept** *(shipped, out of band)* | SkyKings client, `GuildJoinScreening`, `@sbr/screening` policy engine, bridge join wiring, panel policy editor | 1 |
 | **4** | **LFG rework** | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + remove, message tracking | 1, 3 |
 | **5** | **XP & standing** | XP ledger + balances, source weights/caps config, anti-abuse gates, aggregation jobs, `/me` & `/profile` rework | 1, 2 |
 | **6** | **Leaderboards** | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |

@@ -9,6 +9,19 @@ export interface HypixelPlayerDTO {
   readonly ign: string | null;
   /** The Discord identifier set in the in-game social field, or null if unset. */
   readonly discordSocial: string | null;
+  /**
+   * First and last time Hypixel saw them log in, in epoch milliseconds. Null
+   * when the account hides it or has never logged in — never coerced to zero,
+   * because "we can't see it" and "brand new account" are different answers to
+   * a screening question about account age.
+   *
+   * Kept as numbers rather than `Date` because this DTO is cached through
+   * Redis as JSON: a Date would come back as a string on every cache hit while
+   * still typing as a Date, which is the kind of bug that only shows up in
+   * production.
+   */
+  readonly firstLoginMs: number | null;
+  readonly lastLoginMs: number | null;
 }
 
 // ── Raw upstream shapes (loosely typed; validated during normalization) ──
@@ -32,6 +45,9 @@ export interface RawHypixelPlayer {
       readonly DISCORD?: string;
     };
   };
+  /** Epoch milliseconds, as Hypixel sends them. */
+  readonly firstLogin?: number;
+  readonly lastLogin?: number;
 }
 
 /** Normalized Skyblock profile projection with the member blob for networth. */

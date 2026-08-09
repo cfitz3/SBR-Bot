@@ -20,6 +20,8 @@ import { ComponentRouter, interactionArgs, respond, toSlashCommands } from "@sbr
 import type { GuildRosterDTO, GuildRosterSource } from "@sbr/shared-types";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
+import { acceptCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
+import { chatLine, staffReport } from "@sbr/screening";
 
 export interface GuildChatLine {
   readonly name: string;
@@ -444,6 +446,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // reply is a server message block, not chat, so it never parses as chat.
       captureRosterLine(str);
 
+      // Join notices are server messages too, so this must come before the
+      // guild-chat parse rather than inside it.
+      const join = parseJoinEvent(str);
+      if (join) {
+        relay("join-screening", () => handleJoin(bot, join));
+        return;
+      }
+
       const parsed = parseGuildChat(str);
       if (!parsed) return;
 
@@ -537,6 +547,104 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       await relayDiscordToGame(app, guildId, msg, (line) => sayInGuildChat(bot, line));
     });
   });
+
+  // ── join screening ────────────────────────────────────────────────────────
+  //
+  // Hypixel prints the request notice to everyone with the invite permission,
+  // and prints it again if the applicant retries. `seenRecently` collapses that
+  // to one screening: a duplicate would double the Hypixel and SkyKings calls
+  // and post the staff report twice for one person.
+  const recentJoins = new Map<string, number>();
+  const JOIN_DEDUPE_MS = 60_000;
+
+  function seenRecently(key: string): boolean {
+    const now = Date.now();
+    for (const [k, at] of recentJoins) if (now - at > JOIN_DEDUPE_MS) recentJoins.delete(k);
+    if (recentJoins.has(key)) return true;
+    recentJoins.set(key, now);
+    return false;
+  }
+
+  /**
+   * Screen a join request, or record a completed join.
+   *
+   * Nothing here throws into the chat handler: `relay` catches, and every step
+   * that could fail is allowed to leave the rest working. In particular a
+   * failure to resolve the applicant's uuid ends the screening — we will not
+   * accept somebody we could not identify — while a failure to post the staff
+   * report only costs the report, because the row is already written.
+   */
+  async function handleJoin(bot: Bot, event: GuildJoinEvent): Promise<void> {
+    if (seenRecently(`${event.kind}:${event.ign.toLowerCase()}`)) return;
+
+    const guildId = await resolveInternalGuild();
+    if (!guildId) return;
+
+    const resolved = await app.handlerDeps.players.resolveIgn(event.ign);
+    if (!resolved) {
+      app.log.warn("join event for an unresolvable name — not screened", { ign: event.ign, kind: event.kind });
+      return;
+    }
+
+    // Somebody who is already in is not a candidate for a gate. The screening
+    // is still run and recorded, because "who joined, and what did they look
+    // like at the time" is the metric this feature exists to capture — it is
+    // only the accept/deny half that does not apply.
+    const { screening, id, shouldAccept } = await app.screening.screen({
+      guildId,
+      uuid: resolved.uuid,
+      ign: resolved.ign,
+    });
+
+    if (event.kind === "JOINED") {
+      await app.screening.decide(id, "JOINED", "AUTO");
+      await postStaffReport(guildId, `**${resolved.ign} joined the guild.**
+${staffReport(screening)}`);
+      return;
+    }
+
+    if (shouldAccept) {
+      // A raw command, not `/gc`: this is an instruction to Hypixel, not a line
+      // of guild chat, so it must not go through the echo-suppressing sender.
+      if (spawned) bot.chat(acceptCommand(resolved.ign));
+      await app.screening.decide(id, "ACCEPTED", "AUTO");
+    } else if (screening.verdict === "DENY") {
+      await app.screening.decide(id, "DENIED", "AUTO");
+    }
+
+    // The public line is deliberately vague — see `chatLine`. Said only when we
+    // actually acted, so a request quietly queued for staff does not announce
+    // itself to the guild.
+    if (shouldAccept || screening.verdict === "DENY") {
+      sayInGuildChat(bot, chatLine(screening), true);
+    }
+
+    await postStaffReport(
+      guildId,
+      shouldAccept
+        ? `**Auto-accepted ${resolved.ign}.**
+${staffReport(screening)}`
+        : `**Join request from ${resolved.ign} — ${screening.verdict.toLowerCase()}.**
+${staffReport(screening)}`,
+    );
+  }
+
+  /**
+   * Post to the guild's `staff` channel. Silent when the slot is unbound: a
+   * guild that has not configured one still gets screening, recorded and
+   * decided, it just has nowhere for the write-up to go.
+   */
+  async function postStaffReport(guildId: string, content: string): Promise<void> {
+    const channelId = await app.handlerDeps.config.getChannel(guildId, "staff");
+    if (!channelId) return;
+    const channel = await discord.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) return;
+    // The report quotes a stranger's IGN and a third-party listing reason,
+    // neither of which we control; mentions stay unparsed.
+    await channel.send({ content, allowedMentions: { parse: [] } }).catch((e: unknown) => {
+      app.log.warn("could not post screening report", { error: String(e) });
+    });
+  }
 
   /**
    * Run a relay hop detached from its event handler. Without the catch, one bad

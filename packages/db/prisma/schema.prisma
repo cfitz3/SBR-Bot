@@ -305,6 +305,7 @@ model Guild {
   events        Event[]
   lfgPosts      LFGPost[]
   perms         PermGroup[]
+  screenings    GuildJoinScreening[]
   subscriptions NotificationSubscription[]
 
   @@index([discordGuildId])
@@ -458,6 +459,100 @@ model GuildScan {
   guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
 
   @@index([guildId, startedAt])
+}
+
+enum ScreeningVerdict {
+  /// Clears the bar on every axis the policy checks.
+  ACCEPT
+  /// Nothing disqualifying, but something a human should look at.
+  REVIEW
+  /// Fails a rule the policy treats as disqualifying.
+  DENY
+}
+
+enum ScreeningOutcome {
+  /// Screened, no decision yet — the state a REVIEW verdict rests in.
+  PENDING
+  /// `/g accept` was sent. Says nothing about whether it worked upstream.
+  ACCEPTED
+  /// Refused, by policy or by a human.
+  DENIED
+  /// Went stale unanswered, or the player withdrew.
+  EXPIRED
+  /// Observed joining without a request — an open guild, or an invite.
+  JOINED
+}
+
+/// One screening per join attempt: who asked, what we found out about them at
+/// that moment, and what happened next.
+///
+/// A row per *attempt*, not per player. Repeat requests are themselves a signal
+/// (three tries in a week reads differently from one), the stat block is a
+/// point-in-time reading that would be destroyed by an upsert, and the pair is
+/// what makes "who did we let in, on what evidence" answerable months later.
+///
+/// The stat columns duplicate what a ProfileSnapshot would hold, and do so
+/// deliberately: a snapshot needs a linked MinecraftAccount row, and an
+/// applicant is by definition somebody the platform has never met. These are
+/// the numbers as they stood at the door.
+model GuildJoinScreening {
+  id        String  @id @default(cuid())
+  guildId   String
+  uuid      String
+  ign       String
+  /// Resolved via the Hypixel social field or the SkyKings link, when either
+  /// knew. Null is ordinary — most applicants arrive unlinked.
+  discordId String?
+
+  requestedAt DateTime         @default(now())
+  verdict     ScreeningVerdict
+  /// 0–100. Higher is riskier; the thresholds that turn it into a verdict are
+  /// per-guild policy, so the number is stored and the cut is not.
+  riskScore   Int              @default(0)
+  /// Machine-readable reason codes (`SCAMMER_FLAGGED`, `NEW_ACCOUNT`, …), in the
+  /// order the policy raised them. Rendered to sentences at the surface.
+  reasons     String[]         @default([])
+
+  /// Three-valued on purpose: true = listed, false = SkyKings answered and had
+  /// nothing, null = we could not find out. Collapsing null into false is how an
+  /// outage becomes an all-clear.
+  scammer       Boolean?
+  scammerReason String?
+  /// Which identifier matched — `UUID` or `DISCORD`.
+  scammerSource String?
+
+  /// The stat block as it stood at the moment of the request. Every field is
+  /// nullable: an applicant with their API off is unreadable, not empty.
+  networth       BigInt?
+  skillAverage   Float?
+  catacombsLevel Float?
+  senitherWeight Float?
+  skyblockLevel  Float?
+  profileName    String?
+  firstLoginAt   DateTime?
+  lastLoginAt    DateTime?
+  /// Everything else worth keeping but not worth a column — slayer levels, the
+  /// SkyKings tracker's own figures, the guild they came from, API-visibility
+  /// flags. Read by the panel and by later analysis, never by a hot path.
+  metrics        Json      @default("{}")
+
+  outcome   ScreeningOutcome @default(PENDING)
+  decidedAt DateTime?
+  /// `AUTO` for a policy decision, otherwise the deciding staff member's
+  /// Discord id. A string rather than a relation: the decider may be the bot.
+  decidedBy String?
+  /// Set when screening itself failed, so a REVIEW caused by an outage is
+  /// distinguishable from one caused by the applicant.
+  error     String?
+  createdAt DateTime         @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, requestedAt])
+  /// "Have they tried before, and what happened?" — the repeat-attempt read.
+  @@index([guildId, uuid, requestedAt])
+  /// The staff queue: pending reviews, oldest first.
+  @@index([guildId, outcome, requestedAt])
 }
 
 model GuildConfig {

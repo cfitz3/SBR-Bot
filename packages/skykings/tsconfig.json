@@ -6,5 +6,5 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../shared-types" }, { "path": "../env" }, { "path": "../jobs" }, { "path": "../perms" }, { "path": "../screening" }]
+  "references": [{ "path": "../observability" }]
 }

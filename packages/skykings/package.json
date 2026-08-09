@@ -1,5 +1,5 @@
 {
-  "name": "@sbr/panel-core",
+  "name": "@sbr/skykings",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,10 +17,6 @@
     "test": "node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
-    "@sbr/analytics": "*",
-    "@sbr/moderation": "*",
-    "@sbr/observability": "*",
-    "@sbr/screening": "*",
-    "@sbr/shared-types": "*"
+    "@sbr/observability": "*"
   }
 }

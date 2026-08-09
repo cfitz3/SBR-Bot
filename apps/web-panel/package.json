@@ -22,6 +22,7 @@
     "@sbr/observability": "*",
     "@sbr/panel-core": "*",
     "@sbr/redis": "*",
+    "@sbr/screening": "*",
     "@sbr/shared-types": "*"
   }
 }
