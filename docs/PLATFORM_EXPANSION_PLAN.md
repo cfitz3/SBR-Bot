@@ -48,8 +48,8 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 
 | # | Phase | Delivers | Depends on |
 | --- | --- | --- | --- |
-| **1** | **Config foundation** | HTTP/HTTPS toggle, `GuildChannelBinding` + open channel-slot registry, `GuildSetting` KV, panel config surface | — |
-| **2** | **Guild scan & member cache** | 6–8h guild scan job, rolling 6h in-game member cache (Postgres + Redis), GEXP daily diff table | 1 |
+| **1** | **Config foundation** *(1a, 1b shipped; 1c open)* | HTTP/HTTPS toggle, `GuildChannelBinding` + open channel-slot registry, `GuildSetting` KV, panel config surface | — |
+| **2** | **Guild scan & member cache** *(shipped)* | 6h guild scan job, rolling 6h in-game member cache, GEXP daily table | 1 |
 | **3** | **Perms** | `PermGroup`/`PermMember`/`PermRoster`, `PermService`, `/perm create\|info\|roster add\|roster remove\|disband`, roster autofill + stats | 2 |
 | **4** | **LFG rework** | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + remove, message tracking | 1, 3 |
 | **5** | **XP & standing** | XP ledger + balances, source weights/caps config, anti-abuse gates, aggregation jobs, `/me` & `/profile` rework | 1, 2 |
@@ -137,6 +137,23 @@ model GuildScan {
 
 > `packages/hypixel` needs `GuildMemberDTO` extended with `expHistory: Record<string, number>`
 > and `weeklyGexp` — the normalizer currently drops both.
+
+**As shipped** (migration `20260809140000_guild_scan_cache`), with two deviations from
+the sketch above:
+
+- **`lastSeenAt` was dropped.** It would have duplicated `refreshedAt` — the scan is the
+  only writer, and a row is refreshed exactly when the member is seen. Presence sampling
+  (assumption 5) needs its own grain and will get its own table in Phase 5 rather than
+  overloading a column here.
+- **GEXP is stored as Hypixel's daily value, not a computed diff.** `expHistory` is
+  already per-day, so diffing it against the previous scan would turn an idempotent
+  overwrite into a stateful accumulation that double-counts on any re-run. The table is
+  a mirror of upstream's series, extended past its ~7-day window.
+
+`packages/hypixel` gained `expHistory`/`weeklyGexp` on `GuildMemberDTO` plus
+`resolveIgn(uuid)` against the Mojang session server; the pure scan logic is
+`packages/jobs/src/guild-scan.ts` and the cadence is `26 1,7,13,19 * * *`.
+See `docs/WORKERS.md` §2.14 for the failure and rate-limit rules.
 
 ### 2.3 Perms (Phase 3)
 

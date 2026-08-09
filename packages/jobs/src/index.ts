@@ -14,6 +14,7 @@ export {
   defineConfigInvalidationJob,
   defineEndedAuctionJob,
   defineEventTransitionJob,
+  defineGuildScanJob,
   defineInactivityScanJob,
   defineMilestoneDetectJob,
   defineProfileSnapshotJob,
@@ -65,6 +66,18 @@ export {
   type SnapshotWrite,
   type TrackedAccount,
 } from "./progression.js";
+export {
+  MEMBER_CACHE_TTL_MS,
+  collectGexp,
+  isCacheFresh,
+  scanGuild,
+  type CachedMemberRow,
+  type GexpDailyWrite,
+  type GuildScanDeps,
+  type GuildScanResult,
+  type MemberCacheWrite,
+  type ScannedMember,
+} from "./guild-scan.js";
 export {
   diffRoster,
   findInactive,

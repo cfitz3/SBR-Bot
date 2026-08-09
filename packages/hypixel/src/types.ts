@@ -170,7 +170,7 @@ export interface EndedAuctionDTO {
   readonly soldAt: number | null;
   /**
    * Item identity, decoded from the NBT blob the endpoint returns. Null when the
-   * blob is absent or unreadable — the sale is then real but unattributable, and
+   * blob is absent or unreadable ï¿½ the sale is then real but unattributable, and
    * pricing skips it rather than guessing.
    */
   readonly itemId: string | null;
@@ -197,7 +197,7 @@ export interface RawEndedAuction {
   readonly price?: number;
   readonly bin?: boolean;
   readonly timestamp?: number;
-  /** base64(gzip(NBT)) — the only place the item's identity appears. */
+  /** base64(gzip(NBT)) ï¿½ the only place the item's identity appears. */
   readonly item_bytes?: string;
 }
 
@@ -313,6 +313,14 @@ export interface GuildMemberDTO {
   readonly uuid: string;
   readonly rank: string | null;
   readonly joinedAt: number | null;
+  /**
+   * GEXP by `YYYY-MM-DD`, exactly as Hypixel reports it: a rolling ~7-day
+   * window, keyed in UTC, and *not* cumulative â€” each value is that day's
+   * earnings. Today's entry is still climbing when read.
+   */
+  readonly expHistory: Readonly<Record<string, number>>;
+  /** Sum of `expHistory`. The number guild leaderboards are usually ranked on. */
+  readonly weeklyGexp: number;
 }
 
 export interface GuildDTO {
@@ -345,4 +353,5 @@ export interface RawGuildMember {
   readonly uuid?: string;
   readonly rank?: string;
   readonly joined?: number;
+  readonly expHistory?: Readonly<Record<string, unknown>> | null;
 }

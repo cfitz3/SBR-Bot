@@ -293,6 +293,9 @@ model Guild {
   channels      GuildChannelBinding[]
   settings      GuildSetting[]
   members       GuildMember[]
+  memberCache   GuildMemberCache[]
+  gexpDaily     GuildGexpDaily[]
+  scans         GuildScan[]
   permissions   BridgePermission[]
   wordlist      WordlistEntry[]
   infractions   Infraction[]
@@ -386,6 +389,74 @@ model GuildSetting {
 
   @@unique([guildId, key])
   @@index([guildId])
+}
+
+/// Rolling snapshot of the *in-game* guild roster, refreshed by `guild-scan`.
+///
+/// Distinct from GuildMember, which is platform membership keyed by Discord
+/// account: this table holds everyone in the Hypixel guild, including the many
+/// who have never linked a Discord account, and is what perm roster autofill,
+/// leaderboards and XP read so none of them costs a live Hypixel call.
+///
+/// Rows older than the cache TTL (6h) are stale, not wrong — a reader may serve
+/// them while saying so, which is far better than blocking on the API.
+model GuildMemberCache {
+  id          String    @id @default(cuid())
+  guildId     String
+  uuid        String
+  /// Resolved from Mojang opportunistically; null until a lookup succeeds, since
+  /// the guild endpoint returns uuids only.
+  ign         String?
+  guildRank   String?
+  joinedAt    DateTime?
+  /// Sum of the ~7-day expHistory window at the time of the scan.
+  weeklyGexp  Int       @default(0)
+  /// When this row was last confirmed present in-game. Doubles as the staleness
+  /// clock and as the left-the-guild tombstone check.
+  refreshedAt DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, uuid])
+  @@index([guildId, refreshedAt])
+}
+
+/// One row per member per day: Hypixel's own expHistory, de-duplicated into a
+/// permanent series. The rolling window upstream is only ~7 days, so this table
+/// is the only place long-run GEXP tenure and leaderboards can come from.
+///
+/// Idempotent on (guildId, uuid, day): re-scanning a day overwrites it, which is
+/// what makes today's still-climbing value converge rather than double-count.
+model GuildGexpDaily {
+  id      String   @id @default(cuid())
+  guildId String
+  uuid    String
+  day     DateTime @db.Date
+  gexp    Int      @default(0)
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, uuid, day])
+  @@index([guildId, day])
+}
+
+/// Audit row per scan attempt. Cheap, and the only way to answer "why is the
+/// roster stale" without reading worker logs.
+model GuildScan {
+  id          String    @id @default(cuid())
+  guildId     String
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  memberCount Int       @default(0)
+  /// UUIDs seen for the first time / no longer present, relative to the cache.
+  joined      String[]  @default([])
+  left        String[]  @default([])
+  error       String?
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, startedAt])
 }
 
 model GuildConfig {

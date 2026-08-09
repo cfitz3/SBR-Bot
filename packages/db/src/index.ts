@@ -32,6 +32,7 @@ export {
   type ApplicationRow,
   type JobHealthRow,
 } from "./repositories/panel.js";
+export { guildScanRepository, type CachedGuildMemberRow } from "./repositories/guild-scan.js";
 export {
   wordlistRepository,
   guildConfigRepository,

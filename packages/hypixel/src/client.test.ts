@@ -340,6 +340,54 @@ test("getGuild orders ranks by priority, highest first", async () => {
   assert.equal(dto.members[0]?.uuid, "m1");
 });
 
+test("getGuild carries expHistory through and sums it into weeklyGexp", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      guild: {
+        _id: "g1",
+        name: "SBR",
+        members: [
+          { uuid: "m1", rank: "Member", expHistory: { "2026-08-08": 1_200, "2026-08-09": 300 } },
+          { uuid: "m2", rank: "Member" },
+        ],
+      },
+    }).getGuild("g1"),
+  );
+  assert.deepEqual(dto.members[0]?.expHistory, { "2026-08-08": 1_200, "2026-08-09": 300 });
+  assert.equal(dto.members[0]?.weeklyGexp, 1_500);
+  // A member with no history reads as zero earned, not as missing keys.
+  assert.deepEqual(dto.members[1]?.expHistory, {});
+  assert.equal(dto.members[1]?.weeklyGexp, 0);
+});
+
+test("expHistory entries that aren't a day and a count are dropped, not propagated", async () => {
+  const dto = data(
+    await client({
+      success: true,
+      guild: {
+        _id: "g1",
+        name: "SBR",
+        members: [
+          {
+            uuid: "m1",
+            expHistory: {
+              "2026-08-09": 500,
+              "not-a-day": 900,
+              "2026-08-08": "1200",
+              "2026-08-07": -5,
+              "2026-08-06": 12.7,
+            },
+          },
+        ],
+      },
+    }).getGuild("g1"),
+  );
+  // Only the well-formed days survive; 12.7 floors, because GEXP is an integer.
+  assert.deepEqual(dto.members[0]?.expHistory, { "2026-08-09": 500, "2026-08-06": 12 });
+  assert.equal(dto.members[0]?.weeklyGexp, 512);
+});
+
 test("a guild that does not exist is MISSING_PROFILE, not an error", async () => {
   const result = await client({ success: true, guild: null }).getGuild("nope");
   assert.equal(result.ok, false);

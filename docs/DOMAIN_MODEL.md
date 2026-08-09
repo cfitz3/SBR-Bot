@@ -18,6 +18,9 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | LinkedAccount | Postgres | Persistent (link is durable; verification is ephemeral) |
 | Guild | Postgres | Persistent |
 | GuildMember | Postgres | Persistent |
+| GuildMemberCache | Postgres | Cache of upstream truth (rebuildable, 6 h rolling) |
+| GuildGexpDaily | Postgres | Persistent (time-series) |
+| GuildScan | Postgres | Persistent (operational audit) |
 | SelectedSkyblockProfile | Postgres | Persistent (choice); live profile data is cached |
 | GuildConfig | Postgres (cached in Redis) | Persistent |
 | GuildChannelBinding | Postgres (cached with GuildConfig) | Persistent |
@@ -133,6 +136,66 @@ Which Skyblock profile a member currently tracks (the "cute name" / profile id).
 
 **Enum — `SkyblockGameMode`:** `NORMAL`, `IRONMAN`, `STRANDED`, `BINGO`.
 **Relationships:** N—1 `MinecraftAccount`. The *selection* is persistent; the *contents* of the profile are cached in Redis and snapshotted into `ProfileSnapshot`.
+
+#### GuildMemberCache
+The in-game guild roster as Hypixel reports it, refreshed on a rolling ~6 h window
+by the `guild-scan` job. Distinct from `GuildMember`, which is keyed by Discord
+account and drives roles and access: most people in a Hypixel guild have never
+linked a Discord account, and commands, leaderboards and perm rosters still have
+to name them.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `uuid` | Minecraft uuid — the only identifier the guild endpoint returns |
+| `ign` | resolved from Mojang opportunistically; null until a lookup succeeds |
+| `guildRank` | in-game rank name |
+| `joinedAt` | in-game join timestamp (nullable) |
+| `weeklyGexp` | sum of the ~7-day `expHistory` window at scan time |
+| `refreshedAt` | when the row was last confirmed present in-game |
+
+Unique on (`guildId`, `uuid`), indexed on (`guildId`, `refreshedAt`).
+**Relationships:** N—1 `Guild`.
+
+Rebuildable by definition — dropping the table costs one scan. Two rules protect
+it: an IGN is written with `COALESCE`, so a skipped or failed Mojang lookup never
+nulls out a name we already had; and rows are deleted only after a *successful*
+fetch, because a partial roster is a lie rather than a subset and would otherwise
+read as the entire guild leaving.
+
+#### GuildGexpDaily
+One row per member per day of guild experience — the permanent series behind
+tenure, activity and GEXP leaderboards.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `uuid` | Minecraft uuid |
+| `day` | `DATE`, UTC, as Hypixel keys `expHistory` |
+| `gexp` | that day's earned GEXP; `0` is a real reading, not a gap |
+
+Unique on (`guildId`, `uuid`, `day`), indexed on (`guildId`, `day`).
+**Relationships:** N—1 `Guild`.
+
+This table exists because Hypixel's `expHistory` window is only about a week wide;
+nothing longer-range can be reconstructed after the fact. Writes upsert with
+`gexp = EXCLUDED.gexp` — an overwrite, never a sum — so today's still-climbing
+value converges as the day goes on instead of multiplying by the number of scans.
+
+#### GuildScan
+One audit row per scan attempt, so "why is the roster stale" is answerable without
+reading worker logs.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `startedAt`, `finishedAt` | timing |
+| `memberCount` | roster size observed (0 on a failed fetch) |
+| `joined`, `left` | uuid arrays, relative to the cache before the scan |
+| `error` | text; null on success |
+
+Indexed on (`guildId`, `startedAt`).
+**Relationships:** N—1 `Guild`.
 
 ---
 
@@ -443,6 +506,9 @@ erDiagram
     Guild ||--|| GuildConfig : configures
     Guild ||--o{ GuildChannelBinding : routes
     Guild ||--o{ GuildSetting : tunes
+    Guild ||--o{ GuildMemberCache : mirrors
+    Guild ||--o{ GuildGexpDaily : accrues
+    Guild ||--o{ GuildScan : audits
     Guild ||--o{ BridgePermission : grants
     Guild ||--o{ WordlistEntry : filters
     MinecraftAccount ||--o{ SelectedSkyblockProfile : selects
@@ -464,7 +530,8 @@ erDiagram
 
 ## Persistent vs. Ephemeral — Guidance
 
-- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, GuildChannelBinding, GuildSetting, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, ProfileSnapshot, Milestone, WorkerJobLog. These are records of fact, audit, or configuration.
+- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, GuildChannelBinding, GuildSetting, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, ProfileSnapshot, Milestone, GuildGexpDaily, GuildScan, WorkerJobLog. These are records of fact, audit, or configuration.
+- **Cache of upstream truth, in Postgres because it is too large and too slow-moving for Redis:** `GuildMemberCache`. Rebuildable from Hypixel by one scan; kept in Postgres because commands join against it and because it must outlive a Redis flush. Freshness is `refreshedAt` against a 6 h TTL (`MEMBER_CACHE_TTL_MS`), not a key expiry — a stale roster is still worth serving with a warning, whereas an evicted one is not servable at all.
 - **Persistent record + ephemeral live-state mirror in Redis:**
   - `ModerationAction` → active mute/ban with TTL for fast enforcement checks.
   - `LFGPost` → open posts with TTL for live listings + auto-expiry.

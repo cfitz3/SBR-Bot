@@ -175,6 +175,25 @@ export function defineRosterSyncJob(sync: () => Promise<number>): JobDefinition<
   };
 }
 
+/**
+ * guild-scan: refresh the in-game roster cache and the GEXP series.
+ *
+ * A long lock because it is one Hypixel call plus a bounded batch of Mojang
+ * lookups per guild, and a single retry because the cache is a 6-hour rolling
+ * window — a run that fails has hours before anything downstream notices, and
+ * the next run recomputes the same state from scratch.
+ */
+export function defineGuildScanJob(scan: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "guild-scan",
+    queue: "progression",
+    lockKey: "lock:job:guild-scan",
+    lockTtlMs: 10 * 60_000,
+    maxRetries: 1,
+    handler: scan,
+  };
+}
+
 /** inactivity-scan: flag members who look inactive. Advisory only, never a kick. */
 export function defineInactivityScanJob(scan: () => Promise<number>): JobDefinition<number> {
   return {

@@ -14,6 +14,7 @@ import {
   maintenanceJobRepository,
   snapshotJobRepository,
   guildRepository,
+  guildScanRepository,
 } from "@sbr/db";
 import {
   defineAnalyticsIngestJob,
@@ -23,6 +24,7 @@ import {
   defineConfigInvalidationJob,
   defineEndedAuctionJob,
   defineEventTransitionJob,
+  defineGuildScanJob,
   defineInactivityScanJob,
   defineMilestoneDetectJob,
   defineProfileSnapshotJob,
@@ -36,6 +38,7 @@ import {
   invalidateConfigCaches,
   refreshBazaar,
   refreshResources,
+  scanGuild,
   scanInactivity,
   snapshotProfiles,
   sweepAuctions,
@@ -280,6 +283,56 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("roster"),
   };
 
+  const guildScan: JobDefinition<number> = {
+    ...defineGuildScanJob(async () => {
+      const guilds = await guildRepository.listActive();
+      let members = 0;
+      for (const guild of guilds) {
+        const hypixelGuildId = guild.hypixelGuildId;
+        if (!hypixelGuildId) {
+          // Nothing to scan, and nothing worth an audit row every six hours.
+          ctx.log.debug("guild scan skipped: no hypixel guild linked", { guildId: guild.id });
+          continue;
+        }
+        const result = await scanGuild(guild.id, {
+          async fetchRoster() {
+            const remote = await ctx.hypixel.getGuild(hypixelGuildId, "id");
+            return remote.ok ? remote.value.data.members : null;
+          },
+          listCached: (id) => guildScanRepository.listCache(id),
+          async resolveNames(uuids) {
+            const names: Record<string, string> = {};
+            // Sequential on purpose: Mojang rate-limits hard and this batch is
+            // small and never on a user's critical path.
+            for (const uuid of uuids) {
+              const name = await ctx.hypixel.resolveIgn(uuid).catch(() => null);
+              if (name !== null) names[uuid] = name;
+            }
+            return names;
+          },
+          upsertMembers: (id, rows) => guildScanRepository.upsertMembers(id, rows),
+          removeMembers: (id, uuids) => guildScanRepository.removeMembers(id, uuids),
+          writeGexp: (id, rows) => guildScanRepository.writeGexp(id, rows),
+          recordScan: (id, result, error) => guildScanRepository.recordScan(id, result, error),
+        });
+        if (result.skipped) {
+          ctx.log.warn("guild scan incomplete", { guildId: guild.id, reason: result.skipped });
+          continue;
+        }
+        ctx.log.info("guild scanned", {
+          guildId: guild.id,
+          members: result.memberCount,
+          joined: result.joined.length,
+          left: result.left.length,
+          gexpRows: result.gexpRows,
+        });
+        members += result.memberCount;
+      }
+      return members;
+    }),
+    lockKey: keys.lockJob("guild-scan"),
+  };
+
   const inactivity: JobDefinition<number> = {
     ...defineInactivityScanJob(async () => {
       const guilds = await guildRepository.listActive();
@@ -398,6 +451,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     eventTransition,
     reminders,
     rosterSync,
+    guildScan,
     inactivity,
     analyticsIngest,
     analyticsRollup,

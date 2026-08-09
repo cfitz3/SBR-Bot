@@ -29,8 +29,10 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
 | `config-cache-invalidation` | Event (on write) + reconcile cron | on config change / 5–10 min | Version-stamped keys; last-writer-wins | Backoff; reconcile pass | Bots read stale config until reconcile |
 | `guild-roster-sync` | Repeatable | 5–15 min | Diff-based reconcile to DB | Backoff; per-guild lock | Roster/rank drift until next run |
+| `guild-scan` | Repeatable (cron) | every 6 h (`26 1,7,13,19 * * *`) | Upsert on `(guildId,uuid)`; GEXP upsert on `(guildId,uuid,day)` overwrites | 1 retry; global lock, 10 min TTL | Member cache ages past its 6 h TTL; a missed day of GEXP is unrecoverable |
 
-*(guild-roster-sync included as the membership counterpart to the required set.)*
+*(guild-roster-sync included as the membership counterpart to the required set;
+guild-scan is the in-game counterpart to both — see §2.14.)*
 
 ---
 
@@ -132,6 +134,17 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 - **Idempotency:** keys are **version-stamped**; a stale invalidation for an older version is ignored (last-writer-wins).
 - **Retry:** backoff; the periodic reconcile pass repairs any missed invalidation (self-healing).
 - **Failure impact:** bots may read stale config for up to the reconcile interval — bounded, not indefinite.
+
+### 2.14 `guild-scan`
+- **Trigger / frequency:** repeatable cron `26 1,7,13,19 * * *` — every 6 h, offset from midnight so a scan lands shortly *before* the cache TTL expires rather than alongside every other daily job.
+- **Inputs:** Hypixel `guild` by id, per configured guild; Mojang session server for reverse uuid→name lookups.
+- **Outputs:** `GuildMemberCache` (full roster incl. unlinked members), `GuildGexpDaily` (one row per member per day), `GuildScan` (audit row).
+- **Idempotency:** members upsert on `(guildId,uuid)`; GEXP upserts on `(guildId,uuid,day)` with `gexp = EXCLUDED.gexp`. Today's value is still climbing, so the write is an **overwrite, never a sum** — a day scanned four times converges instead of quadrupling.
+- **Partial-failure rule:** a failed or throwing roster fetch writes **nothing** and removes **nobody**; it records a `GuildScan` row with the error and returns `skipped: "fetch-failed"`. A partial roster is a lie rather than a subset — treating one bad response as truth would evict the whole guild from the cache and read as ~125 people leaving.
+- **Mojang budget:** the guild endpoint returns uuids only. Names are resolved for cache rows that have none, capped per run (default 20) with joiners prioritised, and written with `COALESCE` so a skipped or failed lookup never nulls out a name already known. A cold start therefore fills in names over a few scans, which nobody notices.
+- **Retry:** one retry; global lock `lock:job:guild-scan`, 10 min TTL. One unreachable guild does not abort the others in the same run.
+- **Failure impact:** the member cache ages past its 6 h freshness window and commands warn rather than fail. The real cost is GEXP: Hypixel's `expHistory` window is only ~7 days wide, so a gap longer than that is permanently unrecoverable.
+- **Distinct from `guild-roster-sync`,** which reconciles Discord-keyed platform membership and drives roles and access. This job caches the in-game guild as it actually is.
 
 ---
 
