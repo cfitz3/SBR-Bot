@@ -15,6 +15,7 @@
     { "path": "packages/bridge" },
     { "path": "packages/moderation" },
     { "path": "packages/community" },
+    { "path": "packages/perms" },
     { "path": "packages/guild-config" },
     { "path": "packages/analytics" },
     { "path": "packages/commands-bridge" },

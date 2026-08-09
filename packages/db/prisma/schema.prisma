@@ -304,6 +304,7 @@ model Guild {
   applications  Application[]
   events        Event[]
   lfgPosts      LFGPost[]
+  perms         PermGroup[]
   subscriptions NotificationSubscription[]
 
   @@index([discordGuildId])
@@ -665,6 +666,64 @@ model LFGPost {
 
   @@index([guildId, status])
   @@index([guildId, activity, status])
+}
+
+enum PermStatus {
+  ACTIVE
+  DISBANDED
+}
+
+/// A "perm" — a permanent party. The standing roster people run an activity with,
+/// as opposed to `LFGPost`, which is one advertisement for one run.
+///
+/// Disbanding is a status change, not a delete: a perm's history is the only
+/// record of who ran with whom, and the roster is worth keeping after the party
+/// stops running together.
+model PermGroup {
+  id             String      @id @default(cuid())
+  guildId        String
+  ownerDiscordId String
+  name           String
+  activity       LFGActivity @default(OTHER)
+  status         PermStatus  @default(ACTIVE)
+  /// The perm `/lfg perm:true` autofills from when no perm is named. At most one
+  /// per (guild, owner, activity) — enforced by a partial unique index in the
+  /// migration, since Prisma cannot express a filtered unique constraint.
+  isDefault      Boolean     @default(false)
+  notes          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  guild   Guild        @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  members PermMember[]
+
+  @@index([guildId, ownerDiscordId, status])
+  @@index([guildId, activity, status])
+}
+
+/// One seat in a perm.
+///
+/// `ign` is the required identifier and `discordId`/`uuid` are both optional,
+/// which is the opposite of most tables here. A perm is formed in-game, where
+/// most of the guild has no linked Discord account and the only thing anyone
+/// knows about a teammate is what they type. Requiring a link would make the
+/// command unusable for the people it is for.
+model PermMember {
+  id          String   @id @default(cuid())
+  permGroupId String
+  discordId   String?
+  uuid        String?
+  ign         String
+  /// Free-form, validated per activity in `@sbr/perms`. Not an enum: Skyblock
+  /// class and role vocabulary changes far more often than we want migrations.
+  role        String
+  slot        Int      @default(0)
+  addedAt     DateTime @default(now())
+
+  permGroup PermGroup @relation(fields: [permGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([permGroupId, ign, role])
+  @@index([permGroupId, slot])
 }
 
 model NotificationSubscription {

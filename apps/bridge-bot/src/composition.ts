@@ -9,14 +9,19 @@ import {
   communityRepository,
   disconnectDb,
   guildConfigRepository,
+  guildMemberDirectory,
   guildRepository,
   identityRepository,
+  linkDirectory,
+  memberProgressSource,
+  permRepository,
   progressionRepository,
   rankResolver,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
 import { CommunityServiceImpl } from "@sbr/community";
+import { PermServiceImpl } from "@sbr/perms";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import {
   ItemCatalog,
@@ -182,6 +187,15 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
   const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
+  // Roster enrichment reads the Phase 2 member cache and stored snapshots, never
+  // Hypixel: `/perm info` on a five-stack would otherwise be five live calls.
+  const perms = new PermServiceImpl({
+    repo: permRepository,
+    directory: guildMemberDirectory,
+    progress: memberProgressSource,
+    links: linkDirectory,
+    logger: log,
+  });
   // The bridge asks "am I suspended?" on every relayed line, so its config is
   // cached hard. Publishing and subscribing is what keeps that cache from being
   // the reason a panel toggle appears to do nothing for ten seconds.
@@ -211,6 +225,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     pricing,
     market,
     community,
+    perms,
     roster,
     config: guildConfig,
     analytics,

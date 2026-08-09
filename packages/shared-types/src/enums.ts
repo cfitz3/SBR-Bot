@@ -175,6 +175,16 @@ export const LFGStatus = {
 } as const;
 export type LFGStatus = (typeof LFGStatus)[keyof typeof LFGStatus];
 
+/**
+ * A perm is disbanded, never deleted: the roster is the only record of who ran
+ * with whom, and it stays worth reading after the party stops running.
+ */
+export const PermStatus = {
+  ACTIVE: "ACTIVE",
+  DISBANDED: "DISBANDED",
+} as const;
+export type PermStatus = (typeof PermStatus)[keyof typeof PermStatus];
+
 export const MilestoneType = {
   SKILL_LEVEL: "SKILL_LEVEL",
   CATACOMBS_LEVEL: "CATACOMBS_LEVEL",

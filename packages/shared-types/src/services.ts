@@ -42,6 +42,7 @@ import type {
   MilestoneDTO,
   ModerationActionDTO,
   NetworthDTO,
+  PermGroupDTO,
   ProgressMetric,
   ProgressSeriesDTO,
   PriceDTO,
@@ -494,6 +495,65 @@ export type LfgError =
   | { readonly kind: "NOT_A_MEMBER" }
   | { readonly kind: "AUTHOR_CANNOT_LEAVE" }
   | { readonly kind: "INVALID_SLOTS"; readonly detail: string };
+
+/**
+ * Perms — standing parties (packages/perms).
+ *
+ * Member-facing only. There is deliberately no panel surface for any of this:
+ * who someone runs dungeons with is not staff configuration, and the panel's
+ * scope is administration (PLATFORM_EXPANSION_PLAN.md §4).
+ */
+export interface PermService {
+  createPerm(input: NewPermGroup): Promise<Result<PermGroupDTO, PermError>>;
+  /** Resolve by id or by name (case-insensitive) within the guild. */
+  getPerm(guildId: string, idOrName: string): Promise<Result<PermGroupDTO, PermError>>;
+  listPerms(guildId: string, ownerDiscordId?: string): Promise<Result<readonly PermGroupDTO[]>>;
+  addToRoster(input: RosterChange): Promise<Result<PermGroupDTO, PermError>>;
+  removeFromRoster(input: RosterChange): Promise<Result<PermGroupDTO, PermError>>;
+  disbandPerm(guildId: string, idOrName: string, actor: PermActor): Promise<Result<PermGroupDTO, PermError>>;
+  setDefaultPerm(guildId: string, idOrName: string, actor: PermActor): Promise<Result<PermGroupDTO, PermError>>;
+  /** What `/lfg perm:true` autofills from; null when the caller has no default. */
+  defaultPermFor(guildId: string, ownerDiscordId: string, activity: LFGActivity): Promise<Result<PermGroupDTO | null>>;
+}
+
+export interface NewPermGroup {
+  readonly guildId: string;
+  readonly ownerDiscordId: string;
+  readonly name: string;
+  readonly activity: LFGActivity;
+  readonly notes?: string | null;
+}
+
+/**
+ * Who is asking. `isStaff` is resolved by the caller from the capability check
+ * rather than re-derived here, so the rule "owner or staff" is stated once in
+ * the service and enforced identically from every surface.
+ */
+export interface PermActor {
+  readonly discordId: string;
+  readonly isStaff: boolean;
+}
+
+export interface RosterChange {
+  readonly guildId: string;
+  readonly idOrName: string;
+  readonly actor: PermActor;
+  readonly ign: string;
+  readonly role: string;
+  readonly slot?: number | null;
+}
+
+export type PermError =
+  | { readonly kind: "NOT_FOUND" }
+  | { readonly kind: "DISBANDED" }
+  | { readonly kind: "NAME_TAKEN"; readonly name: string }
+  | { readonly kind: "NOT_OWNER" }
+  | { readonly kind: "FULL"; readonly capacity: number }
+  | { readonly kind: "ALREADY_ON_ROSTER"; readonly ign: string }
+  | { readonly kind: "NOT_ON_ROSTER"; readonly ign: string }
+  | { readonly kind: "INVALID_ROLE"; readonly allowed: readonly string[] }
+  | { readonly kind: "INVALID_NAME"; readonly detail: string }
+  | { readonly kind: "INVALID_IGN" };
 
 export interface NewTicket {
   readonly guildId: string;

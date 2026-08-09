@@ -93,6 +93,35 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/joinrun` | Join an open run | Linked | `run_id` | Updated party roster; DM/ping | Run full/closed; already joined | DB + Cache (slot update) |
 | `/leaverun` | Leave a run you joined | Linked | `run_id` | Updated roster | Not in run; run closed | DB + Cache |
 | `/rsvp` | RSVP to a scheduled event | Public | `event_id`, `state` (going/maybe/no) | Updated RSVP + counts | Event full→waitlist; event past | DB (`EventRSVP`) |
+| `/perm` | Standing parties — the group you always run with | Linked | `action` (info/list/create/roster-add/roster-remove/disband/default), `perm?`, `name?`, `activity?`, `ign?`, `role?`, `slot?`, `notes?` | Roster embed: seat, IGN, linked mention, cata/SA | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileSnapshot` for enrichment |
+
+### `/perm` — standing parties
+
+A **perm** is a fixed party a member runs with repeatedly: a name, an activity,
+and a roster of seats. One command with an `action` option rather than seven
+top-level commands, for the same reason `/ticket` is one command.
+
+Three properties are worth stating because they are load-bearing:
+
+- **Addressed by name.** Names are unique per guild while a perm is *active*,
+  compared case-insensitively, and freed for reuse on disband — enforced by a
+  partial unique index, since people type `/perm perm:F7 core` from memory in
+  guild chat. Ids still work anywhere a name does.
+- **Rosters are keyed by IGN.** A linked Discord account and a uuid are attached
+  when they can be resolved and their absence is never an error. Perms are formed
+  in-game, and most of a Hypixel guild has never linked an account.
+- **Enrichment never calls Hypixel.** The in-guild marking comes from the 6 h
+  member cache and the cata/SA columns from the newest stored `ProfileSnapshot`,
+  one query each for the whole roster. `inGuild` is three-valued: a cold or
+  unreachable cache renders as *nothing*, not as "left the guild".
+
+Owner-or-staff may edit or disband a perm; only the owner may mark one as their
+`/lfg` autofill default, because that is a personal preference rather than
+administration. Disbanding is a status change, never a delete — a roster is a
+record of who ran together.
+
+**Not in the web panel, deliberately.** Who someone runs dungeons with is not
+staff configuration (`PLATFORM_EXPANSION_PLAN.md` §4).
 
 ---
 
@@ -211,7 +240,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 **Design constraints**
 - **Prefix-based**, not slash: e.g. `!stats <ign>`, `!nw`, `!price <item>`, `!lfg <activity>`, `!help`. Prefix and enabled set come from `GuildConfig`.
 - **Output is truncated/paginated** to fit Minecraft chat (single line, ~256 char cap); rich embeds collapse to a compact one-liner (e.g. `Player — Cata 42 | SA 45.3 | NW 8.2b | SnrW 12,340`).
-- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayer, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`). **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
+- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayer, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
 - **Cooldowns are stricter** (per-IGN Redis `cd:ingame:*`) because guild chat is spam-prone and rate-limited by Hypixel itself.
 - **Identity is by IGN → `LinkedAccount`.** If the IGN isn't linked, commands still work for public lookups but personalized commands (`/me`, `/whatnext`) reply with a "link on Discord" hint.
 
@@ -221,6 +250,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 | `!price`, `!bz`, `!lbin` | `/price`,`/bazaar`,`/lowestbin` | Run cmd | Cache→Live |
 | `!weight` | `progression` (Senither/farming) | Run cmd | Cache→Live |
 | `!lfg`, `!runs` | `/lfg`,`/runs` | Run cmd (linked) | DB + Cache |
+| `!perm` | `/perm` | Run cmd (linked) | DB + member cache |
 | `!help` | `/help` (condensed) | Public | Static |
 
 **In-game error handling:** invalid command → short usage hint; on cooldown → silent or `⌛` reply; API failure → `⚠ data unavailable, try later`; unauthorized → `no permission` one-liner. Errors never dump stack traces into guild chat.

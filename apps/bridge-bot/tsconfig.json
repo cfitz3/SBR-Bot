@@ -11,6 +11,7 @@
     { "path": "../../packages/bridge" },
     { "path": "../../packages/commands-bridge" },
     { "path": "../../packages/community" },
+    { "path": "../../packages/perms" },
     { "path": "../../packages/config" },
     { "path": "../../packages/db" },
     { "path": "../../packages/guild-config" },

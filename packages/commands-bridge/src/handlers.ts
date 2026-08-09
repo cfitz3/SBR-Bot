@@ -13,6 +13,7 @@ import type {
   HandlerDeps,
 } from "./types.js";
 import { communitySpecs } from "./handlers-community.js";
+import { permSpecs } from "./handlers-perms.js";
 import {
   renderAccessoriesEmbed,
   renderAdviceEmbed,
@@ -73,7 +74,7 @@ const help: CommandHandler = async () => ({
     "Market: /price /bazaar /lowestbin /auctions",
     "Guild: /online",
     "Events: /events /create-event /rsvp /attendance",
-    "Groups: /lfg /runs /joinrun /leaverun",
+    "Groups: /lfg /runs /joinrun /leaverun /perm",
     "Help: /ticket /help",
   ].join("\n"),
 });
@@ -810,6 +811,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       autocomplete: itemAutocomplete,
     },
     ...communitySpecs(),
+    ...permSpecs(),
   ];
   return new Map(specs.map((s) => [s.name, s]));
 }

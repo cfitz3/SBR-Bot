@@ -16,6 +16,7 @@ import type {
   IdentityService,
   MarketService,
   OptionType,
+  PermService,
   PlayerLookup,
   PricingService,
   ProgressionService,
@@ -67,6 +68,11 @@ export interface HandlerDeps {
   /** Order book and listings — the raw market behind `/bazaar` and `/auctions`. */
   readonly market: MarketService;
   readonly community: CommunityService;
+  /**
+   * Standing parties. Member-facing only — the panel deliberately has no perm
+   * surface, so this service is wired into the bots and nowhere else.
+   */
+  readonly perms: PermService;
   /**
    * Live in-game presence for `/online`. Optional because it exists only where
    * a Mineflayer session does — the admin bot and the panel wire the same

@@ -50,7 +50,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | --- | --- | --- | --- |
 | **1** | **Config foundation** *(1a, 1b shipped; 1c open)* | HTTP/HTTPS toggle, `GuildChannelBinding` + open channel-slot registry, `GuildSetting` KV, panel config surface | — |
 | **2** | **Guild scan & member cache** *(shipped)* | 6h guild scan job, rolling 6h in-game member cache, GEXP daily table | 1 |
-| **3** | **Perms** | `PermGroup`/`PermMember`/`PermRoster`, `PermService`, `/perm create\|info\|roster add\|roster remove\|disband`, roster autofill + stats | 2 |
+| **3** | **Perms** *(shipped)* | `PermGroup`/`PermMember`/`PermRoster`, `PermService`, `/perm create\|info\|roster add\|roster remove\|disband`, roster autofill + stats | 2 |
 | **4** | **LFG rework** | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + remove, message tracking | 1, 3 |
 | **5** | **XP & standing** | XP ledger + balances, source weights/caps config, anti-abuse gates, aggregation jobs, `/me` & `/profile` rework | 1, 2 |
 | **6** | **Leaderboards** | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
@@ -196,6 +196,38 @@ model PermMember {
 Partial unique index (raw SQL in the migration): at most one `isDefault` perm per
 `(guildId, ownerDiscordId, activity)`.
 
+**As shipped** (`20260809180000_perms`), with three deviations from the sketch above:
+
+- **`PermRoster` was dropped.** The phase table named three models, but a roster is
+  not a thing distinct from the perm — `PermGroup` *is* the roster, and its seats are
+  `PermMember` rows. A third table would have been a one-to-one join with nothing on it.
+- **A second partial unique index was added**, on `("guildId", LOWER("name"))
+  WHERE status = 'ACTIVE'`. The sketch had no uniqueness on `name`, but `/perm info
+  <name>` addresses perms by name from memory in guild chat, and two live perms
+  called "F7 core" make that command unanswerable. Scoping it to `ACTIVE` keeps the
+  name reusable after a disband, which is what makes disband-not-delete tolerable.
+- **`/perm` is one command with an `action` option**, not six. Six top-level names
+  for one feature is a poor trade against a shared command namespace; `/ticket`
+  already made the same call.
+
+Two things the sketch left open and the implementation had to decide:
+
+- **Roles are data, not schema.** `role` stays a free-form string validated against a
+  per-activity table in `packages/perms/src/activities.ts`, which also carries the
+  capacity and an alias list (`zerk`→`berserk`, `dps`→`damage`, `cannon`→`cannoneer`).
+  Skyblock's class vocabulary changes faster than migrations should.
+- **Enrichment is cache-only.** `/perm info` reads `GuildMemberCache` and the newest
+  `ProfileSnapshot`, one query each for the whole roster, never Hypixel — five live
+  calls for a casually-run command is what the Phase 2 cache exists to prevent. Every
+  enrichment read is failure-wrapped, so a downed cache degrades the roster to plain
+  names rather than hiding it, and `inGuild` is three-valued: a cold cache renders as
+  nothing, not as "left the guild".
+
+**Deferred from this phase:** IGN autocomplete on `/perm ign:` off the member cache.
+It needs a directory port on `HandlerDeps` that nothing else wants yet; the `perm:`
+option does autocomplete, off `listPerms`. Revisit with Phase 4, which reads the same
+cache.
+
 ### 2.4 LFG (Phase 4)
 
 Additive columns on `LFGPost`: `channelId String?`, `messageId String?`,
@@ -329,12 +361,13 @@ model TicketTypeConfig {
 
 | Command | Surface | Notes |
 | --- | --- | --- |
-| `/perm create <activity> [name]` | Discord | Owner = caller. |
-| `/perm info <perm>` | Discord + `!perm` | Roster with cata level, class levels, SA per member. |
-| `/perm roster add <name> <role> [slot]` | Discord | Autocomplete off the 6h member cache. |
-| `/perm roster remove <name> <role>` | Discord | |
-| `/perm disband <perm>` | Discord | Owner or staff. |
-| `/perm default <perm>` | Discord | Marks the perm `/lfg perm:true` autofills from. |
+| `/perm action:create name: activity:` | Discord + `!perm` | Owner = caller. *Shipped.* |
+| `/perm action:info perm:` | Discord + `!perm` | Roster with cata level and skill average per member, from the cache. *Shipped.* |
+| `/perm action:list` | Discord + `!perm` | Every active perm in the guild. *Shipped.* |
+| `/perm action:roster-add perm: ign: role: [slot]` | Discord + `!perm` | `perm:` autocompletes; `ign:` autocomplete deferred (see §2.3). *Shipped.* |
+| `/perm action:roster-remove perm: ign: role:` | Discord + `!perm` | *Shipped.* |
+| `/perm action:disband perm:` | Discord + `!perm` | Owner or staff. Status change, never a delete. *Shipped.* |
+| `/perm action:default perm:` | Discord + `!perm` | Marks the perm `/lfg perm:true` autofills from. Owner only. *Shipped.* |
 | `/leaderboard <category>` | Discord + bridge | wealth, tenure, skill-average, catacombs, slayer, discord-activity, guild-chat, xp. |
 | `/standing [player]` | Discord | XP, level, source breakdown, tenure, rank in guild. |
 

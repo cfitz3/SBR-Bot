@@ -34,6 +34,12 @@ export {
 } from "./repositories/panel.js";
 export { guildScanRepository, type CachedGuildMemberRow } from "./repositories/guild-scan.js";
 export {
+  permRepository,
+  guildMemberDirectory,
+  memberProgressSource,
+  linkDirectory,
+} from "./repositories/perms.js";
+export {
   wordlistRepository,
   guildConfigRepository,
   type GuildConfigRow,

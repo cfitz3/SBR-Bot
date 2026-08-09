@@ -17,6 +17,7 @@ import type {
   MemberStatus,
   MilestoneType,
   ModActionType,
+  PermStatus,
   RaidSensitivity,
   RSVPState,
   SkyblockGameMode,
@@ -359,6 +360,48 @@ export interface LFGPostDTO {
   readonly createdAt: string;
   /** Everyone currently holding a slot, author first. */
   readonly members: readonly string[];
+}
+
+/**
+ * One seat in a perm.
+ *
+ * `ign` is the identity that always exists; `discordId` and `uuid` are filled in
+ * where we happen to know them. A perm is formed in-game, and most of a Hypixel
+ * guild has never linked a Discord account — requiring one would make the
+ * feature unusable for the people it is for.
+ */
+export interface PermMemberDTO {
+  readonly ign: string;
+  readonly role: string;
+  readonly slot: number;
+  readonly discordId: string | null;
+  readonly uuid: string | null;
+  /**
+   * Whether the member is still in the in-game guild, per the 6h member cache.
+   * Null when the cache has no reading at all (cold start), which is different
+   * from a confident "they left" and is rendered differently.
+   */
+  readonly inGuild: boolean | null;
+  /** From the newest ProfileSnapshot, when one exists. No live Hypixel call. */
+  readonly catacombsLevel: number | null;
+  readonly skillAverage: number | null;
+}
+
+/** `/perm info` — a standing party and its roster. */
+export interface PermGroupDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly ownerDiscordId: string;
+  readonly name: string;
+  readonly activity: LFGActivity;
+  readonly status: PermStatus;
+  readonly isDefault: boolean;
+  readonly notes: string | null;
+  readonly createdAt: string;
+  /** Seats in slot order. Empty on a freshly created perm. */
+  readonly members: readonly PermMemberDTO[];
+  /** Party size for the activity — how many seats the roster may hold. */
+  readonly capacity: number;
 }
 
 export interface TicketDTO {

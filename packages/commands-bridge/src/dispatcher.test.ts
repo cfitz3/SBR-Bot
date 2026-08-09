@@ -27,6 +27,8 @@ import {
   type GuildRosterSource,
   type DungeonsDTO,
   type NetworthDTO,
+  type PermGroupDTO,
+  type PermService,
   type PlayerLookup,
   type PricingService,
   type ProfileSummaryDTO,
@@ -306,6 +308,41 @@ function community(over: Partial<CommunityService> = {}): CommunityService {
   };
   return base as CommunityService;
 }
+/**
+ * A perm the dispatcher tests can render. Two seats of five so "full" and
+ * "empty" are both a deliberate override rather than the default.
+ */
+const aPerm: PermGroupDTO = {
+  id: "pm1",
+  guildId: "g1",
+  ownerDiscordId: "111",
+  name: "F7 core",
+  activity: "DUNGEONS",
+  status: "ACTIVE",
+  isDefault: false,
+  notes: null,
+  capacity: 5,
+  createdAt: "2026-08-01T00:00:00.000Z",
+  members: [
+    { ign: "Alpha", role: "healer", slot: 0, discordId: "111", uuid: "u-alpha", inGuild: true, catacombsLevel: 42, skillAverage: 51.25 },
+    { ign: "Beta", role: "berserk", slot: 1, discordId: null, uuid: null, inGuild: null, catacombsLevel: null, skillAverage: null },
+  ],
+};
+
+function perms(over: Partial<PermService> = {}): PermService {
+  const base: PermService = {
+    async createPerm(input) { return ok({ ...aPerm, name: input.name, members: [] }); },
+    async getPerm() { return ok(aPerm); },
+    async listPerms() { return ok([aPerm]); },
+    async addToRoster() { return ok(aPerm); },
+    async removeFromRoster() { return ok({ ...aPerm, members: [aPerm.members[0]!] }); },
+    async disbandPerm() { return ok({ ...aPerm, status: "DISBANDED" }); },
+    async setDefaultPerm() { return ok({ ...aPerm, isDefault: true }); },
+    async defaultPermFor() { return ok(aPerm); },
+  };
+  return { ...base, ...over };
+}
+
 const guildConfig: GuildConfigService = {
   async get() { return ok(null); },
   async isFeatureEnabled() { return true; },
@@ -331,6 +368,7 @@ function makeDispatcher(over: {
   market?: MarketService;
   capabilities?: CapabilityChecker;
   community?: CommunityService;
+  perms?: PermService;
   roster?: GuildRosterSource;
   usage?: UsageSink;
   now?: () => number;
@@ -346,6 +384,7 @@ function makeDispatcher(over: {
       pricing: over.pricing ?? pricing,
       market: over.market ?? market(),
       community: over.community ?? community(),
+      perms: over.perms ?? perms(),
       ...(over.roster ? { roster: over.roster } : {}),
       config: guildConfig,
       analytics,
@@ -1000,10 +1039,138 @@ test("closing an already-closed ticket says so", async () => {
   assert.match(r.text, /already closed/);
 });
 
+// ─────────────────────────────── Perms ───────────────────────────────
+
+test("/perm with no action shows the guild's perms", async () => {
+  const r = await makeDispatcher().dispatch("perm", ctx({ args: noArgs }));
+  assert.equal(r.embed?.title, "Guild perms");
+  assert.match(r.text, /F7 core 2\/5/);
+});
+
+test("/perm action:info renders the roster with seats, stats and mentions", async () => {
+  const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
+  const fields = r.embed?.fields ?? [];
+  assert.deepEqual(fields.map((f) => f.name), ["Owner", "healer", "berserk"]);
+  assert.match(fields[1]!.value, /Alpha \(<@111>\) — cata 42 · sa 51\.3/);
+  // Unlinked, unsnapshotted, unknown-cache seat: a bare name and nothing else.
+  assert.equal(fields[2]!.value, "Beta");
+});
+
+test("a seat is only marked as having left when the cache actually says so", async () => {
+  const gone = perms({
+    async getPerm() {
+      return ok({
+        ...aPerm,
+        members: [{ ...aPerm.members[0]!, inGuild: false }, aPerm.members[1]!],
+      });
+    },
+  });
+  const r = await makeDispatcher({ perms: gone }).dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
+  const fields = r.embed?.fields ?? [];
+  assert.match(fields[1]!.value, /left the guild/);
+  // `inGuild: null` is "we don't know", and must not read as an accusation.
+  assert.doesNotMatch(fields[2]!.value, /left the guild/);
+});
+
+test("/perm action:create reports the new perm and how to fill it", async () => {
+  const r = await makeDispatcher().dispatch(
+    "perm",
+    ctx({ args: recordArgs({ action: "create", name: "Kuudra core", activity: "KUUDRA" }) }),
+  );
+  assert.match(r.text, /Created "Kuudra core"/);
+  assert.match((r.embed?.fields ?? []).map((f) => f.value).join(" "), /Nobody yet/);
+});
+
+test("a name clash comes back as a sentence naming the taken name", async () => {
+  const taken = perms({ async createPerm() { return err({ kind: "NAME_TAKEN", name: "F7 core" }); } });
+  const r = await makeDispatcher({ perms: taken }).dispatch(
+    "perm",
+    ctx({ args: recordArgs({ action: "create", name: "f7 CORE" }) }),
+  );
+  assert.match(r.text, /"F7 core" is already the name/);
+  assert.equal(r.ephemeral, true);
+});
+
+test("/perm action:roster-add confirms with the new roster size", async () => {
+  const r = await makeDispatcher().dispatch(
+    "perm",
+    ctx({ args: recordArgs({ action: "roster-add", perm: "F7 core", ign: "Gamma", role: "tank" }) }),
+  );
+  assert.match(r.text, /Added Gamma — 2\/5/);
+});
+
+test("an unusable role lists the ones that would work", async () => {
+  const strict = perms({
+    async addToRoster() { return err({ kind: "INVALID_ROLE", allowed: ["healer", "mage", "tank"] }); },
+  });
+  const r = await makeDispatcher({ perms: strict }).dispatch(
+    "perm",
+    ctx({ args: recordArgs({ action: "roster-add", perm: "F7 core", ign: "Gamma", role: "cannoneer" }) }),
+  );
+  assert.match(r.text, /healer, mage, tank/);
+});
+
+test("a full perm says how many seats there are", async () => {
+  const full = perms({ async addToRoster() { return err({ kind: "FULL", capacity: 5 }); } });
+  const r = await makeDispatcher({ perms: full }).dispatch(
+    "perm",
+    ctx({ args: recordArgs({ action: "roster-add", perm: "F7 core", ign: "Gamma", role: "tank" }) }),
+  );
+  assert.match(r.text, /full — 5 seats/);
+});
+
+test("editing someone else's perm is refused with the rule, not a stack trace", async () => {
+  const notMine = perms({ async removeFromRoster() { return err({ kind: "NOT_OWNER" }); } });
+  const r = await makeDispatcher({ perms: notMine }).dispatch(
+    "perm",
+    ctx({ args: recordArgs({ action: "roster-remove", perm: "F7 core", ign: "Alpha", role: "healer" }) }),
+  );
+  assert.match(r.text, /Only the person who created that perm/);
+});
+
+test("every action that needs a perm asks for one rather than guessing", async () => {
+  for (const action of ["roster-add", "roster-remove", "disband", "default"]) {
+    const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action }) }));
+    assert.match(r.text, /Which perm\?/, action);
+  }
+});
+
+test("disbanding is ephemeral and says the name is reusable", async () => {
+  const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "disband", perm: "F7 core" }) }));
+  assert.equal(r.ephemeral, true);
+  assert.match(r.text, /Disbanded "F7 core"\. The name is free again\./);
+});
+
+test("/perm action:default explains what it changed", async () => {
+  const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "default", perm: "F7 core" }) }));
+  assert.match(r.text, /now what \/lfg fills from for dungeons/);
+});
+
+/**
+ * The actor's staff flag is derived from the capability check, not from the
+ * caller — a surface that could pass `isStaff: true` itself would make the
+ * owner-or-staff rule unenforceable.
+ */
+test("the staff flag reaching the perm service comes from the capability check", async () => {
+  const seen: boolean[] = [];
+  const record = perms({
+    async disbandPerm(_g, _n, actor) { seen.push(actor.isStaff); return ok(aPerm); },
+  });
+  const args = recordArgs({ action: "disband", perm: "F7 core" });
+
+  await makeDispatcher({ perms: record }).dispatch("perm", ctx({ args }));
+  await makeDispatcher({
+    perms: record,
+    identity: identity({ async hasCapability() { return false; } }),
+  }).dispatch("perm", ctx({ args }));
+
+  assert.deepEqual(seen, [true, false]);
+});
+
 test("RSVP buttons route to the same reply as /rsvp", async () => {
   const deps = {
     identity: identity(), progression: progression(), players, pricing, market: market(),
-    community: community(), config: guildConfig, analytics, logger: silent,
+    community: community(), perms: perms(), config: guildConfig, analytics, logger: silent,
   };
   const r = await communityButtonReplies.rsvp("e1", "111", "GOING", deps);
   assert.match(r.text, /Recorded: going for "F7 carries"/);
@@ -1012,7 +1179,7 @@ test("RSVP buttons route to the same reply as /rsvp", async () => {
 test("run buttons join and leave, and reject an unknown action", async () => {
   const deps = {
     identity: identity(), progression: progression(), players, pricing, market: market(),
-    community: community(), config: guildConfig, analytics, logger: silent,
+    community: community(), perms: perms(), config: guildConfig, analytics, logger: silent,
   };
   assert.match((await communityButtonReplies.run("p1", "222", "join", deps)).text, /Joined — 3\/5/);
   assert.match((await communityButtonReplies.run("p1", "222", "leave", deps)).text, /Left — 1\/5/);

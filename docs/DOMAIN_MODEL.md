@@ -34,6 +34,8 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | Event | Postgres | Persistent |
 | EventRSVP | Postgres | Persistent |
 | LFGPost | Postgres (+ Redis TTL mirror) | Persistent record, ephemeral visibility |
+| PermGroup | Postgres | Persistent (disbanded, never deleted) |
+| PermMember | Postgres | Persistent |
 | ProfileSnapshot | Postgres | Persistent (time-series) |
 | Milestone | Postgres | Persistent |
 | CommandUsage | Postgres (buffered via Redis) | Persistent (analytics) |
@@ -421,6 +423,58 @@ A "looking for group" post (carry, dungeon party, etc.).
 **Relationships:** N—1 `Guild`, N—1 `DiscordUser`.
 *Note:* durable record in Postgres, but active/open posts are mirrored in Redis with a TTL so expiry and live listings are cheap.
 
+#### PermGroup
+A **perm** — a standing party a member runs with repeatedly. Where `LFGPost` is
+one run that expires in hours, a perm is the group itself and outlives any run.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `ownerDiscordId` | who created it; owner-or-staff may edit, owner alone may set it as their default |
+| `name` | how it is addressed in chat; unique per guild **while active** |
+| `activity` | `LFGActivity` — also fixes the capacity and the valid role names |
+| `status` | `PermStatus` |
+| `isDefault` | what `/lfg perm:true` autofills from; at most one per (owner, activity) |
+| `notes` | free text |
+
+**Enum — `PermStatus`:** `ACTIVE`, `DISBANDED`.
+**Relationships:** N—1 `Guild`, 1—N `PermMember`.
+
+*Two partial unique indexes*, written in raw SQL because Prisma cannot express a
+filtered unique: `("guildId", LOWER("name")) WHERE status = 'ACTIVE'` and
+`("guildId","ownerDiscordId","activity") WHERE isDefault AND status = 'ACTIVE'`.
+Together they give the two guarantees the feature rests on — a live name means
+exactly one perm, and an owner has at most one default per activity — while
+leaving a disbanded perm's name free for reuse.
+
+*Note:* disbanding sets `status` and clears `isDefault`; it never deletes. A
+roster is a record of who ran together, and an autofill source that no longer
+exists would silently produce empty LFG posts.
+
+#### PermMember
+One seat on a perm's roster.
+
+| Field | Notes |
+|-------|-------|
+| `permGroupId` | FK |
+| `ign` | **required** — the identity that always exists |
+| `role` | free-form, validated against the activity in `@sbr/perms` rather than an enum |
+| `slot` | seat order |
+| `discordId`, `uuid` | optional, attached when resolvable |
+
+**Unique:** `(permGroupId, ign, role)` — one person may hold two roles on the
+same perm, but not the same role twice.
+**Relationships:** N—1 `PermGroup`.
+
+*Note:* `role` is deliberately not a Prisma enum. Skyblock's class vocabulary
+changes faster than migrations should, so the role table (and its alias list —
+`zerk`, `dps`, `cannon`) lives in `packages/perms/src/activities.ts` as data.
+
+*Note:* rosters are enriched for display from `GuildMemberCache` (still in the
+guild?) and the newest `ProfileSnapshot` (cata/SA), never from a live Hypixel
+call — one query each for the whole roster. "Not in the cache" is rendered as
+unknown rather than as "left the guild" when the cache is cold.
+
 ---
 
 ### Progression & Analytics
@@ -523,6 +577,8 @@ erDiagram
     Guild ||--o{ Event : schedules
     Event ||--o{ EventRSVP : gathers
     Guild ||--o{ LFGPost : hosts
+    Guild ||--o{ PermGroup : houses
+    PermGroup ||--o{ PermMember : seats
     DiscordUser ||--o{ CommandUsage : invokes
 ```
 
@@ -530,7 +586,7 @@ erDiagram
 
 ## Persistent vs. Ephemeral — Guidance
 
-- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, GuildChannelBinding, GuildSetting, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, ProfileSnapshot, Milestone, GuildGexpDaily, GuildScan, WorkerJobLog. These are records of fact, audit, or configuration.
+- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, GuildChannelBinding, GuildSetting, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, PermGroup, PermMember, ProfileSnapshot, Milestone, GuildGexpDaily, GuildScan, WorkerJobLog. These are records of fact, audit, or configuration.
 - **Cache of upstream truth, in Postgres because it is too large and too slow-moving for Redis:** `GuildMemberCache`. Rebuildable from Hypixel by one scan; kept in Postgres because commands join against it and because it must outlive a Redis flush. Freshness is `refreshedAt` against a 6 h TTL (`MEMBER_CACHE_TTL_MS`), not a key expiry — a stale roster is still worth serving with a warning, whereas an evicted one is not servable at all.
 - **Persistent record + ephemeral live-state mirror in Redis:**
   - `ModerationAction` → active mute/ban with TTL for fast enforcement checks.

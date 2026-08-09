@@ -256,11 +256,13 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // decision — guild chat proves guild membership and nothing else.
   assert.deepEqual(names, [
     "bazaar", "dungeons", "events", "help", "lfg", "lowestbin",
-    "networth", "price", "profile", "runs", "skills", "slayer", "stats",
+    "networth", "perm", "price", "profile", "runs", "skills", "slayer", "stats",
   ]);
 
-  // Anything that writes is `"linked"`, never `true`.
-  assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name), ["lfg"]);
+  // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
+  // than in the `true` set because its read actions share one command with its
+  // writes, and the weaker of the two requirements would govern the pair.
+  assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), ["lfg", "perm"]);
 
   // And the identity commands stay Discord-only: `/link` in guild chat would
   // invite people to type an IGN at a surface that can't verify who they are.
