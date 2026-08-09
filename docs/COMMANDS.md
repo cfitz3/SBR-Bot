@@ -88,12 +88,40 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/lfg` | Create a looking-for-group post | Linked | `activity`, `slots`, `details?` | Public LFG embed w/ join button | Cooldown; too many open posts | DB (`LFGPost`) + Cache (`lfg:open:*` TTL) |
+| `/lfg` | Create a looking-for-group post | Linked | `activity`, `slots?`, `title?`, `details?`, `perm?`, `permname?` | Public LFG embed w/ join / leave / close buttons | Cooldown; too many open posts; no such perm | DB (`LFGPost`) + Cache (`lfg:open:*` TTL) |
 | `/runs` | List open runs/LFG posts | Public | `activity?` | List of open `LFGPost`s | None open | Cache (`lfg:open:*`) → DB |
 | `/joinrun` | Join an open run | Linked | `run_id` | Updated party roster; DM/ping | Run full/closed; already joined | DB + Cache (slot update) |
 | `/leaverun` | Leave a run you joined | Linked | `run_id` | Updated roster | Not in run; run closed | DB + Cache |
+| `/editrun` | Change a run you host | Linked (owner or staff) | `id`, `title?`, `details?`, `slots?` | Updated embed | Nothing to change; not yours; run finished; slots below the current party | DB |
+| `/closerun` | End a run | Linked (owner or staff) | `id` | Embed marked closed, buttons disabled | Not yours; already closed | DB |
 | `/rsvp` | RSVP to a scheduled event | Public | `event_id`, `state` (going/maybe/no) | Updated RSVP + counts | Event full→waitlist; event past | DB (`EventRSVP`) |
 | `/perm` | Standing parties — the group you always run with | Linked | `action` (info/list/create/roster-add/roster-remove/disband/default), `perm?`, `name?`, `activity?`, `ign?`, `role?`, `slot?`, `notes?` | Roster embed: seat, IGN, linked mention, cata/SA | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileSnapshot` for enrichment |
+
+### `/lfg` — runs
+
+A post is a row; the message is a view of it. Every button carries the post id
+in its `customId` (`run:<postId>:join|leave|close`), so the board survives a
+restart and nothing ever has to look a post up by the message it was sent as.
+
+- **Perm autofill.** `perm:true` brings the author's default perm for that
+  activity; `permname:F7 core` names one, and wins over `perm:true` when both are
+  given. Seats are taken in roster order until the party is full, the author is
+  never duplicated, and seats with no linked Discord account are skipped — there
+  is nobody to mention. A missing *default* is not an error (`perm:true` means
+  "bring my usual party if I have one"); a missing *named* perm is.
+- **Edits never kick anybody.** Shrinking `slots` below the current party is
+  refused rather than silently truncating it. Raising slots on a full post
+  reopens it, so the new seat is actually reachable.
+- **Closing is a decision, expiring is not.** A closed post names who closed it;
+  an expired one just says expired. Owner or staff (`MENTION`) may close; the
+  buttons stay visible but disabled, so the message still reads as the run it was.
+- **The board never blocks the reply.** Publishing to the configured `lfg`
+  channel and refreshing the embed absorb their own failures — a broken channel
+  binding must not turn a successful join into an error in a member's face.
+
+**In-game shape stays `!lfg <activity> [slots] [details]`.** Guild chat has no
+named arguments, so `title`, `perm` and `permname` are marked
+`inGamePositional: false` and take no token there.
 
 ### `/perm` — standing parties
 
@@ -241,6 +269,12 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 - **Prefix-based**, not slash: e.g. `!stats <ign>`, `!nw`, `!price <item>`, `!lfg <activity>`, `!help`. Prefix and enabled set come from `GuildConfig`.
 - **Output is truncated/paginated** to fit Minecraft chat (single line, ~256 char cap); rich embeds collapse to a compact one-liner (e.g. `Player — Cata 42 | SA 45.3 | NW 8.2b | SnrW 12,340`).
 - **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayer, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
+- **Arguments are positional**, in the spec's declared order, with the last one
+  absorbing the rest of the line so multi-word values work. There is no
+  `key:value` syntax, so an option only Discord should see is declared
+  `inGamePositional: false` — otherwise adding one silently re-maps the free-text
+  argument at the end (this is why `!lfg <activity> [slots] [details]` still works
+  after `/lfg` gained `title`, `perm` and `permname`).
 - **Cooldowns are stricter** (per-IGN Redis `cd:ingame:*`) because guild chat is spam-prone and rate-limited by Hypixel itself.
 - **Identity is by IGN → `LinkedAccount`.** If the IGN isn't linked, commands still work for public lookups but personalized commands (`/me`, `/whatnext`) reply with a "link on Discord" hint.
 

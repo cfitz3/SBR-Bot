@@ -754,6 +754,26 @@ model LFGPost {
   members          String[]    @default([])
   status           LFGStatus   @default(OPEN)
   expiresAt        DateTime?
+  /// A short headline the author writes, e.g. "F7 carries, need healer".
+  /// Separate from `details` because one goes in the embed title and the other
+  /// in its body, and squashing them means the list view has nothing short to
+  /// show.
+  title            String?
+  /// Where the post was published, so the embed can be edited in place as
+  /// people join and leave rather than leaving a stale roster on screen.
+  /// Nullable because publishing can fail — a post that exists with no message
+  /// is recoverable; a post that only exists as a message is not.
+  channelId        String?
+  messageId        String?
+  /// The perm this post's roster was autofilled from, when it was. Kept for the
+  /// same reason a screening keeps its inputs: "why were those four already in
+  /// the party" should be answerable later.
+  permGroupId      String?
+  /// Closure is recorded, not inferred from `status`: "closed by the author at
+  /// 9pm" and "expired quietly overnight" are both CLOSED-ish states that mean
+  /// different things when someone asks what happened to a run.
+  closedAt          DateTime?
+  closedByDiscordId String?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 

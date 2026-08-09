@@ -52,7 +52,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **2** | **Guild scan & member cache** *(shipped)* | 6h guild scan job, rolling 6h in-game member cache, GEXP daily table | 1 |
 | **3** | **Perms** *(shipped)* | `PermGroup`/`PermMember`/`PermRoster`, `PermService`, `/perm create\|info\|roster add\|roster remove\|disband`, roster autofill + stats | 2 |
 | **S** | **Join screening & auto-accept** *(shipped, out of band)* | SkyKings client, `GuildJoinScreening`, `@sbr/screening` policy engine, bridge join wiring, panel policy editor | 1 |
-| **4** | **LFG rework** | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + remove, message tracking | 1, 3 |
+| **4** | **LFG rework** *(shipped)* | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + close, message tracking | 1, 3 |
 | **5** | **XP & standing** | XP ledger + balances, source weights/caps config, anti-abuse gates, aggregation jobs, `/me` & `/profile` rework | 1, 2 |
 | **6** | **Leaderboards** | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
 | **7** | **Milestones/achievements** | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
@@ -249,10 +249,24 @@ It needs a directory port on `HandlerDeps` that nothing else wants yet; the `per
 option does autocomplete, off `listPerms`. Revisit with Phase 4, which reads the same
 cache.
 
-### 2.4 LFG (Phase 4)
+### 2.4 LFG (Phase 4) — *shipped*
 
 Additive columns on `LFGPost`: `channelId String?`, `messageId String?`,
 `permGroupId String?`, `title String?`, `closedAt DateTime?`, `closedByDiscordId String?`.
+Migration `20260809230000_lfg_rework`. No index on `messageId`: button state lives in
+the `customId`, so no read ever goes message → post.
+
+Two decisions worth carrying forward:
+
+- **`@sbr/community` does not depend on `@sbr/perms`.** LFG wants two things from a
+  perm — its name and who is in it — so it declares a `PermRosterLookup` port and
+  `@sbr/db` implements it. A missing *default* perm is not an error (`perm:true`
+  means "bring my usual party if I have one"); a missing *named* one is.
+- **Discord-only options need marking.** In-game args are positional and the last
+  option absorbs the line, so adding `title`/`perm`/`permname` would have re-mapped
+  `!lfg dungeons 5 need a healer`. `CommandOptionSpec.inGamePositional: false` keeps
+  them off the guild-chat shape; anything added to an `inGame` spec from here needs
+  the same consideration.
 
 ### 2.5 XP & standing (Phase 5)
 
@@ -396,7 +410,7 @@ model TicketTypeConfig {
 
 | Command | Change |
 | --- | --- |
-| `/lfg` | Posts an **embed** into the configured LFG channel; adds `perm` boolean; adds `close`/`edit` for author or staff; tracks `messageId`. |
+| `/lfg` | Posts an **embed** into the configured LFG channel; adds `title`, `perm` boolean and `permname`; `/editrun` + `/closerun` and a Close button for author or staff; tracks `messageId`. *Shipped.* |
 | `/me`, `/profile` | Combined standing: Hypixel stats + guild standing (GEXP, tenure) + Discord activity + XP/level + open infractions. |
 | `/slayer` → `/slayers` | Renamed with `/slayer` kept as a deprecated alias for one release; per-tier boss kill breakdown. |
 | `/skills` | New skills + current caps, capped-skill markers. |

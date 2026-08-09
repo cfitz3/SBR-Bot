@@ -42,7 +42,7 @@ import { CommandDispatcher } from "./dispatcher.js";
 import { buildBridgeRegistry } from "./handlers.js";
 import { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
 import { InMemoryCooldownGate } from "./cooldown.js";
-import type { CapabilityChecker, CommandContext, UsageSink } from "./types.js";
+import type { CapabilityChecker, CommandContext, LfgBoard, UsageSink } from "./types.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -265,9 +265,10 @@ const anEvent: EventDTO = {
 };
 
 const aPost: LFGPostDTO = {
-  id: "p1", guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", details: "cata 30+",
+  id: "p1", guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", title: null, details: "cata 30+",
   slotsTotal: 5, slotsFilled: 2, status: "OPEN", expiresAt: null,
   createdAt: "2026-08-01T00:00:00.000Z", members: ["111", "222"],
+  channelId: null, messageId: null, permGroupId: null, closedAt: null, closedByDiscordId: null,
 };
 
 const aTicket: TicketDTO = {
@@ -371,6 +372,7 @@ function makeDispatcher(over: {
   perms?: PermService;
   roster?: GuildRosterSource;
   usage?: UsageSink;
+  lfgBoard?: LfgBoard;
   now?: () => number;
 } = {}) {
   return new CommandDispatcher({
@@ -388,6 +390,7 @@ function makeDispatcher(over: {
       ...(over.roster ? { roster: over.roster } : {}),
       config: guildConfig,
       analytics,
+      ...(over.lfgBoard ? { lfgBoard: over.lfgBoard } : {}),
       logger: silent,
     },
     logger: silent,
@@ -1002,7 +1005,135 @@ test("a full run's join button is disabled rather than missing", async () => {
   const r = await makeDispatcher({ community: full }).dispatch("joinrun", ctx({ args: recordArgs({ id: "p1" }) }));
   const buttons = (r.components ?? [])[0]?.buttons ?? [];
   assert.equal(buttons[0]?.disabled, true);
-  assert.equal(buttons[1]?.disabled, undefined);
+  // A full run is still a live run: leaving frees a slot, and the host can close it.
+  assert.equal(buttons[1]?.disabled, false);
+  assert.equal(buttons[2]?.customId, "run:p1:close");
+  assert.equal(buttons[2]?.disabled, false);
+});
+
+/** Records what the board was asked to do, so publishing can be asserted. */
+function boardSpy(): { board: LfgBoard; published: string[]; refreshed: string[] } {
+  const published: string[] = [];
+  const refreshed: string[] = [];
+  return {
+    published,
+    refreshed,
+    board: {
+      async publish(post) { published.push(post.id); },
+      async refresh(post) { refreshed.push(post.id); },
+    },
+  };
+}
+
+test("/lfg passes the perm request and headline straight through", async () => {
+  const seen: unknown[] = [];
+  const spy = community({
+    async createLfg(input) { seen.push(input); return ok({ ...aPost, title: input.title ?? null }); },
+  });
+  await makeDispatcher({ community: spy }).dispatch(
+    "lfg",
+    ctx({ args: recordArgs({ activity: "DUNGEONS", title: "F7 carries", perm: "true" }) }),
+  );
+  assert.deepEqual(
+    (seen[0] as { perm?: unknown; title?: unknown }).perm,
+    true,
+    "perm:true has to reach the service — the roster is filled there, not here",
+  );
+  assert.equal((seen[0] as { title?: unknown }).title, "F7 carries");
+});
+
+test("a named perm wins over perm:true", async () => {
+  const seen: unknown[] = [];
+  const spy = community({ async createLfg(input) { seen.push(input); return ok(aPost); } });
+  await makeDispatcher({ community: spy }).dispatch(
+    "lfg",
+    ctx({ args: recordArgs({ activity: "DUNGEONS", perm: "true", permname: "Alts" }) }),
+  );
+  assert.equal((seen[0] as { perm?: unknown }).perm, "Alts");
+});
+
+test("a perm that doesn't exist is explained rather than silently ignored", async () => {
+  const missing = community({
+    async createLfg() { return err({ kind: "NO_SUCH_PERM", detail: 'You have no perm called "Ghost".' }); },
+  });
+  const r = await makeDispatcher({ community: missing }).dispatch(
+    "lfg",
+    ctx({ args: recordArgs({ activity: "DUNGEONS", permname: "Ghost" }) }),
+  );
+  assert.equal(r.ephemeral, true);
+  assert.match(r.text, /no perm called "Ghost"/);
+});
+
+test("a new run is published to the board as well as answered in place", async () => {
+  const spy = boardSpy();
+  const r = await makeDispatcher({ lfgBoard: spy.board }).dispatch(
+    "lfg",
+    ctx({ args: recordArgs({ activity: "DUNGEONS" }) }),
+  );
+  assert.equal(r.ephemeral, false);
+  assert.deepEqual(spy.published, ["p1"]);
+});
+
+test("joining refreshes the published post, so the roster people read is current", async () => {
+  const spy = boardSpy();
+  await makeDispatcher({ lfgBoard: spy.board }).dispatch("joinrun", ctx({ args: recordArgs({ id: "p1" }) }));
+  assert.deepEqual(spy.refreshed, ["p1"]);
+});
+
+test("/editrun with nothing to change asks for a field instead of writing", async () => {
+  let called = false;
+  const spy = community({ async editLfg() { called = true; return ok(aPost); } });
+  const r = await makeDispatcher({ community: spy }).dispatch("editrun", ctx({ args: recordArgs({ id: "p1" }) }));
+  assert.equal(called, false);
+  assert.match(r.text, /Nothing to change/);
+});
+
+test("/editrun sends only the fields given, with the caller's staff standing", async () => {
+  const seen: unknown[] = [];
+  const spy = community({ async editLfg(input) { seen.push(input); return ok({ ...aPost, title: "new" }); } });
+  const r = await makeDispatcher({ community: spy }).dispatch(
+    "editrun",
+    ctx({ args: recordArgs({ id: "p1", title: "new" }) }),
+  );
+  assert.deepEqual(Object.keys(seen[0] as object).sort(), ["actorDiscordId", "isStaff", "postId", "title"]);
+  assert.equal(r.ephemeral, true, "an edit is between the author and the bot; the board shows the result");
+});
+
+test("/editrun on someone else's run is refused in plain words", async () => {
+  const spy = community({ async editLfg() { return err({ kind: "NOT_YOURS" }); } });
+  const r = await makeDispatcher({ community: spy }).dispatch(
+    "editrun",
+    ctx({ args: recordArgs({ id: "p1", title: "mine now" }) }),
+  );
+  assert.match(r.text, /isn't your run/);
+});
+
+test("/closerun closes and refreshes the board", async () => {
+  const board = boardSpy();
+  const spy = community({ async closeLfg() { return ok({ ...aPost, status: "CLOSED", closedByDiscordId: "111" }); } });
+  const r = await makeDispatcher({ community: spy, lfgBoard: board.board }).dispatch(
+    "closerun",
+    ctx({ args: recordArgs({ id: "p1" }) }),
+  );
+  assert.match(r.text, /Run closed/);
+  assert.deepEqual(board.refreshed, ["p1"]);
+});
+
+test("the close button closes the run the presser owns", async () => {
+  const seen: Array<{ id: string; who: string; staff: boolean | undefined }> = [];
+  const spy = community({
+    async closeLfg(postId, actor, isStaff) {
+      seen.push({ id: postId, who: actor, staff: isStaff });
+      return ok({ ...aPost, status: "CLOSED", closedByDiscordId: actor });
+    },
+  });
+  const deps = {
+    identity: identity(), progression: progression(), players, pricing, market: market(),
+    community: spy, perms: perms(), config: guildConfig, analytics, logger: silent,
+  };
+  const r = await communityButtonReplies.run("p1", "222", "close", "g1", deps);
+  assert.equal(r.ephemeral, false);
+  assert.deepEqual(seen, [{ id: "p1", who: "222", staff: true }]);
 });
 
 test("/ticket opens a ticket privately", async () => {
@@ -1181,9 +1312,9 @@ test("run buttons join and leave, and reject an unknown action", async () => {
     identity: identity(), progression: progression(), players, pricing, market: market(),
     community: community(), perms: perms(), config: guildConfig, analytics, logger: silent,
   };
-  assert.match((await communityButtonReplies.run("p1", "222", "join", deps)).text, /Joined — 3\/5/);
-  assert.match((await communityButtonReplies.run("p1", "222", "leave", deps)).text, /Left — 1\/5/);
-  assert.match((await communityButtonReplies.run("p1", "222", "detonate", deps)).text, /isn't valid any more/);
+  assert.match((await communityButtonReplies.run("p1", "222", "join", "g1", deps)).text, /Joined — 3\/5/);
+  assert.match((await communityButtonReplies.run("p1", "222", "leave", "g1", deps)).text, /Left — 1\/5/);
+  assert.match((await communityButtonReplies.run("p1", "222", "detonate", "g1", deps)).text, /isn't valid any more/);
 });
 
 test("parseRsvpState only accepts real states", async () => {

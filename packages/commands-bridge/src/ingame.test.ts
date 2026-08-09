@@ -73,6 +73,25 @@ test("earlier options take one token each", () => {
   assert.equal(args.getString("note"), "needs carry");
 });
 
+test("a Discord-only option takes no token, so the free-text one still absorbs the line", () => {
+  // Regression: /lfg gained title/perm/permname for Discord. Positionally those
+  // would have eaten "need" and "a healer", leaving details empty.
+  const spec: CommandSpec = {
+    ...priceSpec,
+    options: [
+      { name: "activity", description: "a", type: "string", required: true },
+      { name: "title", description: "t", type: "string", inGamePositional: false },
+      { name: "details", description: "d", type: "string" },
+      { name: "permname", description: "p", type: "string", inGamePositional: false },
+    ],
+  };
+  const args = positionalArgs(spec, ["dungeons", "need", "a", "healer"]);
+  assert.equal(args.getString("activity"), "dungeons");
+  assert.equal(args.getString("details"), "need a healer");
+  assert.equal(args.getString("title"), null);
+  assert.equal(args.getString("permname"), null);
+});
+
 // ───────────────────────────── flattening ─────────────────────────────
 
 test("an embed collapses to title — fields, joined with pipes", () => {

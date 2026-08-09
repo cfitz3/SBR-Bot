@@ -6,6 +6,7 @@ export { buildBridgeRegistry } from "./handlers.js";
 export { InMemoryCooldownGate } from "./cooldown.js";
 export { formatCoins, renderNetworth, renderFailure, renderLinkError, renderRosterEmbed } from "./render.js";
 export { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
+export { lfgButtons, renderLfgEmbed } from "./render-community.js";
 export {
   InGameDispatcher,
   INGAME_MAX_CHARS,
@@ -26,6 +27,7 @@ export type {
   CommandSpec,
   CommandHandler,
   HandlerDeps,
+  LfgBoard,
   CooldownGate,
   CapabilityChecker,
   UsageSink,

@@ -43,6 +43,7 @@ import {
   buildBridgeRegistry,
   type CapabilityChecker,
   type HandlerDeps,
+  type LfgBoard,
   type UsageSink,
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
@@ -99,6 +100,8 @@ export interface BridgeApp {
    * withholding the beat until ready would render that as DOWN.
    */
   setStatusSource(source: (() => BridgeStatusDetails) | null): void;
+  /** Hand the composition the Discord-backed LFG board once the client exists. */
+  setLfgBoard(board: LfgBoard | null): void;
   shutdown(): Promise<void>;
 }
 
@@ -244,6 +247,20 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
   };
 
+  // Same indirection for the LFG board, which additionally needs the Discord
+  // client — built from the app, so it cannot be a constructor argument. Before
+  // it is set every call is a no-op, which is the right answer: the post is
+  // already saved, and only its card in the channel is missing.
+  let liveBoard: LfgBoard | null = null;
+  const lfgBoard: LfgBoard = {
+    async publish(post) {
+      await liveBoard?.publish(post);
+    },
+    async refresh(post) {
+      await liveBoard?.refresh(post);
+    },
+  };
+
   const handlerDeps: HandlerDeps = {
     identity,
     progression,
@@ -255,6 +272,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     roster,
     config: guildConfig,
     analytics,
+    lfgBoard,
     logger: log,
   };
 
@@ -319,6 +337,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setStatusSource(source) {
       liveStatus = source;
+    },
+    setLfgBoard(board) {
+      liveBoard = board;
     },
     async shutdown() {
       stopHeartbeat();

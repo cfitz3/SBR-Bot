@@ -14,6 +14,7 @@ import type {
   GuildConfigService,
   GuildRosterSource,
   IdentityService,
+  LFGPostDTO,
   MarketService,
   OptionType,
   PermService,
@@ -81,7 +82,28 @@ export interface HandlerDeps {
   readonly roster?: GuildRosterSource;
   readonly config: GuildConfigService;
   readonly analytics: AnalyticsService;
+  /**
+   * The LFG board in the configured `lfg` channel. Optional for the same reason
+   * as `roster`: only a surface with a Discord client can publish one, and a
+   * deployment without it still gets working `/lfg` replies — they just live in
+   * the channel the command was run in.
+   */
+  readonly lfgBoard?: LfgBoard;
   readonly logger: Logger;
+}
+
+/**
+ * Publishes an LFG post to the guild's board and keeps it current.
+ *
+ * Both methods absorb their own failures: a board that cannot be reached must
+ * not turn a successful join into an error message. The post is the record; the
+ * message is a view of it.
+ */
+export interface LfgBoard {
+  /** Post the embed into the `lfg` channel and remember where it landed. */
+  publish(post: LFGPostDTO): Promise<void>;
+  /** Re-render the post where it was published. A no-op for an unpublished post. */
+  refresh(post: LFGPostDTO): Promise<void>;
 }
 
 export type CommandHandler = (ctx: CommandContext, deps: HandlerDeps) => Promise<CommandReply>;
@@ -117,6 +139,15 @@ export interface CommandOptionSpec {
   readonly choices?: readonly Choice[];
   readonly minValue?: number;
   readonly maxValue?: number;
+  /**
+   * Whether guild chat can reach this option positionally. Defaults to true.
+   *
+   * In-game args are pure position — there is no `key:value` syntax and the last
+   * option absorbs the rest of the line, so *every* option added to a spec eats a
+   * token from the free-text one at the end. Marking an option `false` keeps it
+   * Discord-only and leaves the in-game shape of the command as it was.
+   */
+  readonly inGamePositional?: boolean;
 }
 
 /**

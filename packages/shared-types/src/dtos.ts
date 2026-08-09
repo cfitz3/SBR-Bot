@@ -360,6 +360,18 @@ export interface LFGPostDTO {
   readonly createdAt: string;
   /** Everyone currently holding a slot, author first. */
   readonly members: readonly string[];
+  /** Short headline for the embed, or null when the author gave none. */
+  readonly title: string | null;
+  /**
+   * Where this post was published. Null until it lands — publishing can fail,
+   * and a post with no message is recoverable in a way that the reverse is not.
+   */
+  readonly channelId: string | null;
+  readonly messageId: string | null;
+  /** The perm the roster was autofilled from, if any. */
+  readonly permGroupId: string | null;
+  readonly closedAt: string | null;
+  readonly closedByDiscordId: string | null;
 }
 
 /**

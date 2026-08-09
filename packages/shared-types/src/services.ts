@@ -438,6 +438,16 @@ export interface CommunityService {
   listLfg(guildId: string, activity?: LFGActivity): Promise<Result<readonly LFGPostDTO[]>>;
   joinLfg(postId: string, discordId: string): Promise<Result<LFGPostDTO, LfgError>>;
   leaveLfg(postId: string, discordId: string): Promise<Result<LFGPostDTO, LfgError>>;
+  getLfg(postId: string): Promise<Result<LFGPostDTO | null>>;
+  /** Edit a post after the fact. Author, or staff acting on someone's behalf. */
+  editLfg(input: LfgEdit): Promise<Result<LFGPostDTO, LfgError>>;
+  /** Close a post early. Author, or staff. Expiry is a separate, quieter thing. */
+  closeLfg(postId: string, actorDiscordId: string, isStaff?: boolean): Promise<Result<LFGPostDTO, LfgError>>;
+  /**
+   * Record where a post was published, so its embed can be edited in place.
+   * Called by the transport after the message lands, never by a command.
+   */
+  bindLfgMessage(postId: string, channelId: string, messageId: string): Promise<Result<LFGPostDTO, LfgError>>;
 
   // ── Tickets (`/ticket`) ──
   openTicket(input: NewTicket): Promise<Result<TicketDTO>>;
@@ -485,6 +495,29 @@ export interface NewLfgPost {
   readonly details?: string | null;
   readonly slotsTotal: number;
   readonly expiresInMinutes?: number;
+  /** Short headline for the embed. */
+  readonly title?: string | null;
+  /**
+   * Autofill the roster from a perm.
+   *
+   * `true` uses the author's default perm for this activity; a string names one.
+   * Absent means "just me". A named perm that does not exist is an error, but a
+   * *default* that does not exist is not: `perm: true` means "bring my usual
+   * party if I have one", and someone who has never made a perm asked for a
+   * perfectly ordinary solo post.
+   */
+  readonly perm?: boolean | string;
+}
+
+/** A roster edit an author (or staff) makes after posting. */
+export interface LfgEdit {
+  readonly postId: string;
+  readonly actorDiscordId: string;
+  /** True when the actor may act on anybody's post. */
+  readonly isStaff?: boolean;
+  readonly title?: string | null;
+  readonly details?: string | null;
+  readonly slotsTotal?: number;
 }
 
 export type LfgError =
@@ -494,7 +527,13 @@ export type LfgError =
   | { readonly kind: "ALREADY_JOINED" }
   | { readonly kind: "NOT_A_MEMBER" }
   | { readonly kind: "AUTHOR_CANNOT_LEAVE" }
-  | { readonly kind: "INVALID_SLOTS"; readonly detail: string };
+  | { readonly kind: "INVALID_SLOTS"; readonly detail: string }
+  /** The actor is neither the author nor staff. */
+  | { readonly kind: "NOT_YOURS" }
+  /** A named perm that does not exist, or is not the actor's to use. */
+  | { readonly kind: "NO_SUCH_PERM"; readonly detail: string }
+  /** Shrinking a post below the number of people already in it. */
+  | { readonly kind: "SLOTS_BELOW_ROSTER"; readonly detail: string };
 
 /**
  * Perms — standing parties (packages/perms).

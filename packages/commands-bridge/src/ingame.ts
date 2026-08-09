@@ -102,9 +102,14 @@ export function parseInGameCommand(line: string, prefix: string = INGAME_PREFIX)
  * is left so multi-word values work (`!price enchanted diamond block`). Boolean
  * and numeric coercion is `recordArgs`' job — a token that won't coerce reads as
  * absent, which handlers already treat as "not supplied".
+ *
+ * Options marked `inGamePositional: false` are skipped entirely. Without that,
+ * adding a Discord-only option to a spec would silently re-map guild chat: every
+ * declared option takes a token, so a new one in the middle shifts the free-text
+ * value at the end onto the wrong field.
  */
 export function positionalArgs(spec: CommandSpec, tokens: readonly string[]): CommandArgs {
-  const options = spec.options ?? [];
+  const options = (spec.options ?? []).filter((o) => o.inGamePositional !== false);
   const record: Record<string, string> = {};
 
   for (let i = 0; i < options.length && i < tokens.length; i += 1) {
@@ -125,6 +130,7 @@ function missingRequired(spec: CommandSpec, args: CommandArgs): readonly string[
 
 function usageHint(spec: CommandSpec, prefix: string): string {
   const shape = (spec.options ?? [])
+    .filter((o) => o.inGamePositional !== false)
     .map((o) => (o.required === true ? `<${o.name}>` : `[${o.name}]`))
     .join(" ");
   return `Usage: ${prefix}${spec.name}${shape ? ` ${shape}` : ""}`;

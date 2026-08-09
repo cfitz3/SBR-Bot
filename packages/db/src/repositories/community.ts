@@ -14,12 +14,12 @@ import type {
   MemberRole,
   MemberSummaryDTO,
   NewEvent,
-  NewLfgPost,
   NewTicket,
   RSVPState,
   RsvpEntryDTO,
   TicketDTO,
 } from "@sbr/shared-types";
+import type { LfgInsert, LfgPatch } from "@sbr/community";
 import { prisma } from "../client.js";
 
 interface EventRsvpInfo {
@@ -63,6 +63,7 @@ function toLfgDTO(r: {
   guildId: string;
   authorDiscordId: string;
   activity: string;
+  title: string | null;
   details: string | null;
   slotsTotal: number;
   slotsFilled: number;
@@ -70,12 +71,18 @@ function toLfgDTO(r: {
   expiresAt: Date | null;
   createdAt: Date;
   members: string[];
+  channelId: string | null;
+  messageId: string | null;
+  permGroupId: string | null;
+  closedAt: Date | null;
+  closedByDiscordId: string | null;
 }): LFGPostDTO {
   return {
     id: r.id,
     guildId: r.guildId,
     authorDiscordId: r.authorDiscordId,
     activity: r.activity as LFGActivity,
+    title: r.title,
     details: r.details,
     slotsTotal: r.slotsTotal,
     slotsFilled: r.slotsFilled,
@@ -83,6 +90,11 @@ function toLfgDTO(r: {
     expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
     createdAt: r.createdAt.toISOString(),
     members: r.members,
+    channelId: r.channelId,
+    messageId: r.messageId,
+    permGroupId: r.permGroupId,
+    closedAt: r.closedAt ? r.closedAt.toISOString() : null,
+    closedByDiscordId: r.closedByDiscordId,
   };
 }
 
@@ -263,19 +275,24 @@ export const communityRepository = {
 
   // ──────────────────────────────── LFG ────────────────────────────────
 
-  async createLfg(input: NewLfgPost): Promise<LFGPostDTO> {
+  async createLfg(input: LfgInsert): Promise<LFGPostDTO> {
     const expiresAt =
       input.expiresInMinutes === undefined ? null : new Date(Date.now() + input.expiresInMinutes * 60_000);
+    const members = [...input.members];
     const row = await prisma.lFGPost.create({
       data: {
         guildId: input.guildId,
         authorDiscordId: input.authorDiscordId,
         activity: input.activity,
-        details: input.details ?? null,
+        title: input.title,
+        details: input.details,
         slotsTotal: input.slotsTotal,
-        // The author holds the first slot, so a fresh post reads 1/5 not 0/5.
-        slotsFilled: 1,
-        members: [input.authorDiscordId],
+        // The author holds the first slot, so a fresh post reads 1/5 not 0/5;
+        // an autofilled roster starts higher still.
+        slotsFilled: members.length,
+        members,
+        permGroupId: input.permGroupId,
+        status: members.length >= input.slotsTotal ? "FULL" : "OPEN",
         expiresAt,
       },
     });
@@ -306,6 +323,32 @@ export const communityRepository = {
   async setLfgMembers(postId: string, members: readonly string[], status: LFGStatus): Promise<LFGPostDTO | null> {
     const row = await prisma.lFGPost
       .update({ where: { id: postId }, data: { members: [...members], slotsFilled: members.length, status } })
+      .catch(() => null);
+    return row ? toLfgDTO(row) : null;
+  },
+
+  async updateLfg(postId: string, patch: LfgPatch): Promise<LFGPostDTO | null> {
+    // Spread-with-undefined would write nulls over the fields nobody touched,
+    // so each key is only added when the caller actually supplied it.
+    const data: Record<string, unknown> = {};
+    if (patch.title !== undefined) data["title"] = patch.title;
+    if (patch.details !== undefined) data["details"] = patch.details;
+    if (patch.slotsTotal !== undefined) data["slotsTotal"] = patch.slotsTotal;
+    if (patch.status !== undefined) data["status"] = patch.status;
+    const row = await prisma.lFGPost.update({ where: { id: postId }, data }).catch(() => null);
+    return row ? toLfgDTO(row) : null;
+  },
+
+  async closeLfg(postId: string, closedByDiscordId: string, closedAt: Date): Promise<LFGPostDTO | null> {
+    const row = await prisma.lFGPost
+      .update({ where: { id: postId }, data: { status: "CLOSED", closedAt, closedByDiscordId } })
+      .catch(() => null);
+    return row ? toLfgDTO(row) : null;
+  },
+
+  async bindLfgMessage(postId: string, channelId: string, messageId: string): Promise<LFGPostDTO | null> {
+    const row = await prisma.lFGPost
+      .update({ where: { id: postId }, data: { channelId, messageId } })
       .catch(() => null);
     return row ? toLfgDTO(row) : null;
   },

@@ -413,14 +413,23 @@ A "looking for group" post (carry, dungeon party, etc.).
 | `guildId` | FK |
 | `authorDiscordUserId` | FK |
 | `activity` | see enum |
+| `title` | nullable headline the author chose; leads the embed when present |
 | `details` | text |
 | `slotsTotal`, `slotsFilled` | party size |
 | `status` | see enum |
 | `expiresAt` | auto-expiry |
+| `channelId`, `messageId` | where the board message landed; both null until a send succeeds |
+| `permGroupId` | the perm the starting roster was autofilled from, when it was |
+| `closedAt`, `closedByDiscordId` | set together on `/closerun` or the Close button; null on an expired post |
 
 **Enum — `LFGActivity`:** `DUNGEONS`, `SLAYERS`, `KUUDRA`, `FISHING`, `MINING`, `OTHER`.
 **Enum — `LFGStatus`:** `OPEN`, `FULL`, `EXPIRED`, `CLOSED`.
-**Relationships:** N—1 `Guild`, N—1 `DiscordUser`.
+**Relationships:** N—1 `Guild`, N—1 `DiscordUser`, N—1 `PermGroup` (optional).
+*No index on `messageId`, on purpose:* every button carries its post id in the
+`customId`, so nothing ever resolves a post from the message it was posted as —
+the index would cost writes to serve no read.
+*Closure vs. expiry:* both end a run, but only one was a decision, which is why
+`closedByDiscordId` exists and the embed names a closer but never an expirer.
 *Note:* durable record in Postgres, but active/open posts are mirrored in Redis with a TTL so expiry and live listings are cheap.
 
 #### PermGroup

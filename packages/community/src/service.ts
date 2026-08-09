@@ -19,6 +19,7 @@ import {
   type LFGActivity,
   type LFGPostDTO,
   type LFGStatus,
+  type LfgEdit,
   type LfgError,
   type MemberRole,
   type MemberSummaryDTO,
@@ -32,7 +33,7 @@ import {
   type TicketError,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
-import type { CommunityRepository } from "./ports.js";
+import type { CommunityRepository, LfgPatch, PermRoster, PermRosterLookup } from "./ports.js";
 
 /** Retained for the pre-Stage-5 call sites; `EventError` is the current union. */
 export type RsvpError = EventError;
@@ -45,17 +46,24 @@ export interface CommunityServiceDeps {
   readonly logger: Logger;
   /** Injected so tests can pin "now" when validating event start times. */
   readonly now?: () => Date;
+  /**
+   * Resolves `/lfg perm:`. Optional: without it every post starts as just the
+   * author, which is the pre-Phase-4 behaviour and not a failure.
+   */
+  readonly perms?: PermRosterLookup;
 }
 
 export class CommunityServiceImpl implements CommunityService {
   private readonly repo: CommunityRepository;
   private readonly log: Logger;
   private readonly now: () => Date;
+  private readonly perms: PermRosterLookup | undefined;
 
   constructor(deps: CommunityServiceDeps) {
     this.repo = deps.repo;
     this.log = deps.logger.child({ service: "community" });
     this.now = deps.now ?? ((): Date => new Date());
+    this.perms = deps.perms;
   }
 
   async listUpcomingEvents(guildId: string): Promise<Result<readonly EventDTO[]>> {
@@ -145,13 +153,130 @@ export class CommunityServiceImpl implements CommunityService {
     if (!Number.isInteger(input.slotsTotal) || input.slotsTotal < 2 || input.slotsTotal > MAX_LFG_SLOTS) {
       return err({ kind: "INVALID_SLOTS", detail: `slots has to be a whole number from 2 to ${MAX_LFG_SLOTS}.` });
     }
-    const post = await this.repo.createLfg(input);
-    this.log.info("lfg created", { postId: post.id, activity: input.activity, slots: input.slotsTotal });
+
+    const roster = await this.resolvePerm(input);
+    if (roster !== null && "kind" in roster) return err(roster);
+
+    // The author always holds the first seat, and the perm can only fill what is
+    // left: asking for 4 slots and having a 5-person perm posts 4, not 5.
+    const members = [input.authorDiscordId];
+    for (const id of roster?.discordIds ?? []) {
+      if (members.length >= input.slotsTotal) break;
+      if (!members.includes(id)) members.push(id);
+    }
+
+    const post = await this.repo.createLfg({
+      guildId: input.guildId,
+      authorDiscordId: input.authorDiscordId,
+      activity: input.activity,
+      title: input.title ?? null,
+      details: input.details ?? null,
+      slotsTotal: input.slotsTotal,
+      ...(input.expiresInMinutes === undefined ? {} : { expiresInMinutes: input.expiresInMinutes }),
+      permGroupId: roster?.id ?? null,
+      members,
+    });
+    this.log.info("lfg created", {
+      postId: post.id,
+      activity: input.activity,
+      slots: input.slotsTotal,
+      filled: members.length,
+      permGroupId: post.permGroupId,
+    });
     return ok(post);
+  }
+
+  /**
+   * Turns `perm:` into a roster, or into the error to report.
+   *
+   * Returns the roster (or null for "no autofill") on success and an `LfgError`
+   * on failure — a plain union rather than a Result because the caller only ever
+   * unwraps it once, right here.
+   */
+  private async resolvePerm(input: NewLfgPost): Promise<PermRoster | null | LfgError> {
+    if (input.perm === undefined || input.perm === false) return null;
+
+    if (!this.perms) {
+      // Only worth complaining about when a specific perm was named; `perm: true`
+      // on a deployment without perms wired in is just an ordinary solo post.
+      if (typeof input.perm === "string") {
+        return { kind: "NO_SUCH_PERM", detail: "Perms are not available on this server." };
+      }
+      return null;
+    }
+
+    if (typeof input.perm === "string") {
+      const named = await this.perms.namedRoster(input.guildId, input.authorDiscordId, input.perm);
+      if (!named) return { kind: "NO_SUCH_PERM", detail: `You have no perm called "${input.perm}".` };
+      return named;
+    }
+    // A missing default is not an error: "bring my usual party" from someone with
+    // no usual party is a perfectly ordinary request for a post of one.
+    return await this.perms.defaultRoster(input.guildId, input.authorDiscordId, input.activity);
   }
 
   async listLfg(guildId: string, activity?: LFGActivity): Promise<Result<readonly LFGPostDTO[]>> {
     return ok(await this.repo.listLfg(guildId, activity));
+  }
+
+  async getLfg(postId: string): Promise<Result<LFGPostDTO | null>> {
+    return ok(await this.repo.getLfg(postId));
+  }
+
+  async editLfg(input: LfgEdit): Promise<Result<LFGPostDTO, LfgError>> {
+    const post = await this.repo.getLfg(input.postId);
+    if (!post) return err({ kind: "NOT_FOUND" });
+    if (post.authorDiscordId !== input.actorDiscordId && input.isStaff !== true) {
+      return err({ kind: "NOT_YOURS" });
+    }
+    if (post.status === "EXPIRED" || post.status === "CLOSED") return err({ kind: "CLOSED" });
+
+    const patch: LfgPatch = {};
+    if (input.title !== undefined) Object.assign(patch, { title: input.title });
+    if (input.details !== undefined) Object.assign(patch, { details: input.details });
+
+    if (input.slotsTotal !== undefined) {
+      if (!Number.isInteger(input.slotsTotal) || input.slotsTotal < 2 || input.slotsTotal > MAX_LFG_SLOTS) {
+        return err({ kind: "INVALID_SLOTS", detail: `slots has to be a whole number from 2 to ${MAX_LFG_SLOTS}.` });
+      }
+      // Shrinking below the roster would mean kicking somebody as a side effect
+      // of an edit, which is not a thing an edit should quietly do.
+      if (input.slotsTotal < post.members.length) {
+        return err({
+          kind: "SLOTS_BELOW_ROSTER",
+          detail: `${post.members.length} people are already in — remove someone before shrinking to ${input.slotsTotal}.`,
+        });
+      }
+      Object.assign(patch, {
+        slotsTotal: input.slotsTotal,
+        // Raising the cap on a full post has to reopen it, or nobody could join
+        // the seat that was just created.
+        status: lfgStatusFor(post.members.length, input.slotsTotal),
+      });
+    }
+
+    const updated = await this.repo.updateLfg(input.postId, patch);
+    if (!updated) return err({ kind: "NOT_FOUND" });
+    this.log.info("lfg edited", { postId: input.postId, actorDiscordId: input.actorDiscordId, fields: Object.keys(patch) });
+    return ok(updated);
+  }
+
+  async closeLfg(postId: string, actorDiscordId: string, isStaff?: boolean): Promise<Result<LFGPostDTO, LfgError>> {
+    const post = await this.repo.getLfg(postId);
+    if (!post) return err({ kind: "NOT_FOUND" });
+    if (post.authorDiscordId !== actorDiscordId && isStaff !== true) return err({ kind: "NOT_YOURS" });
+    if (post.status === "CLOSED" || post.status === "EXPIRED") return err({ kind: "CLOSED" });
+
+    const closed = await this.repo.closeLfg(postId, actorDiscordId, this.now());
+    if (!closed) return err({ kind: "NOT_FOUND" });
+    this.log.info("lfg closed", { postId, actorDiscordId, staff: isStaff === true });
+    return ok(closed);
+  }
+
+  async bindLfgMessage(postId: string, channelId: string, messageId: string): Promise<Result<LFGPostDTO, LfgError>> {
+    const bound = await this.repo.bindLfgMessage(postId, channelId, messageId);
+    if (!bound) return err({ kind: "NOT_FOUND" });
+    return ok(bound);
   }
 
   async joinLfg(postId: string, discordId: string): Promise<Result<LFGPostDTO, LfgError>> {
