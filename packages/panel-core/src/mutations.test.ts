@@ -7,6 +7,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  CONFIG_CHANNEL_SLOTS,
   err,
   ok,
   type CommunityService,
@@ -58,6 +59,7 @@ function configRecorder(recorded: Recorded, result: Result<void> = ok(undefined)
     setBridgeSuspended: record("setBridgeSuspended") as GuildConfigService["setBridgeSuspended"],
     setRecruitment: record("setRecruitment") as GuildConfigService["setRecruitment"],
     setRoleMapping: record("setRoleMapping") as GuildConfigService["setRoleMapping"],
+    setSetting: record("setSetting") as GuildConfigService["setSetting"],
   };
   return partial as GuildConfigService;
 }
@@ -150,6 +152,42 @@ test("null clears a channel slot rather than being rejected as a missing id", as
   assert.deepEqual(recorded.calls[0]?.args, ["g1", "log", null]);
 });
 
+test("every slot the platform defines is writable, not just the five legacy columns", async () => {
+  const { mutations, recorded } = make();
+
+  for (const slot of CONFIG_CHANNEL_SLOTS) {
+    const result = await mutations.setChannel(session(), "g1", slot, "123456789012345678");
+    assert.equal(result.ok, true, `${slot} was refused`);
+  }
+
+  assert.deepEqual(
+    recorded.calls.map((c) => c.args[1]),
+    [...CONFIG_CHANNEL_SLOTS],
+  );
+});
+
+test("a setting is written under its key, and the audit records the key rather than the payload", async () => {
+  const { mutations, recorded } = make();
+  const value = { title: "Open a ticket", body: "Tell us what you need." };
+
+  const result = await mutations.setSetting(session(), "g1", "tickets.panel", value);
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [{ method: "setSetting", args: ["g1", "tickets.panel", value] }]);
+  assert.deepEqual(recorded.audits[0]?.change, { key: "tickets.panel", bytes: JSON.stringify(value).length });
+});
+
+test("null clears a setting; only an absent value is refused", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.setSetting(session(), "g1", "tickets.panel", null)).ok, true);
+  assert.deepEqual(recorded.calls[0]?.args, ["g1", "tickets.panel", null]);
+
+  const missing = await mutations.setSetting(session(), "g1", "tickets.panel", undefined);
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error?.kind, "INVALID_INPUT");
+});
+
 // ── the two gates ──
 
 test("an unauthenticated write is denied without touching the config service", async () => {
@@ -238,6 +276,10 @@ test("junk input is refused before the config service or the audit sees it", asy
     await mutations.setBridgeSuspended(session(), "g1", "true"),
     await mutations.setRecruitment(session(), "g1", { open: "yes" }),
     await mutations.setRecruitment(session(), "g1", { open: true, minWeight: -1 }),
+    await mutations.setSetting(session(), "g1", "Tickets Panel", {}),
+    await mutations.setSetting(session(), "g1", "tickets..panel", {}),
+    // A member roster's worth of JSON — a setting is a template, not a table.
+    await mutations.setSetting(session(), "g1", "tickets.panel", { blob: "x".repeat(70_000) }),
   ];
 
   for (const [i, result] of cases.entries()) {

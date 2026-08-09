@@ -495,6 +495,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     switch (name) {
       case "config.channel":
         return sendMutation(res, await m.setChannel(session, guildId, b["slot"], b["channelId"]));
+      case "config.setting":
+        return sendMutation(res, await m.setSetting(session, guildId, b["key"], b["value"]));
       case "config.role-mapping":
         return sendMutation(res, await m.setRoleMapping(session, guildId, b["role"], b["discordRoleId"]));
       case "config.feature":

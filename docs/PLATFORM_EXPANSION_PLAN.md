@@ -48,7 +48,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 
 | # | Phase | Delivers | Depends on |
 | --- | --- | --- | --- |
-| **1** | **Config foundation** *(1a, 1b shipped; 1c open)* | HTTP/HTTPS toggle, `GuildChannelBinding` + open channel-slot registry, `GuildSetting` KV, panel config surface | — |
+| **1** | **Config foundation** *(shipped)* | HTTP/HTTPS toggle, `GuildChannelBinding` + open channel-slot registry, `GuildSetting` KV, panel config surface | — |
 | **2** | **Guild scan & member cache** *(shipped)* | 6h guild scan job, rolling 6h in-game member cache, GEXP daily table | 1 |
 | **3** | **Perms** *(shipped)* | `PermGroup`/`PermMember`/`PermRoster`, `PermService`, `/perm create\|info\|roster add\|roster remove\|disband`, roster autofill + stats | 2 |
 | **4** | **LFG rework** | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + remove, message tracking | 1, 3 |
@@ -90,6 +90,26 @@ model GuildSetting {
   @@unique([guildId, key])
 }
 ```
+
+**As shipped (1c, the panel surface).** Two deviations from the sketch above:
+
+- **No schema registry in `@sbr/guild-config`.** `GuildSetting` values stay opaque
+  to the config service and to the panel: the panel's `config.setting` mutation
+  enforces only what is true of every setting (a dotted lowercase key, JSON that
+  round-trips, a 64 KiB ceiling) and leaves shape validation to whichever feature
+  owns the key. A central registry would put every future feature's payload shape
+  in one file that every phase has to edit; the "typed at the edge" intent is met
+  by `getSetting<T>` returning null on an unreadable value, which callers already
+  fall back from.
+- **No generic settings editor on the panel.** `config.setting` ships as a write
+  route with no UI, because a control needs a known key *and* a read, and
+  `GuildConfigService` exposes no way to enumerate keys. Each later phase brings
+  its own control and its own read; this is the write path they build on.
+
+Channel bindings, by contrast, are fully surfaced: the Mapping page renders one
+control per entry in `CONFIG_CHANNEL_SLOTS` and reads them from
+`GuildRuntimeConfig.channels` rather than the mirrored legacy columns, so the five
+new slots are settable the moment their features land.
 
 ### 2.2 Guild scan & member cache (Phase 2)
 
@@ -397,7 +417,8 @@ New/changed pages, all behind the existing `MANAGE_GUILD` session check:
 
 | Page | Contents |
 | --- | --- |
-| **Settings** (existing, extended) | Channel bindings for *every* slot (bridge, staff, log, applications, events, LFG, tickets, milestones, leaderboard, modlog), prefixes, timezone, feature toggles. |
+| **Mapping** (existing, extended) *(shipped)* | Channel bindings for *every* slot (bridge, staff, log, applications, events, LFG, tickets, milestones, leaderboard, modlog), role mappings, feature toggles. The slots landed on Mapping rather than Settings because the existing split is by what a change *does*: Mapping changes where the platform points, Settings changes how it behaves. |
+| **Settings** (existing) | Bridge suspend, recruitment, prefixes and timezone (the last two read-only until a mutation exists). |
 | **XP** (new) | Per-source enable/weight/daily cap/cooldown/min-length, level curve, manual adjustment with audit trail. |
 | **Milestones** (new) | CRUD over `MilestoneDefinition`, XP reward, announce toggle. |
 | **Tickets** (new) | Panel embed editor, ticket types/categories, staff roles, parent channel, dropdown ordering. |
@@ -406,7 +427,7 @@ New/changed pages, all behind the existing `MANAGE_GUILD` session check:
 | **Health** (existing, extended) | Job health incl. new scan/XP jobs, last scan result, cache staleness. |
 
 New action routes (`POST /api/guilds/:id/actions/...`):
-`config.channel` (extended to open slots), `config.setting`, `xp.source`, `xp.adjust`,
+`config.channel` (extended to open slots) *(shipped)*, `config.setting` *(shipped)*, `xp.source`, `xp.adjust`,
 `milestone.upsert`, `milestone.delete`, `ticket.panel`, `ticket.type`, `wordlist.upsert`,
 `wordlist.delete`, `moderation.defaults`.
 

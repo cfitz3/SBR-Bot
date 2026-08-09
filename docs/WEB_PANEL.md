@@ -57,7 +57,11 @@ Writes live in `PanelMutations` (`panel-core/src/mutations.ts`), a sibling of `P
 - **Rate limit** is per user and per mutation on `cd:web:{mutation}:{discordId}` — a guard against a stuck key or a double-clicked toggle, not a quota.
 - **Audit.** Every authorized attempt is captured as `CommandUsage(surface=WEB_PANEL)`, failures included, so a burst of refused writes is visible. Config changes additionally go through a `ConfigAuditSink`; they are *not* written as `ModerationAction`s, whose `type` enum describes actions taken on a person. Today the sink emits a typed analytics event; the port is what makes a durable `ConfigAudit` table a wiring change later.
 
-Available now: `config.channel`, `config.role-mapping`, `config.feature`, `config.recruitment`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.cancel`, `member.role`, `member.unlink`.
+Available now: `config.channel`, `config.setting`, `config.role-mapping`, `config.feature`, `config.recruitment`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.cancel`, `member.role`, `member.unlink`.
+
+**`config.channel` accepts whatever `CONFIG_CHANNEL_SLOTS` lists**, not a copy of that list. The registry in `@sbr/shared-types` is what the mutation validates against *and* what the Mapping page renders a control for, so a slot cannot exist as a control that saves into a rejection, nor as an accepted name with no way to set it. The browser half cannot import the registry at runtime (no bundler, so a bare specifier would not resolve), so its copy lives in `client/pages/channel-slots.ts` beside a Node test that fails when the two lists differ.
+
+**`config.setting` is the write path for config that isn't worth a column** — embed templates, per-feature payloads. The key namespace is open by design: a feature becomes configurable by picking a key, not by editing the mutation layer. What this layer enforces is what is true of every setting — a dotted lowercase key, a value that round-trips through JSON, and a 64 KiB ceiling — and it audits the key and byte count, never the payload, because a template can carry someone's words. Its tier is Admin: the keys are not enumerable here, so the one mutation has to sit at the highest tier any of them would need. Shape validation belongs to whichever feature owns the key; there is no generic settings editor, and reads of a setting arrive with the page that needs one.
 
 **The actor is handed to each mutation, not read by it.** `run()` passes the authenticated `discordId` into the mutation body, so an action cannot be attributed to anyone but the signed-in user even if the request body claims otherwise — a body-supplied `actorDiscordId` is ignored, and there is a test that says so.
 
@@ -180,7 +184,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 ### 3.9 Feature Flags & Role/Channel Mapping
 - **Feature flags:** per-guild toggles from `GuildConfig.features` (e.g. in-game commands, LFG, networth, antiraid). Toggling invalidates cache + pub/sub to bots.
 - **Role mapping:** map platform roles (`MODERATOR`/`OFFICER`/`ADMIN`) → Discord role IDs, and set the verified-member role. Uses a live Discord role picker (needs bot present to enumerate roles).
-- **Channel mapping:** assign functional channels (bridge, staff, log, applications, events) → Discord channel IDs, validated against the guild's channels.
+- **Channel mapping:** assign functional channels → Discord channel IDs, validated against the guild's channels. Every slot in `CONFIG_CHANNEL_SLOTS` gets a control: the five originals (bridge, staff, log, applications, events) plus LFG, tickets, milestones, leaderboard and modlog. The page reads them from `GuildRuntimeConfig.channels`, the canonical binding map, rather than from the five legacy `*ChannelId` columns — which is why a slot with no column behind it still shows up as "not set" instead of vanishing.
 - **View/edit raw role IDs & channel IDs** with validation and a "resolve name" preview; invalid/stale IDs flagged.
 - **Bot-gated:** picker requires `INSTALLED`; degrades to manual-ID entry with validation warnings if the bot can't enumerate.
 - **Access:** Admin+.

@@ -11,15 +11,7 @@ import { loadPage, postAction, type WriteResult } from "../api.js";
 import { card, deniedState, errorState, pageTitle, spinner } from "../components.js";
 import { fieldGroup, textField, toggleField, validateSnowflake } from "../forms.js";
 import { h, replace } from "../dom.js";
-
-/** Slot id → what breaks when it is unset. */
-const CHANNEL_SLOTS: readonly (readonly [string, string, string])[] = [
-  ["bridge", "Bridge", "Relayed to and from guild chat. Unset means the bridge has nowhere to speak."],
-  ["staff", "Staff", "Staff-only notices: safety sweeps, escalations."],
-  ["log", "Log", "Moderation and config audit trail."],
-  ["applications", "Applications", "Where new applications are posted for review."],
-  ["events", "Events", "Event announcements and RSVP posts."],
-];
+import { CHANNEL_SLOT_COPY } from "./channel-slots.js";
 
 /**
  * Every platform role, including MEMBER and OWNER.
@@ -51,7 +43,7 @@ export async function renderMapping(host: HTMLElement, guildId: string): Promise
   const { channels, roleMappings, features } = result.data;
 
   const channelFields = fieldGroup(
-    ...CHANNEL_SLOTS.map(([slot, label, hint]) =>
+    ...CHANNEL_SLOT_COPY.map(({ slot, label, hint }) =>
       textField({
         label,
         hint,
@@ -106,7 +98,7 @@ export async function renderMapping(host: HTMLElement, guildId: string): Promise
     }),
   );
 
-  const unset = CHANNEL_SLOTS.filter(([slot]) => !channels[slot]).length;
+  const unset = CHANNEL_SLOT_COPY.filter(({ slot }) => !channels[slot]).length;
 
   replace(
     host,

@@ -6,6 +6,7 @@
  * Reads only. Writes go through the same domain services the bots use (the panel
  * "commands, it doesn't bypass"), so nothing here mutates.
  */
+import { CONFIG_CHANNEL_SLOTS } from "@sbr/shared-types";
 import type {
   AuditQuery,
   CommunityService,
@@ -503,13 +504,13 @@ export class PanelService {
       access,
       data: {
         roleMappings: cfg?.roleMappings ?? {},
-        channels: {
-          bridge: cfg?.bridgeChannelId ?? null,
-          staff: cfg?.staffChannelId ?? null,
-          log: cfg?.logChannelId ?? null,
-          applications: cfg?.applicationsChannelId ?? null,
-          events: cfg?.eventsChannelId ?? null,
-        },
+        // Built from the slot registry over the canonical `channels` map, not
+        // from the five legacy columns: every slot appears, and an unbound one
+        // appears as null rather than being missing, so the page renders a
+        // control for it instead of silently omitting it.
+        channels: Object.fromEntries(
+          CONFIG_CHANNEL_SLOTS.map((slot) => [slot, cfg?.channels[slot] ?? null] as const),
+        ),
         features: cfg?.features ?? {},
       },
     };

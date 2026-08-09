@@ -7,6 +7,7 @@
  * services the bots do (WEB_PANEL.md §7) and never reaches around them into the
  * database, so this file holds no SQL and no enforcement logic of its own.
  */
+import { CONFIG_CHANNEL_SLOTS, isConfigChannelSlot } from "@sbr/shared-types";
 import type {
   AnalyticsService,
   CommunityService,
@@ -25,6 +26,13 @@ import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolve
 /** Every write the panel can perform, and the platform role it requires. */
 export const MUTATION_TIERS = {
   "config.channel": "ADMIN",
+  /**
+   * Free-form admin config (embed templates, per-feature payloads). Admin
+   * rather than Officer because the keys are not enumerable here: this one
+   * mutation is the write path for every setting a later feature invents, so
+   * its tier has to be the highest any of them would need.
+   */
+  "config.setting": "ADMIN",
   "config.role-mapping": "ADMIN",
   "config.feature": "ADMIN",
   "config.recruitment": "ADMIN",
@@ -142,8 +150,6 @@ function limiterKey(discordId: string, mutation: MutationName): string {
   return `cd:web:${mutation}:${discordId}`;
 }
 
-const CHANNEL_SLOTS: readonly ConfigChannelSlot[] = ["bridge", "staff", "log", "applications", "events"];
-
 const MEMBER_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "ADMIN", "OWNER"];
 
 /**
@@ -156,6 +162,26 @@ const SNOWFLAKE = /^\d{17,20}$/;
 
 /** Feature flag names are keys in a config JSON blob; keep them boring. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
+
+/**
+ * Admin setting keys: a dotted namespace, e.g. `tickets.panel`, `xp.weights`.
+ *
+ * Deliberately not a closed list. A setting exists because some feature stores
+ * a payload under a name it owns, and enumerating them here would mean every
+ * new feature had to edit this file to become configurable. The shape rule is
+ * what stops a caller writing a key it can never read back.
+ */
+const SETTING_KEY = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){0,3}$/;
+
+/**
+ * Ceiling on one stored setting, in characters of JSON.
+ *
+ * These land in a single row read on the config path, so a setting is meant to
+ * be a template or a small table — not a place to park a member list. 64 KiB is
+ * far above anything the platform stores and far below anything that would make
+ * a config read expensive.
+ */
+const SETTING_MAX_CHARS = 64 * 1024;
 
 /** Database ids (cuid/uuid). Shape-checked so a lookup miss means "not found". */
 const ENTITY_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -229,15 +255,59 @@ export class PanelMutations {
     channelId: unknown,
   ): Promise<MutationResult> {
     return this.run(session, guildId, "config.channel", async () => {
-      if (typeof slot !== "string" || !CHANNEL_SLOTS.includes(slot as ConfigChannelSlot)) {
-        return invalid(`slot must be one of ${CHANNEL_SLOTS.join(", ")}`);
+      // The registry in shared-types is the one list: what the API accepts and
+      // what the UI renders are the same set, so a slot cannot exist as a
+      // control that saves into a rejection.
+      if (!isConfigChannelSlot(slot)) {
+        return invalid(`slot must be one of ${CONFIG_CHANNEL_SLOTS.join(", ")}`);
       }
       // null clears the slot; anything else must look like a channel id.
       if (channelId !== null && (typeof channelId !== "string" || !SNOWFLAKE.test(channelId))) {
         return invalid("channelId must be a Discord id or null");
       }
-      const result = await this.d.config.setChannel(guildId, slot as ConfigChannelSlot, channelId);
+      const result = await this.d.config.setChannel(guildId, slot, channelId);
       return { result, change: { slot, channelId } };
+    });
+  }
+
+  /**
+   * Write one free-form admin setting.
+   *
+   * The value is opaque to this layer — its shape belongs to whichever feature
+   * owns the key, and validating it here would put two copies of that shape in
+   * the codebase. What is enforced is what is true of *every* setting: a
+   * well-formed key, and a value that round-trips through JSON at a sane size.
+   */
+  async setSetting(
+    session: PanelSession | null,
+    guildId: string,
+    key: unknown,
+    value: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "config.setting", async () => {
+      if (typeof key !== "string" || !SETTING_KEY.test(key)) {
+        return invalid("key must be a dotted lowercase name, e.g. tickets.panel");
+      }
+      if (value === undefined) return invalid("value is required; send null to clear the setting");
+
+      let encoded: string;
+      try {
+        // Catches cycles and non-JSON values (functions, BigInt) before they
+        // reach the repository, where the same failure would surface as an
+        // opaque driver error.
+        encoded = JSON.stringify(value) ?? "null";
+      } catch {
+        return invalid("value must be JSON");
+      }
+      if (encoded.length > SETTING_MAX_CHARS) {
+        return invalid(`value must be under ${SETTING_MAX_CHARS} characters of JSON`);
+      }
+
+      const result = await this.d.config.setSetting(guildId, key, value);
+      // The key, not the payload: a setting may hold a message template with
+      // someone's words in it, and the audit trail records who changed what
+      // named thing, not a copy of its contents.
+      return { result, change: { key, bytes: encoded.length } };
     });
   }
 

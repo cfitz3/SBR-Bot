@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  CONFIG_CHANNEL_SLOTS,
   ok,
   type CommunityService,
   type GuildConfigService,
@@ -389,7 +390,16 @@ test("a heartbeat store that throws leaves the job table intact", async () => {
 test("an ADMIN reaches mapping and gets every channel slot, present or not", async () => {
   const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadMapping(session(), "g1");
   assert.equal(r.access.allowed, true);
-  assert.deepEqual(Object.keys(r.data?.channels ?? {}).sort(), [
-    "applications", "bridge", "events", "log", "staff",
-  ]);
+  // The whole registry, including the slots with no legacy column behind them:
+  // a slot missing from this map is a slot with no control on the page.
+  assert.deepEqual(Object.keys(r.data?.channels ?? {}).sort(), [...CONFIG_CHANNEL_SLOTS].sort());
+  assert.equal(r.data?.channels["milestones"], null);
+});
+
+test("a bound slot comes back from the canonical map, not from a legacy column", async () => {
+  const r = await svc({
+    roles: roles({ "111": "ADMIN" }),
+    config: configService({ channels: { lfg: "123456789012345678" } }),
+  }).loadMapping(session(), "g1");
+  assert.equal(r.data?.channels["lfg"], "123456789012345678");
 });
