@@ -7,7 +7,13 @@
  * services the bots do (WEB_PANEL.md §7) and never reaches around them into the
  * database, so this file holds no SQL and no enforcement logic of its own.
  */
-import { CONFIG_CHANNEL_SLOTS, isConfigChannelSlot } from "@sbr/shared-types";
+import {
+  CONFIG_CHANNEL_SLOTS,
+  isConfigChannelSlot,
+  isMilestoneMetric,
+  MILESTONE_METRICS,
+  MilestoneType as MILESTONE_TYPES,
+} from "@sbr/shared-types";
 import type {
   AnalyticsService,
   CommunityService,
@@ -16,6 +22,9 @@ import type {
   GuildConfigService,
   IdentityService,
   MemberRole,
+  MilestoneDefinitionInput,
+  MilestoneDefinitionService,
+  MilestoneType,
   ModActionType,
   ModerationService,
   RecruitmentSettings,
@@ -58,6 +67,13 @@ export const MUTATION_TIERS = {
    */
   "xp.source": "ADMIN",
   "xp.adjust": "ADMIN",
+  /**
+   * What the guild recognises as a milestone, and what reaching one pays.
+   * Admin because a definition carries an XP reward: at a lower tier this
+   * would be a way to mint standing without the XP page's gate.
+   */
+  "milestone.upsert": "ADMIN",
+  "milestone.remove": "ADMIN",
   /** Bridge control is an Officer power in WEB_PANEL.md §2, not an Admin one. */
   "bridge.suspend": "OFFICER",
   /**
@@ -164,6 +180,8 @@ export interface PanelMutationsDeps {
    * write rather than crashing the request.
    */
   readonly xp?: XpService;
+  /** Optional like XP: absent refuses the write instead of crashing. */
+  readonly milestones?: MilestoneDefinitionService;
   readonly limiter: MutationLimiter;
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
@@ -187,6 +205,13 @@ const MEMBER_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "
  * written into config and silently disabling a feature.
  */
 const SNOWFLAKE = /^\d{17,20}$/;
+
+/** Definition keys are ours to shape: lowercase, with `:` grouping a family. */
+const MILESTONE_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
+const MILESTONE_LABEL_MAX = 80;
+const MILESTONE_DESC_MAX = 500;
+/** A reward big enough to matter, small enough not to rewrite the leaderboard. */
+const MAX_MILESTONE_REWARD = 1_000_000;
 
 /** Feature flag names are keys in a config JSON blob; keep them boring. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
@@ -603,6 +628,109 @@ export class PanelMutations {
         return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
       }
       return { result: { ok: true }, change: { discordId, amount, reason } };
+    });
+  }
+
+  // ─────────────────────────── milestones ───────────────────────────
+
+  /**
+   * Create or edit one milestone definition.
+   *
+   * Keyed by `key`, so editing a built-in default is a create that shadows it
+   * and switching one off is a store with `enabled: false`. The panel never
+   * has to write the other twenty-nine defaults to change one of them, and a
+   * default added by a later release still reaches a guild that has customised
+   * something else.
+   */
+  async upsertMilestone(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "milestone.upsert", async () => {
+      const milestones = this.d.milestones;
+      if (milestones === undefined) return unavailable("Milestones are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const key = body["key"];
+      if (typeof key !== "string" || !MILESTONE_KEY.test(key)) {
+        return invalid("key must be a short lowercase name, e.g. networth:1b");
+      }
+      const label = body["label"];
+      if (typeof label !== "string" || label.trim().length === 0 || label.length > MILESTONE_LABEL_MAX) {
+        return invalid(`label must be 1–${MILESTONE_LABEL_MAX} characters`);
+      }
+      const description = body["description"] ?? null;
+      if (description !== null && (typeof description !== "string" || description.length > MILESTONE_DESC_MAX)) {
+        return invalid(`description must be under ${MILESTONE_DESC_MAX} characters, or null`);
+      }
+      const type = body["type"];
+      if (typeof type !== "string" || !(type in MILESTONE_TYPES)) {
+        return invalid(`type must be one of ${Object.keys(MILESTONE_TYPES).join(", ")}`);
+      }
+      // The metric decides which snapshot field is compared; anything outside
+      // the list would store a definition that can never fire, which reads on
+      // the page as configured and behaves as absent.
+      const metric = body["metric"];
+      if (!isMilestoneMetric(metric)) {
+        return invalid(`metric must be one of ${MILESTONE_METRICS.join(", ")}`);
+      }
+      const threshold = body["threshold"];
+      if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0) {
+        return invalid("threshold must be a positive number");
+      }
+      if (!isCount(body["xpReward"], MAX_MILESTONE_REWARD)) {
+        return invalid(`xpReward must be a whole number up to ${MAX_MILESTONE_REWARD}`);
+      }
+      if (typeof body["announce"] !== "boolean") return invalid("announce must be a boolean");
+      if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+
+      const definition: MilestoneDefinitionInput = {
+        key,
+        label: label.trim(),
+        description: description as string | null,
+        type: type as MilestoneType,
+        metric,
+        threshold,
+        xpReward: body["xpReward"],
+        announce: body["announce"],
+        enabled: body["enabled"],
+      };
+      try {
+        await milestones.upsert(guildId, definition);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // Recorded in full: a definition is numbers, switches and a label
+      // somebody wrote for public display — there is nothing private in it, and
+      // "who made this milestone worth 5,000 XP" is the question the trail is
+      // for.
+      return { result: { ok: true }, change: { ...definition } };
+    });
+  }
+
+  /**
+   * Drop a guild's definition row.
+   *
+   * A shadowed default reverts to the built-in rather than disappearing — to
+   * stop recognising one of those, store it disabled instead. Milestones
+   * already recorded against it are untouched: deleting the definition changes
+   * what the guild recognises from now on, it does not unmake the fact that
+   * somebody reached it.
+   */
+  async removeMilestone(session: PanelSession | null, guildId: string, key: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "milestone.remove", async () => {
+      const milestones = this.d.milestones;
+      if (milestones === undefined) return unavailable("Milestones are not enabled on this deployment");
+      if (typeof key !== "string" || !MILESTONE_KEY.test(key)) return invalid("key must be a definition key");
+
+      let removed: boolean;
+      try {
+        removed = await milestones.remove(guildId, key);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // A key with no row is not an error: the page may have been showing a
+      // built-in default, and "there is nothing of yours to remove" is the
+      // state the caller wanted to reach.
+      return { result: { ok: true }, change: { key, removed } };
     });
   }
 

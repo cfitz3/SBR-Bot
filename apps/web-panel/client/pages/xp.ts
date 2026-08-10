@@ -36,6 +36,7 @@ const SOURCE_COPY: Readonly<Record<string, { readonly label: string; readonly un
   TENURE: { label: "Tenure", unit: "one unit per day in the guild" },
   COMMAND_USAGE: { label: "Command use", unit: "one unit per counted command" },
   EVENT: { label: "Events", unit: "one unit per event attended" },
+  MILESTONE: { label: "Milestones", unit: "one unit per XP a milestone definition awards" },
   MANUAL: { label: "Staff adjustments", unit: "one unit per XP entered by hand" },
 };
 

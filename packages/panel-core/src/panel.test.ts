@@ -7,6 +7,8 @@ import {
   type GuildConfigService,
   type GuildRuntimeConfig,
   type MemberRole,
+  type MilestoneDefinitionDTO,
+  type MilestoneDefinitionService,
   type ModerationService,
   type XpService,
 } from "@sbr/shared-types";
@@ -461,6 +463,52 @@ test("with XP unwired the page says so instead of showing seven dead controls", 
 
 test("an officer cannot open the XP page at all", async () => {
   const r = await svc({ xp: xpService() }).loadXp(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+// ── milestones ──
+
+/** One built-in and one of the guild's own — the two states the page renders. */
+const milestoneService = (): MilestoneDefinitionService =>
+  ({
+    async list(guildId: string): Promise<readonly MilestoneDefinitionDTO[]> {
+      return [
+        {
+          id: null, guildId, key: "networth:1b", label: "1b networth", description: null,
+          type: "NETWORTH_THRESHOLD", metric: "networth", threshold: 1e9, xpReward: 500,
+          announce: true, enabled: true, source: "DEFAULT",
+        },
+        {
+          id: "d2", guildId, key: "cata:50", label: "Catacombs 50", description: null,
+          type: "CATACOMBS_LEVEL", metric: "catacombsLevel", threshold: 50, xpReward: 0,
+          announce: false, enabled: false, source: "GUILD",
+        },
+      ];
+    },
+  }) as unknown as MilestoneDefinitionService;
+
+test("the milestones page shows defaults and the guild's own rows together", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), milestones: milestoneService() })
+    .loadMilestones(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.definitions.map((d) => d.source), ["DEFAULT", "GUILD"]);
+  // A switched-off definition is listed, not filtered: the page has to render
+  // the control that turns it back on.
+  assert.equal(r.data?.definitions.find((d) => d.key === "cata:50")?.enabled, false);
+});
+
+test("with milestones unwired the page says so rather than showing an empty list", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadMilestones(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.definitions, []);
+});
+
+test("an officer cannot open the milestones page", async () => {
+  const r = await svc({ milestones: milestoneService() }).loadMilestones(session(), "g1");
   assert.equal(r.access.allowed, false);
   assert.equal(r.data, null);
 });

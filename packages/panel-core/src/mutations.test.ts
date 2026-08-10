@@ -14,6 +14,8 @@ import {
   type GuildConfigService,
   type IdentityService,
   type MemberRole,
+  type MilestoneDefinitionDTO,
+  type MilestoneDefinitionService,
   type ModerationService,
   type Result,
   type XpService,
@@ -108,6 +110,24 @@ function xpRecorder(recorded: Recorded, throws = false): XpService {
   } as unknown as XpService;
 }
 
+/**
+ * Milestone definitions, recorded the same way. `remove` answers `removed` so a
+ * key with no stored row can be told apart from one that had one.
+ */
+function milestoneRecorder(recorded: Recorded, removed = true): MilestoneDefinitionService {
+  return {
+    async list() { return []; },
+    async upsert(guildId, input) {
+      recorded.calls.push({ method: "upsertMilestone", args: [guildId, input] });
+      return { ...input, id: "d1", guildId, source: "GUILD" } as MilestoneDefinitionDTO;
+    },
+    async remove(guildId, key) {
+      recorded.calls.push({ method: "removeMilestone", args: [guildId, key] });
+      return removed;
+    },
+  };
+}
+
 /** Allows everything unless the key is in `blocked` — the real gate is Redis. */
 function limiter(recorded: Recorded, blocked: readonly string[] = []): MutationLimiter {
   return {
@@ -126,6 +146,10 @@ function make(
     /** Leave XP unwired, as a deployment that runs without it does. */
     noXp?: boolean;
     xpThrows?: boolean;
+    /** Same, for a deployment without milestone tracking. */
+    noMilestones?: boolean;
+    /** What `remove` reports back: false is "there was no row of yours". */
+    milestoneRemoved?: boolean;
   } = {},
 ) {
   const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
@@ -138,6 +162,9 @@ function make(
     config: configRecorder(recorded, over.result ?? ok(undefined)),
     ...actionRecorders(recorded, over.result ?? ok(undefined)),
     ...(over.noXp === true ? {} : { xp: xpRecorder(recorded, over.xpThrows === true) }),
+    ...(over.noMilestones === true
+      ? {}
+      : { milestones: milestoneRecorder(recorded, over.milestoneRemoved ?? true) }),
     limiter: limiter(recorded, over.blocked ?? []),
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
@@ -839,5 +866,140 @@ test("an officer can neither reweight XP nor adjust a balance", async () => {
 
   assert.equal(source.access.allowed, false);
   assert.equal(adjust.access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+// ── milestones ──
+
+const milestoneBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  key: "networth:1b",
+  label: "1b networth",
+  description: null,
+  type: "NETWORTH_THRESHOLD",
+  metric: "networth",
+  threshold: 1_000_000_000,
+  xpReward: 500,
+  announce: true,
+  enabled: true,
+  ...over,
+});
+
+test("a definition reaches the milestone service whole, and the audit records it in full", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.upsertMilestone(session(), "g1", milestoneBody());
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    {
+      method: "upsertMilestone",
+      args: [
+        "g1",
+        {
+          key: "networth:1b",
+          label: "1b networth",
+          description: null,
+          type: "NETWORTH_THRESHOLD",
+          metric: "networth",
+          threshold: 1_000_000_000,
+          xpReward: 500,
+          announce: true,
+          enabled: true,
+        },
+      ],
+    },
+  ]);
+  assert.equal(recorded.audits[0]?.mutation, "milestone.upsert");
+  assert.deepEqual(recorded.audits[0]?.change, {
+    key: "networth:1b",
+    label: "1b networth",
+    description: null,
+    type: "NETWORTH_THRESHOLD",
+    metric: "networth",
+    threshold: 1_000_000_000,
+    xpReward: 500,
+    announce: true,
+    enabled: true,
+  });
+});
+
+test("a definition that could never fire is refused before it reaches the store", async () => {
+  const { mutations, recorded } = make();
+
+  const cases: Record<string, unknown>[] = [
+    { key: "Networth 1B" },              // keys are lowercase and punctuated, not prose
+    { key: "" },
+    { label: "   " },
+    { label: "x".repeat(81) },
+    { type: "SOMETHING_ELSE" },
+    { metric: "bankBalance" },           // not a snapshot field the detector reads
+    { threshold: 0 },
+    { threshold: -5 },
+    { threshold: "1000000000" },
+    { xpReward: 2_000_000 },             // above MAX_MILESTONE_REWARD
+    { xpReward: 1.5 },
+    { xpReward: -1 },
+    { announce: "yes" },
+    { enabled: null },
+  ];
+
+  for (const [i, over] of cases.entries()) {
+    const result = await mutations.upsertMilestone(session(), "g1", milestoneBody(over));
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  // Nothing was stored, and nothing invalid was written to the trail either.
+  assert.deepEqual(recorded.calls, []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("a description is optional but bounded", async () => {
+  const { mutations } = make();
+
+  assert.equal((await mutations.upsertMilestone(session(), "g1", milestoneBody({ description: "why" }))).ok, true);
+  const long = await mutations.upsertMilestone(session(), "g1", milestoneBody({ description: "x".repeat(501) }));
+  assert.equal(long.error?.kind, "INVALID_INPUT");
+});
+
+test("removing a key nobody stored is a success, reported as nothing removed", async () => {
+  // The page lists built-in defaults next to stored rows, so "remove" on a
+  // default is a reasonable thing to click. The end state the caller wanted —
+  // no row of this guild's own — is already true.
+  const { mutations, recorded } = make({ milestoneRemoved: false });
+
+  const result = await mutations.removeMilestone(session(), "g1", "networth:1b");
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [{ method: "removeMilestone", args: ["g1", "networth:1b"] }]);
+  assert.deepEqual(recorded.audits[0]?.change, { key: "networth:1b", removed: false });
+});
+
+test("a removal needs a key shaped like one", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.removeMilestone(session(), "g1", "")).error?.kind, "INVALID_INPUT");
+  assert.equal((await mutations.removeMilestone(session(), "g1", 7)).error?.kind, "INVALID_INPUT");
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("with milestones unwired, both writes refuse instead of crashing the request", async () => {
+  const { mutations, recorded } = make({ noMilestones: true });
+
+  const upsert = await mutations.upsertMilestone(session(), "g1", milestoneBody());
+  const remove = await mutations.removeMilestone(session(), "g1", "networth:1b");
+
+  assert.equal(upsert.error?.kind, "SERVICE_ERROR");
+  assert.equal(remove.error?.kind, "SERVICE_ERROR");
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("an officer cannot change what the guild recognises", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const upsert = await mutations.upsertMilestone(session(), "g1", milestoneBody());
+  const remove = await mutations.removeMilestone(session(), "g1", "networth:1b");
+
+  assert.equal(upsert.access.allowed, false);
+  assert.equal(remove.access.allowed, false);
   assert.deepEqual(recorded.calls, []);
 });

@@ -33,6 +33,7 @@ export {
   type MembersVM,
   type SettingsVM,
   type MappingVM,
+  type MilestonesVM,
   type XpVM,
   XP_SOURCE_ORDER,
   type HealthVM,

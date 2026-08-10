@@ -13,6 +13,8 @@ import type {
   GuildConfigService,
   GuildRuntimeConfig,
   InfractionDTO,
+  MilestoneDefinitionDTO,
+  MilestoneDefinitionService,
   ModerationActionDTO,
   ModerationService,
   RsvpEntryDTO,
@@ -179,6 +181,7 @@ export const XP_SOURCE_ORDER: readonly XpSource[] = [
   "TENURE",
   "COMMAND_USAGE",
   "EVENT",
+  "MILESTONE",
   "MANUAL",
 ];
 
@@ -190,6 +193,19 @@ export interface XpVM {
    * as disabled with zero weight, which is exactly what the engine does with it.
    */
   readonly sources: readonly XpSourcePolicyDTO[];
+}
+
+export interface MilestonesVM {
+  /** False when no definition service is wired; the page then says so. */
+  readonly installed: boolean;
+  /**
+   * Every definition in effect — the built-in defaults with the guild's own
+   * rows layered over them, each flagged with which it is. Defaults are
+   * included so the page can show what is already being recognised without a
+   * guild having to re-create it, and flagged so the client knows an edit to
+   * one is a create rather than an update.
+   */
+  readonly definitions: readonly MilestoneDefinitionDTO[];
 }
 
 export interface MappingVM {
@@ -250,6 +266,8 @@ export interface PanelServiceDeps {
    * as "configured off" instead of "not installed".
    */
   readonly xp?: XpService;
+  /** Optional for the same reason as XP: absent means the page reports it. */
+  readonly milestones?: MilestoneDefinitionService;
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
   readonly logger: Logger;
@@ -617,6 +635,23 @@ export class PanelService {
   }
 
   // ─────────────────────────── health ───────────────────────────
+
+  /**
+   * The milestone configuration page: what the guild recognises and pays for.
+   *
+   * Definitions only. Who has reached what is member-facing and stays in the
+   * bots (`/milestones`), the same line the XP page draws between rules and
+   * standings.
+   */
+  async loadMilestones(session: PanelSession | null, guildId: string): Promise<PageResult<MilestonesVM>> {
+    const access = await authorize(session, guildId, "milestones", this.d.roles);
+    if (!access.allowed) return this.denied(access, "milestones", guildId);
+
+    const milestones = this.d.milestones;
+    if (milestones === undefined) return { access, data: { installed: false, definitions: [] } };
+
+    return { access, data: { installed: true, definitions: await milestones.list(guildId) } };
+  }
 
   async loadHealth(session: PanelSession | null, guildId: string): Promise<PageResult<HealthVM>> {
     const access = await authorize(session, guildId, "health", this.d.roles);

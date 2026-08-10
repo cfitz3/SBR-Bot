@@ -33,6 +33,7 @@ export type PanelPage =
   | "members"
   | "mapping"
   | "xp"
+  | "milestones"
   | "health";
 
 /**
@@ -57,6 +58,10 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // manual adjustment on the same page writes to the ledger by hand. Both are
   // configuration in the strict sense, so the page sits with the other config.
   xp: "ADMIN",
+  // What the guild recognises, and what it pays for reaching it. Configuration
+  // in the same sense the XP weights are — the achievements themselves stay in
+  // the bots, where the members who earned them can see them.
+  milestones: "ADMIN",
   health: "ADMIN",
 };
 

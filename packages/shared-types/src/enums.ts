@@ -195,6 +195,28 @@ export const MilestoneType = {
 } as const;
 export type MilestoneType = (typeof MilestoneType)[keyof typeof MilestoneType];
 
+/**
+ * The snapshot fields a milestone threshold can be measured against.
+ *
+ * Here rather than in `@sbr/jobs` beside the detector, because the panel has to
+ * validate a metric arriving over HTTP and render one option per metric, and
+ * the panel cannot import the workers' package. Two lists would drift into a
+ * control that saves into a rejection.
+ */
+export const MILESTONE_METRICS = [
+  "networth",
+  "skillAverage",
+  "catacombsLevel",
+  "slayerXp",
+  "senitherWeight",
+] as const;
+export type MilestoneMetric = (typeof MILESTONE_METRICS)[number];
+
+/** Narrow an untrusted string — a panel body, a stored row — to a real metric. */
+export function isMilestoneMetric(value: unknown): value is MilestoneMetric {
+  return typeof value === "string" && (MILESTONE_METRICS as readonly string[]).includes(value);
+}
+
 export const CommandSurface = {
   BRIDGE_BOT: "BRIDGE_BOT",
   ADMIN_BOT: "ADMIN_BOT",

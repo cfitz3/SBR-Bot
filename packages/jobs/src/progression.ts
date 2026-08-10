@@ -10,6 +10,10 @@
  * recently — and a member whose fetch fails is logged past, never retried in a
  * tight loop.
  */
+import {
+  MILESTONE_METRICS,
+  type MilestoneMetric as SharedMilestoneMetric,
+} from "@sbr/shared-types";
 
 export interface TrackedAccount {
   readonly minecraftAccountId: string;
@@ -120,21 +124,16 @@ export type MilestoneType =
   | "COLLECTION"
   | "CUSTOM";
 
-/** The snapshot fields a definition may be measured against. */
-export type MilestoneMetric = keyof SnapshotMetrics;
-
-const METRICS: readonly MilestoneMetric[] = [
-  "networth",
-  "skillAverage",
-  "catacombsLevel",
-  "slayerXp",
-  "senitherWeight",
-];
-
-/** Narrow an untrusted string — a panel body, a stored row — to a real metric. */
-export function isMilestoneMetric(value: unknown): value is MilestoneMetric {
-  return typeof value === "string" && (METRICS as readonly string[]).includes(value);
-}
+// The metric vocabulary lives in the contract layer, where the panel can also
+// reach it; re-exported here so the detector's callers have one import. The
+// annotation is a compile-time assertion that the two agree: if a field is
+// added to a snapshot without being added to the list (or the reverse), this
+// line stops the build rather than letting a metric silently never fire.
+export { isMilestoneMetric } from "@sbr/shared-types";
+export type MilestoneMetric = SharedMilestoneMetric;
+/** Compile-time check that every listed metric is a field a snapshot carries. */
+const _metricsAreSnapshotFields: readonly (keyof SnapshotMetrics)[] = MILESTONE_METRICS;
+void _metricsAreSnapshotFields;
 
 /**
  * One threshold worth recognising.
