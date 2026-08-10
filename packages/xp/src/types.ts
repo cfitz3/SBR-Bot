@@ -36,6 +36,7 @@ export const XP_SOURCES: readonly XpSource[] = [
   "TENURE",
   "COMMAND_USAGE",
   "EVENT",
+  "MILESTONE",
   "MANUAL",
 ];
 

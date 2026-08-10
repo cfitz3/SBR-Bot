@@ -7,7 +7,13 @@
  * matters for upgrades: adding a default later reaches every guild, instead of
  * only the ones seeded after the change.
  */
-import type { MilestoneDefinitionDTO, MilestoneDefinitionInput, MilestoneType } from "@sbr/shared-types";
+import type {
+  MilestoneAnnouncerPort,
+  MilestoneDefinitionDTO,
+  MilestoneDefinitionInput,
+  MilestoneType,
+  PendingMilestoneDTO,
+} from "@sbr/shared-types";
 import {
   DEFAULT_MILESTONE_DEFINITIONS,
   isMilestoneMetric,
@@ -141,6 +147,67 @@ export const milestoneDefinitionRepository = {
   async remove(guildId: string, key: string): Promise<boolean> {
     const { count } = await prisma.milestoneDefinition.deleteMany({ where: { guildId, key } });
     return count > 0;
+  },
+};
+
+/**
+ * The announcement queue.
+ *
+ * Rows detected against a built-in default carry no `definitionId`, so their
+ * label is recovered from the defaults by `(metric, threshold)` — the same pair
+ * the unique constraint uses. A row that matches nothing (a definition deleted
+ * after detection, a threshold since edited) falls back to a plain description
+ * rather than being skipped: something was achieved, and saying it awkwardly
+ * beats never saying it.
+ */
+export const milestoneAnnouncementRepository: MilestoneAnnouncerPort = {
+  async listPending(limit: number): Promise<readonly PendingMilestoneDTO[]> {
+    const rows = await prisma.milestone.findMany({
+      // Guild-less rows have nowhere to be posted. They stay unannounced rather
+      // than being marked done, so linking the account later can still surface
+      // them if we ever choose to.
+      where: { announced: false, guildId: { not: null } },
+      orderBy: { achievedAt: "asc" },
+      take: limit,
+      select: {
+        id: true,
+        guildId: true,
+        discordId: true,
+        type: true,
+        metric: true,
+        thresholdValue: true,
+        achievedAt: true,
+        definition: { select: { label: true } },
+        minecraftAccount: { select: { currentIgn: true } },
+      },
+    });
+
+    return rows.map((row) => {
+      const threshold = Number(row.thresholdValue);
+      const fallback = DEFAULT_MILESTONE_DEFINITIONS.find(
+        (d) => d.metric === row.metric && d.threshold === threshold,
+      );
+      return {
+        id: row.id,
+        guildId: row.guildId as string,
+        discordId: row.discordId,
+        ign: row.minecraftAccount.currentIgn,
+        label: row.definition?.label ?? fallback?.label ?? `${row.metric} ${threshold.toLocaleString("en-US")}`,
+        type: row.type as MilestoneType,
+        metric: row.metric,
+        thresholdValue: threshold,
+        achievedAt: row.achievedAt.toISOString(),
+      };
+    });
+  },
+
+  async markAnnounced(ids: readonly string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const { count } = await prisma.milestone.updateMany({
+      where: { id: { in: [...ids] } },
+      data: { announced: true },
+    });
+    return count;
   },
 };
 

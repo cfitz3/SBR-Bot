@@ -44,6 +44,7 @@ import type {
   MilestoneDefinitionInput,
   ModerationActionDTO,
   NetworthDTO,
+  PendingMilestoneDTO,
   PermGroupDTO,
   ProgressMetric,
   ProgressSeriesDTO,
@@ -214,6 +215,22 @@ export interface MilestoneDefinitionService {
    * custom definition disappears. Recorded milestones are untouched either way.
    */
   remove(guildId: string, key: string): Promise<boolean>;
+}
+
+/**
+ * Port: the announcement queue, implemented by `@sbr/db`.
+ *
+ * Detection and announcement are deliberately separate processes — the workers
+ * record, a bot posts — so the handover is a durable flag rather than an event.
+ * A sweep is at-least-once: `markAnnounced` runs after the message lands, so a
+ * bot that dies mid-post re-posts on the next pass rather than losing the
+ * milestone entirely. Duplicated praise is the better failure.
+ */
+export interface MilestoneAnnouncerPort {
+  /** Unannounced milestones for guilds, oldest first. */
+  listPending(limit: number): Promise<readonly PendingMilestoneDTO[]>;
+  /** Flip the flag once posted. Returns rows changed. */
+  markAnnounced(ids: readonly string[]): Promise<number>;
 }
 
 /**
@@ -758,6 +775,21 @@ export interface XpService {
   /** Null when the member has never earned anything — not a zeroed standing. */
   standing(guildId: string, discordId: string): Promise<XpStandingDTO | null>;
   leaderboard(guildId: string, limit: number): Promise<readonly XpStandingDTO[]>;
+  /**
+   * A milestone reward, credited once. The dedupe key is the milestone id, so
+   * re-running detection or replaying a day credits nothing twice.
+   *
+   * Awarded when the milestone is *recorded*, not when it is announced: the
+   * announce flag governs visibility, and a guild that recognises something
+   * quietly still means to pay for it.
+   */
+  awardMilestone(
+    guildId: string,
+    discordId: string,
+    amount: number,
+    milestoneId: string,
+    label: string,
+  ): Promise<boolean>;
   /** Staff adjustment, signed and always reasoned. Rebuilds the balance now. */
   adjust(
     guildId: string,
@@ -783,6 +815,7 @@ export type XpSource =
   | "TENURE"
   | "COMMAND_USAGE"
   | "EVENT"
+  | "MILESTONE"
   | "MANUAL";
 
 /** A member's standing, as the bots render it. */

@@ -13,6 +13,7 @@ import {
   eventJobRepository,
   maintenanceJobRepository,
   snapshotJobRepository,
+  milestoneDefinitionRepository,
   guildRepository,
   guildScanRepository,
   xpRepository,
@@ -48,6 +49,7 @@ import {
   syncRoster,
   transitionEvents,
   type JobDefinition,
+  type MilestoneDefinition,
 } from "@sbr/jobs";
 import { XpService } from "@sbr/xp";
 import type { WorkerContext } from "./composition.js";
@@ -215,14 +217,60 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
 
   const milestones: JobDefinition<number> = {
     ...defineMilestoneDetectJob(async () => {
-      const accounts = await snapshotJobRepository.listAccountsWithHistory(MILESTONE_BATCH);
+      const xp = new XpService({
+        repo: xpRepository,
+        activity: activitySink,
+        cooldowns: ctx.adapters.cooldowns,
+        logger: ctx.log,
+      });
+      const targets = await snapshotJobRepository.listAccountsForDetection(MILESTONE_BATCH);
+      // One read per guild rather than one per account: a batch is mostly the
+      // same handful of guilds, and the definitions do not change mid-run.
+      const definitionsByGuild = new Map<string, readonly MilestoneDefinition[]>();
+
       let recorded = 0;
-      for (const accountId of accounts) {
-        recorded += await detectAndRecord(accountId, {
+      for (const target of targets) {
+        if (target.guildId !== null && !definitionsByGuild.has(target.guildId)) {
+          definitionsByGuild.set(
+            target.guildId,
+            await milestoneDefinitionRepository.listForDetection(target.guildId),
+          );
+        }
+        const definitions = target.guildId === null ? [] : definitionsByGuild.get(target.guildId) ?? [];
+
+        recorded += await detectAndRecord(target.minecraftAccountId, {
           recentSnapshots: (id) => snapshotJobRepository.recentSnapshots(id),
-          // guildId stays null: a milestone belongs to the account, and the
-          // account can be in more than one guild.
-          record: (candidate) => snapshotJobRepository.record(candidate, null),
+          definitions,
+          record: async (candidate) => {
+            const isNew = await snapshotJobRepository.record(candidate, target.guildId, target.discordId);
+            if (!isNew) return false;
+
+            // Paid at detection, not at announcement: `announce` governs
+            // whether the guild sees it, and a milestone a guild chose to
+            // recognise quietly is still one it meant to reward. The dedupe key
+            // is the milestone's own id, so a replay credits nothing twice.
+            if (candidate.xpReward > 0 && target.guildId !== null && target.discordId !== null) {
+              try {
+                await xp.awardMilestone(
+                  target.guildId,
+                  target.discordId,
+                  candidate.xpReward,
+                  `${target.minecraftAccountId}:${candidate.key}`,
+                  candidate.label,
+                );
+              } catch (error) {
+                // The milestone row is already committed and the announcer will
+                // still post it. Losing the reward is worth reporting; losing
+                // the rest of the batch to it is not.
+                ctx.log.error("milestone reward failed", {
+                  key: candidate.key,
+                  discordId: target.discordId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            return true;
+          },
         });
       }
       return recorded;

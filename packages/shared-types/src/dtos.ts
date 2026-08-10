@@ -446,6 +446,27 @@ export interface MilestoneDTO {
 }
 
 /**
+ * A recorded milestone waiting to be posted.
+ *
+ * Carries the name and mention the announcement needs rather than ids to
+ * resolve: the sweep runs minutes to hours after detection, and re-deriving a
+ * member's IGN then would credit the wrong name to anyone who has since changed
+ * it. `discordId` is null for an account with no verified link — still worth
+ * announcing, just without a mention.
+ */
+export interface PendingMilestoneDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly discordId: string | null;
+  readonly ign: string | null;
+  readonly label: string;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly thresholdValue: number;
+  readonly achievedAt: string;
+}
+
+/**
  * A guild-configured milestone threshold, as the panel edits it.
  *
  * `source` distinguishes the two rows the panel shows in one list: a `DEFAULT`

@@ -11,6 +11,7 @@ import type {
   EmbedView,
   EventDTO,
   LFGPostDTO,
+  PendingMilestoneDTO,
   RsvpEntryDTO,
   TicketDTO,
 } from "@sbr/shared-types";
@@ -196,3 +197,22 @@ export function renderTicketListEmbed(tickets: readonly TicketDTO[]): EmbedView 
   };
 }
 
+
+/**
+ * A milestone announcement, as the guild sees it.
+ *
+ * The IGN leads and the mention follows, because the achievement happened
+ * in-game to a name people recognise there — a bare ping would read as a
+ * notification rather than as recognition. An unlinked account still gets an
+ * announcement, just without the mention.
+ */
+export function renderMilestoneEmbed(milestone: PendingMilestoneDTO): EmbedView {
+  const who = milestone.ign ?? "A guild member";
+  const mention = milestone.discordId === null ? "" : ` (<@${milestone.discordId}>)`;
+  return {
+    title: "Milestone reached",
+    description: `**${who}**${mention} hit **${milestone.label}**.`,
+    fields: [{ name: "When", value: timestampTag(milestone.achievedAt, "R"), inline: true }],
+    color: "SUCCESS",
+  };
+}

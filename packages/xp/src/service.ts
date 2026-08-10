@@ -139,6 +139,37 @@ export class XpService {
    * The balance is rebuilt immediately rather than waiting for the nightly job,
    * because the staff member who just ran this will look at the result.
    */
+  /**
+   * Credit a milestone reward. Idempotent through the milestone id as dedupe
+   * key: detection can be re-run and the day re-aggregated without paying
+   * twice. A zero reward writes nothing — an empty ledger row would show up in
+   * a standing breakdown as a source that gave nothing.
+   */
+  async awardMilestone(
+    guildId: string,
+    discordId: string,
+    amount: number,
+    milestoneId: string,
+    label: string,
+  ): Promise<boolean> {
+    const value = Math.trunc(amount);
+    if (value <= 0) return false;
+
+    await this.repo.recordAwards(guildId, [
+      {
+        discordId,
+        source: "MILESTONE",
+        amount: value,
+        rawValue: value,
+        day: this.today(),
+        dedupeKey: `milestone:${milestoneId}`,
+        meta: { label },
+      },
+    ]);
+    await this.rebuildBalances(guildId);
+    return true;
+  }
+
   async adjust(
     guildId: string,
     discordId: string,

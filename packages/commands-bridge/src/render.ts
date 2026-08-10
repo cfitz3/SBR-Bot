@@ -369,6 +369,7 @@ const XP_SOURCE_LABELS: Readonly<Record<XpSource, string>> = {
   TENURE: "Tenure",
   COMMAND_USAGE: "Command use",
   EVENT: "Events",
+  MILESTONE: "Milestones",
   MANUAL: "Staff adjustment",
 };
 

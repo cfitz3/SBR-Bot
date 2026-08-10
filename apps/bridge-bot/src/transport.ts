@@ -26,6 +26,7 @@ import {
 import { EchoLedger } from "@sbr/bridge";
 import { ComponentRouter, interactionArgs, respond, toActionRow, toEmbed, toSlashCommands } from "@sbr/discord-kit";
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
+import { startMilestoneAnnouncer } from "./milestones.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
 import { acceptCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
@@ -360,6 +361,28 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // The board needs the client, and the client is built from the app, so it is
   // handed over here rather than composed in.
   app.setLfgBoard(createLfgBoard(app, discord));
+
+  // The announcer needs a live client, so like the board it is built here and
+  // torn down with the transport.
+  const announcer = startMilestoneAnnouncer({
+    milestones: app.milestones,
+    getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "milestones"),
+    async post(channelId, embed, mentionDiscordId) {
+      const channel = await discord.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+      const message = await (channel as SendableChannel)
+        .send({
+          embeds: [toEmbed(embed)],
+          // Only the member being congratulated is pingable. The label comes
+          // from guild configuration, and a role or everyone mention typed into
+          // one must not become a server-wide ping.
+          allowedMentions: mentionDiscordId === null ? { parse: [] } : { users: [mentionDiscordId] },
+        })
+        .catch(() => null);
+      return message !== null;
+    },
+    log: app.log,
+  });
 
   discord.on(Events.InteractionCreate, (i) => {
     // Each branch catches its own failure: an unhandled rejection here would
@@ -801,6 +824,7 @@ ${staffReport(screening)}`,
     async destroy() {
       // Stop reconnecting before closing anything, so the `end` this triggers
       // isn't answered with a fresh login.
+      announcer.stop();
       stopping = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

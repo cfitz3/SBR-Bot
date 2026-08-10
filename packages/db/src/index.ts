@@ -47,7 +47,7 @@ export {
 } from "./repositories/perms.js";
 export { xpRepository, activitySink } from "./repositories/xp.js";
 export { leaderboardSource } from "./repositories/leaderboards.js";
-export { milestoneDefinitionRepository } from "./repositories/milestones.js";
+export { milestoneDefinitionRepository, milestoneAnnouncementRepository } from "./repositories/milestones.js";
 export {
   wordlistRepository,
   guildConfigRepository,

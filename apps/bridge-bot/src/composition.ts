@@ -15,6 +15,7 @@ import {
   leaderboardSource,
   linkDirectory,
   memberProgressSource,
+  milestoneAnnouncementRepository,
   permRepository,
   progressionRepository,
   rankResolver,
@@ -55,7 +56,7 @@ import { BridgeService } from "@sbr/bridge";
 import { createLogger, type Logger } from "@sbr/observability";
 import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
-import { err, ok, type GuildRosterSource, type PlayerLookup } from "@sbr/shared-types";
+import { err, ok, type GuildRosterSource, type MilestoneAnnouncerPort, type PlayerLookup } from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
@@ -84,6 +85,11 @@ export interface BridgeApp {
    * service holds no session state — only clients and policy.
    */
   readonly screening: ScreeningService;
+  /**
+   * The announcement queue. Exposed on the app rather than reached for in the
+   * transport so the sweeper can be handed a fake in tests without a database.
+   */
+  readonly milestones: MilestoneAnnouncerPort;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
@@ -361,6 +367,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     log,
     dispatcher,
     handlerDeps,
+    milestones: milestoneAnnouncementRepository,
     inGame,
     bridge,
     screening,
