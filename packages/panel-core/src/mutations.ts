@@ -13,6 +13,7 @@ import {
   isMilestoneMetric,
   MILESTONE_METRICS,
   MilestoneType as MILESTONE_TYPES,
+  TicketCategory as TICKET_CATEGORIES,
 } from "@sbr/shared-types";
 import type {
   AnalyticsService,
@@ -26,6 +27,10 @@ import type {
   MilestoneDefinitionService,
   MilestoneType,
   ModActionType,
+  TicketCategory,
+  TicketConfigService,
+  TicketPanelConfigInput,
+  TicketTypeInput,
   ModerationService,
   RecruitmentSettings,
   XpService,
@@ -74,6 +79,15 @@ export const MUTATION_TIERS = {
    */
   "milestone.upsert": "ADMIN",
   "milestone.remove": "ADMIN",
+  /**
+   * The ticket menu and the panel advertising it. Admin because a type names
+   * the staff roles pulled into a ticket and the category channel it opens
+   * under — reachable at a lower tier, it would be a way to route reports and
+   * appeals somewhere the people they are about can read them.
+   */
+  "ticket.type.upsert": "ADMIN",
+  "ticket.type.remove": "ADMIN",
+  "ticket.panel.save": "ADMIN",
   /** Bridge control is an Officer power in WEB_PANEL.md §2, not an Admin one. */
   "bridge.suspend": "OFFICER",
   /**
@@ -182,6 +196,8 @@ export interface PanelMutationsDeps {
   readonly xp?: XpService;
   /** Optional like XP: absent refuses the write instead of crashing. */
   readonly milestones?: MilestoneDefinitionService;
+  /** Optional like XP: absent refuses the write instead of crashing. */
+  readonly tickets?: TicketConfigService;
   readonly limiter: MutationLimiter;
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
@@ -212,6 +228,22 @@ const MILESTONE_LABEL_MAX = 80;
 const MILESTONE_DESC_MAX = 500;
 /** A reward big enough to matter, small enough not to rewrite the leaderboard. */
 const MAX_MILESTONE_REWARD = 1_000_000;
+
+/**
+ * Ticket type keys share the milestone shape: lowercase and hyphenated. They
+ * are what a member types into `/ticket type:`, so they stay short and typable.
+ */
+const TICKET_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
+const TICKET_LABEL_MAX = 80;
+/** Long enough for a real question, short enough to fit an ephemeral reply. */
+const TICKET_PROMPT_MAX = 500;
+/** Emoji come from Discord's picker; the cap only stops someone pasting a novel. */
+const TICKET_EMOJI_MAX = 64;
+/** More staff roles than this on one type means the ping is no longer a ping. */
+const MAX_TICKET_STAFF_ROLES = 10;
+/** Menu positions are a small ordering hint, not an index into anything. */
+const MAX_TICKET_POSITION = 999;
+const TICKET_PANEL_TITLE_MAX = 120;
 
 /** Feature flag names are keys in a config JSON blob; keep them boring. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
@@ -731,6 +763,150 @@ export class PanelMutations {
       // built-in default, and "there is nothing of yours to remove" is the
       // state the caller wanted to reach.
       return { result: { ok: true }, change: { key, removed } };
+    });
+  }
+
+  // ───────────────────────────── tickets ─────────────────────────────
+
+  /**
+   * Create or update one ticket type.
+   *
+   * Layered over the built-ins by key, exactly as milestone definitions are:
+   * editing a built-in stores a row that shadows it, and switching one off is a
+   * store with `enabled: false`. The panel never writes the other four to
+   * change one, and a built-in added by a later release still reaches a guild
+   * that has customised something else.
+   */
+  async upsertTicketType(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.type.upsert", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const key = body["key"];
+      if (typeof key !== "string" || !TICKET_KEY.test(key)) {
+        return invalid("key must be a short lowercase name, e.g. staff-app");
+      }
+      const label = body["label"];
+      if (typeof label !== "string" || label.trim().length === 0 || label.length > TICKET_LABEL_MAX) {
+        return invalid(`label must be 1–${TICKET_LABEL_MAX} characters`);
+      }
+      const emoji = body["emoji"] ?? null;
+      if (emoji !== null && (typeof emoji !== "string" || emoji.length > TICKET_EMOJI_MAX)) {
+        return invalid("emoji must be a short string, or null");
+      }
+      // The category is the fixed enum a ticket is filed under; the type is what
+      // a member picks. Anything outside the enum would store a row the bot
+      // could read but never open a ticket with.
+      const category = body["category"];
+      if (typeof category !== "string" || !(category in TICKET_CATEGORIES)) {
+        return invalid(`category must be one of ${Object.keys(TICKET_CATEGORIES).join(", ")}`);
+      }
+      const parentChannelId = body["parentChannelId"] ?? null;
+      if (parentChannelId !== null && (typeof parentChannelId !== "string" || !SNOWFLAKE.test(parentChannelId))) {
+        return invalid("parentChannelId must be a Discord channel id, or null");
+      }
+      const staffRoleIds = body["staffRoleIds"];
+      if (
+        !Array.isArray(staffRoleIds) ||
+        staffRoleIds.length > MAX_TICKET_STAFF_ROLES ||
+        !staffRoleIds.every((r): r is string => typeof r === "string" && SNOWFLAKE.test(r))
+      ) {
+        return invalid(`staffRoleIds must be up to ${MAX_TICKET_STAFF_ROLES} Discord role ids`);
+      }
+      const prompt = body["prompt"] ?? null;
+      if (prompt !== null && (typeof prompt !== "string" || prompt.length > TICKET_PROMPT_MAX)) {
+        return invalid(`prompt must be under ${TICKET_PROMPT_MAX} characters, or null`);
+      }
+      if (!isCount(body["position"], MAX_TICKET_POSITION)) {
+        return invalid(`position must be a whole number up to ${MAX_TICKET_POSITION}`);
+      }
+      if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+
+      const type: TicketTypeInput = {
+        key,
+        label: label.trim(),
+        emoji: emoji as string | null,
+        category: category as TicketCategory,
+        parentChannelId: parentChannelId as string | null,
+        // Duplicate role ids would ping the same people twice; deduped here
+        // rather than at the repository, so the audit records what was stored.
+        staffRoleIds: [...new Set(staffRoleIds)],
+        prompt: prompt as string | null,
+        position: body["position"],
+        enabled: body["enabled"],
+      };
+      try {
+        await tickets.upsertType(guildId, type);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // Recorded in full: a type is a label, a category and a list of role ids
+      // meant for public display — nothing private in it, and "who pointed
+      // appeals at this channel" is the question the trail is for.
+      return { result: { ok: true }, change: { ...type, staffRoleIds: [...type.staffRoleIds] } };
+    });
+  }
+
+  /**
+   * Drop a guild's ticket-type row.
+   *
+   * A shadowed built-in reverts to the default rather than disappearing — to
+   * stop offering one of those, store it disabled instead. Tickets already
+   * opened under it are untouched: their category is recorded on the ticket,
+   * not looked up through this row.
+   */
+  async removeTicketType(session: PanelSession | null, guildId: string, key: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.type.remove", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof key !== "string" || !TICKET_KEY.test(key)) return invalid("key must be a ticket type key");
+
+      let removed: boolean;
+      try {
+        removed = await tickets.removeType(guildId, key);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // A key with no row is not an error, for the same reason as milestones:
+      // the page may have been showing a built-in.
+      return { result: { ok: true }, change: { key, removed } };
+    });
+  }
+
+  /** Save the ticket panel's channel and wording. */
+  async saveTicketPanel(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.panel.save", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const channelId = body["channelId"] ?? null;
+      if (channelId !== null && (typeof channelId !== "string" || !SNOWFLAKE.test(channelId))) {
+        return invalid("channelId must be a Discord channel id, or null");
+      }
+      const title = body["title"];
+      if (typeof title !== "string" || title.trim().length === 0 || title.length > TICKET_PANEL_TITLE_MAX) {
+        return invalid(`title must be 1–${TICKET_PANEL_TITLE_MAX} characters`);
+      }
+      const description = body["description"] ?? null;
+      if (description !== null && (typeof description !== "string" || description.length > DESCRIPTION_MAX)) {
+        return invalid(`description must be under ${DESCRIPTION_MAX} characters, or null`);
+      }
+
+      const panel: TicketPanelConfigInput = {
+        channelId: channelId as string | null,
+        title: title.trim(),
+        description: description as string | null,
+      };
+      try {
+        await tickets.savePanel(guildId, panel);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { ...panel } };
     });
   }
 

@@ -176,7 +176,9 @@ closes when it expires."*
 
 | Command | Options | CD | Purpose | Output |
 |---|---|---|---|---|
-| `/ticket` | `action?` (open/list/close, default open) `category?` (5 choices) `subject?` `id?` `reason?` | 30s | One command, three actions | All ephemeral. open → `Opened ticket {id}. Staff will pick it up.`; list → the caller's own tickets only (seeing everyone's would leak reports and appeals); close → `Closed ticket {id}.` |
+| `/ticket` | `action?` (open/list/close, default open) `type?` (autocompleted from the guild's menu) `category?` (deprecated, the 5 fixed choices) `subject?` `id?` `reason?` | 30s | One command, three actions | All ephemeral. open → `Opened {type} ticket {id}. {the type's prompt, or "Staff will pick it up."}`; an unknown type lists the keys on offer, and a guild with every type switched off gets `Tickets aren't open here right now.`; list → the caller's own tickets only (seeing everyone's would leak reports and appeals); close → `Closed ticket {id}.` |
+
+`type:` is autocompleted rather than a fixed choice list because the menu is per-guild and editable at any time, while slash-command choices are frozen at registration — a guild adding a type would otherwise need the whole command re-registered before anyone could pick it. Guilds that have configured nothing see the five built-ins (`support`, `report`, `appeal`, `application`, `other`), which are exactly the old `category:` values, so `category:` keeps working unchanged.
 
 ### 2.9 Button routes
 

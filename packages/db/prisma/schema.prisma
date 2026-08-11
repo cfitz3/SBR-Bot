@@ -312,6 +312,8 @@ model Guild {
   screenings    GuildJoinScreening[]
   subscriptions NotificationSubscription[]
   milestoneDefs MilestoneDefinition[]
+  ticketPanel   TicketPanelConfig?
+  ticketTypes   TicketTypeConfig[]
 
   @@index([discordGuildId])
 }
@@ -1150,4 +1152,58 @@ model MetricRollup {
 
   @@index([guildId, metric, period, bucketStart])
   @@index([period, bucketStart])
+}
+
+/// The one ticket panel a guild posts, and where it lives.
+///
+/// One row per guild: a second panel would mean two places to open the same
+/// ticket, and the message id here is what lets the bot edit the posted panel
+/// in place instead of leaving a stale copy behind whenever the types change.
+model TicketPanelConfig {
+  id          String   @id @default(cuid())
+  guildId     String   @unique
+  /// Where the panel is posted. Null until an admin picks a channel.
+  channelId   String?
+  /// The panel message itself, so an edit updates rather than reposts.
+  messageId   String?
+  title       String   @default("Support")
+  description String?
+  /// Presentation the panel editor owns (colour, thumbnail); no behaviour here.
+  embed       Json     @default("{}")
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+}
+
+/// One kind of ticket a member can open.
+///
+/// Guilds layer these over the built-in types by `key`, exactly as milestone
+/// definitions do: a guild that has configured nothing still gets the five
+/// standard types, and adding a built-in later reaches every guild rather than
+/// only the ones seeded after the change.
+model TicketTypeConfig {
+  id              String         @id @default(cuid())
+  guildId         String
+  key             String
+  label           String
+  emoji           String?
+  /// Which of the fixed categories a ticket of this type is filed under. The
+  /// category drives routing and reporting; the type is what a member picks.
+  category        TicketCategory @default(SUPPORT)
+  /// Category channel new ticket channels are created under. Null = wherever
+  /// the transport defaults to.
+  parentChannelId String?
+  staffRoleIds    String[]       @default([])
+  /// Shown to the member when they choose this type — the question the guild
+  /// actually wants answered before staff pick the ticket up.
+  prompt          String?
+  position        Int            @default(0)
+  enabled         Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, key])
+  @@index([guildId, enabled])
 }

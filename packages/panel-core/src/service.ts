@@ -15,6 +15,9 @@ import type {
   InfractionDTO,
   MilestoneDefinitionDTO,
   MilestoneDefinitionService,
+  TicketConfigService,
+  TicketPanelConfigDTO,
+  TicketTypeDTO,
   ModerationActionDTO,
   ModerationService,
   RsvpEntryDTO,
@@ -208,6 +211,19 @@ export interface MilestonesVM {
   readonly definitions: readonly MilestoneDefinitionDTO[];
 }
 
+export interface TicketsVM {
+  /** False when no ticket-config service is wired; the page then says so. */
+  readonly installed: boolean;
+  /**
+   * Every type in effect — the built-ins with the guild's own rows layered over
+   * them, each flagged with which it is, so the client knows an edit to a
+   * built-in is a create rather than an update.
+   */
+  readonly types: readonly TicketTypeDTO[];
+  /** Panel content, filled in with defaults when it has never been configured. */
+  readonly panel: TicketPanelConfigDTO | null;
+}
+
 export interface MappingVM {
   readonly roleMappings: Readonly<Record<string, string>>;
   readonly channels: Readonly<Record<string, string | null>>;
@@ -268,6 +284,8 @@ export interface PanelServiceDeps {
   readonly xp?: XpService;
   /** Optional for the same reason as XP: absent means the page reports it. */
   readonly milestones?: MilestoneDefinitionService;
+  /** Optional: absent means the Tickets page reports itself not installed. */
+  readonly tickets?: TicketConfigService;
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
   readonly logger: Logger;
@@ -651,6 +669,25 @@ export class PanelService {
     if (milestones === undefined) return { access, data: { installed: false, definitions: [] } };
 
     return { access, data: { installed: true, definitions: await milestones.list(guildId) } };
+  }
+
+  /**
+   * The ticket configuration page: what a member may open, and the panel that
+   * advertises it.
+   *
+   * Configuration only. The open tickets themselves — and whatever a member put
+   * in one — stay in the bot, which is the same line every other page here
+   * draws between rules and the people they apply to.
+   */
+  async loadTickets(session: PanelSession | null, guildId: string): Promise<PageResult<TicketsVM>> {
+    const access = await authorize(session, guildId, "tickets", this.d.roles);
+    if (!access.allowed) return this.denied(access, "tickets", guildId);
+
+    const tickets = this.d.tickets;
+    if (tickets === undefined) return { access, data: { installed: false, types: [], panel: null } };
+
+    const [types, panel] = await Promise.all([tickets.listTypes(guildId), tickets.getPanel(guildId)]);
+    return { access, data: { installed: true, types, panel } };
   }
 
   async loadHealth(session: PanelSession | null, guildId: string): Promise<PageResult<HealthVM>> {

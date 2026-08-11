@@ -15,7 +15,8 @@ import type {
   RSVPState,
   TicketCategory,
 } from "@sbr/shared-types";
-import type { CommandHandler, CommandReply, CommandSpec, HandlerDeps } from "./types.js";
+import { findTicketType, openableTicketTypes } from "@sbr/community";
+import type { AutocompleteHandler, CommandHandler, CommandReply, CommandSpec, HandlerDeps } from "./types.js";
 import {
   lfgButtons,
   renderAttendanceEmbed,
@@ -310,19 +311,58 @@ const ticket: CommandHandler = async (ctx, deps) => {
     return { ephemeral: true, text: `Closed ticket ${result.value.id}.`, embed: renderTicketEmbed(result.value) };
   }
 
+  // `type:` is the guild's own menu; `category:` is the old fixed enum, kept
+  // working because members have the five old values in their slash-command
+  // history and a guild that configured nothing sees the same list either way.
+  const wanted = ctx.args.getString("type") ?? ctx.args.getString("category");
+  const types = await deps.community.listTicketTypes(ctx.guildId);
+  const chosen = types.ok ? findTicketType(types.value, wanted) : null;
+
+  if (chosen === null) {
+    const open = types.ok ? openableTicketTypes(types.value) : [];
+    return {
+      ephemeral: true,
+      text:
+        open.length === 0
+          ? "Tickets aren't open here right now."
+          : `I don't have a ticket type called that. Try: ${open.map((t) => `\`${t.key}\``).join(", ")}.`,
+    };
+  }
+
   const subject = ctx.args.getString("subject");
   const result = await deps.community.openTicket({
     guildId: ctx.guildId,
     openerDiscordId: ctx.userId,
-    category: (ctx.args.getString("category") ?? "SUPPORT") as TicketCategory,
+    category: chosen.category as TicketCategory,
     ...(subject === null ? {} : { subject }),
   });
   if (!result.ok) return { ephemeral: true, text: "Couldn't open a ticket right now." };
+  // The guild's prompt replaces the generic line when it has one: it is the
+  // question staff actually want answered, and it is only useful now.
+  const prompt = chosen.prompt ?? "Staff will pick it up.";
   return {
     ephemeral: true,
-    text: `Opened ticket ${result.value.id}. Staff will pick it up.`,
+    text: `Opened ${chosen.label.toLowerCase()} ticket ${result.value.id}. ${prompt}`,
     embed: renderTicketEmbed(result.value),
   };
+};
+
+/**
+ * Suggest the guild's own ticket types. Empty on any failure — Discord shows
+ * nothing on an autocomplete error regardless, and a member can still type a
+ * key by hand.
+ */
+const ticketTypeAutocomplete: AutocompleteHandler = async (focused, ctx, deps) => {
+  if (focused.name !== "type") return [];
+
+  const types = await deps.community.listTicketTypes(ctx.guildId);
+  if (!types.ok) return [];
+
+  const typed = focused.value.trim().toLowerCase();
+  return openableTicketTypes(types.value)
+    .filter((t) => typed === "" || t.label.toLowerCase().includes(typed) || t.key.includes(typed))
+    .slice(0, 25)
+    .map((t) => ({ name: t.emoji === null ? t.label : `${t.emoji} ${t.label}`, value: t.key }));
 };
 
 // ─────────────────────────── Persistent buttons ───────────────────────────
@@ -537,8 +577,20 @@ export function communitySpecs(): readonly CommandSpec[] {
           ],
         },
         {
-          name: "category",
+          // Autocompleted rather than a choice list: the types are per-guild
+          // and editable at any time, and slash-command choices are fixed at
+          // registration — a guild adding a type would otherwise need the whole
+          // command re-registered before anyone could pick it.
+          name: "type",
           description: "What it's about (when opening)",
+          type: "string",
+          autocomplete: true,
+        },
+        {
+          // The old fixed enum. Kept so existing muscle memory and any saved
+          // command history still open a ticket; `type:` wins when both are set.
+          name: "category",
+          description: "Deprecated — use type:",
           type: "string",
           choices: [
             { name: "Support", value: "SUPPORT" },
@@ -554,6 +606,7 @@ export function communitySpecs(): readonly CommandSpec[] {
       ],
       cooldownMs: 30_000,
       handler: ticket,
+      autocomplete: ticketTypeAutocomplete,
     },
   ];
 }

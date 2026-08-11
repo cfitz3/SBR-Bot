@@ -101,6 +101,7 @@ function repo(over: Partial<CommunityRepository> = {}): Fake {
       async getTicket() { return null; },
       async closeTicket() { return aTicket({ status: "CLOSED" }); },
       async listTickets() { return []; },
+      async listTicketTypes() { return []; },
       async getApplication() { return null; },
       async decideApplication(_id, status, reviewer, reason) {
         return anApplication({ status, reviewerDiscordId: reviewer, decisionReason: reason });

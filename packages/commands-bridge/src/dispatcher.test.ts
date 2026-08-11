@@ -42,6 +42,7 @@ import {
   type XpStandingDTO,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
+import { resolveTicketTypes } from "@sbr/community";
 import { CommandDispatcher } from "./dispatcher.js";
 import { buildBridgeRegistry } from "./handlers.js";
 import { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
@@ -372,6 +373,7 @@ function community(over: Partial<CommunityService> = {}): CommunityService {
     async openTicket(input) { return ok({ ...aTicket, category: input.category }); },
     async closeTicket() { return ok({ ...aTicket, status: "CLOSED", closeReason: "sorted" }); },
     async listTickets() { return ok([aTicket]); },
+    async listTicketTypes(guildId) { return ok(resolveTicketTypes(guildId, [])); },
     async getApplication() { return ok(null); },
     async decideApplication() { return err({ kind: "NOT_FOUND" }); },
     ...over,
@@ -1286,8 +1288,64 @@ test("the close button closes the run the presser owns", async () => {
 test("/ticket opens a ticket privately", async () => {
   const r = await makeDispatcher().dispatch("ticket", ctx({ args: recordArgs({ category: "APPEAL" }) }));
   assert.equal(r.ephemeral, true);
-  assert.match(r.text, /Opened ticket t1/);
+  assert.match(r.text, /Opened appeal a punishment ticket t1/);
   assert.match(r.embed?.fields?.[0]?.value ?? "", /appeal/);
+});
+
+test("/ticket type: picks a guild's own type and files it under its category", async () => {
+  const seen: string[] = [];
+  const configured = community({
+    async listTicketTypes(guildId) {
+      return ok(
+        resolveTicketTypes(guildId, [
+          {
+            id: "tt1",
+            key: "staff-app",
+            label: "Staff application",
+            emoji: null,
+            category: "APPLICATION",
+            parentChannelId: null,
+            staffRoleIds: [],
+            prompt: "Tell us why you'd be good at it.",
+            position: 9,
+            enabled: true,
+          },
+        ]),
+      );
+    },
+    async openTicket(input) { seen.push(input.category); return ok({ ...aTicket, category: input.category }); },
+  });
+  const r = await makeDispatcher({ community: configured }).dispatch(
+    "ticket",
+    ctx({ args: recordArgs({ type: "staff-app" }) }),
+  );
+  assert.deepEqual(seen, ["APPLICATION"]);
+  // The guild's own prompt replaces the generic "staff will pick it up".
+  assert.match(r.text, /Tell us why you'd be good at it\./);
+});
+
+test("/ticket names the types on offer when the one asked for doesn't exist", async () => {
+  const r = await makeDispatcher().dispatch("ticket", ctx({ args: recordArgs({ type: "refund" }) }));
+  assert.match(r.text, /don't have a ticket type/);
+  assert.match(r.text, /`support`/);
+});
+
+test("/ticket says so plainly when a guild has switched every type off", async () => {
+  const closed = community({ async listTicketTypes() { return ok([]); } });
+  const r = await makeDispatcher({ community: closed }).dispatch("ticket", ctx({ args: recordArgs({}) }));
+  assert.match(r.text, /aren't open here/);
+});
+
+test("/ticket type autocomplete offers the guild's menu by key", async () => {
+  const choices = await makeDispatcher().autocomplete(
+    "ticket",
+    { name: "type", value: "app" },
+    { guildId: "g1", userId: "111" },
+  );
+  assert.deepEqual(
+    choices.map((c) => c.value),
+    ["appeal", "application"],
+  );
 });
 
 test("/ticket action:list only ever shows the caller their own tickets", async () => {

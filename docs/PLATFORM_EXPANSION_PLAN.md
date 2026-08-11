@@ -57,7 +57,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **6** | **Leaderboards** *(shipped)* | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
 | **7** | **Milestones/achievements** *(shipped)* | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
 | **8** | **Stat command expansion** *(shipped)* | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
-| **9** | **Ticketing config** | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
+| **9** | **Ticketing config** *(shipped)* | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
 | **10** | **Moderation & wordlist** | `/audit` fixes, expiry-aware punishments, infractions on `/me`, wordlist panel CRUD, auto-warn escalation | 1, 5 |
 | **11** | **Fun bridge commands + legacy cleanup** | Themed prefix commands; drop mirrored legacy channel columns and `BRIDGE_CHANNEL_ID` fallback | all |
 
@@ -469,13 +469,13 @@ model TicketTypeConfig {
 | `/lfg` | Posts an **embed** into the configured LFG channel; adds `title`, `perm` boolean and `permname`; `/editrun` + `/closerun` and a Close button for author or staff; tracks `messageId`. *Shipped.* |
 | `/me` | Gained "Guild standing" (level, total XP, rank) and "Tenure" fields. *Shipped, with two deviations below.* |
 | `/profile` | Unchanged. See the deviation note. |
-| `/slayer` → `/slayers` | Renamed with `/slayer` kept as a deprecated alias for one release; per-tier boss kill breakdown. |
-| `/skills` | New skills + current caps, capped-skill markers. |
-| `/dungeons` | Boss completions per floor, cata progress to next level, class averages. |
-| `/networth` | Category breakdown + top N items per category. |
-| `/auctions` | Split into active / expired / unclaimed with claim value total. |
+| `/slayer` → `/slayers` | Renamed with `/slayer` kept as a deprecated alias for one release; per-tier boss kill breakdown. *Shipped.* |
+| `/skills` | New skills + current caps, capped-skill markers. *Shipped.* |
+| `/dungeons` | Boss completions per floor, cata progress to next level, class averages. *Shipped.* |
+| `/networth` | Category breakdown + top N items per category. *Shipped.* |
+| `/auctions` | Split into active / expired / unclaimed with claim value total. *Shipped.* |
 | `/milestones` | Definition-driven, shows earned + next-up with progress. |
-| `/ticket` | Reads `TicketTypeConfig` instead of the hard-coded category list. |
+| `/ticket` | Reads `TicketTypeConfig` instead of the hard-coded category list: a new autocompleted `type:` option over the guild's own menu, with `category:` kept as a deprecated alias mapping onto the five built-in keys. *Shipped.* |
 
 **Two deviations from the plan's `/me`, `/profile` line, both deliberate:**
 

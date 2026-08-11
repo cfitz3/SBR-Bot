@@ -472,6 +472,69 @@ export interface TicketDTO {
   readonly closedAt: string | null;
 }
 
+/**
+ * One entry in a guild's ticket menu.
+ *
+ * `key` is the stable identifier a member picks and a guild never edits; the
+ * label beside it is free text an admin can reword at will. A DEFAULT is a
+ * built-in that has no row yet — `id` is null, so the panel's first edit of it
+ * is a create rather than an update.
+ */
+export interface TicketTypeDTO {
+  readonly id: string | null;
+  readonly guildId: string;
+  readonly key: string;
+  readonly label: string;
+  readonly emoji: string | null;
+  /** Which enum the opened ticket is recorded under. Reporting stays comparable across guilds. */
+  readonly category: TicketCategory;
+  /** Category channel the ticket channel is created under. Null falls back to the guild default. */
+  readonly parentChannelId: string | null;
+  /** Roles pinged and granted access. Empty means the guild-wide staff role only. */
+  readonly staffRoleIds: readonly string[];
+  /** Shown to the member when they open this type — what to include in the first message. */
+  readonly prompt: string | null;
+  /** Menu order, ascending. Ties fall back to label. */
+  readonly position: number;
+  readonly enabled: boolean;
+  readonly source: "DEFAULT" | "GUILD";
+}
+
+/** What the panel may set. `key` identifies the type and is never edited. */
+export interface TicketTypeInput {
+  readonly key: string;
+  readonly label: string;
+  readonly emoji: string | null;
+  readonly category: TicketCategory;
+  readonly parentChannelId: string | null;
+  readonly staffRoleIds: readonly string[];
+  readonly prompt: string | null;
+  readonly position: number;
+  readonly enabled: boolean;
+}
+
+/**
+ * The ticket panel a guild posts in a channel.
+ *
+ * `channelId`/`messageId` record where it was last posted so a re-post edits
+ * that message instead of leaving a stale panel behind. Both null until posted.
+ */
+export interface TicketPanelConfigDTO {
+  readonly guildId: string;
+  readonly channelId: string | null;
+  readonly messageId: string | null;
+  readonly title: string;
+  readonly description: string | null;
+  readonly updatedAt: string | null;
+}
+
+/** What the panel may set on the panel itself. */
+export interface TicketPanelConfigInput {
+  readonly channelId: string | null;
+  readonly title: string;
+  readonly description: string | null;
+}
+
 export interface MilestoneDTO {
   readonly id: string;
   readonly minecraftUuid: string;

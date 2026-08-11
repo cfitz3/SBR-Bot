@@ -31,6 +31,7 @@ import {
   type RsvpOutcome,
   type TicketDTO,
   type TicketError,
+  type TicketTypeDTO,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type { CommunityRepository, LfgPatch, PermRoster, PermRosterLookup } from "./ports.js";
@@ -329,6 +330,14 @@ export class CommunityServiceImpl implements CommunityService {
 
   async listTickets(guildId: string, openerDiscordId?: string): Promise<Result<readonly TicketDTO[]>> {
     return ok(await this.repo.listTickets(guildId, openerDiscordId));
+  }
+
+  /**
+   * Every type in effect, built-ins included. Disabled ones are kept and
+   * flagged; `openableTicketTypes` is what narrows the list to a member's menu.
+   */
+  async listTicketTypes(guildId: string): Promise<Result<readonly TicketTypeDTO[]>> {
+    return ok(await this.repo.listTicketTypes(guildId));
   }
 
   // ───────────────────────────── Applications ─────────────────────────────

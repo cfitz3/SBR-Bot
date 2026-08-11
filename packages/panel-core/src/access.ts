@@ -34,6 +34,7 @@ export type PanelPage =
   | "mapping"
   | "xp"
   | "milestones"
+  | "tickets"
   | "health";
 
 /**
@@ -62,6 +63,10 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // in the same sense the XP weights are — the achievements themselves stay in
   // the bots, where the members who earned them can see them.
   milestones: "ADMIN",
+  // The ticket menu and the panel that advertises it. Configuration: it decides
+  // what a member may open and which staff get pulled in, and the tickets
+  // themselves stay in the bot where the people in them are.
+  tickets: "ADMIN",
   health: "ADMIN",
 };
 

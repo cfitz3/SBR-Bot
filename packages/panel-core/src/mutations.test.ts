@@ -16,6 +16,8 @@ import {
   type MemberRole,
   type MilestoneDefinitionDTO,
   type MilestoneDefinitionService,
+  type TicketConfigService,
+  type TicketTypeDTO,
   type ModerationService,
   type Result,
   type XpService,
@@ -128,6 +130,28 @@ function milestoneRecorder(recorded: Recorded, removed = true): MilestoneDefinit
   };
 }
 
+/** Ticket configuration, recorded the same way as milestone definitions. */
+function ticketRecorder(recorded: Recorded, removed = true): TicketConfigService {
+  return {
+    async listTypes() { return []; },
+    async upsertType(guildId, input) {
+      recorded.calls.push({ method: "upsertTicketType", args: [guildId, input] });
+      return { ...input, id: "t1", guildId, source: "GUILD" } as TicketTypeDTO;
+    },
+    async removeType(guildId, key) {
+      recorded.calls.push({ method: "removeTicketType", args: [guildId, key] });
+      return removed;
+    },
+    async getPanel(guildId) {
+      return { guildId, channelId: null, messageId: null, title: "Support", description: null, updatedAt: null };
+    },
+    async savePanel(guildId, input) {
+      recorded.calls.push({ method: "saveTicketPanel", args: [guildId, input] });
+      return { guildId, messageId: null, updatedAt: "2026-08-07T12:00:00.000Z", ...input };
+    },
+  };
+}
+
 /** Allows everything unless the key is in `blocked` — the real gate is Redis. */
 function limiter(recorded: Recorded, blocked: readonly string[] = []): MutationLimiter {
   return {
@@ -150,6 +174,9 @@ function make(
     noMilestones?: boolean;
     /** What `remove` reports back: false is "there was no row of yours". */
     milestoneRemoved?: boolean;
+    /** Same, for a deployment without ticketing. */
+    noTickets?: boolean;
+    ticketTypeRemoved?: boolean;
   } = {},
 ) {
   const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
@@ -165,6 +192,9 @@ function make(
     ...(over.noMilestones === true
       ? {}
       : { milestones: milestoneRecorder(recorded, over.milestoneRemoved ?? true) }),
+    ...(over.noTickets === true
+      ? {}
+      : { tickets: ticketRecorder(recorded, over.ticketTypeRemoved ?? true) }),
     limiter: limiter(recorded, over.blocked ?? []),
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
@@ -1001,5 +1031,137 @@ test("an officer cannot change what the guild recognises", async () => {
 
   assert.equal(upsert.access.allowed, false);
   assert.equal(remove.access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+// ── tickets ──
+
+const ticketTypeBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  key: "staff-app",
+  label: "Staff application",
+  emoji: null,
+  category: "APPLICATION",
+  parentChannelId: null,
+  staffRoleIds: [],
+  prompt: "Tell us why.",
+  position: 3,
+  enabled: true,
+  ...over,
+});
+
+test("a ticket type reaches the service whole, and the audit records it in full", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.upsertTicketType(session(), "g1", ticketTypeBody());
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    {
+      method: "upsertTicketType",
+      args: [
+        "g1",
+        {
+          key: "staff-app",
+          label: "Staff application",
+          emoji: null,
+          category: "APPLICATION",
+          parentChannelId: null,
+          staffRoleIds: [],
+          prompt: "Tell us why.",
+          position: 3,
+          enabled: true,
+        },
+      ],
+    },
+  ]);
+  assert.equal(recorded.audits[0]?.mutation, "ticket.type.upsert");
+  assert.equal((recorded.audits[0]?.change as Record<string, unknown>)["key"], "staff-app");
+});
+
+test("a ticket type that could never be opened is refused before it reaches the store", async () => {
+  const { mutations, recorded } = make();
+
+  const cases: Record<string, unknown>[] = [
+    { key: "Staff App" },                       // keys are lowercase and typable
+    { key: "" },
+    { label: "   " },
+    { label: "x".repeat(81) },
+    { category: "BILLING" },                    // not one of the fixed categories
+    { parentChannelId: "not-a-channel" },
+    { staffRoleIds: "123456789012345678" },     // a list, not one id
+    { staffRoleIds: ["nope"] },
+    { staffRoleIds: Array.from({ length: 11 }, (_, i) => String(100000000000000000 + i)) },
+    { prompt: "x".repeat(501) },
+    { position: -1 },
+    { position: 1.5 },
+    { enabled: "yes" },
+  ];
+
+  for (const [i, over] of cases.entries()) {
+    const result = await mutations.upsertTicketType(session(), "g1", ticketTypeBody(over));
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  assert.deepEqual(recorded.calls, []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("duplicate staff roles are stored once, so nobody is pinged twice", async () => {
+  const { mutations, recorded } = make();
+
+  await mutations.upsertTicketType(
+    session(),
+    "g1",
+    ticketTypeBody({ staffRoleIds: ["123456789012345678", "123456789012345678"] }),
+  );
+
+  const input = recorded.calls[0]?.args[1] as { staffRoleIds: readonly string[] };
+  assert.deepEqual(input.staffRoleIds, ["123456789012345678"]);
+});
+
+test("removing a ticket type nobody stored is a success, reported as nothing removed", async () => {
+  // The page lists built-ins next to stored rows, so "remove" on a built-in is
+  // a reasonable thing to click; the end state is already true.
+  const { mutations, recorded } = make({ ticketTypeRemoved: false });
+
+  const result = await mutations.removeTicketType(session(), "g1", "support");
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [{ method: "removeTicketType", args: ["g1", "support"] }]);
+  assert.deepEqual(recorded.audits[0]?.change, { key: "support", removed: false });
+});
+
+test("the panel needs a title and a channel that could exist", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal(
+    (await mutations.saveTicketPanel(session(), "g1", { channelId: null, title: "Support", description: null })).ok,
+    true,
+  );
+  const bad = await mutations.saveTicketPanel(session(), "g1", { channelId: "here", title: "Support", description: null });
+  assert.equal(bad.error?.kind, "INVALID_INPUT");
+  const untitled = await mutations.saveTicketPanel(session(), "g1", { channelId: null, title: " ", description: null });
+  assert.equal(untitled.error?.kind, "INVALID_INPUT");
+  assert.equal(recorded.calls.length, 1);
+});
+
+test("with tickets unwired, every write refuses instead of crashing the request", async () => {
+  const { mutations, recorded } = make({ noTickets: true });
+
+  assert.equal((await mutations.upsertTicketType(session(), "g1", ticketTypeBody())).error?.kind, "SERVICE_ERROR");
+  assert.equal((await mutations.removeTicketType(session(), "g1", "support")).error?.kind, "SERVICE_ERROR");
+  assert.equal(
+    (await mutations.saveTicketPanel(session(), "g1", { channelId: null, title: "Support", description: null }))
+      .error?.kind,
+    "SERVICE_ERROR",
+  );
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("an officer cannot change what a member may open", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.upsertTicketType(session(), "g1", ticketTypeBody())).access.allowed, false);
+  assert.equal((await mutations.removeTicketType(session(), "g1", "support")).access.allowed, false);
   assert.deepEqual(recorded.calls, []);
 });

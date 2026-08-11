@@ -56,6 +56,10 @@ import type {
   SlayersDTO,
   SnapshotMetricsDTO,
   TicketDTO,
+  TicketPanelConfigDTO,
+  TicketPanelConfigInput,
+  TicketTypeDTO,
+  TicketTypeInput,
   WordlistRuleDTO,
 } from "./dtos.js";
 
@@ -233,6 +237,32 @@ export interface MilestoneDefinitionService extends MilestoneDefinitionReader {
    * custom definition disappears. Recorded milestones are untouched either way.
    */
   remove(guildId: string, key: string): Promise<boolean>;
+}
+
+/**
+ * Ticket configuration a guild owns (packages/db + the panel).
+ *
+ * Configuration, not member data: what may be opened and who is pulled in when
+ * it is. The tickets themselves — and the people inside them — stay in the bot,
+ * the same line the milestone page draws between rules and standings.
+ */
+export interface TicketConfigService {
+  /**
+   * Every type in effect: the built-ins with the guild's own rows layered over
+   * them by key. Disabled rows are included and flagged, because the panel has
+   * to render the switch it can turn back on.
+   */
+  listTypes(guildId: string): Promise<readonly TicketTypeDTO[]>;
+  /** Create or update by `(guildId, key)`. Editing a built-in shadows it. */
+  upsertType(guildId: string, input: TicketTypeInput): Promise<TicketTypeDTO>;
+  /**
+   * Remove a guild's row. A shadowed built-in reverts to its default; a custom
+   * type disappears from the menu. Tickets already opened keep their category.
+   */
+  removeType(guildId: string, key: string): Promise<boolean>;
+  /** The panel's content, filled in with defaults when never configured. */
+  getPanel(guildId: string): Promise<TicketPanelConfigDTO>;
+  savePanel(guildId: string, input: TicketPanelConfigInput): Promise<TicketPanelConfigDTO>;
 }
 
 /**
@@ -520,6 +550,12 @@ export interface CommunityService {
   openTicket(input: NewTicket): Promise<Result<TicketDTO>>;
   closeTicket(ticketId: string, actorDiscordId: string, reason: string | null): Promise<Result<TicketDTO, TicketError>>;
   listTickets(guildId: string, openerDiscordId?: string): Promise<Result<readonly TicketDTO[]>>;
+  /**
+   * The guild's ticket menu, built-ins included and in menu order. Disabled
+   * types are present and flagged, so a caller can tell "not offered here" from
+   * "never existed".
+   */
+  listTicketTypes(guildId: string): Promise<Result<readonly TicketTypeDTO[]>>;
 
   // ── Applications (`/application-review`, `/accept-member`, `/deny-member`) ──
   getApplication(applicationId: string): Promise<Result<ApplicationDTO | null>>;

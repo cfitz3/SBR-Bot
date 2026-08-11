@@ -9,6 +9,8 @@ import {
   type MemberRole,
   type MilestoneDefinitionDTO,
   type MilestoneDefinitionService,
+  type TicketConfigService,
+  type TicketTypeDTO,
   type ModerationService,
   type XpService,
 } from "@sbr/shared-types";
@@ -158,6 +160,7 @@ function svc(
     heartbeats?: HeartbeatReader;
     xp?: XpService;
     milestones?: MilestoneDefinitionService;
+    tickets?: TicketConfigService;
   } = {},
 ) {
   return new PanelService({
@@ -169,6 +172,7 @@ function svc(
     ...(over.heartbeats ? { heartbeats: over.heartbeats } : {}),
     ...(over.xp ? { xp: over.xp } : {}),
     ...(over.milestones ? { milestones: over.milestones } : {}),
+    ...(over.tickets ? { tickets: over.tickets } : {}),
     logger: silent,
   });
 }
@@ -511,6 +515,57 @@ test("with milestones unwired the page says so rather than showing an empty list
 
 test("an officer cannot open the milestones page", async () => {
   const r = await svc({ milestones: milestoneService() }).loadMilestones(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+// ── tickets ──
+
+/** One built-in and one of the guild's own — the two states the page renders. */
+const ticketService = (): TicketConfigService =>
+  ({
+    async listTypes(guildId: string): Promise<readonly TicketTypeDTO[]> {
+      return [
+        {
+          id: null, guildId, key: "support", label: "Support", emoji: null, category: "SUPPORT",
+          parentChannelId: null, staffRoleIds: [], prompt: null, position: 0, enabled: true,
+          source: "DEFAULT",
+        },
+        {
+          id: "t2", guildId, key: "appeal", label: "Appeal", emoji: null, category: "APPEAL",
+          parentChannelId: null, staffRoleIds: [], prompt: null, position: 1, enabled: false,
+          source: "GUILD",
+        },
+      ];
+    },
+    async getPanel(guildId: string) {
+      return { guildId, channelId: null, messageId: null, title: "Support", description: null, updatedAt: null };
+    },
+  }) as unknown as TicketConfigService;
+
+test("the tickets page shows built-ins and the guild's own rows together", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), tickets: ticketService() })
+    .loadTickets(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.types.map((t) => t.source), ["DEFAULT", "GUILD"]);
+  // A switched-off type is listed, not filtered: the page has to render the
+  // control that turns it back on.
+  assert.equal(r.data?.types.find((t) => t.key === "appeal")?.enabled, false);
+  assert.equal(r.data?.panel?.title, "Support");
+});
+
+test("with tickets unwired the page says so rather than showing an empty menu", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadTickets(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.types, []);
+  assert.equal(r.data?.panel, null);
+});
+
+test("an officer cannot open the tickets page", async () => {
+  const r = await svc({ tickets: ticketService() }).loadTickets(session(), "g1");
   assert.equal(r.access.allowed, false);
   assert.equal(r.data, null);
 });

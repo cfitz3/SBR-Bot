@@ -13,6 +13,7 @@ import type {
   NewTicket,
   RSVPState,
   TicketDTO,
+  TicketTypeDTO,
 } from "@sbr/shared-types";
 
 export interface EventRsvpInfo {
@@ -111,6 +112,12 @@ export interface CommunityRepository {
   getTicket(ticketId: string): Promise<TicketDTO | null>;
   closeTicket(ticketId: string, actorDiscordId: string, reason: string | null): Promise<TicketDTO | null>;
   listTickets(guildId: string, openerDiscordId?: string): Promise<readonly TicketDTO[]>;
+  /**
+   * Every ticket type in effect, built-ins included, in menu order. Disabled
+   * types are included and flagged — the caller decides whether it is drawing a
+   * member's menu or an admin's editor.
+   */
+  listTicketTypes(guildId: string): Promise<readonly TicketTypeDTO[]>;
 
   // ── Applications ──
   getApplication(applicationId: string): Promise<ApplicationDTO | null>;

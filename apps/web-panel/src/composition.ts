@@ -13,6 +13,7 @@ import {
   guildRepository,
   identityRepository,
   milestoneDefinitionRepository,
+  ticketConfigRepository,
   moderationRepository,
   panelRepository,
   rankResolver,
@@ -136,6 +137,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     reads: panelRepository,
     config: guildConfig,
     milestones: milestoneDefinitionRepository,
+    tickets: ticketConfigRepository,
     heartbeats: adapters.heartbeat,
     logger: log,
   });
@@ -168,6 +170,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     identity,
     xp,
     milestones: milestoneDefinitionRepository,
+    tickets: ticketConfigRepository,
     limiter: adapters.cooldowns,
     audit,
     analytics,

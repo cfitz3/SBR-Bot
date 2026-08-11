@@ -30,6 +30,8 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | ModerationAction | Postgres | Persistent (audit) |
 | WordlistEntry | Postgres (cached in Redis) | Persistent |
 | Ticket | Postgres | Persistent |
+| TicketTypeConfig | Postgres | Persistent (config; layered over built-in defaults) |
+| TicketPanelConfig | Postgres | Persistent (config) |
 | Application | Postgres | Persistent |
 | Event | Postgres | Persistent |
 | EventRSVP | Postgres | Persistent |
@@ -38,6 +40,7 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | PermMember | Postgres | Persistent |
 | ProfileSnapshot | Postgres | Persistent (time-series) |
 | Milestone | Postgres | Persistent |
+| MilestoneDefinition | Postgres | Persistent (config; layered over built-in defaults) |
 | XpEvent | Postgres | Persistent (ledger; the source of truth for XP) |
 | XpBalance | Postgres | Derived (rebuildable from `XpEvent`) |
 | XpSourceConfig | Postgres | Persistent (config) |
@@ -357,6 +360,37 @@ A support/help thread opened by a user.
 **Enum — `TicketStatus`:** `OPEN`, `PENDING`, `RESOLVED`, `CLOSED`.
 **Relationships:** N—1 `Guild`, N—1 `DiscordUser`.
 
+#### TicketTypeConfig
+One kind of ticket a member may open. Layered by key over five built-in defaults
+(`support`, `report`, `appeal`, `application`, `other` — the same five values the
+old fixed `category:` option offered), exactly as `MilestoneDefinition` is: a
+stored row shadows the built-in with the same key, and an unknown key is that
+guild's own type.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK; unique with `key` |
+| `key` | what a member passes to `/ticket type:`; never edited |
+| `label`, `emoji`, `prompt` | what the member sees, and the question asked first |
+| `category` | which fixed `TicketCategory` the ticket is filed under, for routing and reporting |
+| `parentChannelId` | category channel the ticket opens under; null = transport default |
+| `staffRoleIds` | roles pulled in |
+| `position`, `enabled` | menu order (ties fall back to the label), and whether it is offered |
+
+**Relationships:** N—1 `Guild`.
+
+#### TicketPanelConfig
+The embed that advertises the menu. One row per guild.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK, unique |
+| `channelId` | where the panel is posted; null until an admin picks one |
+| `messageId` | the posted message, so an edit updates rather than reposts. Cleared when `channelId` changes |
+| `title`, `description`, `embed` | presentation only; no behaviour |
+
+**Relationships:** N—1 `Guild`.
+
 #### Application
 A guild-join application submitted by a user.
 
@@ -535,6 +569,24 @@ A recognized achievement/threshold crossed by a member.
 
 **Enum — `MilestoneType`:** `SKILL_LEVEL`, `CATACOMBS_LEVEL`, `SLAYER_TIER`, `NETWORTH_THRESHOLD`, `COLLECTION`, `CUSTOM`.
 **Relationships:** N—1 `MinecraftAccount`, N—1 `ProfileSnapshot`.
+
+#### MilestoneDefinition
+One thing a guild recognises — the rule a `Milestone` is an instance of. A guild's
+rows are layered **by key** over a built-in default set, so a guild that
+configures nothing stores nothing and a default added in a later release reaches
+every guild.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK; unique with `key` |
+| `key` | stable id, e.g. `networth:10b`. Replays key off this, not the label, so renaming never re-announces |
+| `label`, `description` | display |
+| `type` | see `MilestoneType` |
+| `metric`, `threshold` | which snapshot field, and how much |
+| `xpReward` | credited once, on announce. `0` = recognition only (the default) |
+| `announce`, `enabled` | whether it is posted, whether it is in force |
+
+**Relationships:** N—1 `Guild`, 1—N `Milestone`.
 
 #### XpEvent
 One awarded (or deducted) amount of guild XP. **The ledger is the truth**;

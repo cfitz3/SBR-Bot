@@ -215,6 +215,22 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 - **Degrades to a sentence** when XP is not wired into the deployment: the page says it is not enabled rather than rendering seven dead controls.
 - **Access:** Admin+ (both writes, matching the page — an Officer-tier write behind an Admin-only page would be a permission nobody could exercise).
 
+### 3.13 Milestones
+- **Definitions, not standings.** Each row is one thing the guild recognises: its key, the metric it reads (`MILESTONE_METRICS`), the threshold, the type, whether it is announced, and what reaching it pays. Who has reached what is member-facing and stays in the bots behind `/milestones`.
+- **Built-in defaults are listed alongside a guild's own rows**, because they are already in force — listing only stored rows would show an empty page for a guild that is in fact recognising thirty things. A default carries `source: "DEFAULT"` and `id: null`, so the first edit is a create: editing one writes a guild row that shadows it by key.
+- **Every control saves the whole definition** rather than a patch, since for a default there is nothing on the server to merge a patch against.
+- **Removal is for guild rows only.** The way to stop recognising a built-in is to switch it off, which stores it disabled — deleting a row that does not exist would just make the default reappear.
+- **Access:** Admin+.
+
+### 3.14 Tickets
+- **The menu and the panel, not the tickets.** This page owns what a member may open with `/ticket` and the embed that advertises it. The tickets themselves — and whatever a member wrote in one — stay in the bot and in the Recruitment/Tickets queue, where the people in them are.
+- **Ticket types** layer exactly like milestone definitions: five built-ins (`support`, `report`, `appeal`, `application`, `other` — the same five values the old fixed `category:` option offered) are listed with `source: "DEFAULT"`, a guild's stored row shadows the built-in with the same key, and a key the built-ins don't know is that guild's own type, sorted in by position. A guild that configures nothing stores nothing, and a built-in added in a later release reaches every guild.
+- **Per type:** offered or not, the name a member sees, the prompt they are asked when they open one, the category channel it opens under, the staff role ids pulled in (deduped on save, so nobody is pinged twice), the menu position, and which fixed `TicketCategory` it is filed under for reporting.
+- **The key is typed, not derived from the name.** It is what a member passes to `/ticket type:` and what a guild row joins on; a key that moved when somebody reworded the name would break saved commands and shadow nothing.
+- **Turning every type off closes ticketing** without touching the history — `/ticket` then says so rather than opening one under a category nobody watches. The command reads this same resolved list, so a member can never open a type the editor says is switched off.
+- **The panel** holds its channel, title and description. Where it was last posted is recorded server-side, not typed here — moving it to another channel is a re-post, and changing the channel clears the stored message id so a later edit doesn't update a message in a channel the admin moved away from.
+- **Access:** Admin+ — a type names the staff roles it pulls in and the category channel it opens under, which is role and channel configuration.
+
 ---
 
 ## 4. Data Sources per Page
@@ -233,6 +249,8 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 | Linked Members | DB (`GuildMember`,`LinkedAccount`) + `hypixel` | DB + Redis (re-verify) |
 | Health | `WorkerJobLog` + live BullMQ + bot heartbeats + `rl:hypixel` | Requeue/force-sync (workers) |
 | XP | `xp` (`XpSourceConfig`) | `xp` → `XpSourceConfig`, `XpEvent` (adjustments) + audit |
+| Milestones | `milestones` (`MilestoneDefinition` layered over built-in defaults) | `MilestoneDefinition` + audit |
+| Tickets | `tickets` (`TicketTypeConfig` layered over built-in defaults, `TicketPanelConfig`) | `TicketTypeConfig`, `TicketPanelConfig` + audit |
 
 ---
 
@@ -251,7 +269,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 1. **Login only via Discord OAuth**; sessions in Redis, tokens encrypted, sliding expiry + refresh rotation.
 2. **Guild visibility = Discord `MANAGE_GUILD` ∩ platform `Guild` record**, re-validated on entry.
 3. **Every guild-scoped action authorized server-side** against `GuildMember.role`; UI gating is cosmetic only.
-4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (recruitment/events/bridge) < Admin/Owner (settings/flags/mapping/health).
+4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (recruitment/events/bridge) < Admin/Owner (settings/flags/mapping/health/XP/milestones/ticket config). Note the split: working a ticket is Staff, but *configuring which tickets exist* is Admin, because a type names roles and channels.
 5. **Rank hierarchy** enforced on actions targeting people.
 6. **Bot-gated configuration** — anything the bot must enforce is disabled (with explanation) when the bot is missing or under-permissioned.
 7. **All writes audited** and rate-limited; **all writes go through shared domain services**, never around them.

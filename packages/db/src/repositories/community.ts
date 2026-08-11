@@ -21,6 +21,7 @@ import type {
 } from "@sbr/shared-types";
 import type { LfgInsert, LfgPatch } from "@sbr/community";
 import { prisma } from "../client.js";
+import { ticketConfigRepository } from "./ticket-config.js";
 
 interface EventRsvpInfo {
   status: EventStatus;
@@ -395,6 +396,11 @@ export const communityRepository = {
     });
     return rows.map(toTicketDTO);
   },
+
+  // Delegated rather than inlined: the same list backs the panel editor, and
+  // two queries that merged the built-ins differently would let a member open a
+  // type the editor says is switched off.
+  listTicketTypes: (guildId: string) => ticketConfigRepository.listTypes(guildId),
 
   // ───────────────────────────── Applications ─────────────────────────────
 

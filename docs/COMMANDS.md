@@ -239,6 +239,8 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/ticket` | Manage tickets (open/assign/close on behalf) | Staff | `action` (open/assign/close), `user?`, `category?`, `reason?` | Ticket thread + status | Ticket not found; already closed | DB (`Ticket`) + Discord API |
 
+What a member may open is configuration, not a command: the ticket menu (`TicketTypeConfig`) and the panel that advertises it (`TicketPanelConfig`) are edited on the panel's admin-only **Tickets** page. The bot reads that menu — see COMMAND_INVENTORY.md §2.8 for the member-facing `/ticket`. A guild that configures nothing offers the five built-in types, which are the fixed `TicketCategory` values.
+
 ---
 
 ## 15. Admin Bot — Server Safety & Audit
