@@ -25,6 +25,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `reminder-dispatch` | Scheduled (delayed jobs) | at offsets before events | Mark reminder sent (`reminderState`) | Backoff; skip if already sent | Missed/late reminder pings |
 | `event-transition` | Repeatable + delayed | every 1–5 min / at boundaries | Idempotent state guard (only valid transitions) | Backoff; re-evaluate from truth | Event status lags (SCHEDULED→LIVE→COMPLETED) |
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
+| `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
 | `xp-aggregate` | Repeatable (cron) | every 3 h (`48 */3 * * *`) | Derived awards upsert on `XpEvent.dedupeKey`; balances rebuilt from the whole ledger | 1 retry; global lock, 10 min TTL | Standings lag by up to a pass; nothing is lost — counters are re-derived next run |
@@ -119,6 +120,17 @@ guild-scan is the in-game counterpart to both — see §2.14.)*
 - **Retry:** backoff; recompute.
 - **Failure impact:** inactivity report delayed; no state mutated, so safe.
 - **Safety note:** deliberately advisory — automated removal is a staff decision, not a worker's, matching the Admin bot's "fail-safe" stance.
+
+### 2.9b `punishment-expiry`
+- **Trigger / frequency:** cron, every five minutes (`3-59/5 * * * *`), **timely** lane.
+- **Inputs:** `ModerationAction` rows that are `active`, of type `MUTE` or `BAN`, and whose `expiresAt` is in the past.
+- **Outputs:** those rows cleared to `active: false`.
+- **What it does not do:** it does not lift anything. The enforcement itself expires on Discord's own clock (a timeout ends when it ends) and on the Redis mirror's TTL; this job clears the *record*, so that what staff read matches what is actually being enforced. That is also why it lives in workers rather than the Admin bot — unlike `safety-sweep`, it never needs the gateway.
+- **Scope:** only `MUTE` and `BAN`. A `KICK` row stays flagged active forever because nothing lifts one, and clearing it would rewrite history to say somebody did.
+- **Idempotency:** the `WHERE` clause excludes everything it has already written, so a re-run is a no-op.
+- **Retry:** backoff, 3 attempts; a global lock stops two workers sweeping at once.
+- **Failure impact:** the `/audit in_force` list and the panel's "In force now" card over-report for up to one cadence — staff may believe a member is still muted after the mute ended.
+- **Timely, not bulk:** what it clears is what staff read to decide whether somebody is *already* being punished, and five minutes of "still muted" after a mute ended is a wrong answer to a question people act on.
 
 ### 2.10 `analytics-ingest` + `analytics-rollup`
 - **Trigger / frequency:** ingest = continuous stream consumer; rollups = hourly / daily (~00:15 guild-local, staggered) / weekly.

@@ -17,6 +17,7 @@ import {
   type Result,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
+import { inForce } from "./expiry.js";
 import { isPunitive, needsBotPermission, rankOf } from "./rank.js";
 import type {
   BotCapabilities,
@@ -64,6 +65,32 @@ export class ModerationServiceImpl implements ModerationService {
 
   async listActions(query: AuditQuery): Promise<Result<readonly ModerationActionDTO[]>> {
     return ok(await this.repo.listActions(query));
+  }
+
+  /**
+   * Filtered twice on purpose: the store narrows to flagged-active rows that
+   * have not passed their expiry, and `inForce` re-checks against this
+   * process's clock. The second pass costs nothing and covers the seconds
+   * between the query and the render, plus any store that answers with a
+   * coarser notion of "active" than this one.
+   */
+  async listInForce(
+    guildId: string,
+    targetDiscordId: string | null = null,
+  ): Promise<Result<readonly ModerationActionDTO[]>> {
+    const rows = await this.repo.listActions({
+      guildId,
+      targetDiscordId,
+      inForceOnly: true,
+      limit: 200,
+    });
+    return ok(inForce(rows, this.now()));
+  }
+
+  async sweepExpired(now: Date = this.now()): Promise<Result<number>> {
+    const cleared = await this.repo.deactivateExpired(null, now);
+    if (cleared > 0) this.log.info("expired punishments cleared", { cleared });
+    return ok(cleared);
   }
 
   async applyAction(input: ApplyActionInput): Promise<Result<ModerationActionDTO, ModerationError>> {

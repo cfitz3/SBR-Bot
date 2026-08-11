@@ -79,6 +79,8 @@ const moderation = (n: number): ModerationService => ({
   async recordInfraction(i) { return ok({ ...i, id: "x", createdAt: "t" }); },
   async applyAction() { throw new Error("unused"); },
   async listActions() { return ok([]); },
+  async listInForce() { return ok([]); },
+  async sweepExpired() { return ok(0); },
   async listInfractions() {
     return ok(
       Array.from({ length: n }, (_v, i) => ({

@@ -365,6 +365,19 @@ export interface ModerationService {
   listInfractions(guildId: string, discordId: string): Promise<Result<readonly InfractionDTO[]>>;
   /** `/audit` — the moderation log, filtered and newest-first. */
   listActions(query: AuditQuery): Promise<Result<readonly ModerationActionDTO[]>>;
+  /**
+   * The punishments being enforced right now, newest first. Expiry-aware: a
+   * mute whose clock has run out is not listed even if the sweep has not
+   * cleared its flag yet, so the list matches what the bridge and Discord are
+   * actually enforcing rather than what the column last recorded.
+   */
+  listInForce(guildId: string, targetDiscordId?: string | null): Promise<Result<readonly ModerationActionDTO[]>>;
+  /**
+   * Clear the `active` flag on punishments whose duration has run out, and
+   * report how many. Enforcement itself expires on its own (Redis TTLs, Discord
+   * timeouts); this only stops the audit tables claiming otherwise.
+   */
+  sweepExpired(now?: Date): Promise<Result<number>>;
 }
 
 /**
@@ -379,6 +392,12 @@ export interface AuditQuery {
   readonly type?: ModActionType | null;
   /** Look back this many days; omitted means no lower bound. */
   readonly sinceDays?: number | null;
+  /**
+   * Only punishments still being enforced. Applied in the query rather than
+   * over the results, so "the newest 100 still in force" is a hundred live
+   * rows and not whatever survives filtering a hundred mixed ones.
+   */
+  readonly inForceOnly?: boolean;
   readonly limit?: number;
 }
 

@@ -247,7 +247,7 @@ destructive command requiring `confirm:true`.
 | `/purge` ✱ | MOD | `count*` (1–100) `user?` `channel?` `confirm?` | Bulk-delete recent messages | Ephemeral count of messages **actually** deleted (Discord silently skips >14d), and a `NOTE` action recording it |
 | `/member-note` | MOD | `target*` `note*` | Private staff note | Ephemeral confirmation |
 | `/infractions` | MOD | `target*` | A member's history | Paged embeds |
-| `/audit` | MOD | `actor?` `target?` `type?` (9 choices) `days?` (1–365) | Search the moderation log, limit 100 | Paged embeds |
+| `/audit` | MOD | `actor?` `target?` `type?` (9 choices) `days?` (1–365) `in_force?` | Search the moderation log, newest 100 (says so when there are more) | Paged embeds |
 
 ### 4.2 Safety
 

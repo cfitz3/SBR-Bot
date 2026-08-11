@@ -61,6 +61,8 @@ function moderation(over: Partial<ModerationService> = {}): ModerationService {
     async applyAction() { return ok(action()); },
     async listInfractions() { return ok([]); },
     async listActions() { return ok([]); },
+    async listInForce() { return ok([]); },
+    async sweepExpired() { return ok(0); },
     ...over,
   };
 }
@@ -503,6 +505,48 @@ test("audit passes its filters straight through", async () => {
   assert.equal(q.targetDiscordId, TARGET);
   assert.equal(q.type, "BAN");
   assert.equal(q.sinceDays, 7);
+});
+
+test("audit says so when the log runs past the page limit, rather than stopping silently", async () => {
+  // 101 rows: the handler asks for one more than it shows precisely to tell
+  // "a hundred entries" apart from "at least a hundred entries".
+  const rows = Array.from({ length: 101 }, (_, i) => action({ id: `a${i}` }));
+  const mod = moderation({ async listActions() { return ok(rows); } });
+  const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
+  assert.match(r.text, /100\+ action/);
+  assert.match(r.pages?.[0]?.title ?? "", /there are more/);
+  assert.equal(r.pages?.length, 10, "the extra row is dropped, not rendered");
+});
+
+test("audit shows exactly the page limit without claiming there is more", async () => {
+  const rows = Array.from({ length: 100 }, (_, i) => action({ id: `a${i}` }));
+  const mod = moderation({ async listActions() { return ok(rows); } });
+  const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
+  assert.match(r.text, /^100 action/);
+  assert.doesNotMatch(r.pages?.[0]?.title ?? "", /more/);
+});
+
+test("audit in_force asks the store for live punishments and says so when there are none", async () => {
+  let seen: AuditQuery | null = null;
+  const mod = moderation({ async listActions(q) { seen = q; return ok([]); } });
+  const r = await make({ moderation: mod }).dispatch(
+    "audit",
+    ctx({ args: recordArgs({ in_force: "true" }) }),
+  );
+  assert.equal((seen as unknown as AuditQuery).inForceOnly, true);
+  assert.match(r.text, /Nothing is being enforced/);
+});
+
+test("an expired mute reads as expired, not as one a staffer lifted", async () => {
+  const rows = [
+    action({ id: "gone", type: "MUTE", active: true, expiresAt: "2000-01-01T00:00:00.000Z" }),
+    action({ id: "early", type: "MUTE", active: false, expiresAt: "2999-01-01T00:00:00.000Z" }),
+  ];
+  const mod = moderation({ async listActions() { return ok(rows); } });
+  const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
+  const names = (r.pages?.[0]?.fields ?? []).map((f) => f.name);
+  assert.match(names[0] ?? "", /\(expired\)/);
+  assert.match(names[1] ?? "", /\(lifted\)/);
 });
 
 test("infractions reports the count", async () => {

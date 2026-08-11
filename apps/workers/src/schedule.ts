@@ -54,6 +54,11 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // The stream drain is continuous in spirit; 15s is close enough that the
   // buffer never grows, without a permanently blocked consumer.
   { name: "analytics-ingest", repeat: { every: 15_000 }, priority: LANE.timely },
+  // Off-minute /5: 3,8,13,…,58. In the timely lane rather than bulk because
+  // what it clears is what staff read to decide whether somebody is already
+  // being punished — five minutes of "still muted" after a mute ended is a
+  // wrong answer to a question people act on.
+  { name: "punishment-expiry", repeat: { pattern: "3-59/5 * * * *" }, priority: LANE.timely },
   // Off-minute /7: 4,11,18,…,53. The reconcile safety net for config writes
   // that already publish their own invalidation.
   { name: "config-cache-invalidation", repeat: { pattern: "4-59/7 * * * *" }, priority: LANE.timely },

@@ -12,7 +12,7 @@
  * that rule here would be one that drifts — so a refusal arrives as a message on
  * the form rather than as a control that was never offered.
  */
-import type { ModerationVM } from "@sbr/panel-core";
+import type { ModerationActionVM, ModerationVM } from "@sbr/panel-core";
 import { loadPage, postAction } from "../api.js";
 import {
   badge,
@@ -73,6 +73,7 @@ export async function renderModeration(host: HTMLElement, guildId: string): Prom
       card("Look up a member", lookupBody(rerender)),
       card("Issue an action", actionForm(guildId, rerender)),
       data.target ? card("Infractions", infractionsBody(data)) : null,
+      card("In force now", inForceBody(data)),
       card(data.target ? "Actions on this member" : "Recent actions", actionsBody(data)),
     ),
   );
@@ -273,6 +274,36 @@ function infractionsBody(data: ModerationVM): HTMLElement {
   );
 }
 
+/**
+ * What is *currently being enforced*, as opposed to what has happened.
+ *
+ * The actions table below is a history and answers "what was done"; a staffer
+ * deciding whether to escalate is asking the different question "is this person
+ * already muted right now", and reading that off a history means eyeballing
+ * every row's expiry. The server has already resolved it, so it gets its own
+ * card.
+ */
+function inForceBody(data: ModerationVM): HTMLElement {
+  if (data.inForce.length === 0) {
+    return emptyState(
+      data.target
+        ? "Nothing is currently being enforced against this member."
+        : "Nobody in this guild is muted or banned right now.",
+    );
+  }
+  return table(
+    ["Action", "Member", "By", "Reason", "Ends", "Since"],
+    data.inForce.map((row) => [
+      h("div", { class: "job-cell" }, row.type, badge("in force", "warn")),
+      h("code", {}, row.targetDiscordId ?? "—"),
+      h("code", {}, row.actorDiscordId),
+      row.reason,
+      row.expiresAt === null ? "never" : relativeTime(row.expiresAt),
+      relativeTime(row.createdAt),
+    ]),
+  );
+}
+
 function actionsBody(data: ModerationVM): HTMLElement {
   if (data.actions.length === 0) {
     return emptyState(
@@ -283,7 +314,7 @@ function actionsBody(data: ModerationVM): HTMLElement {
   return table(
     ["Action", "Member", "By", "Reason", "Duration", "When"],
     data.actions.map((row) => [
-      h("div", { class: "job-cell" }, row.type, row.active ? badge("active", "warn") : null),
+      h("div", { class: "job-cell" }, row.type, stateBadge(row)),
       h("code", {}, row.targetDiscordId ?? "—"),
       h("code", {}, row.actorDiscordId),
       row.reason,
@@ -293,12 +324,32 @@ function actionsBody(data: ModerationVM): HTMLElement {
   );
 }
 
-function describeDuration(row: ModerationVM["actions"][number]): string {
+/**
+ * The `active` flag alone cannot say this, which is why the state is resolved
+ * server-side: a swept mute and a hand-lifted one are both `active: false`, and
+ * a kick is `active` forever because nothing lifts one. Labelling every cleared
+ * flag "lifted" would credit a staffer with an unmute the clock performed.
+ */
+function stateBadge(row: ModerationActionVM): HTMLElement | null {
+  switch (row.state) {
+    case "ACTIVE":
+      return badge("in force", "warn");
+    case "EXPIRED":
+      return badge("expired", "neutral");
+    case "LIFTED":
+      return badge("lifted", "ok");
+    default:
+      // MOMENTARY — a warn or a kick had no duration to run out.
+      return null;
+  }
+}
+
+function describeDuration(row: ModerationActionVM): string {
   if (row.durationSeconds === null) return TIMED.has(row.type) ? "permanent" : "—";
   const span = describeSpan(row.durationSeconds * 1000);
   if (row.expiresAt === null) return span;
   const remaining = Date.parse(row.expiresAt) - Date.now();
-  return remaining > 0 ? `${span} (${describeSpan(remaining)} left)` : `${span} (expired)`;
+  return remaining > 0 ? `${span} (${describeSpan(remaining)} left)` : span;
 }
 
 function severityTone(severity: string): BadgeTone {

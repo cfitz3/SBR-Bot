@@ -14,6 +14,7 @@ import type {
   SafetyStatusDTO,
   WordlistRuleDTO,
 } from "@sbr/shared-types";
+import { describeState, punishmentState } from "@sbr/moderation";
 
 /** Discord renders `<t:…:R>` as a live relative timestamp in the reader's locale. */
 export function relativeTs(iso: string): string {
@@ -87,14 +88,39 @@ export function renderInfractionPages(
   }));
 }
 
-export function renderAuditPages(rows: readonly ModerationActionDTO[]): readonly EmbedView[] {
+/**
+ * `/audit`.
+ *
+ * The state comes from `punishmentState` rather than the `active` column, so a
+ * mute that ran its time out reads "expired" instead of "lifted" — the column
+ * cannot tell those apart, and a staffer reading the log to see whether
+ * somebody was let off early needs to.
+ */
+export function renderAuditPages(
+  rows: readonly ModerationActionDTO[],
+  options: { readonly truncated?: boolean; readonly now?: Date } = {},
+): readonly EmbedView[] {
+  const now = options.now ?? new Date();
+  const heading = options.truncated
+    ? `Audit log — newest ${rows.length}, and there are more`
+    : `Audit log — ${rows.length} action${rows.length === 1 ? "" : "s"}`;
   return paginate(rows, 10, (slice, i, total) => ({
-    title: `Audit log — ${rows.length} action${rows.length === 1 ? "" : "s"}`,
+    title: heading,
+    // Silence would read as "that is all there was", which is the one thing a
+    // truncated log must not imply.
+    ...(options.truncated ? { description: "Narrow the filters to see further back." } : {}),
     fields: slice.map((r) => {
       const target = r.targetDiscordId ? `<@${r.targetDiscordId}>` : "—";
-      const expiry = r.expiresAt ? ` · until ${relativeTs(r.expiresAt)}` : "";
+      const state = punishmentState(r, now);
+      const label = state === "MOMENTARY" || state === "ACTIVE" ? "" : ` (${describeState(state)})`;
+      const expiry =
+        r.expiresAt === null
+          ? ""
+          : state === "ACTIVE"
+            ? ` · until ${relativeTs(r.expiresAt)}`
+            : ` · ended ${relativeTs(r.expiresAt)}`;
       return {
-        name: `${r.type}${r.active ? "" : " (lifted)"} · ${relativeTs(r.createdAt)}`,
+        name: `${r.type}${label} · ${relativeTs(r.createdAt)}`,
         value: `${target} by <@${r.actorDiscordId}> — ${r.reason}${expiry}`,
         inline: false,
       };

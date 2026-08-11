@@ -12,6 +12,7 @@ import {
   analyticsJobRepository,
   eventJobRepository,
   maintenanceJobRepository,
+  moderationRepository,
   snapshotJobRepository,
   milestoneDefinitionRepository,
   guildRepository,
@@ -31,6 +32,7 @@ import {
   defineInactivityScanJob,
   defineMilestoneDetectJob,
   defineProfileSnapshotJob,
+  definePunishmentExpiryJob,
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
   defineRosterSyncJob,
@@ -460,6 +462,18 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("inactivity"),
   };
 
+  /**
+   * Expired mutes and bans, cleared from the audit tables.
+   *
+   * The clock is read here rather than passed from the schedule so a job that
+   * waited behind a queue backlog sweeps up to when it actually ran, not to
+   * when it was due.
+   */
+  const punishmentExpiry: JobDefinition<number> = {
+    ...definePunishmentExpiryJob(() => moderationRepository.deactivateExpired(null, new Date())),
+    lockKey: keys.lockJob("punishment-expiry"),
+  };
+
   // ───────────────────────────── analytics ─────────────────────────────
 
   const analyticsIngest: JobDefinition<number> = {
@@ -558,6 +572,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     rosterSync,
     guildScan,
     inactivity,
+    punishmentExpiry,
     xpAggregate,
     analyticsIngest,
     analyticsRollup,

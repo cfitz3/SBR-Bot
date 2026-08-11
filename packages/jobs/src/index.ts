@@ -18,6 +18,7 @@ export {
   defineInactivityScanJob,
   defineMilestoneDetectJob,
   defineProfileSnapshotJob,
+  definePunishmentExpiryJob,
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
   defineRosterSyncJob,

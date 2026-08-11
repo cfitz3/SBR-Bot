@@ -36,6 +36,13 @@ export interface ModerationRepository {
   listInfractions(guildId: string, discordId: string): Promise<readonly InfractionDTO[]>;
   /** Newest-first audit query behind `/audit`. */
   listActions(query: AuditQuery): Promise<readonly ModerationActionDTO[]>;
+  /**
+   * Clear the `active` flag on punishments past their expiry, returning how
+   * many rows changed. The store filters by time itself: sweeping by reading
+   * every active row into the process and writing back the stale ones would
+   * race with anything applied in between.
+   */
+  deactivateExpired(guildId: string | null, now: Date): Promise<number>;
 }
 
 /** A wordlist rule as it is written, before the store assigns it an id. */

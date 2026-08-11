@@ -7,6 +7,7 @@
  * "commands, it doesn't bypass"), so nothing here mutates.
  */
 import { CONFIG_CHANNEL_SLOTS } from "@sbr/shared-types";
+import { punishmentState, type PunishmentState } from "@sbr/moderation";
 import type {
   AuditQuery,
   CommunityService,
@@ -98,11 +99,30 @@ export interface OverviewVM {
   readonly freshness: readonly FreshnessVM[];
 }
 
+/**
+ * A logged action with its state resolved.
+ *
+ * The state is computed here rather than in the browser because it is a
+ * domain rule — `active` and `expiresAt` disagreeing means different things
+ * for different action types — and a second copy of that rule in the client
+ * would be one that drifts from the one `/audit` renders.
+ */
+export interface ModerationActionVM extends ModerationActionDTO {
+  readonly state: PunishmentState;
+}
+
 export interface ModerationVM {
   readonly target: string;
   readonly infractionCount: number;
   readonly infractions: readonly InfractionDTO[];
-  readonly actions: readonly ModerationActionDTO[];
+  readonly actions: readonly ModerationActionVM[];
+  /**
+   * The punishments being served right now, guild-wide when no target is named.
+   * Separate from `actions` because the log answers "what has happened" and this
+   * answers "what is in force" — the same rows read for two different questions,
+   * and only the second one is expiry-aware.
+   */
+  readonly inForce: readonly ModerationActionDTO[];
 }
 
 export interface SelectorVM {
@@ -396,10 +416,14 @@ export class PanelService {
     const access = await authorize(session, guildId, "moderation", this.d.roles);
     if (!access.allowed) return this.denied(access, "moderation", guildId);
 
+    const now = new Date();
     const query: AuditQuery = { guildId, limit: 50, ...(targetDiscordId ? { targetDiscordId } : {}) };
-    const [infractions, actions] = await Promise.all([
+    const [infractions, actions, inForce] = await Promise.all([
       this.d.moderation.listInfractions(guildId, targetDiscordId),
       this.d.moderation.listActions(query),
+      // Empty target means the whole guild, which is what the page shows before
+      // anybody has been looked up.
+      this.d.moderation.listInForce(guildId, targetDiscordId === "" ? null : targetDiscordId),
     ]);
 
     const list = infractions.ok ? infractions.value : [];
@@ -407,7 +431,8 @@ export class PanelService {
       target: targetDiscordId,
       infractionCount: list.length,
       infractions: list,
-      actions: actions.ok ? actions.value : [],
+      actions: (actions.ok ? actions.value : []).map((a) => ({ ...a, state: punishmentState(a, now) })),
+      inForce: inForce.ok ? inForce.value : [],
     };
     return { access, data };
   }

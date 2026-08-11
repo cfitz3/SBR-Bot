@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { MemberRole, ModActionType, ModerationActionDTO } from "@sbr/shared-types";
+import type { AuditQuery, MemberRole, ModActionType, ModerationActionDTO } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { ModerationServiceImpl } from "./service.js";
 import type { BotCapabilities, EnforcementMirror, ModerationRepository, NewActionRecord, RankResolver } from "./ports.js";
@@ -19,6 +19,7 @@ function repo(): { repo: ModerationRepository; created: NewActionRecord[] } {
       },
       async listInfractions() { return []; },
       async listActions() { return []; },
+      async deactivateExpired() { return 0; },
     },
   };
 }
@@ -122,4 +123,54 @@ test("NOTE bypasses rank/self-target guards (annotation, not punishment)", async
   const r = await svc.applyAction(input("NOTE", { targetDiscordId: "actor" }));
   assert.equal(r.ok, true);
   if (r.ok) assert.equal(r.value.active, false);
+});
+
+test("listInForce narrows in the store and re-checks against this process's clock", async () => {
+  // The store answers with a row that expired a second after it was queried;
+  // the service must not hand it on as something still being served.
+  let seen: AuditQuery | null = null;
+  const stale: ModerationActionDTO = {
+    id: "a1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
+    reason: "spam", durationSeconds: 60, expiresAt: "2026-08-05T23:59:00.000Z",
+    surfaces: ["DISCORD"], active: true, createdAt: "2026-08-05T23:58:00.000Z",
+  };
+  const live: ModerationActionDTO = { ...stale, id: "a2", expiresAt: null, type: "BAN" };
+  const svc = build({
+    repoImpl: {
+      ...repo().repo,
+      async listActions(q) { seen = q; return [stale, live]; },
+    },
+  });
+
+  const r = await svc.listInForce("g1", "target");
+  assert.equal(r.ok, true);
+  if (r.ok) assert.deepEqual(r.value.map((a) => a.id), ["a2"]);
+  const q = seen as unknown as AuditQuery;
+  assert.equal(q.inForceOnly, true);
+  assert.equal(q.targetDiscordId, "target");
+});
+
+test("listInForce with no target asks about the whole guild", async () => {
+  let seen: AuditQuery | null = null;
+  const svc = build({
+    repoImpl: { ...repo().repo, async listActions(q) { seen = q; return []; } },
+  });
+  await svc.listInForce("g1");
+  assert.equal((seen as unknown as AuditQuery).targetDiscordId, null);
+});
+
+test("sweepExpired reports what it cleared and passes the clock down", async () => {
+  let seenNow: Date | null = null;
+  const svc = build({
+    repoImpl: {
+      ...repo().repo,
+      async deactivateExpired(_g, now) { seenNow = now; return 3; },
+    },
+  });
+  const r = await svc.sweepExpired();
+  assert.equal(r.ok, true);
+  if (r.ok) assert.equal(r.value, 3);
+  // The injected clock, not the wall clock: a sweep run against "now" in a test
+  // that fixed the time everywhere else would clear rows the test never made.
+  assert.equal((seenNow as unknown as Date).toISOString(), "2026-08-06T00:00:00.000Z");
 });

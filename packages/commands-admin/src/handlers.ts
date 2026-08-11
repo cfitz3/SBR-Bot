@@ -180,24 +180,43 @@ const infractions: AdminHandler = async (ctx, deps) => {
   };
 };
 
-/** `/audit` — the moderation log. Every filter is optional and narrows the search. */
+/**
+ * `/audit` — the moderation log. Every filter is optional and narrows the search.
+ *
+ * One more row is asked for than is shown, because a log that quietly stops at
+ * a hundred looks exactly like a log with a hundred entries in it. The extra row
+ * is the difference between the two, and is dropped before rendering.
+ */
+const AUDIT_PAGE_LIMIT = 100;
+
 const audit: AdminHandler = async (ctx, deps) => {
+  const inForceOnly = ctx.args.getBoolean("in_force") ?? false;
   const result = await deps.moderation.listActions({
     guildId: ctx.guildId,
     actorDiscordId: ctx.args.getUser("actor"),
     targetDiscordId: ctx.args.getUser("target"),
     type: (ctx.args.getString("type") as ModActionType | null) ?? null,
     sinceDays: ctx.args.getNumber("days"),
-    limit: 100,
+    inForceOnly,
+    limit: AUDIT_PAGE_LIMIT + 1,
   });
   if (!result.ok) return { ephemeral: true, text: "Couldn't load the audit log." };
   if (result.value.length === 0) {
-    return { ephemeral: true, text: "No moderation actions match those filters." };
+    return {
+      ephemeral: true,
+      text: inForceOnly
+        ? "Nothing is being enforced right now."
+        : "No moderation actions match those filters.",
+    };
   }
+
+  const truncated = result.value.length > AUDIT_PAGE_LIMIT;
+  const rows = truncated ? result.value.slice(0, AUDIT_PAGE_LIMIT) : result.value;
+  const count = truncated ? `${rows.length}+ action(s)` : `${rows.length} action(s)`;
   return {
     ephemeral: true,
-    text: `${result.value.length} action(s).`,
-    ...paged(renderAuditPages(result.value)),
+    text: inForceOnly ? `${count} still in force.` : `${count}.`,
+    ...paged(renderAuditPages(rows, { truncated })),
   };
 };
 
@@ -595,6 +614,11 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
         { name: "target", description: "Filter by the member acted on", type: "user" },
         { name: "type", description: "Filter by action type", type: "string", choices: MOD_ACTION_CHOICES },
         { name: "days", description: "Look back this many days", type: "integer", minValue: 1, maxValue: 365 },
+        {
+          name: "in_force",
+          description: "Only punishments still being enforced right now",
+          type: "boolean",
+        },
       ],
       minRole: "MODERATOR",
       handler: audit,

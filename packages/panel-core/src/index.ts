@@ -24,6 +24,7 @@ export {
   type PageResult,
   type OverviewVM,
   type ModerationVM,
+  type ModerationActionVM,
   type SelectorVM,
   type AnalyticsVM,
   type RecruitmentVM,

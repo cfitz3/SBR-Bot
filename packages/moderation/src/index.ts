@@ -4,6 +4,15 @@
  */
 export { ModerationServiceImpl, type ModerationServiceDeps } from "./service.js";
 export { rankOf, isPunitive, needsBotPermission } from "./rank.js";
+export {
+  describeState,
+  expiredButFlaggedActive,
+  holdsEnforcement,
+  inForce,
+  isInForce,
+  punishmentState,
+  type PunishmentState,
+} from "./expiry.js";
 export { SafetyServiceImpl, type SafetyServiceDeps } from "./safety.js";
 export {
   compileRule,

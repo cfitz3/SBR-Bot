@@ -157,6 +157,8 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 ### 3.6 Moderation / Infractions View
 - Searchable/filterable list of `Infraction` + `ModerationAction` (by member, actor, type, severity, date, active/expired).
 - Per-member drill-down: full case history, notes, active mutes/bans with expiry.
+- An **In force now** card lists only what is currently being enforced (`ModerationService.listInForce`). It answers a different question from the history table below it: "is this person already muted" is what decides whether to escalate, and reading it off a history means checking every row's expiry by eye. With no target it is the guild-wide list of live mutes and bans.
+- Each history row carries a resolved state — **in force / expired / lifted**, and nothing at all for a warn or kick, which had no duration to run out. The state is computed on the server (`ModerationActionVM.state`, from `@sbr/moderation`'s `punishmentState`) rather than read off the `active` flag: the expiry sweep clears that flag, so a flag-only reading would credit a staffer with every unmute the clock performed.
 - Actions (permission-gated): issue warn/note, revoke/adjust an active mute/ban, view but not alter another staffer's higher-rank actions.
 - **Bridge suspensions** surfaced here and on Overview; officers can suspend/unsuspend with reason.
 - Writes go through `moderation.ModerationService` (audit + Redis enforcement mirror + analytics event).

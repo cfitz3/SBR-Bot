@@ -218,6 +218,30 @@ export function defineGuildScanJob(scan: () => Promise<number>): JobDefinition<n
   };
 }
 
+/**
+ * punishment-expiry: clear the `active` flag on mutes and bans whose duration
+ * has run out.
+ *
+ * Enforcement itself needs nothing from this job — a Discord timeout lifts on
+ * Discord's clock and the Redis mirror on its TTL. What expires without help is
+ * the *record*: the audit tables would otherwise keep listing a member as muted
+ * long after the mute stopped, which is what staff read when deciding whether
+ * somebody is already being punished. Runs in the workers process rather than
+ * the admin bot precisely because it needs no gateway.
+ *
+ * Idempotent, so retries are free. Returns the number of rows cleared.
+ */
+export function definePunishmentExpiryJob(sweep: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "punishment-expiry",
+    queue: "safety",
+    lockKey: "lock:job:punishment-expiry",
+    lockTtlMs: 60_000,
+    maxRetries: 3,
+    handler: sweep,
+  };
+}
+
 /** inactivity-scan: flag members who look inactive. Advisory only, never a kick. */
 export function defineInactivityScanJob(scan: () => Promise<number>): JobDefinition<number> {
   return {
