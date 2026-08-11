@@ -12,7 +12,7 @@
  */
 import type { WordlistVM } from "@sbr/panel-core";
 import type { WordlistRuleDTO } from "@sbr/shared-types";
-import { WordAction, WordMatchType } from "@sbr/shared-types";
+import { WordAction, WordMatchType } from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
 import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";
