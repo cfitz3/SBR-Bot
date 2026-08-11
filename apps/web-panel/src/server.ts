@@ -25,6 +25,7 @@ import {
   type RollupPeriod,
 } from "@sbr/panel-core";
 import type { PanelApp } from "./composition.js";
+import { canManageGuild } from "./permissions.js";
 import { resolveAsset } from "./static.js";
 
 const SESSION_COOKIE = "sbr_sess";
@@ -37,7 +38,6 @@ const SESSION_COOKIE = "sbr_sess";
 const CSRF_COOKIE = "sbr_csrf";
 const CSRF_HEADER = "x-csrf-token";
 const SESSION_TTL_S = 6 * 60 * 60;
-const MANAGE_GUILD = 0x20n;
 
 /** Config payloads are a handful of fields; anything larger is not a real write. */
 const MAX_BODY_BYTES = 16 * 1024;
@@ -449,16 +449,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     // Manageable = MANAGE_GUILD ∩ platform Guild records; store internal ids.
     const manageableGuildIds: string[] = [];
     for (const g of guilds) {
-      if (typeof g.id !== "string" || typeof g.permissions !== "string") continue;
-      // Discord sends permissions as a decimal string; a malformed one would
-      // throw out of BigInt and abort the whole login over one bad entry.
-      let bits: bigint;
-      try {
-        bits = BigInt(g.permissions);
-      } catch {
-        continue;
-      }
-      if ((bits & MANAGE_GUILD) !== MANAGE_GUILD) continue;
+      if (typeof g.id !== "string") continue;
+      if (!canManageGuild(g.permissions)) continue;
       const internalId = await app.resolveGuild(g.id);
       if (internalId) manageableGuildIds.push(internalId);
     }
