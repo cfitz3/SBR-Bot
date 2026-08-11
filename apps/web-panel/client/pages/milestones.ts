@@ -13,7 +13,7 @@
  */
 import type { MilestonesVM } from "@sbr/panel-core";
 import type { MilestoneDefinitionDTO } from "@sbr/shared-types";
-import { MILESTONE_METRICS, MilestoneType } from "@sbr/shared-types";
+import { MILESTONE_METRICS, MilestoneType } from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
 import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";

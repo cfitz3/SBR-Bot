@@ -13,7 +13,7 @@
  */
 import type { TicketsVM } from "@sbr/panel-core";
 import type { TicketTypeDTO } from "@sbr/shared-types";
-import { TicketCategory } from "@sbr/shared-types";
+import { TicketCategory } from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
 import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";
