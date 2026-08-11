@@ -45,6 +45,18 @@ const MAX_BODY_BYTES = 16 * 1024;
 /** OAuth round-trips are short; a state that outlives the redirect is a liability. */
 const OAUTH_STATE_TTL_S = 10 * 60;
 
+/**
+ * Pinned, because an unversioned `discord.com/api/...` is not "whatever is
+ * current" — it is whatever Discord still treats as the default, which is a
+ * version old enough to send `permissions` on `/users/@me/guilds` as a JSON
+ * *number* rather than the decimal string every current doc describes. Reading
+ * that field as a string then matched nothing, and the panel showed an empty
+ * guild selector whose wording blamed the platform for not knowing the guild.
+ * The version an unversioned call resolves to is Discord's to change; the
+ * shape our parsing depends on shouldn't be.
+ */
+const DISCORD_API = "https://discord.com/api/v10";
+
 /** Discord's API is fast or broken; a request that hangs must not hang a login. */
 const DISCORD_TIMEOUT_MS = 10_000;
 
@@ -417,7 +429,7 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     if (consumed !== 1) return send(res, 400, { error: "invalid_state" });
 
     // Exchange the code and read the user + their guilds.
-    const token = await fetchJson("https://discord.com/api/oauth2/token", {
+    const token = await fetchJson(`${DISCORD_API}/oauth2/token`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -434,8 +446,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
 
     const auth = { authorization: `Bearer ${accessToken}` };
     const [meRes, guildsRes] = await Promise.all([
-      fetchJson("https://discord.com/api/users/@me", { headers: auth }),
-      fetchJson("https://discord.com/api/users/@me/guilds", { headers: auth }),
+      fetchJson(`${DISCORD_API}/users/@me`, { headers: auth }),
+      fetchJson(`${DISCORD_API}/users/@me/guilds`, { headers: auth }),
     ]);
     const me = meRes.json as { id?: string } | undefined;
     if (!meRes.ok || !me?.id) return send(res, 502, { error: "no_user" });
