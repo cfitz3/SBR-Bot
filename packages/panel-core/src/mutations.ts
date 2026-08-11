@@ -11,6 +11,7 @@ import {
   CONFIG_CHANNEL_SLOTS,
   isConfigChannelSlot,
   isMilestoneMetric,
+  isUpstreamUnavailable,
   MILESTONE_METRICS,
   MilestoneType as MILESTONE_TYPES,
   TicketCategory as TICKET_CATEGORIES,
@@ -21,6 +22,7 @@ import type {
   ConfigChannelSlot,
   EventType,
   GuildConfigService,
+  HypixelResult,
   IdentityService,
   MemberRole,
   MilestoneDefinitionInput,
@@ -51,6 +53,12 @@ import { XP_SOURCE_ORDER } from "./service.js";
 /** Every write the panel can perform, and the platform role it requires. */
 export const MUTATION_TIERS = {
   "config.channel": "ADMIN",
+  /**
+   * Which Hypixel guild this platform guild tracks. Admin because it decides
+   * whose roster the workers sync and whose members the whole panel is about —
+   * repointing it is closer to re-creating the guild than to editing a setting.
+   */
+  "config.hypixel": "ADMIN",
   /**
    * Free-form admin config (embed templates, per-feature payloads). Admin
    * rather than Officer because the keys are not enumerable here: this one
@@ -163,7 +171,18 @@ export interface MutationError {
  * envelope handling is one code path for reads and writes alike.
  */
 export type MutationResult =
-  | { readonly access: Extract<AccessDecision, { allowed: true }>; readonly ok: true; readonly error: null }
+  | {
+      readonly access: Extract<AccessDecision, { allowed: true }>;
+      readonly ok: true;
+      readonly error: null;
+      /**
+       * A caveat on a write that did succeed — "linked, but we couldn't reach
+       * Hypixel to confirm it". Distinct from an error because the row is
+       * written and refusing would be a lie; distinct from silence because the
+       * admin needs to know the confirmation didn't happen.
+       */
+      readonly note?: string;
+    }
   | {
       readonly access: Extract<AccessDecision, { allowed: true }>;
       readonly ok: false;
@@ -198,6 +217,21 @@ export interface ConfigAuditSink {
   record(entry: ConfigAuditEntry): Promise<void>;
 }
 
+/**
+ * Just enough of the Hypixel client to resolve a guild before linking it.
+ *
+ * Declared structurally here, like `MutationLimiter` and `ConfigAuditSink`, so
+ * panel-core keeps out of `@sbr/hypixel`'s dependency graph — a data-source
+ * package is the wrong thing for this layer to import, and the real client
+ * satisfies this shape without knowing the interface exists.
+ */
+export interface HypixelGuildLookup {
+  getGuild(
+    id: string,
+    by: "id" | "name",
+  ): Promise<HypixelResult<{ readonly id: string; readonly name: string | null }>>;
+}
+
 export interface PanelMutationsDeps {
   readonly roles: RoleResolver;
   readonly config: GuildConfigService;
@@ -216,6 +250,11 @@ export interface PanelMutationsDeps {
   readonly tickets?: TicketConfigService;
   /** Optional like XP: absent refuses the write instead of crashing. */
   readonly wordlist?: WordlistService;
+  /**
+   * Optional like the rest: without it a guild can still be unlinked, but
+   * linking one refuses rather than writing an id nothing ever checked.
+   */
+  readonly hypixel?: HypixelGuildLookup;
   readonly limiter: MutationLimiter;
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
@@ -239,6 +278,16 @@ const MEMBER_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "
  * written into config and silently disabling a feature.
  */
 const SNOWFLAKE = /^\d{17,20}$/;
+
+/**
+ * Hypixel guild ids are 24 hex characters (a Mongo ObjectId). Used to tell an
+ * id apart from a name in the one free-text field that accepts either — no real
+ * guild name is 24 unbroken hex characters, so the split is unambiguous.
+ */
+const HYPIXEL_GUILD_ID = /^[0-9a-f]{24}$/i;
+
+/** Hypixel caps guild names at 32; the slack is for whitespace already trimmed. */
+const HYPIXEL_GUILD_NAME_MAX = 64;
 
 /** Definition keys are ours to shape: lowercase, with `:` grouping a family. */
 const MILESTONE_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
@@ -420,6 +469,66 @@ export class PanelMutations {
       }
       const result = await this.d.config.setChannel(guildId, slot, channelId);
       return { result, change: { slot, channelId } };
+    });
+  }
+
+  /**
+   * Link this guild to a Hypixel guild, by name or by id. Blank unlinks.
+   *
+   * Until this is set, roster sync and guild scan have nothing to work on and
+   * skip every run, so most of the panel stays empty — which makes this the
+   * first write a new deployment needs and the one that must not be fragile.
+   *
+   * Hence the fallback: an id is stored even when Hypixel cannot confirm it,
+   * with a note saying so. A name is not, because resolving one *is* the API
+   * call — there is no id to store, and inventing one would be worse than
+   * telling the admin to paste it.
+   */
+  async setHypixelGuild(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "config.hypixel", async () => {
+      if (input !== null && typeof input !== "string") {
+        return invalid("send a Hypixel guild name or id, or null to unlink");
+      }
+      const query = (input ?? "").trim();
+      if (query === "") {
+        const result = await this.d.config.setHypixelGuild(guildId, null);
+        return { result, change: { hypixelGuildId: null, verified: false } };
+      }
+
+      const byId = HYPIXEL_GUILD_ID.test(query);
+      if (!byId && query.length > HYPIXEL_GUILD_NAME_MAX) {
+        return invalid(`a guild name is at most ${HYPIXEL_GUILD_NAME_MAX} characters`);
+      }
+      const lookup = this.d.hypixel;
+      if (!lookup) return unavailable("Hypixel lookups aren't available in this deployment");
+
+      const found = await lookupHypixelGuild(lookup, query, byId ? "id" : "name");
+      if (found.kind === "missing") {
+        return invalid(byId ? "Hypixel has no guild with that id" : "Hypixel has no guild by that name");
+      }
+      if (found.kind === "unreachable") {
+        if (!byId) {
+          return unavailable(
+            "Hypixel isn't answering, so a name can't be turned into an id right now — paste the guild's 24-character id instead",
+          );
+        }
+        // Lowercased so the stored id matches what Hypixel returns, and so the
+        // same guild pasted in two cases can't defeat the unique constraint.
+        const id = query.toLowerCase();
+        const result = await this.d.config.setHypixelGuild(guildId, id);
+        return {
+          result,
+          change: { hypixelGuildId: id, verified: false },
+          note: "Linked, but Hypixel wasn't reachable to confirm that guild exists.",
+        };
+      }
+
+      const result = await this.d.config.setHypixelGuild(guildId, found.id);
+      return {
+        result,
+        change: { hypixelGuildId: found.id, verified: true },
+        ...(found.name === null ? {} : { note: `Linked to ${found.name}.` }),
+      };
     });
   }
 
@@ -1443,7 +1552,7 @@ export class PanelMutations {
     await this.capture(mutation, guildId, actorDiscordId, true, startedAt, at);
     this.log.info("panel write applied", { mutation, guildId, actor: actorDiscordId, change: step.change });
 
-    return { access, ok: true, error: null };
+    return { access, ok: true, error: null, ...(step.note === undefined ? {} : { note: step.note }) };
   }
 
   private async fail(
@@ -1488,6 +1597,8 @@ type Step =
   | {
       readonly result: { readonly ok: true } | { readonly ok: false; readonly error: unknown };
       readonly change: Readonly<Record<string, unknown>>;
+      /** Carried to `MutationResult.note` when the write succeeds. */
+      readonly note?: string;
     };
 
 function invalid(detail: string): Step {
@@ -1517,6 +1628,37 @@ function wordlistRefusal(error: WordlistError): MutationError {
   return error.kind === "DUPLICATE"
     ? { kind: "INVALID_INPUT", detail: "this guild already has a rule with that pattern and match type" }
     : { kind: "INVALID_INPUT", detail: error.detail };
+}
+
+/** What asking Hypixel about a guild can tell us, once the noise is collapsed. */
+type GuildLookupOutcome =
+  | { readonly kind: "found"; readonly id: string; readonly name: string | null }
+  | { readonly kind: "missing" }
+  | { readonly kind: "unreachable" };
+
+/**
+ * Resolve a guild, separating "Hypixel says there is no such guild" from "we
+ * could not ask Hypixel". The distinction is the whole design of the link flow:
+ * the first is a typo the admin should fix, the second must not stop onboarding.
+ */
+async function lookupHypixelGuild(
+  lookup: HypixelGuildLookup,
+  query: string,
+  by: "id" | "name",
+): Promise<GuildLookupOutcome> {
+  try {
+    const found = await lookup.getGuild(query, by);
+    if (found.ok) return { kind: "found", id: found.value.data.id, name: found.value.data.name };
+    // Only a successful response with no guild in it is a definitive no. A
+    // disabled key or a spent rate limit is silence, and reading silence as
+    // "that guild doesn't exist" would refuse a correct id during an outage.
+    return found.error.state === "MISSING_PROFILE" ? { kind: "missing" } : { kind: "unreachable" };
+  } catch (error) {
+    // HypixelUnavailableError is thrown rather than returned. Anything else is a
+    // real fault and must not be laundered into an outage.
+    if (isUpstreamUnavailable(error)) return { kind: "unreachable" };
+    throw error;
+  }
 }
 
 /** A whole number in `[0, max]` — the shape every XP limit shares. */

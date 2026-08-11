@@ -206,6 +206,12 @@ export interface SettingsVM {
    * Serialized (coins as a string) because it crosses the wire as JSON.
    */
   readonly screening: ScreeningPolicyView;
+  /**
+   * The guild's own record, for the fields that live on `Guild` rather than in
+   * its config — currently just the Hypixel link. Null only if the record
+   * vanished between the access check and this read.
+   */
+  readonly guild: GuildCard | null;
 }
 
 /**
@@ -619,14 +625,16 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const [config, policy] = await Promise.all([
+    const [config, policy, cards] = await Promise.all([
       this.d.config.get(guildId),
       this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
+      this.d.reads.listGuildCards([guildId]),
     ]);
     return {
       access,
       data: {
         config: config.ok ? config.value : null,
+        guild: cards[0] ?? null,
         // Read through the same tolerant parser the bridge bot uses, so the
         // page shows what screening will actually do with the stored value
         // rather than a prettier version of what is in the row.

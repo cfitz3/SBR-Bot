@@ -40,6 +40,20 @@ export interface GuildConfigRepository {
    * an empty string, so "unset" and "set to nothing" cannot diverge.
    */
   setChannelBinding(guildId: string, slot: ConfigChannelSlot, channelId: string | null): Promise<void>;
+  /**
+   * Bind or clear the Hypixel guild this platform guild tracks. Null unlinks.
+   *
+   * The odd one out on this port: it writes `Guild`, not `GuildConfig`. It lives
+   * here anyway because it is guild configuration to everyone who sets it, and
+   * because it has to share the service's cache-clear and broadcast — a link
+   * that landed in Postgres while the bots kept serving the old picture would be
+   * the exact drift `ConfigBroadcaster` exists to prevent.
+   *
+   * Rejects with an Error, rather than overwriting, when another guild already
+   * holds that Hypixel id; the column is unique and the collision is a real
+   * answer, not a failure.
+   */
+  setHypixelGuild(guildId: string, hypixelGuildId: string | null): Promise<void>;
   /** Read one admin setting; null when the guild has never set it. */
   getSetting(guildId: string, key: string): Promise<unknown>;
   /** Upsert one admin setting. Null deletes it, restoring the platform default. */

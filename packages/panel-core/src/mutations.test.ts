@@ -9,6 +9,7 @@ import { test } from "node:test";
 import {
   CONFIG_CHANNEL_SLOTS,
   err,
+  hypixelFailure,
   ok,
   type CommunityService,
   type GuildConfigService,
@@ -34,6 +35,7 @@ import {
   MUTATION_COOLDOWN_MS,
   PanelMutations,
   type ConfigAuditEntry,
+  type HypixelGuildLookup,
   type MutationLimiter,
 } from "./mutations.js";
 
@@ -70,8 +72,41 @@ function configRecorder(recorded: Recorded, result: Result<void> = ok(undefined)
     setRecruitment: record("setRecruitment") as GuildConfigService["setRecruitment"],
     setRoleMapping: record("setRoleMapping") as GuildConfigService["setRoleMapping"],
     setSetting: record("setSetting") as GuildConfigService["setSetting"],
+    setHypixelGuild: record("setHypixelGuild") as GuildConfigService["setHypixelGuild"],
   };
   return partial as GuildConfigService;
+}
+
+/** The Hypixel id the lookup resolves to; distinct from any id a test types in. */
+const RESOLVED_GUILD_ID = "aaaaaaaaaaaaaaaaaaaaaaaa";
+
+/**
+ * The four answers the link flow distinguishes: a hit, a definitive miss, an
+ * outage that answers with a state, and an outage that throws. The last two are
+ * the same event on two code paths, which is the reason both are here.
+ */
+type LookupOutcome = "found" | "missing" | "disabled" | "throws";
+
+function hypixelRecorder(recorded: Recorded, outcome: LookupOutcome): HypixelGuildLookup {
+  return {
+    async getGuild(id, by) {
+      recorded.calls.push({ method: "getGuild", args: [id, by] });
+      if (outcome === "throws") {
+        // Shaped like the real one: `isUpstreamUnavailable` matches on `name`.
+        const error = new Error("nothing cached to fall back on");
+        error.name = "HypixelUnavailableError";
+        throw error;
+      }
+      if (outcome === "missing") return hypixelFailure("MISSING_PROFILE");
+      if (outcome === "disabled") return hypixelFailure("API_DISABLED");
+      return ok({
+        data: { id: RESOLVED_GUILD_ID, name: "SkyBlock Royalty" },
+        freshness: "LIVE",
+        fetchedAt: "2026-08-07T12:00:00.000Z",
+        source: "LIVE",
+      });
+    },
+  };
 }
 
 /**
@@ -216,6 +251,10 @@ function make(
     wordlistRefusal?: WordlistError;
     /** The rule id names nothing in this guild. */
     wordlistMissing?: boolean;
+    /** Same, for a deployment with no Hypixel client wired in. */
+    noHypixel?: boolean;
+    /** What the guild lookup answers with. */
+    lookup?: LookupOutcome;
   } = {},
 ) {
   const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
@@ -242,6 +281,7 @@ function make(
             ...(over.wordlistMissing === true ? { missing: true } : {}),
           }),
         }),
+    ...(over.noHypixel === true ? {} : { hypixel: hypixelRecorder(recorded, over.lookup ?? "found") }),
     limiter: limiter(recorded, over.blocked ?? []),
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
@@ -296,6 +336,116 @@ test("every slot the platform defines is writable, not just the five legacy colu
     recorded.calls.map((c) => c.args[1]),
     [...CONFIG_CHANNEL_SLOTS],
   );
+});
+
+// ── linking a Hypixel guild ──
+
+test("a 24-hex id is taken as an id and stored as the one Hypixel confirms", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setHypixelGuild(session(), "g1", "BBBBBBBBBBBBBBBBBBBBBBBB");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok === true ? result.note : undefined, "Linked to SkyBlock Royalty.");
+  assert.deepEqual(recorded.calls, [
+    { method: "getGuild", args: ["BBBBBBBBBBBBBBBBBBBBBBBB", "id"] },
+    { method: "setHypixelGuild", args: ["g1", RESOLVED_GUILD_ID] },
+  ]);
+  assert.deepEqual(recorded.audits[0]?.change, { hypixelGuildId: RESOLVED_GUILD_ID, verified: true });
+});
+
+test("anything that isn't a 24-hex id is looked up as a name", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setHypixelGuild(session(), "g1", "  SkyBlock Royalty  ");
+
+  assert.equal(result.ok, true);
+  // Trimmed before the lookup, and the resolved id — not the typed name — is
+  // what gets stored: a name is a search key, never an identifier.
+  assert.deepEqual(recorded.calls, [
+    { method: "getGuild", args: ["SkyBlock Royalty", "name"] },
+    { method: "setHypixelGuild", args: ["g1", RESOLVED_GUILD_ID] },
+  ]);
+});
+
+test("a blank field unlinks without asking Hypixel anything", async () => {
+  const { mutations, recorded } = make();
+
+  for (const blank of ["", "   ", null]) {
+    const result = await mutations.setHypixelGuild(session(), "g1", blank);
+    assert.equal(result.ok, true, `${JSON.stringify(blank)} should unlink`);
+  }
+
+  assert.deepEqual(
+    recorded.calls,
+    [1, 2, 3].map(() => ({ method: "setHypixelGuild", args: ["g1", null] })),
+  );
+});
+
+test("a guild Hypixel says does not exist is refused, not stored", async () => {
+  const { mutations, recorded } = make({ lookup: "missing" });
+
+  const result = await mutations.setHypixelGuild(session(), "g1", "BBBBBBBBBBBBBBBBBBBBBBBB");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.equal(recorded.calls.some((c) => c.method === "setHypixelGuild"), false);
+});
+
+for (const lookup of ["disabled", "throws"] as const) {
+  test(`an id still links when Hypixel is unreachable (${lookup}), with a note saying so`, async () => {
+    // The case this fallback exists for: onboarding must not be impossible
+    // because the API key is dead. The id is the admin's to be right about.
+    const { mutations, recorded } = make({ lookup });
+
+    const result = await mutations.setHypixelGuild(session(), "g1", "BBBBBBBBBBBBBBBBBBBBBBBB");
+
+    assert.equal(result.ok, true);
+    assert.match(result.ok === true ? (result.note ?? "") : "", /wasn't reachable/);
+    // Lowercased on the way in, so the same guild in two cases is one row.
+    assert.deepEqual(recorded.calls[1], {
+      method: "setHypixelGuild",
+      args: ["g1", "bbbbbbbbbbbbbbbbbbbbbbbb"],
+    });
+    assert.deepEqual(recorded.audits[0]?.change, {
+      hypixelGuildId: "bbbbbbbbbbbbbbbbbbbbbbbb",
+      verified: false,
+    });
+  });
+
+  test(`a name is refused when Hypixel is unreachable (${lookup}), because there is no id to store`, async () => {
+    const { mutations, recorded } = make({ lookup });
+
+    const result = await mutations.setHypixelGuild(session(), "g1", "SkyBlock Royalty");
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.kind, "SERVICE_ERROR");
+    assert.match(result.error?.detail ?? "", /24-character id/);
+    assert.equal(recorded.calls.some((c) => c.method === "setHypixelGuild"), false);
+  });
+}
+
+test("without a Hypixel client, linking refuses but unlinking still works", async () => {
+  const { mutations, recorded } = make({ noHypixel: true });
+
+  const refused = await mutations.setHypixelGuild(session(), "g1", "BBBBBBBBBBBBBBBBBBBBBBBB");
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error?.kind, "SERVICE_ERROR");
+
+  // Unlinking needs nobody's confirmation, so it is not held hostage to a
+  // dependency the write itself never touches.
+  assert.equal((await mutations.setHypixelGuild(session(), "g1", "")).ok, true);
+  assert.deepEqual(recorded.calls, [{ method: "setHypixelGuild", args: ["g1", null] }]);
+});
+
+test("an OFFICER cannot repoint the guild", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.setHypixelGuild(session(), "g1", "BBBBBBBBBBBBBBBBBBBBBBBB");
+
+  assert.equal(result.ok, false);
+  assert.equal(result.access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
 });
 
 test("a setting is written under its key, and the audit records the key rather than the payload", async () => {

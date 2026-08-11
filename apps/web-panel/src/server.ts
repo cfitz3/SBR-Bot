@@ -530,6 +530,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     switch (name) {
       case "config.channel":
         return sendMutation(res, await m.setChannel(session, guildId, b["slot"], b["channelId"]));
+      case "config.hypixel":
+        return sendMutation(res, await m.setHypixelGuild(session, guildId, b["guild"]));
       case "config.setting":
         return sendMutation(res, await m.setSetting(session, guildId, b["key"], b["value"]));
       case "config.role-mapping":

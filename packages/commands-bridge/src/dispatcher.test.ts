@@ -428,6 +428,7 @@ const guildConfig: GuildConfigService = {
   async setBridgeSuspended() { return ok(undefined); },
   async setRecruitment() { return ok(undefined); },
   async setRoleMapping() { return ok(undefined); },
+  async setHypixelGuild() { return ok(undefined); },
 };
 const analytics: AnalyticsService = { async capture() {}, async emit() {} };
 

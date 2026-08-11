@@ -376,11 +376,21 @@ export class HypixelClient implements HypixelSocialLookup {
     });
   }
 
-  /** Guild by its Hypixel id, or by a member's uuid when `by` is "player". */
-  async getGuild(id: string, by: "id" | "player" = "id"): Promise<HypixelResult<GuildDTO>> {
+  /**
+   * Guild by its Hypixel id, by a member's uuid when `by` is "player", or by its
+   * name when `by` is "name".
+   *
+   * The name form is what onboarding uses: an admin linking a guild knows what
+   * it is called and has no reason to have ever seen its 24-character id.
+   *
+   * Encoded rather than interpolated raw, because a guild name is the one
+   * lookup key here that is free text — spaces and `&` are ordinary in one, and
+   * either would otherwise produce a URL that queries something else entirely.
+   */
+  async getGuild(id: string, by: "id" | "player" | "name" = "id"): Promise<HypixelResult<GuildDTO>> {
     return this.cached<GuildDTO>({
       key: `guild:${by}:${id}`,
-      url: `${API}/guild?${by}=${id}`,
+      url: `${API}/guild?${by}=${encodeURIComponent(id)}`,
       ttlMs: TTL.guild,
       label: `guild ${by}=${id}`,
       normalize: (raw) => {
