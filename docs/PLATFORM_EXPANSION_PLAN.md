@@ -58,7 +58,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **7** | **Milestones/achievements** *(shipped)* | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
 | **8** | **Stat command expansion** *(shipped)* | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
 | **9** | **Ticketing config** *(shipped)* | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
-| **10** | **Moderation & wordlist** | `/audit` fixes, expiry-aware punishments, infractions on `/me`, wordlist panel CRUD, auto-warn escalation | 1, 5 |
+| **10** | **Moderation & wordlist** *(shipped)* | `/audit` fixes, expiry-aware punishments, the caller's own record on `/me`, wordlist + escalation panel editor, auto-warn escalation | 1, 5 |
 | **11** | **Fun bridge commands + legacy cleanup** | Themed prefix commands; drop mirrored legacy channel columns and `BRIDGE_CHANNEL_ID` fallback | all |
 
 ---

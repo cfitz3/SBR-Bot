@@ -236,14 +236,14 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 ### 3.15 Filter
 
 - **Two things that act on members with nobody in the loop.** The chat filter's rules fire at relay time, and the escalation ladder mutes or bans off a warning count. Both are configuration rather than a record of what somebody did, which is what separates this page from Moderation next door.
-- **The rules are shown in full, patterns included** — that is the point of the page, and also why it sits at Admin+: the list is, by construction, a collection of the slurs and scam URLs the guild is filtering.
+- **The rules are shown in full, patterns included** — that is the point of the page. It is not what sets the tier: `/wordlist` in the admin bot already lists the same patterns to Staff, and a filter nobody who moderates can read is a filter nobody can maintain.
 - **The audit trail records which rule changed, to what, and by whom — never the pattern.** A trail that reproduced every entry would be a second copy of exactly the thing nobody wanted written down. `patternLength` is recorded instead, which is enough to tell an edit from a rewrite.
 - **Every control saves the whole rule**, because the mutation validates the *result*: changing only the match type can turn a legal substring into an invalid regex, or into a collision with a rule three rows down, and neither is visible from the changed field alone. A rule keeps its id across an edit — remove-and-re-add would reorder the list under whoever was reading it and orphan the rule id in an older bridge log line.
 - **A rule may be switched off rather than deleted.** Off keeps the row and stops it matching; delete is the irreversible one.
 - **The note a `/wordlist-add` carried is left alone.** It is not on `WordlistRuleDTO`, so this page has never seen it — an omitted `note` means "leave it", and only an explicit `null` clears it. The alternative would have every panel edit quietly delete what a staffer typed in Discord.
 - **The ladder is displayed as it is in force**, built-ins included (ADMIN_BOT.md §5.1). There is nothing stored until the first save, so a row-by-row editor would have to pretend otherwise; saving writes the ladder exactly as shown, which turns the built-ins on display into that guild's own. A mute rung with no duration is refused here rather than dropped on the way back in — `parseEscalationPolicy` would discard it silently, leaving an admin with a step that never fires.
 - **Rules and ladder are independent.** Escalation runs off the moderation service, which every deployment has, so a deployment without the chat filter still gets the ladder editor.
-- **Access:** Admin+.
+- **Access:** Admin+, and deliberately one tier above the bot's own `/wordlist-add` and `/wordlist-remove`, which are Officer. The asymmetry is the ladder: an officer adding one rule is a bounded act with an audit line behind it, while this page hands over the rungs that mute and ban on a count, and that is guild configuration in the same sense as ticket types and role mapping. An officer who needs to add a rule mid-incident still has the command.
 
 ---
 

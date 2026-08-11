@@ -175,6 +175,8 @@ A warning is only worth issuing if the third one means something different from 
 
 **Attribution deviates from the `SYSTEM` convention above, on purpose.** An auto-escalation is attributed to the staffer whose warning tripped it, not to a synthetic system actor. They took the action that caused it, an audit row whose actor is nobody is a row nobody can be asked about, and routing it through the same actor is what keeps the rank guard meaningful — escalation cannot reach somebody the warning itself was not allowed to touch. The row is still identifiable as automatic: its reason reads `Automatic escalation: N warnings in M days`, which `isEscalation()` is the single reader of. `/warn` reports the escalation back to the staffer by asking what is being enforced now, so they know before deciding whether to do anything further.
 
+**The member sees the ladder they are on.** `/me` in the member bot carries a "Your record" field — what is being enforced right now, how many warnings still count inside the window, and which rung the next one lands on (COMMANDS.md §Your record). It reads through `MemberRecordSource`, a one-member read-only port rather than this service, so the member bot gains no ability to read anybody else's history or to act on anyone. The count and the expiry check are the same functions used here, so a member is never told a number staff would dispute.
+
 ---
 
 ## 6. Anti-Raid & Safety Controls
