@@ -20,6 +20,7 @@ import type {
 } from "./enums.js";
 import type {
   AccessoryReportDTO,
+  AchievementsDTO,
   AdviceDTO,
   AntiRaidStateDTO,
   ApplicationDTO,
@@ -53,6 +54,7 @@ import type {
   SafetyStatusDTO,
   SkillsDTO,
   SlayersDTO,
+  SnapshotMetricsDTO,
   TicketDTO,
   WordlistRuleDTO,
 } from "./dtos.js";
@@ -164,6 +166,12 @@ export interface ProgressionService {
    * snapshot worker has not covered yet.
    */
   getMilestones(uuid: string, limit?: number): Promise<Result<readonly MilestoneDTO[]>>;
+  /**
+   * `/milestones` — the guild's achievements with this member's standing
+   * against each: what they have earned, what they are closest to, and the XP
+   * it has paid. Guild-scoped because the definitions are.
+   */
+  getAchievements(uuid: string, guildId: string): Promise<Result<AchievementsDTO>>;
   getProgress(uuid: string, metric: ProgressMetric, rangeDays: number): Promise<Result<ProgressSeriesDTO>>;
   /** `/setprofile` — remember which profile a member's lookups default to. */
   setSelectedProfile(uuid: string, profileId: string): Promise<Result<ProfileSummaryDTO, SelectProfileError>>;
@@ -195,19 +203,29 @@ export type SelectProfileError =
   | { readonly kind: "UNAVAILABLE" };
 
 /**
- * Milestone thresholds a guild recognises (packages/db + the panel).
+ * Port: read-only access to a guild's milestone definitions.
  *
- * Configuration, not member data — which is why this one *does* have a panel
- * surface while the achievements themselves stay in the bots. Staff decide what
- * the guild celebrates; nobody edits who reached it.
+ * Split out of the editing service so `/milestones` — which must know what the
+ * guild recognises to say how close a member is — can depend on the reading
+ * half without acquiring the panel's write surface.
  */
-export interface MilestoneDefinitionService {
+export interface MilestoneDefinitionReader {
   /**
    * Every definition in effect: the built-in defaults with the guild's own rows
    * layered over them by key. Disabled rows are included and flagged, because
    * the panel has to render the switch it can turn back on.
    */
   list(guildId: string): Promise<readonly MilestoneDefinitionDTO[]>;
+}
+
+/**
+ * Milestone thresholds a guild recognises (packages/db + the panel).
+ *
+ * Configuration, not member data — which is why this one *does* have a panel
+ * surface while the achievements themselves stay in the bots. Staff decide what
+ * the guild celebrates; nobody edits who reached it.
+ */
+export interface MilestoneDefinitionService extends MilestoneDefinitionReader {
   /** Create or update by `(guildId, key)`. Editing a default shadows it. */
   upsert(guildId: string, input: MilestoneDefinitionInput): Promise<MilestoneDefinitionDTO>;
   /**
@@ -250,6 +268,13 @@ export interface ProgressionRepository {
     readonly catacombsLevel: number | null;
     readonly senitherWeight: number | null;
   }[]>;
+  /**
+   * The most recent snapshot's metrics, or null if the member has never been
+   * snapshotted. Separate from `listSnapshots` because achievements need one
+   * reading of every milestone metric — including `slayerXp`, which the charted
+   * series has no use for — rather than a window of four.
+   */
+  latestSnapshot(minecraftUuid: string): Promise<SnapshotMetricsDTO | null>;
   /** The member's `/setprofile` choice, or null to follow their in-game selection. */
   getSelectedProfileId(minecraftUuid: string): Promise<string | null>;
   setSelectedProfile(minecraftUuid: string, profile: ProfileSummaryDTO): Promise<void>;

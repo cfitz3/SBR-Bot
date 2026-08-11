@@ -57,6 +57,32 @@ export const progressionRepository: ProgressionRepository = {
     }));
   },
 
+  async latestSnapshot(minecraftUuid: string) {
+    // Newest by capture time, not by day bucket: the event-tracked cohort writes
+    // several rows per day and the last one is the current reading.
+    const row = await prisma.profileSnapshot.findFirst({
+      where: { minecraftAccount: { uuid: minecraftUuid } },
+      orderBy: { capturedAt: "desc" },
+      select: {
+        capturedAt: true,
+        networth: true,
+        skillAverage: true,
+        catacombsLevel: true,
+        slayerXp: true,
+        senitherWeight: true,
+      },
+    });
+    if (!row) return null;
+    return {
+      capturedAt: row.capturedAt.toISOString(),
+      networth: toNumber(row.networth),
+      skillAverage: row.skillAverage,
+      catacombsLevel: row.catacombsLevel,
+      slayerXp: toNumber(row.slayerXp),
+      senitherWeight: row.senitherWeight,
+    };
+  },
+
   async getSelectedProfileId(minecraftUuid: string): Promise<string | null> {
     const row = await prisma.selectedSkyblockProfile.findFirst({
       where: { minecraftAccount: { uuid: minecraftUuid }, guildId: null, isActive: true },

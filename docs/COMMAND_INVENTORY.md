@@ -87,7 +87,7 @@ erroring.
 | `/slayer` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and boss kills | Slayers embed; text `{ign}: N slayer xp` |
 | `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level, classes, floor bests | Dungeons embed; text `{ign}: catacombs N` |
 | `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate with category breakdown | Networth embed; text `{ign}: {total}` |
-| `/milestones` | `player?` | 15s | — | Thresholds the player has crossed (top 10) | Milestones embed; text `{ign}: N milestone(s) recorded` |
+| `/milestones` | `player?` | 15s | — | Guild achievements + standing: earned (top 5) and closest unearned (top 5) w/ progress | Achievements embed; text `{ign}: N/M achievements · next: {label}` |
 | `/progress` | `metric?` (4 choices) `range?` (1–365, default 30) | 15s | — | The **caller's** progression over time; requires a link | Progress embed; text `{ign}: networth over 30d — +N` or `not enough history` |
 
 `/progress` falls back to `networth` for an unrecognised metric rather than

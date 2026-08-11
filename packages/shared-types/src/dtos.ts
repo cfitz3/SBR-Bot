@@ -502,6 +502,70 @@ export interface MilestoneDefinitionInput {
   readonly enabled: boolean;
 }
 
+/**
+ * One reading of every metric a milestone can be defined against.
+ *
+ * Keys match `MILESTONE_METRICS` exactly so a definition's `metric` indexes
+ * this directly — the alternative, a switch per metric, is one place to forget
+ * when a metric is added.
+ */
+export interface SnapshotMetricsDTO {
+  /** ISO-8601 of the capture, for "as of" in the reply. */
+  readonly capturedAt: string;
+  readonly networth: number | null;
+  readonly skillAverage: number | null;
+  readonly catacombsLevel: number | null;
+  readonly slayerXp: number | null;
+  readonly senitherWeight: number | null;
+}
+
+/**
+ * One recognised achievement, seen from a member's side.
+ *
+ * The same shape carries an earned and an unearned one: what a member wants
+ * from `/milestones` is a single list of what the guild rewards and where they
+ * stand against it, and splitting the two into different types would force the
+ * renderer to say the same thing twice. `achievedAt` is the discriminator.
+ *
+ * `current` is null when the metric has never been measured for this member —
+ * distinct from a measured zero, which is real progress against a threshold.
+ */
+export interface AchievementDTO {
+  readonly key: string;
+  readonly label: string;
+  readonly description: string | null;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly threshold: number;
+  /** Guild XP the definition pays. Zero is normal — most defaults pay nothing. */
+  readonly xpReward: number;
+  readonly current: number | null;
+  /** `current / threshold`, clamped to 0–1. Null whenever `current` is. */
+  readonly progress: number | null;
+  /** ISO-8601 when first reached, or null while outstanding. */
+  readonly achievedAt: string | null;
+}
+
+/** A member's standing against every achievement their guild recognises. */
+export interface AchievementsDTO {
+  /** Newest first. */
+  readonly earned: readonly AchievementDTO[];
+  /** Closest first, by fraction of the threshold reached. */
+  readonly upcoming: readonly AchievementDTO[];
+  readonly earnedCount: number;
+  readonly totalCount: number;
+  /** Guild XP the earned set has paid out. */
+  readonly xpEarned: number;
+  /** When the snapshot behind `current` was taken; null if never snapshotted. */
+  readonly measuredAt: string | null;
+  /**
+   * False when no definitions could be read at all — the guild has achievements
+   * switched off, or the service was wired without them. Lets the reply say
+   * "off here" instead of "you have earned nothing", which is a different claim.
+   */
+  readonly configured: boolean;
+}
+
 /** The tracked metrics `/progress` can chart, keyed as `ProfileSnapshot` stores them. */
 export type ProgressMetric = "networth" | "skillAverage" | "catacombsLevel" | "senitherWeight";
 

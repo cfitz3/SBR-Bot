@@ -10,6 +10,7 @@ import {
   type IdentityService,
   type LinkError,
   type LinkedIdentityDTO,
+  type AchievementsDTO,
   type MilestoneDTO,
   type AccessoryReportDTO,
   type AdviceDTO,
@@ -82,8 +83,45 @@ const summary: ProfileSummaryDTO = {
   senitherWeight: 8_120,
 };
 
+const achievements: AchievementsDTO = {
+  earned: [
+    {
+      key: "skill-average-40",
+      label: "Skill average 40",
+      description: null,
+      type: "SKILL_LEVEL",
+      metric: "skillAverage",
+      threshold: 40,
+      xpReward: 250,
+      current: 42.5,
+      progress: 1,
+      achievedAt: "2026-01-02T00:00:00Z",
+    },
+  ],
+  upcoming: [
+    {
+      key: "networth-10b",
+      label: "10b networth",
+      description: null,
+      type: "NETWORTH_THRESHOLD",
+      metric: "networth",
+      threshold: 10_000_000_000,
+      xpReward: 500,
+      current: 8_200_000_000,
+      progress: 0.82,
+      achievedAt: null,
+    },
+  ],
+  earnedCount: 1,
+  totalCount: 2,
+  xpEarned: 250,
+  measuredAt: "2026-01-03T00:00:00Z",
+  configured: true,
+};
+
 function progression(over: Partial<ProgressionService> = {}): ProgressionService {
   return {
+    async getAchievements() { return ok(achievements); },
     async getProfileSummary() { return live(summary); },
     async listProfiles() { return live([summary]); },
     async getSkills() {
@@ -667,10 +705,26 @@ test("setprofile autocomplete is empty rather than throwing for an unlinked call
   assert.equal(choices.length, 0);
 });
 
-test("milestones with no history explains why rather than showing nothing", async () => {
-  const empty = progression({ async getMilestones() { return ok([]); } });
-  const r = await makeDispatcher({ progression: empty }).dispatch("milestones", ctx());
-  assert.match(r.embed?.description ?? "", /once the daily snapshot/);
+test("milestones shows what was earned and what is closest", async () => {
+  const r = await makeDispatcher().dispatch("milestones", ctx());
+  assert.match(r.text, /1\/2 achievements/);
+  assert.match(r.text, /next: 10b networth/);
+  assert.match(r.embed?.description ?? "", /1\/2/);
+  // The unearned one carries a bar, not a bare "not earned".
+  assert.ok(r.embed?.fields?.some((f) => f.value.includes("82%")));
+});
+
+test("milestones says achievements are off rather than reporting none earned", async () => {
+  const off = progression({
+    async getAchievements() {
+      return ok<AchievementsDTO>({
+        earned: [], upcoming: [], earnedCount: 0, totalCount: 0,
+        xpEarned: 0, measuredAt: null, configured: false,
+      });
+    },
+  });
+  const r = await makeDispatcher({ progression: off }).dispatch("milestones", ctx());
+  assert.match(r.embed?.description ?? "", /aren't switched on/);
 });
 
 test("progress reports the change across the window", async () => {

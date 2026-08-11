@@ -44,7 +44,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level, classes, S+ counts | Player not found; no dungeon data | Cache→Live |
 | `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
 | `/progress` | Progression over time vs. snapshots | Linked | `metric?`, `range?` | Embed/chart-link: delta since last snapshot | No snapshots yet for account | DB (`ProfileSnapshot`) + Cache (latest) |
-| `/milestones` | Achievements/thresholds the player has crossed | Public | `player?` | List of `Milestone` records w/ dates | No milestones recorded | DB (`Milestone`) |
+| `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned (newest first, with XP paid) + closest unearned w/ progress bars, `n/total` headline, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet" | DB (`Milestone`, `MilestoneDefinition`, `ProfileSnapshot`) |
 
 ---
 

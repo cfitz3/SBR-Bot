@@ -6,6 +6,7 @@ import { describeAge, stalenessFooter } from "@sbr/shared-types";
 import type {
   AccessoryReportDTO,
   AccessorySuggestionDTO,
+  AchievementsDTO,
   AdviceDTO,
   AuctionsDTO,
   BazaarQuoteDTO,
@@ -19,7 +20,6 @@ import type {
   LeaderboardValueFormat,
   LinkError,
   LowestBinDTO,
-  MilestoneDTO,
   NetworthDTO,
   PriceDTO,
   ProfileSummaryDTO,
@@ -608,24 +608,83 @@ export function renderAdviceEmbed(
   });
 }
 
-export function renderMilestonesEmbed(ign: string, milestones: readonly MilestoneDTO[]): EmbedView {
-  if (milestones.length === 0) {
+/** Metric values read very differently: coins want `2.00b`, a level wants `40`. */
+function formatMetric(metric: string, value: number): string {
+  if (metric === "networth" || metric === "slayerXp") return formatCoins(value);
+  if (metric === "senitherWeight") return formatNumber(Math.round(value));
+  return formatLevel(value);
+}
+
+/** A ten-cell bar. Text, not an image: the in-game surface has to read it too. */
+function progressBar(fraction: number): string {
+  const filled = Math.round(Math.max(0, Math.min(1, fraction)) * 10);
+  return `${"█".repeat(filled)}${"░".repeat(10 - filled)} ${Math.round(fraction * 100)}%`;
+}
+
+/**
+ * `/milestones` — the guild's achievements and where this member stands.
+ *
+ * Shows the earned and the next-closest together, because the question behind
+ * the command is "what have I done and what's next", and a list of past
+ * achievements alone answers only half of it.
+ */
+export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): EmbedView {
+  if (!data.configured) {
     return {
-      title: `${ign} — milestones`,
-      // Distinguish "nothing achieved" from "we haven't snapshotted you yet".
-      description:
-        "No milestones recorded yet — these appear once the daily snapshot has seen you progress.",
+      title: `${ign} — achievements`,
+      // "Off", not "none": a member reading an empty list would conclude they
+      // had achieved nothing, which is a different and untrue claim.
+      description: "Achievements aren't switched on here.",
       color: "NEUTRAL",
     };
   }
+  if (data.totalCount === 0) {
+    return {
+      title: `${ign} — achievements`,
+      description: "This guild hasn't set up any achievements yet.",
+      color: "NEUTRAL",
+    };
+  }
+
+  const earned = data.earned.slice(0, 5).map((a) => ({
+    name: `✅ ${a.label}`,
+    value: `${formatMetric(a.metric, a.threshold)} · <t:${Math.floor(Date.parse(a.achievedAt ?? "") / 1000)}:R>${
+      a.xpReward > 0 ? ` · +${formatNumber(a.xpReward)} XP` : ""
+    }`,
+    inline: false,
+  }));
+
+  const upcoming = data.upcoming.slice(0, 5).map((a) => ({
+    name: `▫️ ${a.label}`,
+    value:
+      a.progress === null
+        ? // No snapshot for this metric yet — say so instead of drawing an empty
+          // bar, which would read as "0%" and imply a measurement we don't have.
+          `${formatMetric(a.metric, a.threshold)} · not measured yet`
+        : `${progressBar(a.progress)} — ${formatMetric(a.metric, a.current ?? 0)} / ${formatMetric(a.metric, a.threshold)}`,
+    inline: false,
+  }));
+
+  const measured =
+    data.measuredAt === null
+      ? "No snapshot yet — progress appears after the next daily capture."
+      : `Measured <t:${Math.floor(Date.parse(data.measuredAt) / 1000)}:R>`;
+
   return {
-    title: `${ign} — milestones`,
-    fields: milestones.slice(0, 10).map((m) => ({
-      name: `${m.metric} ${formatNumber(m.thresholdValue)}`,
-      value: `${m.type} · <t:${Math.floor(Date.parse(m.achievedAt) / 1000)}:R>`,
-      inline: false,
-    })),
-    color: "SUCCESS",
+    title: `${ign} — achievements`,
+    description:
+      `**${data.earnedCount}/${data.totalCount}** earned` +
+      (data.xpEarned > 0 ? ` · **${formatNumber(data.xpEarned)}** guild XP from achievements` : ""),
+    fields: [
+      ...(earned.length > 0
+        ? earned
+        : [{ name: "Nothing earned yet", value: "The closest ones are below.", inline: false }]),
+      ...(upcoming.length > 0
+        ? [{ name: "​", value: "**Up next**", inline: false }, ...upcoming]
+        : []),
+    ],
+    footer: measured,
+    color: data.earnedCount > 0 ? "SUCCESS" : "INFO",
   };
 }
 

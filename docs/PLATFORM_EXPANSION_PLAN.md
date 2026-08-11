@@ -55,7 +55,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **4** | **LFG rework** *(shipped)* | Embed posts into a configured channel, `perm:` toggle autofill, author/staff edit + close, message tracking | 1, 3 |
 | **5** | **XP & standing** *(shipped)* | XP ledger + balances, source weights/caps config, anti-abuse gates, `xp-aggregate` job, `/standing` + `/me` (see §3 for the `/profile` deviation) | 1, 2 |
 | **6** | **Leaderboards** *(shipped)* | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
-| **7** | **Milestones/achievements** | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
+| **7** | **Milestones/achievements** *(shipped)* | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
 | **8** | **Stat command expansion** | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
 | **9** | **Ticketing config** | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
 | **10** | **Moderation & wordlist** | `/audit` fixes, expiry-aware punishments, infractions on `/me`, wordlist panel CRUD, auto-warn escalation | 1, 5 |

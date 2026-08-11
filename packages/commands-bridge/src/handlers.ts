@@ -25,7 +25,7 @@ import {
   renderLeaderboardLine,
   renderLinkError,
   renderLowestBinEmbed,
-  renderMilestonesEmbed,
+  renderAchievementsEmbed,
   renderNetworth,
   renderNetworthEmbed,
   renderPriceEmbed,
@@ -379,16 +379,31 @@ const setprofileAutocomplete: AutocompleteHandler = async (focused, ctx, deps) =
     .filter((c) => typed === "" || c.name.toLowerCase().includes(typed));
 };
 
+/**
+ * `/milestones` — the guild's achievements with the member's standing against
+ * them, not a bare list of what they crossed. Public rather than ephemeral:
+ * achievements are the thing the guild celebrates, and announcing them is the
+ * point (see the announcer in DOMAIN_MODEL.md §Milestones).
+ */
 const milestones: CommandHandler = async (ctx, deps) => {
   const target = await resolveTarget(ctx, deps);
   if ("problem" in target) return { ephemeral: true, text: target.problem };
 
-  const result = await deps.progression.getMilestones(target.uuid, 10);
-  const list = result.ok ? result.value : [];
+  const result = await deps.progression.getAchievements(target.uuid, ctx.guildId);
+  if (!result.ok) {
+    return { ephemeral: true, text: "Couldn't read achievements just now — try again shortly." };
+  }
+  const data = result.value;
+  const next = data.upcoming[0];
   return {
     ephemeral: false,
-    text: `${target.ign}: ${list.length} milestone(s) recorded`,
-    embed: renderMilestonesEmbed(target.ign, list),
+    // The text line is the whole reply on the in-game surface, so it carries the
+    // headline and the nearest target rather than deferring to the embed.
+    text: data.configured
+      ? `${target.ign}: ${data.earnedCount}/${data.totalCount} achievements` +
+        (next ? ` · next: ${next.label}` : "")
+      : "Achievements aren't switched on here.",
+    embed: renderAchievementsEmbed(target.ign, data),
   };
 };
 

@@ -18,6 +18,7 @@ import {
   memberProgressSource,
   milestoneAnnouncementRepository,
   permRepository,
+  milestoneDefinitionRepository,
   progressionRepository,
   rankResolver,
   screeningHistorySource,
@@ -195,6 +196,10 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     profiles,
     networth,
     repo: progressionRepository,
+    // `/milestones` measures a member against what this guild recognises, so it
+    // needs the definitions the panel edits — read-only here; the bots never
+    // write configuration.
+    definitions: milestoneDefinitionRepository,
     // Upgrade advice reads prices out of the sweep cache only. A cold cache
     // costs a price tag, not the advice — never a live auction call, which
     // would put a Hypixel round-trip behind every suggestion.
