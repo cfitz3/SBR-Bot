@@ -11,8 +11,12 @@ services:
       POSTGRES_DB: sbrbot
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    # Loopback only. `"5432:5432"` publishes to 0.0.0.0 — with the development
+    # credentials below that is an open Postgres on the internet, which is
+    # scanned for and taken over within hours. The apps run on the same host, so
+    # they lose nothing; a remote client should tunnel over SSH.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,8 +29,10 @@ services:
     image: redis:7-alpine
     container_name: sbr-redis
     restart: unless-stopped
+    # Loopback only, and for the stronger reason: this Redis has no password at
+    # all, and an exposed one is routinely used to write an SSH key onto the host.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
