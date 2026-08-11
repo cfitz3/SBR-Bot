@@ -193,12 +193,6 @@ export function createLfgBoard(app: BridgeApp, discord: Client): LfgBoard {
 export interface BridgeTransportOptions {
   readonly discordToken: string;
   readonly discordGuildId: string | undefined;
-  /**
-   * Bootstrap fallback only, used until the guild has a `bridge` channel binding.
-   * The binding wins whenever it exists, so a running bot follows a panel change
-   * without a restart.
-   */
-  readonly bridgeChannelId: string | undefined;
   readonly mc: { host: string; port: number; username: string; version: string } | null;
 }
 
@@ -337,14 +331,16 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   /**
    * Where the relay lands, resolved per message rather than captured at boot.
    *
-   * The binding is the source of truth and is changed from the panel or
-   * `/set-channel` while the bot is running; `BRIDGE_CHANNEL_ID` survives only as
-   * a bootstrap fallback for an install whose config row has never been saved.
-   * The service caches, so this is not a query per chat line.
+   * The binding is the only source, and it is changed from the panel or
+   * `/set-channel` while the bot is running — so a channel move takes effect on
+   * the next message rather than the next deploy. The service caches, so this is
+   * not a query per chat line. An unbound guild relays nowhere, which is the
+   * honest answer: there is no env var to fall back to any more, and a bot
+   * quietly posting into a channel nobody configured was the failure the
+   * fallback used to cause.
    */
   async function resolveBridgeChannel(guildId: string): Promise<string | null> {
-    const bound = await app.handlerDeps.config.getChannel(guildId, "bridge");
-    return bound ?? opts.bridgeChannelId ?? null;
+    return app.handlerDeps.config.getChannel(guildId, "bridge");
   }
 
   const discord = new Client({

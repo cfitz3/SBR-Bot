@@ -59,7 +59,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **8** | **Stat command expansion** *(shipped)* | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
 | **9** | **Ticketing config** *(shipped)* | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
 | **10** | **Moderation & wordlist** *(shipped)* | `/audit` fixes, expiry-aware punishments, the caller's own record on `/me`, wordlist + escalation panel editor, auto-warn escalation | 1, 5 |
-| **11** | **Fun bridge commands + legacy cleanup** *(fun shipped)* | Themed prefix commands; drop mirrored legacy channel columns and `BRIDGE_CHANNEL_ID` fallback | all |
+| **11** | **Fun bridge commands + legacy cleanup** *(shipped)* | Themed prefix commands; dropped the mirrored legacy channel columns and the `BRIDGE_CHANNEL_ID` fallback | all |
 
 ---
 
@@ -69,7 +69,8 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 
 ```prisma
 /// Open-ended channel binding. Replaces the fixed *ChannelId columns on GuildConfig
-/// so a new slot is a row, not a migration. Legacy columns are mirrored until Phase 11.
+/// so a new slot is a row, not a migration. Since Phase 11 these rows are the only
+/// record of a channel — the mirrored *ChannelId columns were backfilled and dropped.
 model GuildChannelBinding {
   id        String   @id @default(cuid())
   guildId   String
@@ -109,8 +110,9 @@ model GuildSetting {
 
 Channel bindings, by contrast, are fully surfaced: the Mapping page renders one
 control per entry in `CONFIG_CHANNEL_SLOTS` and reads them from
-`GuildRuntimeConfig.channels` rather than the mirrored legacy columns, so the five
-new slots are settable the moment their features land.
+`GuildRuntimeConfig.channels`, so the five new slots are settable the moment
+their features land. (Phase 1 read that map over the mirrored legacy columns;
+since Phase 11 the map *is* the bindings and nothing else.)
 
 ### 2.2 Guild scan & member cache (Phase 2)
 
@@ -538,6 +540,29 @@ surface and should be designed as one, rather than arriving as a side effect of
 a dice roller. The shipped quotes are about Skyblock rather than about any kind
 of player, for the same reason.
 
+### Legacy channel cleanup (Phase 11) *(shipped)*
+The five mirrored columns on `GuildConfig` (`bridgeChannelId`, `staffChannelId`,
+`logChannelId`, `applicationsChannelId`, `eventsChannelId`) and the
+`BRIDGE_CHANNEL_ID` environment fallback are gone. `GuildChannelBinding` rows are
+now the only record of a channel: `guildConfigRepository.get` builds `channels`
+from bindings alone, `GuildConfigService.setChannel` is one write with nothing to
+mirror, and `resolveBridgeChannel` asks the config service instead of falling back
+to an env var.
+
+- **The migration backfills before it drops.** `20260811150000_drop_legacy_channel_columns`
+  inserts any surviving column value as a binding (`ON CONFLICT DO NOTHING`, so a
+  binding already written wins) and only then drops the columns. A guild last
+  saved by a pre-binding release comes out configured rather than silent. Ids are
+  `md5(...)` rather than `gen_random_uuid()` to avoid depending on `pgcrypto`.
+- **Seeding no longer reads a channel from `.env`.** `db:seed` creates the config
+  row and then reports how many slots are bound, telling the operator to run
+  `/set-channel type:bridge` when none are. A channel id in `.env` is exactly the
+  guild-specific value this buildout has been removing.
+- **Operational consequence:** after `npm run db:seed` on a *fresh* install the
+  relay stays silent until the bridge slot is bound. That is the intended
+  failure — an unbound guild relaying nowhere is legible, whereas relaying into
+  a channel named by an env var nobody edited is not.
+
 ---
 
 ## 4. Web panel changes (admin-only)
@@ -596,10 +621,10 @@ Code paths touched:
 | **Hypixel API keys are not persisting upstream** (known outage) — GEXP/scan cannot be verified live | Build against recorded fixtures + unit tests; gate the scan job behind a feature flag; flag the deferred live smoke test explicitly rather than claiming verification. |
 | **XP double-crediting** on job retries | `XpEvent.dedupeKey` unique index; aggregation is idempotent per (source, subject, day). |
 | **XP farming** (message spam) | Daily caps, per-user cooldowns, min message length, bot/command filtering, all panel-configurable; ledger makes abuse auditable and reversible. |
-| **Channel binding migration** silently breaking the bridge | Dual-read (binding → legacy column → env) and dual-write for the five legacy slots; legacy removal only in Phase 11. |
+| **Channel binding migration** silently breaking the bridge | Dual-read (binding → legacy column → env) and dual-write through Phase 10; Phase 11 backfilled every surviving column value into a binding *in the same migration that dropped the columns*, so an install last written by an older release keeps its channels. |
 | **HTTP mode leaking sessions** | HTTPS remains the default; HTTP mode logs a loud startup warning and refuses `NODE_ENV=production` unless `WEB_PANEL_ALLOW_INSECURE=true`. |
 | **Renaming `/slayer`** breaks muscle memory + registered commands | Ship `/slayers` alongside a deprecated `/slayer` alias for one release. |
-| **Prisma migration size** across 11 phases | One migration per phase, additive only; no destructive change before Phase 11. |
+| **Prisma migration size** across 11 phases | One migration per phase, additive only; the single destructive change (dropping five columns) is Phase 11's, and it backfills before it drops. |
 | **Panel scope creep** into member features | Route allowlist is reviewed per phase against §4's "not in the panel" list. |
 | **Perm roster drift** from real guild membership | Roster autofill reads the 6h cache; `/perm info` marks members no longer in the guild rather than deleting them. |
 

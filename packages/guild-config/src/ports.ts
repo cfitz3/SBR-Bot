@@ -5,18 +5,8 @@ import type { ConfigChannelSlot } from "@sbr/shared-types";
  * (`guildConfigRepository`) so neither side depends on the other.
  */
 export interface GuildConfigRow {
-  /**
-   * Channel bindings by slot, already merged by the repository: a binding row
-   * wins, and a legacy `*ChannelId` column fills in for the five slots that
-   * predate the table. Merging in the repository rather than the service keeps
-   * the compatibility window in one place to delete later.
-   */
+  /** Channel bindings by slot — the only place a channel is recorded. */
   readonly channels: Readonly<Partial<Record<ConfigChannelSlot, string>>>;
-  readonly bridgeChannelId: string | null;
-  readonly staffChannelId: string | null;
-  readonly logChannelId: string | null;
-  readonly applicationsChannelId: string | null;
-  readonly eventsChannelId: string | null;
   readonly prefixes: readonly string[];
   readonly timezone: string;
   readonly applicationsOpen: boolean;

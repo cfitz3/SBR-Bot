@@ -212,12 +212,13 @@ Indexed on (`guildId`, `startedAt`).
 
 #### GuildConfig
 Per-guild settings and feature flags. Single row per guild; hot-read → cached in Redis.
+Holds no channel ids: every destination is a `GuildChannelBinding` row (the five
+mirrored `*ChannelId` columns were backfilled into bindings and dropped in
+`20260811150000_drop_legacy_channel_columns`).
 
 | Field | Notes |
 |-------|-------|
 | `guildId` | FK, unique |
-| `bridgeChannelId` | **deprecated** — mirrored from the `bridge` binding; dropped once no reader remains |
-| `staffChannelId`, `logChannelId`, `applicationsChannelId`, `eventsChannelId` | **deprecated**, same |
 | `prefixes` | command prefixes |
 | `features` | JSON feature-flag map |
 | `cooldownDefaults` | JSON |
@@ -241,9 +242,9 @@ Unique on (`guildId`, `slot`). Deliberately not a Prisma enum: the panel derives
 both its validation and its rendered controls from the same `const` list, and a
 slot written by a newer release is ignored by an older one rather than crashing it.
 
-Reads merge binding rows over the legacy columns (see `guildConfigRepository.get`);
-writes go to the binding first and then mirror the legacy column where one exists,
-so a partial failure leaves the authoritative value correct.
+These rows are the only record of a channel: `guildConfigRepository.get` builds
+`channels` from them alone, and `setChannel` is a single write with nothing to
+mirror, so two copies can no longer disagree.
 
 **Relationships:** N—1 `Guild`.
 

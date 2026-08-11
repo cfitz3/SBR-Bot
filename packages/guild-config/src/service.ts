@@ -32,20 +32,6 @@ export interface GuildConfigServiceDeps {
   readonly broadcast?: ConfigBroadcaster;
 }
 
-/**
- * Legacy column behind a slot name, for the five slots that predate
- * GuildChannelBinding. Writes are mirrored into these so a process still reading
- * `config.bridgeChannelId` (or a rollback to the previous release) sees the
- * current value; the columns are dropped once no reader remains.
- */
-const LEGACY_CHANNEL_COLUMNS: Partial<Record<ConfigChannelSlot, string>> = {
-  bridge: "bridgeChannelId",
-  staff: "staffChannelId",
-  log: "logChannelId",
-  applications: "applicationsChannelId",
-  events: "eventsChannelId",
-};
-
 const DEFAULT_TTL_MS = 10_000;
 
 export class GuildConfigServiceImpl implements GuildConfigService {
@@ -110,14 +96,10 @@ export class GuildConfigServiceImpl implements GuildConfigService {
   }
 
   async setChannel(guildId: string, slot: ConfigChannelSlot, channelId: string | null): Promise<Result<void>> {
-    const legacyColumn = LEGACY_CHANNEL_COLUMNS[slot];
-    return this.write(guildId, async () => {
-      // The binding is authoritative and written first: if the mirror below
-      // fails, the value that every reader now resolves through is already
-      // correct, and the stale column is the copy nobody is meant to trust.
-      await this.repo.setChannelBinding(guildId, slot, channelId);
-      if (legacyColumn) await this.repo.update(guildId, { [legacyColumn]: channelId });
-    });
+    // One write, one place. Until the legacy columns were dropped this also
+    // mirrored five of the slots into GuildConfig; that mirror is gone with the
+    // columns, so a partial failure can no longer leave two disagreeing copies.
+    return this.write(guildId, () => this.repo.setChannelBinding(guildId, slot, channelId));
   }
 
   async getSetting<T>(guildId: string, key: string): Promise<T | null> {

@@ -360,11 +360,11 @@ model SelectedSkyblockProfile {
 
 /// One channel binding per (guild, slot).
 ///
-/// Replaces the fixed `*ChannelId` columns on GuildConfig: adding a slot is a
+/// Replaced the fixed `*ChannelId` columns on GuildConfig: adding a slot is a
 /// row rather than a migration, which is what lets the panel own the full set of
-/// guild-specific channels instead of some of them living in `.env`. The five
-/// legacy columns are still written for now (see LEGACY_CHANNEL_COLUMNS in
-/// @sbr/guild-config) and are dropped once nothing reads them.
+/// guild-specific channels instead of some of them living in `.env`. Those
+/// columns are gone as of 20260811150000_drop_legacy_channel_columns — this
+/// table is now the only place a channel is recorded.
 model GuildChannelBinding {
   id        String   @id @default(cuid())
   guildId   String
@@ -565,11 +565,10 @@ model GuildJoinScreening {
 model GuildConfig {
   id               String   @id @default(cuid())
   guildId          String   @unique
-  bridgeChannelId  String?
-  staffChannelId   String?
-  logChannelId     String?
-  applicationsChannelId String?
-  eventsChannelId  String?
+  /// Channels live in GuildChannelBinding, never here. The five `*ChannelId`
+  /// columns this model used to carry were dropped in
+  /// 20260811150000_drop_legacy_channel_columns, after their values were
+  /// backfilled into bindings.
   prefixes         String[] @default(["!"])
   timezone         String   @default("UTC")
   applicationsOpen Boolean  @default(false)

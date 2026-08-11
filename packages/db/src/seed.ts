@@ -7,7 +7,9 @@
  * server isn't set up on the platform" — so a fresh install needs exactly one
  * Guild row before anything works.
  *
- * Reads DISCORD_GUILD_ID / BRIDGE_CHANNEL_ID / GUILD_NAME from the root .env.
+ * Reads DISCORD_GUILD_ID / GUILD_NAME from the root .env. Channels are not read
+ * from the environment: they are bound with `/set-channel` or the panel's
+ * Mapping page, which is where a guild-specific value belongs.
  * Idempotent: re-running updates the existing rows instead of duplicating them.
  *
  *   node dist/seed.js [ownerDiscordId]
@@ -36,7 +38,6 @@ function required(key: string): string {
 async function main(): Promise<void> {
   const discordGuildId = required("DISCORD_GUILD_ID");
   const name = process.env.GUILD_NAME?.trim() || "SBR";
-  const bridgeChannelId = process.env.BRIDGE_CHANNEL_ID?.trim() || null;
   const ownerDiscordId = (process.argv[2] ?? process.env.GUILD_OWNER_DISCORD_ID ?? "").trim();
 
   const guild = await prisma.guild.upsert({
@@ -46,22 +47,21 @@ async function main(): Promise<void> {
   });
   process.stdout.write(`guild ready: ${guild.name} (${guild.id}) → discord ${discordGuildId}\n`);
 
+  // Config row only. Channels are *not* seeded from the environment any more:
+  // every slot has a real setter (`/set-channel`, and the panel's Mapping page),
+  // and a channel id in `.env` is a guild-specific value living outside the
+  // product — the thing this buildout has been removing all along.
   await prisma.guildConfig.upsert({
     where: { guildId: guild.id },
-    update: { bridgeChannelId },
-    create: { guildId: guild.id, bridgeChannelId },
+    update: {},
+    create: { guildId: guild.id },
   });
-  // Seed the binding too, since that is what the running bot actually reads.
-  // `update` is deliberately omitted from the upsert: re-seeding must not stomp
-  // a channel someone has since changed from the panel.
-  if (bridgeChannelId) {
-    await prisma.guildChannelBinding.upsert({
-      where: { guildId_slot: { guildId: guild.id, slot: "bridge" } },
-      update: {},
-      create: { guildId: guild.id, slot: "bridge", channelId: bridgeChannelId },
-    });
-  }
-  process.stdout.write(`guild config ready: bridge channel=${bridgeChannelId ?? "(unset)"}\n`);
+  const bound = await prisma.guildChannelBinding.count({ where: { guildId: guild.id } });
+  process.stdout.write(
+    bound > 0
+      ? `guild config ready: ${bound} channel binding(s) already set\n`
+      : "guild config ready: no channels bound yet — run `/set-channel type:bridge channel:#…` in Discord\n",
+  );
 
   if (ownerDiscordId) {
     const user = await prisma.discordUser.upsert({

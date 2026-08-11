@@ -513,16 +513,12 @@ export const CONFIG_CHANNEL_SLOT_LABELS: Readonly<Record<ConfigChannelSlot, stri
 export interface GuildRuntimeConfig {
   readonly guildId: string;
   /**
-   * Every configured channel, keyed by slot. The canonical source: a slot with
-   * no binding is absent, and the five legacy `*ChannelId` fields below are a
-   * compatibility view over the same data for call sites not yet migrated.
+   * Every configured channel, keyed by slot, and the only way to ask for one: a
+   * slot with no binding is absent. The five `*ChannelId` fields that used to
+   * sit beside this as a compatibility view are gone — a channel has exactly
+   * one name now, and `getChannel(guildId, slot)` is how you get it.
    */
   readonly channels: Readonly<Partial<Record<ConfigChannelSlot, string>>>;
-  readonly bridgeChannelId: string | null;
-  readonly staffChannelId: string | null;
-  readonly logChannelId: string | null;
-  readonly applicationsChannelId: string | null;
-  readonly eventsChannelId: string | null;
   readonly prefixes: readonly string[];
   readonly timezone: string;
   readonly applicationsOpen: boolean;

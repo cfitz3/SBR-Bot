@@ -150,11 +150,6 @@ export const wordlistRepository = {
 
 export interface GuildConfigRow {
   channels: Partial<Record<ConfigChannelSlot, string>>;
-  bridgeChannelId: string | null;
-  staffChannelId: string | null;
-  logChannelId: string | null;
-  applicationsChannelId: string | null;
-  eventsChannelId: string | null;
   prefixes: string[];
   timezone: string;
   applicationsOpen: boolean;
@@ -186,36 +181,17 @@ function toRoleMap(value: unknown): Record<string, string> {
 }
 
 /**
- * Merge the two places a channel can be recorded, newest wins.
+ * Bindings, keyed by slot.
  *
- * A binding row is authoritative; a legacy column fills in for the five slots
- * that predate the table, covering a guild whose config was written by an older
- * release and never re-saved since. Keeping the fallback here rather than in the
- * service means the compatibility window is one function to delete.
+ * Until `20260811150000_drop_legacy_channel_columns` this also merged five
+ * `*ChannelId` columns underneath the bindings. Those were backfilled into this
+ * table and dropped, so there is now exactly one place a channel is recorded
+ * and nothing left to reconcile.
  */
-function mergeChannels(
-  cfg: {
-    bridgeChannelId: string | null;
-    staffChannelId: string | null;
-    logChannelId: string | null;
-    applicationsChannelId: string | null;
-    eventsChannelId: string | null;
-  },
+function toChannels(
   bindings: readonly { slot: string; channelId: string }[],
 ): Partial<Record<ConfigChannelSlot, string>> {
   const channels: Partial<Record<ConfigChannelSlot, string>> = {};
-
-  const legacy: [ConfigChannelSlot, string | null][] = [
-    ["bridge", cfg.bridgeChannelId],
-    ["staff", cfg.staffChannelId],
-    ["log", cfg.logChannelId],
-    ["applications", cfg.applicationsChannelId],
-    ["events", cfg.eventsChannelId],
-  ];
-  for (const [slot, channelId] of legacy) {
-    if (channelId !== null) channels[slot] = channelId;
-  }
-
   for (const binding of bindings) {
     // An unrecognised slot is a row from a newer release than this process;
     // ignoring it is correct, and better than widening the typed map with it.
@@ -233,12 +209,7 @@ export const guildConfigRepository = {
     ]);
     if (!cfg) return null;
     return {
-      channels: mergeChannels(cfg, bindings),
-      bridgeChannelId: cfg.bridgeChannelId,
-      staffChannelId: cfg.staffChannelId,
-      logChannelId: cfg.logChannelId,
-      applicationsChannelId: cfg.applicationsChannelId,
-      eventsChannelId: cfg.eventsChannelId,
+      channels: toChannels(bindings),
       prefixes: cfg.prefixes,
       timezone: cfg.timezone,
       applicationsOpen: cfg.applicationsOpen,

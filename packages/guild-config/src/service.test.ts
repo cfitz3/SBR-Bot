@@ -9,11 +9,6 @@ const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 function row(over: Partial<GuildConfigRow> = {}): GuildConfigRow {
   return {
     channels: { bridge: "chan-1" },
-    bridgeChannelId: "chan-1",
-    staffChannelId: null,
-    logChannelId: null,
-    applicationsChannelId: null,
-    eventsChannelId: null,
     prefixes: ["!"],
     timezone: "UTC",
     applicationsOpen: false,
@@ -114,27 +109,7 @@ test("with no cached value at all, an outage is reported as an error", async () 
   assert.equal((await svc.get("g1")).ok, false);
 });
 
-test("setChannel writes the binding and mirrors the legacy column, in that order", async () => {
-  const calls: string[] = [];
-  const patches: Record<string, unknown>[] = [];
-  const bound: [string, string | null][] = [];
-  const svc = new GuildConfigServiceImpl({
-    repo: repo({
-      async update(_g, patch) { calls.push("update"); patches.push(patch); },
-      async setChannelBinding(_g, slot, id) { calls.push("bind"); bound.push([slot, id]); },
-    }),
-    logger: silent,
-  });
-
-  await svc.setChannel("g1", "staff", "chan-9");
-  await svc.setChannel("g1", "events", null);
-  assert.deepEqual(bound, [["staff", "chan-9"], ["events", null]]);
-  assert.deepEqual(patches, [{ staffChannelId: "chan-9" }, { eventsChannelId: null }]);
-  // The authoritative row must land before the copy nobody is meant to trust.
-  assert.deepEqual(calls, ["bind", "update", "bind", "update"]);
-});
-
-test("a slot with no legacy column is written to the binding table only", async () => {
+test("every slot is written to the binding table and nowhere else", async () => {
   const calls: string[] = [];
   const bound: [string, string | null][] = [];
   const svc = new GuildConfigServiceImpl({
@@ -145,12 +120,16 @@ test("a slot with no legacy column is written to the binding table only", async 
     logger: silent,
   });
 
+  // Two slots that used to have a mirrored column and one that never did: since
+  // the columns were dropped, all three take exactly the same single write.
+  await svc.setChannel("g1", "staff", "chan-9");
+  await svc.setChannel("g1", "events", null);
   await svc.setChannel("g1", "lfg", "chan-7");
-  assert.deepEqual(bound, [["lfg", "chan-7"]]);
-  assert.deepEqual(calls, ["bind"], "no column exists to mirror into");
+  assert.deepEqual(bound, [["staff", "chan-9"], ["events", null], ["lfg", "chan-7"]]);
+  assert.deepEqual(calls, ["bind", "bind", "bind"], "nothing left to mirror into");
 });
 
-test("getChannel resolves through the merged channel map", async () => {
+test("getChannel resolves through the channel map", async () => {
   const svc = new GuildConfigServiceImpl({
     repo: repo({ async get() { return row({ channels: { bridge: "chan-1", lfg: "chan-7" } }); } }),
     logger: silent,
