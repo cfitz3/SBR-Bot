@@ -3,6 +3,11 @@
 Scope: LFG/Perms, XP & player standing, expanded Skyblock stat commands, milestones,
 guild scanning, ticketing, mod logging, wordlist, admin-only web panel, HTTP/HTTPS toggle.
 
+**Status: all phases (1–11 plus the out-of-band screening phase S) are shipped as of
+2026-08-11.** Where the build deviated from this document the deviation is recorded
+in the relevant phase section rather than edited out, so this stays a record of what
+was decided and why, not only of what exists.
+
 This document is the contract for the build-out. It is written against the existing
 monorepo (`packages/*` domain packages + `apps/*` runtimes) and preserves the current
 architecture: **Prisma/Postgres is the source of truth, Redis is hot state, domain logic
