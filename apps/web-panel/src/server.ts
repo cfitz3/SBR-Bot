@@ -448,12 +448,35 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
 
     // Manageable = MANAGE_GUILD ∩ platform Guild records; store internal ids.
     const manageableGuildIds: string[] = [];
+    // Counted alongside, because an empty result has three different causes and
+    // the selector renders all of them as "no guilds to show": Discord returned
+    // nothing (the `guilds` scope was never granted), nothing passed the
+    // permission gate, or nothing matched a platform Guild row. Summarising the
+    // funnel at login is what tells them apart from a log line instead of a
+    // database session.
+    let manageableCount = 0;
+    const unmatched: string[] = [];
     for (const g of guilds) {
       if (typeof g.id !== "string") continue;
       if (!canManageGuild(g.permissions)) continue;
+      manageableCount += 1;
       const internalId = await app.resolveGuild(g.id);
       if (internalId) manageableGuildIds.push(internalId);
+      else unmatched.push(g.id);
     }
+
+    // Info, not debug: this is the one place Discord authority and platform
+    // records have to agree, and when they disagree the user is locked out of a
+    // panel that looks like it simply has nothing in it. The unmatched ids are
+    // capped because someone in fifty servers would otherwise log fifty
+    // snowflakes on every sign-in.
+    app.log.info("panel login resolved guilds", {
+      discordId: me.id,
+      returnedByDiscord: guilds.length,
+      passedPermissionGate: manageableCount,
+      matchedPlatformGuild: manageableGuildIds.length,
+      unmatchedDiscordGuildIds: unmatched.slice(0, 10),
+    });
 
     const sessionId = randomUUID();
     // Minted with the session and stored beside it, so a write is checked
