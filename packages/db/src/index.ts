@@ -3,7 +3,13 @@
  * The single choke point for database access across the platform.
  */
 export { prisma, connectDb, disconnectDb } from "./client.js";
-export { pingDb, type DbPingResult } from "./health.js";
+export {
+  pingDb,
+  assertDatabaseReady,
+  DatabaseNotReadyError,
+  type DbPingResult,
+  type DbReadyFailure,
+} from "./health.js";
 
 // Typed repositories — the only sanctioned data-access surface for domain packages.
 export { identityRepository } from "./repositories/identity.js";

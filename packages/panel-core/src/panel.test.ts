@@ -157,6 +157,7 @@ function svc(
     config?: GuildConfigService;
     heartbeats?: HeartbeatReader;
     xp?: XpService;
+    milestones?: MilestoneDefinitionService;
   } = {},
 ) {
   return new PanelService({
@@ -167,6 +168,7 @@ function svc(
     config: over.config ?? configService(),
     ...(over.heartbeats ? { heartbeats: over.heartbeats } : {}),
     ...(over.xp ? { xp: over.xp } : {}),
+    ...(over.milestones ? { milestones: over.milestones } : {}),
     logger: silent,
   });
 }

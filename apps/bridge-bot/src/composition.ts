@@ -7,6 +7,7 @@
 import { loadConfig, type AppConfig } from "@sbr/config";
 import {
   communityRepository,
+  assertDatabaseReady,
   disconnectDb,
   guildConfigRepository,
   guildMemberDirectory,
@@ -133,6 +134,10 @@ export type BridgeStatusDetails = Readonly<Record<string, string | number | bool
 export async function createBridgeApp(): Promise<BridgeApp> {
   const config = loadConfig();
   const log = createLogger({ level: config.logLevel, name: "bridge-bot" });
+
+  // Prisma connects lazily, so a wrong or absent Postgres would otherwise only
+  // show up later as an endless drip of failing queries. Check once, up front.
+  await assertDatabaseReady();
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis);
 

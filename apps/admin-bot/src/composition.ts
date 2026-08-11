@@ -7,6 +7,7 @@
 import { loadConfig, type AppConfig } from "@sbr/config";
 import {
   communityRepository,
+  assertDatabaseReady,
   disconnectDb,
   guildConfigRepository,
   guildRepository,
@@ -59,6 +60,10 @@ export type AdminStatusDetails = Readonly<Record<string, string | number | boole
 export async function createAdminApp(): Promise<AdminApp> {
   const config = loadConfig();
   const log = createLogger({ level: config.logLevel, name: "admin-bot" });
+
+  // Prisma connects lazily, so a wrong or absent Postgres would otherwise only
+  // show up later as an endless drip of failing queries. Check once, up front.
+  await assertDatabaseReady();
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis);
 

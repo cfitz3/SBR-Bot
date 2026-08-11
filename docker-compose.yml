@@ -2,6 +2,11 @@ services:
   postgres:
     image: postgres:16
     container_name: sbr-postgres
+    # Without this the datastores stay down after any Docker/host restart while
+    # the apps (run under tmux, outside compose) keep going — and the freed
+    # 5432/6379 can then be claimed by any other Postgres/Redis on the box, so
+    # perfectly valid credentials start being rejected. See the note in README.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: sbrbot
       POSTGRES_USER: postgres
@@ -19,6 +24,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: sbr-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
