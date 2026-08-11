@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import { communitySpecs } from "./handlers-community.js";
 import { permSpecs } from "./handlers-perms.js";
+import { funSpecs } from "./fun.js";
 import {
   renderAccessoriesEmbed,
   renderAdviceEmbed,
@@ -1000,6 +1001,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     ...communitySpecs(),
     ...permSpecs(),
+    ...funSpecs(),
   ];
   return new Map(specs.map((s) => [s.name, s]));
 }

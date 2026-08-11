@@ -61,7 +61,14 @@ import { BridgeService } from "@sbr/bridge";
 import { createLogger, type Logger } from "@sbr/observability";
 import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
-import { err, ok, type GuildRosterSource, type MilestoneAnnouncerPort, type PlayerLookup } from "@sbr/shared-types";
+import {
+  err,
+  ok,
+  type GuildRosterSource,
+  type MilestoneAnnouncerPort,
+  type PlayerLookup,
+  type TextScreen,
+} from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
@@ -318,6 +325,18 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
   });
 
+  // The same compiled filter the relay uses, narrowed to a yes/no. Sharing the
+  // instance rather than building a second one is the point: a quote the bot
+  // says and a message a member relays are held to one set of rules, warmed by
+  // one cache, and cannot drift apart on a stale copy.
+  const wordlistFilter = new WordlistFilterImpl();
+  const screen: TextScreen = {
+    async isClean(guildId, text) {
+      const verdict = await wordlistFilter.check(guildId, text);
+      return verdict.action === "ALLOW";
+    },
+  };
+
   const handlerDeps: HandlerDeps = {
     identity,
     progression,
@@ -333,6 +352,8 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     xp,
     leaderboards,
     record,
+    screen,
+    tallies: adapters.tallies,
     logger: log,
   };
 
@@ -366,7 +387,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
 
   const bridge = new BridgeService({
     guard: new BridgeGuardImpl(redis, identity),
-    wordlist: new WordlistFilterImpl(),
+    wordlist: wordlistFilter,
     flood: new FloodControlImpl(redis),
     logger: log,
   });

@@ -59,7 +59,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **8** | **Stat command expansion** *(shipped)* | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
 | **9** | **Ticketing config** *(shipped)* | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
 | **10** | **Moderation & wordlist** *(shipped)* | `/audit` fixes, expiry-aware punishments, the caller's own record on `/me`, wordlist + escalation panel editor, auto-warn escalation | 1, 5 |
-| **11** | **Fun bridge commands + legacy cleanup** | Themed prefix commands; drop mirrored legacy channel columns and `BRIDGE_CHANNEL_ID` fallback | all |
+| **11** | **Fun bridge commands + legacy cleanup** *(fun shipped)* | Themed prefix commands; drop mirrored legacy channel columns and `BRIDGE_CHANNEL_ID` fallback | all |
 
 ---
 
@@ -496,9 +496,47 @@ model TicketTypeConfig {
   inside the escalation window and what the next warning would cost, and nothing
   a member surface should not be able to ask.
 
-### Bridge fun commands (Phase 11)
+### Bridge fun commands (Phase 11) *(shipped)*
 `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank`, `!cringe` — rate-limited
-through the existing `CooldownGate`, wordlist-filtered, no state beyond Redis counters.
+through the existing `CooldownGate` (5–15s, longer than the lookups'),
+wordlist-filtered, no state beyond Redis counters.
+
+Three constraints turned out to be the actual design, and are documented in
+`COMMANDS.md` §20 rather than left implicit:
+
+- **Nothing echoes what somebody typed.** The bridge speaks with the guild's
+  voice, so a command that repeats arbitrary text is a way to make the guild say
+  anything through a path the chat filter was never asked about. `!8ball`
+  answers without repeating the question, `!rps` echoes only a throw from a
+  fixed set, and `!rank`/`!cringe` take a Minecraft name or nothing.
+- **"Wordlist-filtered" became a narrow port, not the wordlist service.**
+  `TextScreen` asks one yes/no question and cannot write, so the member bot
+  gained no path to edit the rules it is being held to — the same reasoning as
+  `MemberRecordSource` in Phase 10. It is wired to the *same*
+  `WordlistFilterImpl` instance the relay uses, so a quote the bot says and a
+  message a member relays cannot drift apart on a stale cache.
+- **The counter can only count.** `TallyStore` has no read, no reset and no
+  listing: a tally that can be enumerated is a leaderboard, and a leaderboard
+  about who is cringe is a different decision than this one. Keys are
+  `fun:tally:*`, keyed by the typed name rather than a Discord id, with a
+  90-day expiry re-armed on every bump.
+
+**Deviation — the in-game name pattern was widened.** `parseInGameCommand`
+required a leading letter, which made `!8ball` unreachable in guild chat. It now
+accepts a leading digit. The pattern's job is rejecting punctuation (`!!!`,
+`!?`), an unrecognised name still ends in silence, and nothing else changed.
+
+**Deviation — these are Discord slash commands too.** Every registry spec is
+published by `toSlashCommands`, and there is no opt-out flag. Adding one for
+seven fun commands would put a "which surfaces?" decision on every future spec
+to keep a dice roller out of one client, which is the worse trade.
+
+**Not built: a way to edit the quote list.** `!guildquote` reads
+`GuildSetting` `fun.quotes` layered over shipped defaults, but no command or
+panel page writes it. A staff-editable quote list is a content-moderation
+surface and should be designed as one, rather than arriving as a side effect of
+a dice roller. The shipped quotes are about Skyblock rather than about any kind
+of player, for the same reason.
 
 ---
 

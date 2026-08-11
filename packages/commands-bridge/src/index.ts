@@ -6,6 +6,7 @@ export { buildBridgeRegistry } from "./handlers.js";
 export { InMemoryCooldownGate } from "./cooldown.js";
 export { formatCoins, renderNetworth, renderFailure, renderLinkError, renderRosterEmbed } from "./render.js";
 export { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
+export { funSpecs, parseDice, readQuotes, rpsOutcome, vibeRank, QUOTES_SETTING_KEY } from "./fun.js";
 export { lfgButtons, renderLfgEmbed, renderMilestoneEmbed } from "./render-community.js";
 export {
   InGameDispatcher,

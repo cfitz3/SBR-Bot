@@ -77,5 +77,12 @@ export function createKeyFactory(prefix: string) {
       p(`dedup:milestone:${accountId}:${type}:${threshold}`),
     dedupReminder: (eventId: string, offset: string) => p(`dedup:reminder:${eventId}:${offset}`),
     dedupEvent: (eventId: string) => p(`dedup:event:${eventId}`),
+
+    // 10. Joke counters (`!cringe`). The only fun-command state there is, and
+    // the only category here that holds something a member can see days later —
+    // so it carries a rolling TTL and is keyed by the *typed* name, never by a
+    // Discord id: a running joke is about a name, not about an account.
+    funTally: (guildId: string, name: string, subject: string) =>
+      p(`fun:tally:${guildId}:${name}:${subject}`),
   };
 }

@@ -48,6 +48,15 @@ Prefix commands (prefix + enabled set from `GuildConfig`). **Read-only / low-ris
 | `!weight <ign?>` | Senither/farming weight | `RUN_COMMAND` | Cache→Live |
 | `!lfg <activity> <slots>` `!runs` | LFG create/list | `RUN_COMMAND` (linked) | DB + Cache |
 | `!help` | condensed catalog | Public | Static |
+| `!8ball` `!roll` `!coinflip` `!rps` `!guildquote` `!rank` `!cringe` | fun (`COMMANDS.md` §20) | Public | None (Redis counter for `!cringe`) |
+
+**The fun commands never echo what somebody typed**, which is a bridge concern
+rather than a taste one: this bot speaks with the guild's voice in guild chat, so
+a command that repeats arbitrary text is a way to make the guild say anything
+through a path the relay's chat filter was never asked about. `!guildquote` is
+the one command that says stored text, and it is screened through the *same*
+`WordlistFilterImpl` instance the relay uses — one cache, one set of rules, no
+chance of the two drifting apart.
 
 **In-game constraints:** single-line ~256-char replies (embeds collapse to one-liners), stricter per-IGN cooldowns (`cd:ingame:*`), identity resolved by IGN → `LinkedAccount`. Unknown command → short usage hint; unauthorized → one-line refusal; errors never dump traces to chat.
 

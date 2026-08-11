@@ -65,6 +65,15 @@ const ALIASES: Readonly<Record<string, string>> = {
   event: "events",
   h: "help",
   commands: "help",
+  // Fun (COMMANDS.md §19). `8b` and `dice` are what chat shortens these to; the
+  // rest are the names people reach for before they learn the real one.
+  "8b": "8ball",
+  eightball: "8ball",
+  flip: "coinflip",
+  cf: "coinflip",
+  dice: "roll",
+  quote: "guildquote",
+  gq: "guildquote",
 };
 
 export interface ParsedInGameCommand {
@@ -94,7 +103,11 @@ export function parseInGameCommand(line: string, prefix: string = INGAME_PREFIX)
   if (head === undefined) return null;
 
   const name = head.toLowerCase();
-  if (!/^[a-z][a-z0-9-]*$/.test(name)) return null;
+  // A digit is allowed to lead because `!8ball` is a command people actually
+  // type. The pattern's real job is rejecting punctuation — "!!!", "!?" and the
+  // rest of what excitable chat produces — and an unrecognised name still ends
+  // in silence, so being slightly more permissive here costs nothing.
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return null;
 
   return { name: ALIASES[name] ?? name, tokens: tokens.slice(1) };
 }

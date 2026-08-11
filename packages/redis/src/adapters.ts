@@ -14,6 +14,15 @@ import type {
 } from "@sbr/shared-types";
 import type { RedisContext } from "./client.js";
 
+/**
+ * How long a `!cringe` tally survives without being added to.
+ *
+ * A running joke nobody has touched in three months is not a running joke, and
+ * the alternative — a counter that lives forever — makes Redis the durable home
+ * of a number nobody chose to keep and nothing migrates.
+ */
+const FUN_TALLY_TTL_SECONDS = 90 * 24 * 3600;
+
 const RELEASE_LOCK = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`;
 
 /** LockPort — SET NX PX, owner-checked release. */
@@ -37,6 +46,28 @@ export class RedisCooldownGate {
     if (ok) return { allowed: true };
     const ttl = await this.ctx.client.pTTL(key);
     return { allowed: false, retryAfterMs: ttl > 0 ? ttl : ttlMs };
+  }
+}
+
+/**
+ * TallyStore — a running total that forgets a joke nobody is still telling.
+ *
+ * The expiry is reset on every bump rather than set once, so a counter's life
+ * is measured from the last time somebody used it. That is the difference
+ * between a tally that quietly disappears mid-joke and one that disappears when
+ * the joke does. Nothing here can read a total without adding to it, which is
+ * the port's guarantee rather than an oversight.
+ */
+export class RedisTallyStore {
+  constructor(
+    private readonly ctx: RedisContext,
+    private readonly ttlSeconds: number,
+  ) {}
+  async bump(guildId: string, name: string, subject: string): Promise<number> {
+    const key = this.ctx.keys.funTally(guildId, name, subject);
+    const total = await this.ctx.client.incr(key);
+    await this.ctx.client.expire(key, this.ttlSeconds);
+    return total;
   }
 }
 
@@ -498,5 +529,6 @@ export function createRedisAdapters(ctx: RedisContext) {
     priceSource: new RedisPriceSource(ctx),
     configBus: new RedisConfigBus(ctx),
     heartbeat: new RedisHeartbeat(ctx),
+    tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),
   };
 }

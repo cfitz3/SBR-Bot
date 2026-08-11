@@ -23,6 +23,8 @@ import type {
   PlayerLookup,
   PricingService,
   ProgressionService,
+  TallyStore,
+  TextScreen,
   XpService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
@@ -115,6 +117,24 @@ export interface HandlerDeps {
    * access simply shows a card without the section.
    */
   readonly record?: MemberRecordSource;
+  /**
+   * The chat filter, asked rather than edited. `!guildquote` says something a
+   * staffer stored months ago, and this is how that line is held to the same
+   * standard as a relayed message without giving the member bot a write path
+   * into the guild's wordlist.
+   */
+  readonly screen?: TextScreen;
+  /**
+   * Running totals for the joke counters. Optional because they are pure fun
+   * and a deployment without Redis should lose `!cringe`, not `/me`.
+   */
+  readonly tallies?: TallyStore;
+  /**
+   * Where randomness comes from, for the fun commands. Injected so their tests
+   * can assert on an outcome instead of on a distribution; production leaves it
+   * unset and gets `Math.random`.
+   */
+  readonly random?: () => number;
   readonly logger: Logger;
 }
 

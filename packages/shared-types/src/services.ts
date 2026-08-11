@@ -806,6 +806,32 @@ export type WordlistError =
   | { readonly kind: "DUPLICATE" };
 
 /**
+ * "Is this text allowed to be said here?" and nothing else.
+ *
+ * The member bot needs one thing from the chat filter — a yes or no about a
+ * line it is about to speak on the guild's behalf — and `WordlistService` would
+ * give it the ability to rewrite the guild's rules to get a different answer.
+ * Same reasoning as `MemberRecordSource`: a read-only, single-question port
+ * costs one interface and removes a whole class of reachable mistake.
+ */
+export interface TextScreen {
+  isClean(guildId: string, text: string): Promise<boolean>;
+}
+
+/**
+ * A named running total, per guild and per subject.
+ *
+ * Exists for the joke counters (`!cringe`) and deliberately has no read, no
+ * reset and no listing: a tally that can be enumerated is a leaderboard, and a
+ * leaderboard about who is cringe is a different product decision than the one
+ * that was made here. The store is expected to expire idle counters on its own.
+ */
+export interface TallyStore {
+  /** Add one and return the new total. */
+  bump(guildId: string, name: string, subject: string): Promise<number>;
+}
+
+/**
  * Server-safety postures: `/lockdown` and `/antiraid-*`.
  *
  * Every posture is time-boxed and expires on its own (ADMIN_BOT.md §6) so a
