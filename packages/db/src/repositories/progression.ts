@@ -19,6 +19,7 @@ export const progressionRepository: ProgressionRepository = {
       where: { minecraftAccount: { uuid: minecraftUuid } },
       orderBy: { achievedAt: "desc" },
       take: limit,
+      include: { definition: { select: { label: true } } },
     });
     return rows.map((r) => ({
       id: r.id,
@@ -27,6 +28,10 @@ export const progressionRepository: ProgressionRepository = {
       metric: r.metric,
       thresholdValue: Number(r.thresholdValue),
       achievedAt: r.achievedAt.toISOString(),
+      // Null for anything detected from the built-in defaults, and for a row
+      // whose definition was since deleted. The renderer already formats a
+      // metric and a threshold, so a missing label costs nothing.
+      label: r.definition?.label ?? null,
     }));
   },
 
@@ -50,6 +55,32 @@ export const progressionRepository: ProgressionRepository = {
       catacombsLevel: r.catacombsLevel,
       senitherWeight: r.senitherWeight,
     }));
+  },
+
+  async latestSnapshot(minecraftUuid: string) {
+    // Newest by capture time, not by day bucket: the event-tracked cohort writes
+    // several rows per day and the last one is the current reading.
+    const row = await prisma.profileSnapshot.findFirst({
+      where: { minecraftAccount: { uuid: minecraftUuid } },
+      orderBy: { capturedAt: "desc" },
+      select: {
+        capturedAt: true,
+        networth: true,
+        skillAverage: true,
+        catacombsLevel: true,
+        slayerXp: true,
+        senitherWeight: true,
+      },
+    });
+    if (!row) return null;
+    return {
+      capturedAt: row.capturedAt.toISOString(),
+      networth: toNumber(row.networth),
+      skillAverage: row.skillAverage,
+      catacombsLevel: row.catacombsLevel,
+      slayerXp: toNumber(row.slayerXp),
+      senitherWeight: row.senitherWeight,
+    };
   },
 
   async getSelectedProfileId(minecraftUuid: string): Promise<string | null> {

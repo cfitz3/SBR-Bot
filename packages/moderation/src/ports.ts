@@ -13,6 +13,7 @@ import type {
   ModerationSurface,
   WordAction,
   WordlistRuleDTO,
+  WordlistRuleUpdate,
   WordMatchType,
 } from "@sbr/shared-types";
 
@@ -36,6 +37,25 @@ export interface ModerationRepository {
   listInfractions(guildId: string, discordId: string): Promise<readonly InfractionDTO[]>;
   /** Newest-first audit query behind `/audit`. */
   listActions(query: AuditQuery): Promise<readonly ModerationActionDTO[]>;
+  /**
+   * Clear the `active` flag on punishments past their expiry, returning how
+   * many rows changed. The store filters by time itself: sweeping by reading
+   * every active row into the process and writing back the stale ones would
+   * race with anything applied in between.
+   */
+  deactivateExpired(guildId: string | null, now: Date): Promise<number>;
+}
+
+/**
+ * Port: where a guild's escalation policy is stored.
+ *
+ * Deliberately `unknown` rather than a typed policy. It is a `GuildSetting` KV
+ * row — hand-editable JSON that predates any validation we might add — so the
+ * shape is checked by `parsePolicy` at the moment of use, in one place, rather
+ * than trusted at the boundary of every implementation of this port.
+ */
+export interface EscalationPolicySource {
+  readPolicy(guildId: string): Promise<unknown>;
 }
 
 /** A wordlist rule as it is written, before the store assigns it an id. */
@@ -53,6 +73,8 @@ export interface NewWordlistRecord {
 export interface WordlistRepository {
   list(guildId: string): Promise<readonly WordlistRuleDTO[]>;
   add(input: NewWordlistRecord): Promise<WordlistRuleDTO>;
+  /** Null when the guild has no rule with that id. */
+  update(guildId: string, id: string, patch: WordlistRuleUpdate): Promise<WordlistRuleDTO | null>;
   /** Null when no rule in this guild carries that id / pattern. */
   removeById(guildId: string, id: string): Promise<WordlistRuleDTO | null>;
   removeByPattern(guildId: string, pattern: string): Promise<WordlistRuleDTO | null>;

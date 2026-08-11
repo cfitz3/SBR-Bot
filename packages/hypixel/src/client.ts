@@ -44,6 +44,7 @@ import type {
   RawEndedAuctionsResponse,
   RawFiresalesResponse,
   RawGuild,
+  RawGuildMember,
   RawGuildResponse,
   RawHypixelPlayer,
   RawHypixelPlayerResponse,
@@ -56,6 +57,7 @@ import type {
 } from "./types.js";
 
 const MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/";
+const MOJANG_SESSION_URL = "https://sessionserver.mojang.com/session/minecraft/profile/";
 const API = "https://api.hypixel.net/v2";
 
 /**
@@ -252,6 +254,26 @@ export class HypixelClient implements HypixelSocialLookup {
     }
     if (res.status === 204 || res.status === 404) return null;
     throw new HypixelUnavailableError(`Mojang lookup failed for "${ign}" (status ${res.status})`);
+  }
+
+  /**
+   * The reverse: a (undashed) UUID to its current IGN, or null if Mojang has no
+   * profile for it.
+   *
+   * Mojang's session server rather than the Hypixel player endpoint, because the
+   * guild scan resolves names in batches and a name is not worth spending the
+   * Hypixel budget on. Throws on an unexpected status so the caller can treat an
+   * outage as "not resolved yet" rather than "this account has no name" — the
+   * two would otherwise be indistinguishable, and the second is written down.
+   */
+  async resolveIgn(uuid: string): Promise<string | null> {
+    const res = await this.http.get(MOJANG_SESSION_URL + encodeURIComponent(uuid));
+    if (res.status === 200) {
+      const profile = res.json as RawMojangProfile;
+      return profile.name ?? null;
+    }
+    if (res.status === 204 || res.status === 404) return null;
+    throw new HypixelUnavailableError(`Mojang name lookup failed for "${uuid}" (status ${res.status})`);
   }
 
   /** HypixelSocialLookup: read the in-game Discord social field for an IGN. */
@@ -458,7 +480,7 @@ export class HypixelClient implements HypixelSocialLookup {
         if (!body.success) return null;
         const auctions: EndedAuctionDTO[] = (body.auctions ?? []).map((a) => {
           // Decoding here rather than in the job keeps the wire format inside
-          // the client � everything downstream sees a normalized item id.
+          // the client � everything downstream sees a normalized item id.
           const item = a.item_bytes ? decodeItemBytes(a.item_bytes) : null;
           return {
             auctionId: a.auction_id ?? "",
@@ -585,7 +607,14 @@ function normalizePlayer(uuid: string, raw: RawHypixelPlayer): HypixelPlayerDTO 
     ign: raw.displayname ?? null,
     // Unknown ⇒ null, never coerced.
     discordSocial: discord && discord.length > 0 ? discord : null,
+    firstLoginMs: epoch(raw.firstLogin),
+    lastLoginMs: epoch(raw.lastLogin),
   };
+}
+
+/** A usable epoch timestamp, or null. Tolerates absent and nonsensical alike. */
+function epoch(ms: number | undefined): number | null {
+  return typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : null;
 }
 
 const GAME_MODES: Record<string, SkyblockProfileDTO["gameMode"]> = {
@@ -626,6 +655,10 @@ function normalizeAuction(raw: RawAuction): AuctionDTO {
     // falls back to the opening bid while nobody has bid yet.
     price: bin ? num(raw.starting_bid) : num(raw.highest_bid_amount) || num(raw.starting_bid),
     endsAt: num(raw.end),
+    // A BIN that sold reports its ask as the winning bid, so this is the amount
+    // waiting to be collected either way.
+    highestBid: (num(raw.highest_bid_amount) ?? 0) > 0 ? num(raw.highest_bid_amount) : null,
+    claimed: raw.claimed === true,
   };
 }
 
@@ -643,7 +676,38 @@ function normalizeGuild(raw: RawGuild): GuildDTO {
     createdAt: num(raw.created),
     members: (raw.members ?? [])
       .filter((m) => typeof m.uuid === "string")
-      .map((m) => ({ uuid: m.uuid as string, rank: str(m.rank), joinedAt: num(m.joined) })),
+      .map((m) => {
+        const expHistory = normalizeExpHistory(m.expHistory);
+        return {
+          uuid: m.uuid as string,
+          rank: str(m.rank),
+          joinedAt: num(m.joined),
+          expHistory,
+          weeklyGexp: Object.values(expHistory).reduce((sum, n) => sum + n, 0),
+        };
+      }),
     ranks,
   };
+}
+
+/** Hypixel day keys, matched strictly so a shape change reads as absent, not as a day. */
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Coerce `expHistory` into a plain day→number map.
+ *
+ * The field is absent for guilds whose API access is off and has been seen
+ * carrying non-numeric junk, so anything unrecognised is dropped rather than
+ * propagated: a bad key here would otherwise become a bad `GuildGexpDaily` row
+ * that the XP system then treats as fact.
+ */
+function normalizeExpHistory(raw: RawGuildMember["expHistory"]): Record<string, number> {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out: Record<string, number> = {};
+  for (const [day, value] of Object.entries(raw)) {
+    if (!DAY_KEY.test(day)) continue;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) continue;
+    out[day] = Math.floor(value);
+  }
+  return out;
 }

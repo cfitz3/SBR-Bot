@@ -54,6 +54,11 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // The stream drain is continuous in spirit; 15s is close enough that the
   // buffer never grows, without a permanently blocked consumer.
   { name: "analytics-ingest", repeat: { every: 15_000 }, priority: LANE.timely },
+  // Off-minute /5: 3,8,13,…,58. In the timely lane rather than bulk because
+  // what it clears is what staff read to decide whether somebody is already
+  // being punished — five minutes of "still muted" after a mute ended is a
+  // wrong answer to a question people act on.
+  { name: "punishment-expiry", repeat: { pattern: "3-59/5 * * * *" }, priority: LANE.timely },
   // Off-minute /7: 4,11,18,…,53. The reconcile safety net for config writes
   // that already publish their own invalidation.
   { name: "config-cache-invalidation", repeat: { pattern: "4-59/7 * * * *" }, priority: LANE.timely },
@@ -66,7 +71,18 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // exist rather than racing the writer.
   { name: "milestone-detect", repeat: { pattern: "12,42 * * * *" }, priority: LANE.bulk },
   { name: "guild-roster-sync", repeat: { pattern: "9,39 * * * *" }, priority: LANE.bulk },
+  // The in-game roster cache, on the 6-hour cadence its TTL is written against —
+  // offset from midnight so a scan lands shortly *before* the cache goes stale
+  // rather than at the same instant as every other daily job on the box.
+  { name: "guild-scan", repeat: { pattern: "26 1,7,13,19 * * *" }, priority: LANE.bulk },
   { name: "analytics-rollup", repeat: { pattern: "13 * * * *" }, priority: LANE.bulk },
+  // Every three hours rather than nightly: a member who asks for their standing
+  // should not be told about the person they were yesterday. Not more often than
+  // that, because each run rebuilds every balance by reading a guild's whole
+  // ledger — cheap at guild scale, but it grows with time, and there is no
+  // member-visible difference between "an hour stale" and "three hours stale".
+  // 48 past the hour keeps it clear of the roster and snapshot passes.
+  { name: "xp-aggregate", repeat: { pattern: "48 */3 * * *" }, priority: LANE.bulk },
   // Daily, at hours nobody is playing and nothing else is scheduled.
   { name: "resources-refresh", repeat: { pattern: "17 4 * * *" }, priority: LANE.bulk },
   { name: "inactivity-scan", repeat: { pattern: "23 5 * * *" }, priority: LANE.bulk },

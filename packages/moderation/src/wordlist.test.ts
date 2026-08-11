@@ -30,6 +30,18 @@ function repo(seed: WordlistRuleDTO[] = []): WordlistRepository & { rows: Wordli
       rows.push(created);
       return created;
     },
+    async update(_g, id, patch) {
+      const i = rows.findIndex((r) => r.id === id);
+      if (i === -1) return null;
+      const merged = { ...rows[i]!, ...patch };
+      const next: WordlistRuleDTO = {
+        id: merged.id, guildId: merged.guildId, pattern: merged.pattern,
+        matchType: merged.matchType, action: merged.action,
+        severity: merged.severity, enabled: merged.enabled,
+      };
+      rows[i] = next;
+      return next;
+    },
     async removeById(_g, id) {
       const i = rows.findIndex((r) => r.id === id);
       return i === -1 ? null : rows.splice(i, 1)[0]!;
@@ -135,4 +147,61 @@ test("/filter-test runs the live rule set", async () => {
   if (!r.ok) return;
   assert.equal(r.value.action, "BLOCK");
   assert.equal(r.value.matched.length, 1);
+});
+
+test("updating a rule keeps its id", async () => {
+  const r = repo([rule({ id: "r1", severity: 1, enabled: true })]);
+  const svc = new WordlistServiceImpl({ repo: r, logger: silent });
+  const result = await svc.update("g1", "r1", { severity: 4, enabled: false });
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value?.id, "r1");
+    assert.equal(result.value?.severity, 4);
+    assert.equal(result.value?.enabled, false);
+  }
+  assert.equal(r.rows.length, 1);
+});
+
+test("updating a rule that isn't there reports nothing rather than failing", async () => {
+  const svc = new WordlistServiceImpl({ repo: repo(), logger: silent });
+  const result = await svc.update("g1", "nope", { enabled: false });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.value, null);
+});
+
+test("a patch is validated against the rule it produces, not against itself", async () => {
+  // The patch changes only the match type; the pattern it inherits is not a
+  // valid regex, which is invisible from the patch alone.
+  const r = repo([rule({ id: "r1", pattern: "([a-z", matchType: "SUBSTRING" })]);
+  const svc = new WordlistServiceImpl({ repo: r, logger: silent });
+  const result = await svc.update("g1", "r1", { matchType: "REGEX" });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.kind, "INVALID_PATTERN");
+  assert.equal(r.rows[0]!.matchType, "SUBSTRING");
+});
+
+test("an edit that collides with another rule is refused as a duplicate", async () => {
+  const r = repo([rule({ id: "r1", pattern: "aaa" }), rule({ id: "r2", pattern: "bbb" })]);
+  const svc = new WordlistServiceImpl({ repo: r, logger: silent });
+  const result = await svc.update("g1", "r2", { pattern: "aaa" });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.kind, "DUPLICATE");
+});
+
+test("a rule may be edited without colliding with itself", async () => {
+  const r = repo([rule({ id: "r1", pattern: "aaa" })]);
+  const svc = new WordlistServiceImpl({ repo: r, logger: silent });
+  const result = await svc.update("g1", "r1", { pattern: "aaa", action: "BLOCK" });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.value?.action, "BLOCK");
+});
+
+test("a disabled rule stops matching once it is switched off", async () => {
+  const r = repo([rule({ id: "r1", pattern: "scam", matchType: "SUBSTRING", action: "BLOCK" })]);
+  const svc = new WordlistServiceImpl({ repo: r, logger: silent });
+  const before = await svc.test("g1", "this is a scam");
+  assert.equal(before.ok && before.value.action, "BLOCK");
+  await svc.update("g1", "r1", { enabled: false });
+  const after = await svc.test("g1", "this is a scam");
+  assert.equal(after.ok && after.value.action, "ALLOW");
 });

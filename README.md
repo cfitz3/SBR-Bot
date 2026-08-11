@@ -107,6 +107,22 @@ Each app validates its config at boot and fails fast. The centralised
 environment (one root `.env`) is resolved by `@sbr/env` regardless of the
 directory a process starts from.
 
+### Long-running hosts (tmux, systemd, a VPS)
+
+The apps and the datastores have separate lifecycles: the apps run on the host,
+Postgres and Redis run in compose. Both compose services therefore declare
+`restart: unless-stopped` so they come back with the Docker daemon. Without it a
+daemon or host restart leaves the datastores down while the apps keep running,
+and the freed `5432`/`6379` can be claimed by any *other* Postgres or Redis on
+the box — at which point correct credentials start being rejected
+(`password authentication failed for user "postgres"`) and the database looks
+like it was deleted. Recreating the database does not help, because the server
+answering is not ours.
+
+Each app now asserts at boot that `DATABASE_URL` points at a Postgres holding
+our schema, and refuses to start otherwise with the cause named. If you see that
+refusal, run `docker compose ps` first.
+
 ## Common scripts (root)
 
 | Script | Does |

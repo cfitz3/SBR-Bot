@@ -9,6 +9,19 @@ export interface HypixelPlayerDTO {
   readonly ign: string | null;
   /** The Discord identifier set in the in-game social field, or null if unset. */
   readonly discordSocial: string | null;
+  /**
+   * First and last time Hypixel saw them log in, in epoch milliseconds. Null
+   * when the account hides it or has never logged in — never coerced to zero,
+   * because "we can't see it" and "brand new account" are different answers to
+   * a screening question about account age.
+   *
+   * Kept as numbers rather than `Date` because this DTO is cached through
+   * Redis as JSON: a Date would come back as a string on every cache hit while
+   * still typing as a Date, which is the kind of bug that only shows up in
+   * production.
+   */
+  readonly firstLoginMs: number | null;
+  readonly lastLoginMs: number | null;
 }
 
 // ── Raw upstream shapes (loosely typed; validated during normalization) ──
@@ -32,6 +45,9 @@ export interface RawHypixelPlayer {
       readonly DISCORD?: string;
     };
   };
+  /** Epoch milliseconds, as Hypixel sends them. */
+  readonly firstLogin?: number;
+  readonly lastLogin?: number;
 }
 
 /** Normalized Skyblock profile projection with the member blob for networth. */
@@ -130,6 +146,10 @@ export interface AuctionDTO {
   /** Ask price for a BIN, current highest bid otherwise. Null if unreadable. */
   readonly price: number | null;
   readonly endsAt: number | null;
+  /** Highest bid so far; null when nobody has bid. Zero would read as a 0-coin bid. */
+  readonly highestBid: number | null;
+  /** True once the seller has collected it — Hypixel keeps such rows for a while. */
+  readonly claimed: boolean;
 }
 
 export interface AuctionPageDTO {
@@ -159,6 +179,7 @@ export interface RawAuction {
   readonly starting_bid?: number;
   readonly highest_bid_amount?: number;
   readonly end?: number;
+  readonly claimed?: boolean;
 }
 
 export interface EndedAuctionDTO {
@@ -170,7 +191,7 @@ export interface EndedAuctionDTO {
   readonly soldAt: number | null;
   /**
    * Item identity, decoded from the NBT blob the endpoint returns. Null when the
-   * blob is absent or unreadable � the sale is then real but unattributable, and
+   * blob is absent or unreadable � the sale is then real but unattributable, and
    * pricing skips it rather than guessing.
    */
   readonly itemId: string | null;
@@ -197,7 +218,7 @@ export interface RawEndedAuction {
   readonly price?: number;
   readonly bin?: boolean;
   readonly timestamp?: number;
-  /** base64(gzip(NBT)) � the only place the item's identity appears. */
+  /** base64(gzip(NBT)) � the only place the item's identity appears. */
   readonly item_bytes?: string;
 }
 
@@ -313,6 +334,14 @@ export interface GuildMemberDTO {
   readonly uuid: string;
   readonly rank: string | null;
   readonly joinedAt: number | null;
+  /**
+   * GEXP by `YYYY-MM-DD`, exactly as Hypixel reports it: a rolling ~7-day
+   * window, keyed in UTC, and *not* cumulative — each value is that day's
+   * earnings. Today's entry is still climbing when read.
+   */
+  readonly expHistory: Readonly<Record<string, number>>;
+  /** Sum of `expHistory`. The number guild leaderboards are usually ranked on. */
+  readonly weeklyGexp: number;
 }
 
 export interface GuildDTO {
@@ -345,4 +374,5 @@ export interface RawGuildMember {
   readonly uuid?: string;
   readonly rank?: string;
   readonly joined?: number;
+  readonly expHistory?: Readonly<Record<string, unknown>> | null;
 }

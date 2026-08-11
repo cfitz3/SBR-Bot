@@ -68,3 +68,31 @@ test("service returns unknown total (never exact) when the engine throws", async
     assert.equal(r.value.exact, false);
   }
 });
+
+test("buildNetworth keeps only the most valuable few items per category", () => {
+  const dto = buildNetworth(1_000, { armor: 1_000 }, REQUIRED, REQUIRED, {
+    armor: [
+      { name: "Boots", price: 100 },
+      { name: "Chestplate", price: 400 },
+      { name: "Helmet", price: 300 },
+      { name: "Leggings", price: 200 },
+    ],
+  });
+  assert.deepEqual(
+    dto.topItems["armor"]?.map((i) => i.name),
+    ["Chestplate", "Helmet", "Leggings"],
+  );
+});
+
+test("buildNetworth drops items the engine costed at nothing", () => {
+  // A category of zero-priced items would otherwise render as a list of names
+  // beside a coin figure they contribute none of.
+  const dto = buildNetworth(1_000, { armor: 1_000 }, REQUIRED, REQUIRED, {
+    armor: [{ name: "Rotten Flesh", price: 0 }],
+  });
+  assert.equal("armor" in dto.topItems, false);
+});
+
+test("buildNetworth reports no items at all for a total-only engine", () => {
+  assert.deepEqual(buildNetworth(1_000, { armor: 1_000 }, REQUIRED, REQUIRED).topItems, {});
+});

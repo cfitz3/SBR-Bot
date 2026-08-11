@@ -113,6 +113,13 @@ export const eventJobRepository = {
 
 // ──────────────────────────── progression ────────────────────────────
 
+/** One account to detect over, resolved to the guild and member it concerns. */
+export interface DetectionTarget {
+  readonly minecraftAccountId: string;
+  readonly guildId: string | null;
+  readonly discordId: string | null;
+}
+
 export const snapshotJobRepository = {
   /**
    * Every verified account, with the timestamp of its newest snapshot.
@@ -158,6 +165,7 @@ export const snapshotJobRepository = {
       networth: toBigInt(snapshot.networth),
       skillAverage: snapshot.skillAverage,
       catacombsLevel: snapshot.catacombsLevel,
+      slayerXp: toBigInt(snapshot.slayerXp),
       senitherWeight: snapshot.senitherWeight,
     };
     await prisma.profileSnapshot.upsert({
@@ -173,12 +181,19 @@ export const snapshotJobRepository = {
       where: { minecraftAccountId },
       orderBy: { capturedAt: "desc" },
       take: 2,
-      select: { networth: true, skillAverage: true, catacombsLevel: true, senitherWeight: true },
+      select: {
+        networth: true,
+        skillAverage: true,
+        catacombsLevel: true,
+        slayerXp: true,
+        senitherWeight: true,
+      },
     });
     return rows.map((r) => ({
       networth: toNumber(r.networth),
       skillAverage: r.skillAverage,
       catacombsLevel: r.catacombsLevel,
+      slayerXp: toNumber(r.slayerXp),
       senitherWeight: r.senitherWeight,
     }));
   },
@@ -190,15 +205,29 @@ export const snapshotJobRepository = {
    * the same crossing race to insert and exactly one wins, so `false` here means
    * "already recorded", not "failed".
    */
-  async record(candidate: MilestoneCandidate, guildId: string | null): Promise<boolean> {
+  async record(
+    candidate: MilestoneCandidate,
+    guildId: string | null,
+    discordId: string | null = null,
+  ): Promise<boolean> {
     try {
       await prisma.milestone.create({
         data: {
           minecraftAccountId: candidate.minecraftAccountId,
           guildId,
+          // Null for the built-in defaults: they are not rows, so there is
+          // nothing to point at.
+          definitionId: candidate.definitionId,
+          discordId,
           type: candidate.type,
           metric: candidate.metric,
           thresholdValue: BigInt(Math.round(candidate.thresholdValue)),
+          // A definition the guild marked quiet is born already announced:
+          // there is nothing left to say about it, and the announcer's queue is
+          // exactly "rows still owed a message". Encoding the intent here keeps
+          // the sweep a single indexed read instead of a join that re-decides
+          // visibility every pass.
+          announced: !candidate.announce,
         },
       });
       return true;
@@ -206,6 +235,63 @@ export const snapshotJobRepository = {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return false;
       throw error;
     }
+  },
+
+  /**
+   * Accounts to run detection over, each with the guild whose definitions
+   * apply and the member to credit.
+   *
+   * Both may be null: an account can have snapshots without a verified link
+   * (the roster scan captures everyone in the Hypixel guild, linked or not).
+   * Those still get milestones — the crossing happened — they are just measured
+   * against the built-in defaults, announced without a mention, and paid
+   * nothing, because there is no member to pay.
+   *
+   * One guild per account, not all of them. The unique constraint on a
+   * milestone is `(account, type, metric, threshold)` with no guild in it, so a
+   * crossing is recorded once no matter how many guilds the member is in;
+   * picking their oldest active membership makes which guild's definitions
+   * apply deterministic rather than a race between two workers.
+   */
+  async listAccountsForDetection(limit: number): Promise<readonly DetectionTarget[]> {
+    const accountIds = await snapshotJobRepository.listAccountsWithHistory(limit);
+    if (accountIds.length === 0) return [];
+
+    const links = await prisma.linkedAccount.findMany({
+      where: { minecraftAccountId: { in: [...accountIds] }, status: "VERIFIED" },
+      // Primary link first, then the oldest verification — so an account with
+      // two verified links resolves the same way on every run.
+      orderBy: [{ isPrimary: "desc" }, { verifiedAt: "asc" }],
+      select: {
+        minecraftAccountId: true,
+        discordUser: {
+          select: {
+            discordId: true,
+            memberships: {
+              where: { status: "ACTIVE" },
+              orderBy: { joinedAt: "asc" },
+              take: 1,
+              select: { guildId: true },
+            },
+          },
+        },
+      },
+    });
+
+    const context = new Map<string, { guildId: string | null; discordId: string | null }>();
+    for (const link of links) {
+      if (context.has(link.minecraftAccountId)) continue;
+      context.set(link.minecraftAccountId, {
+        guildId: link.discordUser.memberships[0]?.guildId ?? null,
+        discordId: link.discordUser.discordId,
+      });
+    }
+
+    return accountIds.map((minecraftAccountId) => ({
+      minecraftAccountId,
+      guildId: context.get(minecraftAccountId)?.guildId ?? null,
+      discordId: context.get(minecraftAccountId)?.discordId ?? null,
+    }));
   },
 
   /** Accounts with at least two snapshots — anything less has nothing to compare. */

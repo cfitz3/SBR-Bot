@@ -32,15 +32,6 @@ export interface GuildConfigServiceDeps {
   readonly broadcast?: ConfigBroadcaster;
 }
 
-/** Column behind each `/set-channel` slot name. */
-const CHANNEL_COLUMNS: Record<ConfigChannelSlot, string> = {
-  bridge: "bridgeChannelId",
-  staff: "staffChannelId",
-  log: "logChannelId",
-  applications: "applicationsChannelId",
-  events: "eventsChannelId",
-};
-
 const DEFAULT_TTL_MS = 10_000;
 
 export class GuildConfigServiceImpl implements GuildConfigService {
@@ -98,8 +89,34 @@ export class GuildConfigServiceImpl implements GuildConfigService {
     return config.value.features[feature] === true;
   }
 
+  async getChannel(guildId: string, slot: ConfigChannelSlot): Promise<string | null> {
+    const config = await this.get(guildId);
+    if (!config.ok || config.value === null) return null;
+    return config.value.channels[slot] ?? null;
+  }
+
   async setChannel(guildId: string, slot: ConfigChannelSlot, channelId: string | null): Promise<Result<void>> {
-    return this.write(guildId, () => this.repo.update(guildId, { [CHANNEL_COLUMNS[slot]]: channelId }));
+    // One write, one place. Until the legacy columns were dropped this also
+    // mirrored five of the slots into GuildConfig; that mirror is gone with the
+    // columns, so a partial failure can no longer leave two disagreeing copies.
+    return this.write(guildId, () => this.repo.setChannelBinding(guildId, slot, channelId));
+  }
+
+  async getSetting<T>(guildId: string, key: string): Promise<T | null> {
+    try {
+      return ((await this.repo.getSetting(guildId, key)) as T | null) ?? null;
+    } catch (error) {
+      this.log.error("guild setting read failed", {
+        guildId,
+        key,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+      return null;
+    }
+  }
+
+  async setSetting(guildId: string, key: string, value: unknown): Promise<Result<void>> {
+    return this.write(guildId, () => this.repo.setSetting(guildId, key, value));
   }
 
   async setFeature(guildId: string, feature: string, enabled: boolean): Promise<Result<void>> {

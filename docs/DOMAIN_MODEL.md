@@ -18,19 +18,33 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | LinkedAccount | Postgres | Persistent (link is durable; verification is ephemeral) |
 | Guild | Postgres | Persistent |
 | GuildMember | Postgres | Persistent |
+| GuildMemberCache | Postgres | Cache of upstream truth (rebuildable, 6 h rolling) |
+| GuildGexpDaily | Postgres | Persistent (time-series) |
+| GuildScan | Postgres | Persistent (operational audit) |
 | SelectedSkyblockProfile | Postgres | Persistent (choice); live profile data is cached |
 | GuildConfig | Postgres (cached in Redis) | Persistent |
+| GuildChannelBinding | Postgres (cached with GuildConfig) | Persistent |
+| GuildSetting | Postgres | Persistent |
 | BridgePermission | Postgres (cached in Redis) | Persistent |
 | Infraction | Postgres | Persistent (audit) |
 | ModerationAction | Postgres | Persistent (audit) |
 | WordlistEntry | Postgres (cached in Redis) | Persistent |
 | Ticket | Postgres | Persistent |
+| TicketTypeConfig | Postgres | Persistent (config; layered over built-in defaults) |
+| TicketPanelConfig | Postgres | Persistent (config) |
 | Application | Postgres | Persistent |
 | Event | Postgres | Persistent |
 | EventRSVP | Postgres | Persistent |
 | LFGPost | Postgres (+ Redis TTL mirror) | Persistent record, ephemeral visibility |
+| PermGroup | Postgres | Persistent (disbanded, never deleted) |
+| PermMember | Postgres | Persistent |
 | ProfileSnapshot | Postgres | Persistent (time-series) |
 | Milestone | Postgres | Persistent |
+| MilestoneDefinition | Postgres | Persistent (config; layered over built-in defaults) |
+| XpEvent | Postgres | Persistent (ledger; the source of truth for XP) |
+| XpBalance | Postgres | Derived (rebuildable from `XpEvent`) |
+| XpSourceConfig | Postgres | Persistent (config) |
+| ActivityDaily | Postgres (counters buffered via Redis) | Persistent (time-series) |
 | CommandUsage | Postgres (buffered via Redis) | Persistent (analytics) |
 | WorkerJobLog | Postgres | Persistent (operational) |
 
@@ -132,18 +146,79 @@ Which Skyblock profile a member currently tracks (the "cute name" / profile id).
 **Enum — `SkyblockGameMode`:** `NORMAL`, `IRONMAN`, `STRANDED`, `BINGO`.
 **Relationships:** N—1 `MinecraftAccount`. The *selection* is persistent; the *contents* of the profile are cached in Redis and snapshotted into `ProfileSnapshot`.
 
+#### GuildMemberCache
+The in-game guild roster as Hypixel reports it, refreshed on a rolling ~6 h window
+by the `guild-scan` job. Distinct from `GuildMember`, which is keyed by Discord
+account and drives roles and access: most people in a Hypixel guild have never
+linked a Discord account, and commands, leaderboards and perm rosters still have
+to name them.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `uuid` | Minecraft uuid — the only identifier the guild endpoint returns |
+| `ign` | resolved from Mojang opportunistically; null until a lookup succeeds |
+| `guildRank` | in-game rank name |
+| `joinedAt` | in-game join timestamp (nullable) |
+| `weeklyGexp` | sum of the ~7-day `expHistory` window at scan time |
+| `refreshedAt` | when the row was last confirmed present in-game |
+
+Unique on (`guildId`, `uuid`), indexed on (`guildId`, `refreshedAt`).
+**Relationships:** N—1 `Guild`.
+
+Rebuildable by definition — dropping the table costs one scan. Two rules protect
+it: an IGN is written with `COALESCE`, so a skipped or failed Mojang lookup never
+nulls out a name we already had; and rows are deleted only after a *successful*
+fetch, because a partial roster is a lie rather than a subset and would otherwise
+read as the entire guild leaving.
+
+#### GuildGexpDaily
+One row per member per day of guild experience — the permanent series behind
+tenure, activity and GEXP leaderboards.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `uuid` | Minecraft uuid |
+| `day` | `DATE`, UTC, as Hypixel keys `expHistory` |
+| `gexp` | that day's earned GEXP; `0` is a real reading, not a gap |
+
+Unique on (`guildId`, `uuid`, `day`), indexed on (`guildId`, `day`).
+**Relationships:** N—1 `Guild`.
+
+This table exists because Hypixel's `expHistory` window is only about a week wide;
+nothing longer-range can be reconstructed after the fact. Writes upsert with
+`gexp = EXCLUDED.gexp` — an overwrite, never a sum — so today's still-climbing
+value converges as the day goes on instead of multiplying by the number of scans.
+
+#### GuildScan
+One audit row per scan attempt, so "why is the roster stale" is answerable without
+reading worker logs.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `startedAt`, `finishedAt` | timing |
+| `memberCount` | roster size observed (0 on a failed fetch) |
+| `joined`, `left` | uuid arrays, relative to the cache before the scan |
+| `error` | text; null on success |
+
+Indexed on (`guildId`, `startedAt`).
+**Relationships:** N—1 `Guild`.
+
 ---
 
 ### Configuration & Permissions
 
 #### GuildConfig
 Per-guild settings and feature flags. Single row per guild; hot-read → cached in Redis.
+Holds no channel ids: every destination is a `GuildChannelBinding` row (the five
+mirrored `*ChannelId` columns were backfilled into bindings and dropped in
+`20260811150000_drop_legacy_channel_columns`).
 
 | Field | Notes |
 |-------|-------|
 | `guildId` | FK, unique |
-| `bridgeChannelId` | Discord channel for relay |
-| `staffChannelId`, `logChannelId` | routing |
 | `prefixes` | command prefixes |
 | `features` | JSON feature-flag map |
 | `cooldownDefaults` | JSON |
@@ -151,6 +226,40 @@ Per-guild settings and feature flags. Single row per guild; hot-read → cached 
 | `timezone` | for events |
 
 **Relationships:** 1—1 `Guild`.
+
+#### GuildChannelBinding
+One Discord channel per named slot, per guild. Replaces the fixed `*ChannelId`
+columns so a new destination (LFG, tickets, milestones, leaderboards, modlog) is a
+row rather than a migration, and so nothing guild-specific has to live in `.env`.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `slot` | free-form string; the known set is `ConfigChannelSlot` in `@sbr/shared-types` |
+| `channelId` | Discord channel id |
+
+Unique on (`guildId`, `slot`). Deliberately not a Prisma enum: the panel derives
+both its validation and its rendered controls from the same `const` list, and a
+slot written by a newer release is ignored by an older one rather than crashing it.
+
+These rows are the only record of a channel: `guildConfigRepository.get` builds
+`channels` from them alone, and `setChannel` is a single write with nothing to
+mirror, so two copies can no longer disagree.
+
+**Relationships:** N—1 `Guild`.
+
+#### GuildSetting
+Arbitrary per-guild admin configuration keyed by dotted string (`xp.weights`,
+`lfg.autoExpireMinutes`, …), value is JSON. The escape hatch that keeps
+panel-editable knobs out of `.env` without a migration per knob.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `key` | dotted namespace, unique per guild |
+| `value` | JSON; an absent row means "use the code default" |
+
+**Relationships:** N—1 `Guild`.
 
 #### BridgePermission
 Who may do what through the chat bridge (e.g. run commands, use @mentions, bypass filters).
@@ -252,6 +361,37 @@ A support/help thread opened by a user.
 **Enum — `TicketStatus`:** `OPEN`, `PENDING`, `RESOLVED`, `CLOSED`.
 **Relationships:** N—1 `Guild`, N—1 `DiscordUser`.
 
+#### TicketTypeConfig
+One kind of ticket a member may open. Layered by key over five built-in defaults
+(`support`, `report`, `appeal`, `application`, `other` — the same five values the
+old fixed `category:` option offered), exactly as `MilestoneDefinition` is: a
+stored row shadows the built-in with the same key, and an unknown key is that
+guild's own type.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK; unique with `key` |
+| `key` | what a member passes to `/ticket type:`; never edited |
+| `label`, `emoji`, `prompt` | what the member sees, and the question asked first |
+| `category` | which fixed `TicketCategory` the ticket is filed under, for routing and reporting |
+| `parentChannelId` | category channel the ticket opens under; null = transport default |
+| `staffRoleIds` | roles pulled in |
+| `position`, `enabled` | menu order (ties fall back to the label), and whether it is offered |
+
+**Relationships:** N—1 `Guild`.
+
+#### TicketPanelConfig
+The embed that advertises the menu. One row per guild.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK, unique |
+| `channelId` | where the panel is posted; null until an admin picks one |
+| `messageId` | the posted message, so an edit updates rather than reposts. Cleared when `channelId` changes |
+| `title`, `description`, `embed` | presentation only; no behaviour |
+
+**Relationships:** N—1 `Guild`.
+
 #### Application
 A guild-join application submitted by a user.
 
@@ -312,15 +452,76 @@ A "looking for group" post (carry, dungeon party, etc.).
 | `guildId` | FK |
 | `authorDiscordUserId` | FK |
 | `activity` | see enum |
+| `title` | nullable headline the author chose; leads the embed when present |
 | `details` | text |
 | `slotsTotal`, `slotsFilled` | party size |
 | `status` | see enum |
 | `expiresAt` | auto-expiry |
+| `channelId`, `messageId` | where the board message landed; both null until a send succeeds |
+| `permGroupId` | the perm the starting roster was autofilled from, when it was |
+| `closedAt`, `closedByDiscordId` | set together on `/closerun` or the Close button; null on an expired post |
 
 **Enum — `LFGActivity`:** `DUNGEONS`, `SLAYERS`, `KUUDRA`, `FISHING`, `MINING`, `OTHER`.
 **Enum — `LFGStatus`:** `OPEN`, `FULL`, `EXPIRED`, `CLOSED`.
-**Relationships:** N—1 `Guild`, N—1 `DiscordUser`.
+**Relationships:** N—1 `Guild`, N—1 `DiscordUser`, N—1 `PermGroup` (optional).
+*No index on `messageId`, on purpose:* every button carries its post id in the
+`customId`, so nothing ever resolves a post from the message it was posted as —
+the index would cost writes to serve no read.
+*Closure vs. expiry:* both end a run, but only one was a decision, which is why
+`closedByDiscordId` exists and the embed names a closer but never an expirer.
 *Note:* durable record in Postgres, but active/open posts are mirrored in Redis with a TTL so expiry and live listings are cheap.
+
+#### PermGroup
+A **perm** — a standing party a member runs with repeatedly. Where `LFGPost` is
+one run that expires in hours, a perm is the group itself and outlives any run.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK |
+| `ownerDiscordId` | who created it; owner-or-staff may edit, owner alone may set it as their default |
+| `name` | how it is addressed in chat; unique per guild **while active** |
+| `activity` | `LFGActivity` — also fixes the capacity and the valid role names |
+| `status` | `PermStatus` |
+| `isDefault` | what `/lfg perm:true` autofills from; at most one per (owner, activity) |
+| `notes` | free text |
+
+**Enum — `PermStatus`:** `ACTIVE`, `DISBANDED`.
+**Relationships:** N—1 `Guild`, 1—N `PermMember`.
+
+*Two partial unique indexes*, written in raw SQL because Prisma cannot express a
+filtered unique: `("guildId", LOWER("name")) WHERE status = 'ACTIVE'` and
+`("guildId","ownerDiscordId","activity") WHERE isDefault AND status = 'ACTIVE'`.
+Together they give the two guarantees the feature rests on — a live name means
+exactly one perm, and an owner has at most one default per activity — while
+leaving a disbanded perm's name free for reuse.
+
+*Note:* disbanding sets `status` and clears `isDefault`; it never deletes. A
+roster is a record of who ran together, and an autofill source that no longer
+exists would silently produce empty LFG posts.
+
+#### PermMember
+One seat on a perm's roster.
+
+| Field | Notes |
+|-------|-------|
+| `permGroupId` | FK |
+| `ign` | **required** — the identity that always exists |
+| `role` | free-form, validated against the activity in `@sbr/perms` rather than an enum |
+| `slot` | seat order |
+| `discordId`, `uuid` | optional, attached when resolvable |
+
+**Unique:** `(permGroupId, ign, role)` — one person may hold two roles on the
+same perm, but not the same role twice.
+**Relationships:** N—1 `PermGroup`.
+
+*Note:* `role` is deliberately not a Prisma enum. Skyblock's class vocabulary
+changes faster than migrations should, so the role table (and its alias list —
+`zerk`, `dps`, `cannon`) lives in `packages/perms/src/activities.ts` as data.
+
+*Note:* rosters are enriched for display from `GuildMemberCache` (still in the
+guild?) and the newest `ProfileSnapshot` (cata/SA), never from a live Hypixel
+call — one query each for the whole roster. "Not in the cache" is rendered as
+unknown rather than as "left the guild" when the cache is cold.
 
 ---
 
@@ -333,14 +534,26 @@ A point-in-time capture of a Skyblock profile's stats (time-series for progressi
 |-------|-------|
 | `minecraftAccountId` | FK |
 | `profileId` | Skyblock profile uuid |
+| `captureDate`, `seq` | day bucket + intra-day sequence; normal snapshots are seq 0 (one/day), the event-tracked cohort writes many |
 | `capturedAt` | timestamp (indexed) |
-| `networth` | numeric |
-| `skillAverages` | JSON |
-| `slayerXp`, `catacombsLevel`, etc. | JSON blob of tracked metrics |
-| `source` | see enum |
+| `networth` | BigInt, nullable |
+| `skillAverage`, `catacombsLevel`, `senitherWeight` | Float, nullable |
+| `slayerXp` | BigInt, nullable — total slayer XP across all bosses |
+| `metrics` | JSON blob for everything not promoted to a column |
+| `source`, `eventId` | see enum; `eventId` set for event-tracked captures |
 
 **Enum — `SnapshotSource`:** `SCHEDULED`, `ON_DEMAND`, `EVENT_TRIGGERED`, `BACKFILL`.
 **Relationships:** N—1 `MinecraftAccount`. Append-only; drives milestone detection and progression charts.
+
+**Why the promoted columns.** The ranked figures — networth, skill average,
+catacombs, slayer — are columns rather than keys inside `metrics` because the
+leaderboards sort and page on them, and Postgres cannot index a JSON path as
+cheaply as a scalar. `slayerXp` was added last (migration
+`20260810120000_snapshot_slayer_xp`) and is **nullable with no backfill**:
+writing 0 into historical rows would put long-standing members at the bottom of
+the slayer board, which is a false claim about them rather than a missing one.
+Capturing it costs nothing — the summary already parses slayers for the Senither
+weight.
 
 #### Milestone
 A recognized achievement/threshold crossed by a member.
@@ -357,6 +570,107 @@ A recognized achievement/threshold crossed by a member.
 
 **Enum — `MilestoneType`:** `SKILL_LEVEL`, `CATACOMBS_LEVEL`, `SLAYER_TIER`, `NETWORTH_THRESHOLD`, `COLLECTION`, `CUSTOM`.
 **Relationships:** N—1 `MinecraftAccount`, N—1 `ProfileSnapshot`.
+
+#### MilestoneDefinition
+One thing a guild recognises — the rule a `Milestone` is an instance of. A guild's
+rows are layered **by key** over a built-in default set, so a guild that
+configures nothing stores nothing and a default added in a later release reaches
+every guild.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK; unique with `key` |
+| `key` | stable id, e.g. `networth:10b`. Replays key off this, not the label, so renaming never re-announces |
+| `label`, `description` | display |
+| `type` | see `MilestoneType` |
+| `metric`, `threshold` | which snapshot field, and how much |
+| `xpReward` | credited once, on announce. `0` = recognition only (the default) |
+| `announce`, `enabled` | whether it is posted, whether it is in force |
+
+**Relationships:** N—1 `Guild`, 1—N `Milestone`.
+
+#### XpEvent
+One awarded (or deducted) amount of guild XP. **The ledger is the truth**;
+`XpBalance` is a cache of it.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `discordId` | who, in which guild |
+| `source` | see enum |
+| `amount` | awarded XP after weight and caps. **Signed** — `MANUAL` may take XP away |
+| `rawValue` | what the amount was computed from (GEXP earned, messages sent, days) |
+| `day` | `DATE`, UTC — the same grain the counters and the job use |
+| `dedupeKey` | unique when present, e.g. `gexp:<uuid>:2026-08-09`; null for genuinely one-off awards (`MANUAL`) |
+| `meta` | JSON; for `MANUAL`, the reason and the staff member who entered it |
+
+Indexed on (`guildId`, `discordId`, `day`) and (`guildId`, `source`, `day`).
+**Relationships:** N—1 `Guild`.
+
+**Enum — `XpSource`:** `GEXP`, `DISCORD_MESSAGE`, `GUILD_CHAT_MESSAGE`, `TENURE`, `COMMAND_USAGE`, `EVENT`, `MANUAL`.
+
+`dedupeKey` is what makes re-derivation safe. Derived awards are written with
+**upsert on the key, not insert-if-absent** — a day still in progress is
+*overwritten* by the next pass as its counters climb, rather than credited twice
+or frozen at this morning's partial figure.
+
+#### XpBalance
+A member's current standing. Derived: dropping this table costs one aggregation
+pass, and the job rebuilds every row by reading the whole ledger rather than
+applying a delta, precisely so a missed or double-counted event cannot survive.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `discordId` | unique together |
+| `totalXp`, `level` | level is the closed-form inverse of the triangular curve |
+| `bySource` | JSON per-source totals, denormalized so one row answers all of `/standing` |
+| `tenureDays`, `lastAwardAt` | |
+
+Indexed on (`guildId`, `totalXp`) — the leaderboard's ordering.
+**Relationships:** N—1 `Guild`.
+
+#### XpSourceConfig
+Panel-configured weight and anti-abuse limits, one row per source per guild.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `source` | unique together |
+| `enabled`, `weight` | weight is a `Float`: GEXP arrives in the thousands per day, a message is one unit |
+| `dailyCap` | most XP one member may earn from this source in a day; null = uncapped |
+| `cooldownSec` | minimum gap between two countable actions (message sources only) |
+| `minLength` | minimum message length to count at all |
+
+**Relationships:** N—1 `Guild`.
+
+**A missing row means disabled.** A guild that has configured nothing earns
+nothing — the safe direction for a system people will try to farm, and the
+reason the panel renders unconfigured sources as off rather than inventing a
+default nobody chose.
+
+#### ActivityDaily
+Raw per-day counters. The hot path increments these; nothing on the hot path
+computes XP.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `discordId`, `day` | unique together; `day` is `DATE`, UTC |
+| `discordMessages`, `guildChatMessages`, `commandsUsed` | counters |
+| `presenceSamples` | `/g online` hits — a playtime *proxy*; presence is sampled, never measured |
+
+Indexed on (`guildId`, `day`).
+**Relationships:** N—1 `Guild`.
+
+**Where anti-abuse lives.** The two limits are enforced at the two different
+moments they can be: **at capture**, a message shorter than `minLength` is not
+counted at all and a member inside `cooldownSec` is ignored (a Redis gate, so
+the check costs no query); **at aggregation**, `dailyCap` bounds what a day's
+counters convert into. Splitting them is deliberate — a cap enforced at capture
+would need a running per-day total on the hot path, and a cooldown enforced at
+aggregation would be unenforceable, since by then the counter has already
+forgotten *when* the messages arrived.
+
+Counters are the input, never the record: they are safe to lose a day of
+(standing simply does not move), whereas losing `XpEvent` rows would silently
+rewrite everyone's history.
 
 #### CommandUsage
 A record of a command invocation (usage analytics + rate-limit auditing).
@@ -405,6 +719,11 @@ erDiagram
     DiscordUser ||--o{ GuildMember : joins
     Guild ||--o{ GuildMember : contains
     Guild ||--|| GuildConfig : configures
+    Guild ||--o{ GuildChannelBinding : routes
+    Guild ||--o{ GuildSetting : tunes
+    Guild ||--o{ GuildMemberCache : mirrors
+    Guild ||--o{ GuildGexpDaily : accrues
+    Guild ||--o{ GuildScan : audits
     Guild ||--o{ BridgePermission : grants
     Guild ||--o{ WordlistEntry : filters
     MinecraftAccount ||--o{ SelectedSkyblockProfile : selects
@@ -419,6 +738,8 @@ erDiagram
     Guild ||--o{ Event : schedules
     Event ||--o{ EventRSVP : gathers
     Guild ||--o{ LFGPost : hosts
+    Guild ||--o{ PermGroup : houses
+    PermGroup ||--o{ PermMember : seats
     DiscordUser ||--o{ CommandUsage : invokes
 ```
 
@@ -426,7 +747,8 @@ erDiagram
 
 ## Persistent vs. Ephemeral — Guidance
 
-- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, ProfileSnapshot, Milestone, WorkerJobLog. These are records of fact, audit, or configuration.
+- **Always persistent (source of truth in Postgres):** DiscordUser, MinecraftAccount, LinkedAccount, Guild, GuildMember, GuildConfig, GuildChannelBinding, GuildSetting, BridgePermission, WordlistEntry, Infraction, ModerationAction, Ticket, Application, Event, EventRSVP, PermGroup, PermMember, ProfileSnapshot, Milestone, GuildGexpDaily, GuildScan, WorkerJobLog. These are records of fact, audit, or configuration.
+- **Cache of upstream truth, in Postgres because it is too large and too slow-moving for Redis:** `GuildMemberCache`. Rebuildable from Hypixel by one scan; kept in Postgres because commands join against it and because it must outlive a Redis flush. Freshness is `refreshedAt` against a 6 h TTL (`MEMBER_CACHE_TTL_MS`), not a key expiry — a stale roster is still worth serving with a warning, whereas an evicted one is not servable at all.
 - **Persistent record + ephemeral live-state mirror in Redis:**
   - `ModerationAction` → active mute/ban with TTL for fast enforcement checks.
   - `LFGPost` → open posts with TTL for live listings + auto-expiry.

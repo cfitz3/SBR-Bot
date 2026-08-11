@@ -11,6 +11,7 @@ import type {
   EmbedView,
   EventDTO,
   LFGPostDTO,
+  PendingMilestoneDTO,
   RsvpEntryDTO,
   TicketDTO,
 } from "@sbr/shared-types";
@@ -100,27 +101,52 @@ export function renderAttendanceEmbed(attendance: AttendanceDTO): EmbedView {
 }
 
 export function renderLfgEmbed(post: LFGPostDTO): EmbedView {
+  const count = `${post.slotsFilled}/${post.slotsTotal}`;
   const embed: EmbedView = {
-    title: `${post.activity.toLowerCase()} — ${post.slotsFilled}/${post.slotsTotal}`,
+    // The author's own headline leads when they wrote one; the activity is still
+    // legible from the Status row, and a title someone chose is what people scan.
+    title: post.title === null ? `${post.activity.toLowerCase()} — ${count}` : `${post.title} — ${count}`,
     fields: [
       { name: "Host", value: `<@${post.authorDiscordId}>`, inline: true },
-      { name: "Status", value: post.status.toLowerCase(), inline: true },
+      { name: "Status", value: statusLine(post), inline: true },
       { name: "Party", value: post.members.map((id) => `<@${id}>`).join(", ") || "—", inline: false },
     ],
-    footer: post.expiresAt === null ? `id ${post.id}` : `id ${post.id} • expires ${timestampTag(post.expiresAt, "R")}`,
+    footer: lfgFooter(post),
     color: post.status === "OPEN" ? "SUCCESS" : "NEUTRAL",
   };
   return post.details === null ? embed : { ...embed, description: post.details };
 }
 
-/** Join/leave buttons. Join is disabled rather than hidden once the post is full. */
+/**
+ * "closed" and "expired" both end a run, but only one of them was a decision —
+ * so a post someone closed says who, and a post that timed out says nothing.
+ */
+function statusLine(post: LFGPostDTO): string {
+  if (post.status === "CLOSED" && post.closedByDiscordId !== null) {
+    return `closed by <@${post.closedByDiscordId}>`;
+  }
+  return `${post.activity.toLowerCase()} • ${post.status.toLowerCase()}`;
+}
+
+function lfgFooter(post: LFGPostDTO): string {
+  if (post.status !== "OPEN" && post.status !== "FULL") return `id ${post.id}`;
+  return post.expiresAt === null ? `id ${post.id}` : `id ${post.id} • expires ${timestampTag(post.expiresAt, "R")}`;
+}
+
+/**
+ * Join/leave/close. Join is disabled rather than hidden once the post is full,
+ * and a finished post keeps its buttons disabled rather than losing them, so the
+ * message still reads as the run it was.
+ */
 export function lfgButtons(post: LFGPostDTO): readonly ActionRowView[] {
   const open = post.status === "OPEN";
+  const live = open || post.status === "FULL";
   return [
     {
       buttons: [
         { label: "Join", style: "SUCCESS", customId: `run:${post.id}:join`, disabled: !open },
-        { label: "Leave", style: "SECONDARY", customId: `run:${post.id}:leave` },
+        { label: "Leave", style: "SECONDARY", customId: `run:${post.id}:leave`, disabled: !live },
+        { label: "Close", style: "DANGER", customId: `run:${post.id}:close`, disabled: !live },
       ],
     },
   ];
@@ -171,3 +197,22 @@ export function renderTicketListEmbed(tickets: readonly TicketDTO[]): EmbedView 
   };
 }
 
+
+/**
+ * A milestone announcement, as the guild sees it.
+ *
+ * The IGN leads and the mention follows, because the achievement happened
+ * in-game to a name people recognise there — a bare ping would read as a
+ * notification rather than as recognition. An unlinked account still gets an
+ * announcement, just without the mention.
+ */
+export function renderMilestoneEmbed(milestone: PendingMilestoneDTO): EmbedView {
+  const who = milestone.ign ?? "A guild member";
+  const mention = milestone.discordId === null ? "" : ` (<@${milestone.discordId}>)`;
+  return {
+    title: "Milestone reached",
+    description: `**${who}**${mention} hit **${milestone.label}**.`,
+    fields: [{ name: "When", value: timestampTag(milestone.achievedAt, "R"), inline: true }],
+    color: "SUCCESS",
+  };
+}

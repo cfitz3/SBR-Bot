@@ -26,6 +26,7 @@ The canonical Redis key layout for the platform. Redis is the shared coordinatio
 | Worker locks | `lock:` | workers | short (auto-expire) | token string |
 | Deduplication keys | `dedup:` | emitters (bots/workers) | short window | bit / int / string |
 | Service heartbeats | `hb:` | every process | 45s (3 beats) | JSON |
+| Joke counters | `fun:` | bridge-bot | 90d, rolling | int |
 
 ---
 
@@ -41,7 +42,15 @@ The canonical Redis key layout for the platform. Redis is the shared coordinatio
 cd:BRIDGE_BOT:networth:214...901      SET NX EX 30
 cd:ingame:stats:AriaMC                SET NX EX 15
 cd:relay:BRIDGE_BOT:214...901         (token bucket window)
+cd:xp:{guildId}:{source}:{discordId}  SET NX EX <XpSourceConfig.cooldownSec>
 ```
+
+The XP gate rides the same adapter but is not a command cooldown: it decides
+whether a *message* counts towards XP, not whether a command may run. Presence
+means "already counted recently", so a member inside the window is silently not
+counted — never refused or told. It is only written when the source's
+`cooldownSec > 0`, and its TTL comes from that per-guild setting rather than
+from a command spec.
 
 ---
 
@@ -191,7 +200,21 @@ hb:workers:0b17de44      SET EX 45 {…,"details":{"queues":6}}
 
 ---
 
-## 11. Ownership & Lifecycle Summary
+## 11. Joke Counters (`fun:`)
+
+- **Naming:** `fun:tally:{guildId}:{name}:{subject}` — today the only `name` is `cringe`, and `subject` is the **lowercased Minecraft name that was typed**, never a Discord id. A running joke is about a name, not about an account.
+- **TTL:** 90 days, **reset on every bump**, so a counter's life is measured from the last time somebody used it — a joke nobody is still telling expires on its own, and no counter here lives forever.
+- **Serialization:** a plain int (`INCR`), which is the whole value.
+- **Ownership:** bridge-bot, via the `TallyStore` port. That port can only *add*: it has no read, no reset and no listing, so nothing can enumerate these keys into a leaderboard.
+- **Invalidation:** self-expiring. A flush resets every tally to zero, which is the correct failure mode for a joke and the reason this is the one durable-feeling thing the platform is happy to keep only in Redis.
+
+```
+fun:tally:872...:cringe:aria    INCR ; EXPIRE 7776000   (bump, then re-arm)
+```
+
+---
+
+## 12. Ownership & Lifecycle Summary
 
 | Category | Authoritative? | Survives Redis flush? | How restored |
 |----------|----------------|-----------------------|--------------|
@@ -205,6 +228,7 @@ hb:workers:0b17de44      SET EX 45 {…,"details":{"queues":6}}
 | `lock:` | No | No | Auto-expire; jobs idempotent |
 | `dedup:` | No (DB-backed for durable ones) | Partially | DB flags prevent durable double-posts |
 | `hb:` heartbeats | No (live view only) | No | Refilled by the next beat (≤15s) |
+| `fun:` tallies | No (nothing else stores them) | No | Not restored — counters resume from zero, by design |
 
 **Guiding rules**
 - **Redis is a coordination/cache layer, not the database.** Everything enforceable (mutes, bans, suspensions) is mirrored from Postgres and **rehydrated on startup**, so a Redis flush degrades performance, never correctness.

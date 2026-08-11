@@ -6,16 +6,40 @@
  * Reads only. Writes go through the same domain services the bots use (the panel
  * "commands, it doesn't bypass"), so nothing here mutates.
  */
+import { CONFIG_CHANNEL_SLOTS } from "@sbr/shared-types";
+import {
+  parseEscalationPolicy,
+  punishmentState,
+  ESCALATION_SETTING_KEY,
+  type EscalationPolicy,
+  type PunishmentState,
+} from "@sbr/moderation";
 import type {
   AuditQuery,
   CommunityService,
   GuildConfigService,
   GuildRuntimeConfig,
   InfractionDTO,
+  MilestoneDefinitionDTO,
+  MilestoneDefinitionService,
+  TicketConfigService,
+  TicketPanelConfigDTO,
+  TicketTypeDTO,
+  WordlistRuleDTO,
+  WordlistService,
   ModerationActionDTO,
   ModerationService,
   RsvpEntryDTO,
+  XpService,
+  XpSource,
+  XpSourcePolicyDTO,
 } from "@sbr/shared-types";
+import {
+  parsePolicy,
+  serializePolicy,
+  SCREENING_POLICY_KEY,
+  type ScreeningPolicyView,
+} from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 import { authorize, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
 import { shapeAnalytics, type MetricChart } from "./series.js";
@@ -54,6 +78,7 @@ export const STALE_AFTER_MS: Readonly<Record<string, number>> = {
   "event-transition": 15 * 60_000,
   "config-cache-invalidation": 30 * 60_000,
   "inactivity-scan": 3 * 86_400_000,
+  "xp-aggregate": 9 * 60 * 60_000,
 };
 
 /** The jobs whose freshness the Overview strip summarises. */
@@ -82,11 +107,38 @@ export interface OverviewVM {
   readonly freshness: readonly FreshnessVM[];
 }
 
+/**
+ * A logged action with its state resolved.
+ *
+ * The state is computed here rather than in the browser because it is a
+ * domain rule — `active` and `expiresAt` disagreeing means different things
+ * for different action types — and a second copy of that rule in the client
+ * would be one that drifts from the one `/audit` renders.
+ */
+export interface ModerationActionVM extends ModerationActionDTO {
+  readonly state: PunishmentState;
+}
+
+export interface WordlistVM {
+  /** False when the deployment runs without the filter service wired. */
+  readonly installed: boolean;
+  readonly rules: readonly WordlistRuleDTO[];
+  /** Resolved, not raw: built-in rungs layered under whatever the guild stored. */
+  readonly escalation: EscalationPolicy;
+}
+
 export interface ModerationVM {
   readonly target: string;
   readonly infractionCount: number;
   readonly infractions: readonly InfractionDTO[];
-  readonly actions: readonly ModerationActionDTO[];
+  readonly actions: readonly ModerationActionVM[];
+  /**
+   * The punishments being served right now, guild-wide when no target is named.
+   * Separate from `actions` because the log answers "what has happened" and this
+   * answers "what is in force" — the same rows read for two different questions,
+   * and only the second one is expiry-aware.
+   */
+  readonly inForce: readonly ModerationActionDTO[];
 }
 
 export interface SelectorVM {
@@ -145,6 +197,67 @@ export interface MembersVM {
 
 export interface SettingsVM {
   readonly config: GuildRuntimeConfig | null;
+  /**
+   * The join-screening policy, always populated: a guild that has never saved
+   * one reads back the platform defaults, which are what screening is actually
+   * using. Showing an empty form for "unset" would misdescribe a bot that is
+   * already applying rules.
+   *
+   * Serialized (coins as a string) because it crosses the wire as JSON.
+   */
+  readonly screening: ScreeningPolicyView;
+}
+
+/**
+ * Every XP source, in the order the page lists them, so the form is stable
+ * across guilds and across reloads. Mirrors the `XpSource` enum; a source
+ * missing from this list would be invisible in the panel while still paying out.
+ */
+export const XP_SOURCE_ORDER: readonly XpSource[] = [
+  "GEXP",
+  "DISCORD_MESSAGE",
+  "GUILD_CHAT_MESSAGE",
+  "TENURE",
+  "COMMAND_USAGE",
+  "EVENT",
+  "MILESTONE",
+  "MANUAL",
+];
+
+export interface XpVM {
+  /** False when the deployment has no XP service at all — not "all sources off". */
+  readonly installed: boolean;
+  /**
+   * One row per source, always all of them. An unconfigured source is rendered
+   * as disabled with zero weight, which is exactly what the engine does with it.
+   */
+  readonly sources: readonly XpSourcePolicyDTO[];
+}
+
+export interface MilestonesVM {
+  /** False when no definition service is wired; the page then says so. */
+  readonly installed: boolean;
+  /**
+   * Every definition in effect — the built-in defaults with the guild's own
+   * rows layered over them, each flagged with which it is. Defaults are
+   * included so the page can show what is already being recognised without a
+   * guild having to re-create it, and flagged so the client knows an edit to
+   * one is a create rather than an update.
+   */
+  readonly definitions: readonly MilestoneDefinitionDTO[];
+}
+
+export interface TicketsVM {
+  /** False when no ticket-config service is wired; the page then says so. */
+  readonly installed: boolean;
+  /**
+   * Every type in effect — the built-ins with the guild's own rows layered over
+   * them, each flagged with which it is, so the client knows an edit to a
+   * built-in is a create rather than an update.
+   */
+  readonly types: readonly TicketTypeDTO[];
+  /** Panel content, filled in with defaults when it has never been configured. */
+  readonly panel: TicketPanelConfigDTO | null;
 }
 
 export interface MappingVM {
@@ -199,6 +312,18 @@ export interface PanelServiceDeps {
   readonly moderation: ModerationService;
   readonly reads: PanelReads;
   readonly config: GuildConfigService;
+  /**
+   * Optional: a deployment can run with XP switched off entirely, and the page
+   * then says so rather than showing seven disabled sources, which would read
+   * as "configured off" instead of "not installed".
+   */
+  readonly xp?: XpService;
+  /** Optional for the same reason as XP: absent means the page reports it. */
+  readonly milestones?: MilestoneDefinitionService;
+  /** Optional: absent means the Tickets page reports itself not installed. */
+  readonly tickets?: TicketConfigService;
+  /** Optional: absent means the Wordlist page reports itself not installed. */
+  readonly wordlist?: WordlistService;
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
   readonly logger: Logger;
@@ -309,10 +434,14 @@ export class PanelService {
     const access = await authorize(session, guildId, "moderation", this.d.roles);
     if (!access.allowed) return this.denied(access, "moderation", guildId);
 
+    const now = new Date();
     const query: AuditQuery = { guildId, limit: 50, ...(targetDiscordId ? { targetDiscordId } : {}) };
-    const [infractions, actions] = await Promise.all([
+    const [infractions, actions, inForce] = await Promise.all([
       this.d.moderation.listInfractions(guildId, targetDiscordId),
       this.d.moderation.listActions(query),
+      // Empty target means the whole guild, which is what the page shows before
+      // anybody has been looked up.
+      this.d.moderation.listInForce(guildId, targetDiscordId === "" ? null : targetDiscordId),
     ]);
 
     const list = infractions.ok ? infractions.value : [];
@@ -320,7 +449,8 @@ export class PanelService {
       target: targetDiscordId,
       infractionCount: list.length,
       infractions: list,
-      actions: actions.ok ? actions.value : [],
+      actions: (actions.ok ? actions.value : []).map((a) => ({ ...a, state: punishmentState(a, now) })),
+      inForce: inForce.ok ? inForce.value : [],
     };
     return { access, data };
   }
@@ -489,8 +619,58 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const config = await this.d.config.get(guildId);
-    return { access, data: { config: config.ok ? config.value : null } };
+    const [config, policy] = await Promise.all([
+      this.d.config.get(guildId),
+      this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
+    ]);
+    return {
+      access,
+      data: {
+        config: config.ok ? config.value : null,
+        // Read through the same tolerant parser the bridge bot uses, so the
+        // page shows what screening will actually do with the stored value
+        // rather than a prettier version of what is in the row.
+        screening: serializePolicy(parsePolicy(policy)),
+      },
+    };
+  }
+
+  /**
+   * The XP configuration page: every source, whether it pays, and by how much.
+   *
+   * Deliberately no member standings, no leaderboard and no activity counters.
+   * The panel is admin-only and XP is member-facing (WEB_PANEL.md §3), so what
+   * belongs here is the rules — reading a member's standing is `/standing`,
+   * theirs to run.
+   */
+  async loadXp(session: PanelSession | null, guildId: string): Promise<PageResult<XpVM>> {
+    const access = await authorize(session, guildId, "xp", this.d.roles);
+    if (!access.allowed) return this.denied(access, "xp", guildId);
+
+    const xp = this.d.xp;
+    if (xp === undefined) return { access, data: { installed: false, sources: [] } };
+
+    const policy = await xp.policy(guildId);
+    return {
+      access,
+      data: {
+        installed: true,
+        // Filled out to the full list here rather than in the client: what an
+        // unconfigured source does is the engine's rule, and the page should
+        // show that rule rather than a second guess at it.
+        sources: XP_SOURCE_ORDER.map(
+          (source) =>
+            policy[source] ?? {
+              source,
+              enabled: false,
+              weight: 0,
+              dailyCap: null,
+              cooldownSec: 0,
+              minLength: 0,
+            },
+        ),
+      },
+    };
   }
 
   async loadMapping(session: PanelSession | null, guildId: string): Promise<PageResult<MappingVM>> {
@@ -503,19 +683,78 @@ export class PanelService {
       access,
       data: {
         roleMappings: cfg?.roleMappings ?? {},
-        channels: {
-          bridge: cfg?.bridgeChannelId ?? null,
-          staff: cfg?.staffChannelId ?? null,
-          log: cfg?.logChannelId ?? null,
-          applications: cfg?.applicationsChannelId ?? null,
-          events: cfg?.eventsChannelId ?? null,
-        },
+        // Built from the slot registry over the canonical `channels` map, not
+        // from the five legacy columns: every slot appears, and an unbound one
+        // appears as null rather than being missing, so the page renders a
+        // control for it instead of silently omitting it.
+        channels: Object.fromEntries(
+          CONFIG_CHANNEL_SLOTS.map((slot) => [slot, cfg?.channels[slot] ?? null] as const),
+        ),
         features: cfg?.features ?? {},
       },
     };
   }
 
   // ─────────────────────────── health ───────────────────────────
+
+  /**
+   * The milestone configuration page: what the guild recognises and pays for.
+   *
+   * Definitions only. Who has reached what is member-facing and stays in the
+   * bots (`/milestones`), the same line the XP page draws between rules and
+   * standings.
+   */
+  async loadMilestones(session: PanelSession | null, guildId: string): Promise<PageResult<MilestonesVM>> {
+    const access = await authorize(session, guildId, "milestones", this.d.roles);
+    if (!access.allowed) return this.denied(access, "milestones", guildId);
+
+    const milestones = this.d.milestones;
+    if (milestones === undefined) return { access, data: { installed: false, definitions: [] } };
+
+    return { access, data: { installed: true, definitions: await milestones.list(guildId) } };
+  }
+
+  /**
+   * The ticket configuration page: what a member may open, and the panel that
+   * advertises it.
+   *
+   * Configuration only. The open tickets themselves — and whatever a member put
+   * in one — stay in the bot, which is the same line every other page here
+   * draws between rules and the people they apply to.
+   */
+  async loadTickets(session: PanelSession | null, guildId: string): Promise<PageResult<TicketsVM>> {
+    const access = await authorize(session, guildId, "tickets", this.d.roles);
+    if (!access.allowed) return this.denied(access, "tickets", guildId);
+
+    const tickets = this.d.tickets;
+    if (tickets === undefined) return { access, data: { installed: false, types: [], panel: null } };
+
+    const [types, panel] = await Promise.all([tickets.listTypes(guildId), tickets.getPanel(guildId)]);
+    return { access, data: { installed: true, types, panel } };
+  }
+
+  /**
+   * The chat filter and the escalation ladder on one page.
+   *
+   * They are two halves of the same question — what the platform does about a
+   * member without a staffer present — and splitting them would mean an admin
+   * tuning the filter's severities had to open a different page to see what
+   * those severities eventually add up to.
+   */
+  async loadWordlist(session: PanelSession | null, guildId: string): Promise<PageResult<WordlistVM>> {
+    const access = await authorize(session, guildId, "wordlist", this.d.roles);
+    if (!access.allowed) return this.denied(access, "wordlist", guildId);
+
+    const wordlist = this.d.wordlist;
+    // The escalation policy is readable either way: it is a setting, not a
+    // service, and a deployment without the filter still escalates warnings.
+    const stored = await this.d.config.getSetting<unknown>(guildId, ESCALATION_SETTING_KEY);
+    const escalation = parseEscalationPolicy(stored);
+    if (wordlist === undefined) return { access, data: { installed: false, rules: [], escalation } };
+
+    const rules = await wordlist.list(guildId);
+    return { access, data: { installed: true, rules: rules.ok ? rules.value : [], escalation } };
+  }
 
   async loadHealth(session: PanelSession | null, guildId: string): Promise<PageResult<HealthVM>> {
     const access = await authorize(session, guildId, "health", this.d.roles);

@@ -22,6 +22,7 @@
     "@sbr/progression": "*",
     "@sbr/redis": "*",
     "@sbr/shared-types": "*",
+    "@sbr/xp": "*",
     "bullmq": "^5.34.0",
     "skyhelper-networth": "^2.7.2"
   }

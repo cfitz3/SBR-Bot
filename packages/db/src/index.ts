@@ -3,7 +3,13 @@
  * The single choke point for database access across the platform.
  */
 export { prisma, connectDb, disconnectDb } from "./client.js";
-export { pingDb, type DbPingResult } from "./health.js";
+export {
+  pingDb,
+  assertDatabaseReady,
+  DatabaseNotReadyError,
+  type DbPingResult,
+  type DbReadyFailure,
+} from "./health.js";
 
 // Typed repositories — the only sanctioned data-access surface for domain packages.
 export { identityRepository } from "./repositories/identity.js";
@@ -32,6 +38,23 @@ export {
   type ApplicationRow,
   type JobHealthRow,
 } from "./repositories/panel.js";
+export { guildScanRepository, type CachedGuildMemberRow } from "./repositories/guild-scan.js";
+export {
+  screeningRepository,
+  screeningHistorySource,
+  screeningPolicySource,
+  SCREENING_POLICY_KEY,
+} from "./repositories/screening.js";
+export {
+  permRepository,
+  guildMemberDirectory,
+  memberProgressSource,
+  linkDirectory,
+} from "./repositories/perms.js";
+export { xpRepository, activitySink } from "./repositories/xp.js";
+export { leaderboardSource } from "./repositories/leaderboards.js";
+export { milestoneDefinitionRepository, milestoneAnnouncementRepository } from "./repositories/milestones.js";
+export { ticketConfigRepository } from "./repositories/ticket-config.js";
 export {
   wordlistRepository,
   guildConfigRepository,

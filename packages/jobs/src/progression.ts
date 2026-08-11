@@ -10,6 +10,10 @@
  * recently — and a member whose fetch fails is logged past, never retried in a
  * tight loop.
  */
+import {
+  MILESTONE_METRICS,
+  type MilestoneMetric as SharedMilestoneMetric,
+} from "@sbr/shared-types";
 
 export interface TrackedAccount {
   readonly minecraftAccountId: string;
@@ -25,6 +29,7 @@ export interface SnapshotMetrics {
   readonly networth: number | null;
   readonly skillAverage: number | null;
   readonly catacombsLevel: number | null;
+  readonly slayerXp: number | null;
   readonly senitherWeight: number | null;
 }
 
@@ -111,35 +116,125 @@ export async function snapshotProfiles(deps: ProfileSnapshotDeps): Promise<numbe
 
 // ─────────────────────────────── milestones ───────────────────────────────
 
-export interface MilestoneCandidate {
-  readonly minecraftAccountId: string;
-  readonly type: "SKILL_LEVEL" | "CATACOMBS_LEVEL" | "SLAYER_TIER" | "NETWORTH_THRESHOLD" | "COLLECTION" | "CUSTOM";
-  readonly metric: string;
-  readonly thresholdValue: number;
+export type MilestoneType =
+  | "SKILL_LEVEL"
+  | "CATACOMBS_LEVEL"
+  | "SLAYER_TIER"
+  | "NETWORTH_THRESHOLD"
+  | "COLLECTION"
+  | "CUSTOM";
+
+// The metric vocabulary lives in the contract layer, where the panel can also
+// reach it; re-exported here so the detector's callers have one import. The
+// annotation is a compile-time assertion that the two agree: if a field is
+// added to a snapshot without being added to the list (or the reverse), this
+// line stops the build rather than letting a metric silently never fire.
+export { isMilestoneMetric } from "@sbr/shared-types";
+export type MilestoneMetric = SharedMilestoneMetric;
+/** Compile-time check that every listed metric is a field a snapshot carries. */
+const _metricsAreSnapshotFields: readonly (keyof SnapshotMetrics)[] = MILESTONE_METRICS;
+void _metricsAreSnapshotFields;
+
+/**
+ * One threshold worth recognising.
+ *
+ * `id` is null for the built-in defaults: they are not rows, so a milestone
+ * detected from one records no `definitionId`. That is the difference the
+ * schema's nullable column exists to carry.
+ */
+export interface MilestoneDefinition {
+  readonly id: string | null;
+  /** Stable across renames — the detector and the panel both key off this. */
+  readonly key: string;
+  readonly label: string;
+  readonly type: MilestoneType;
+  readonly metric: MilestoneMetric;
+  readonly threshold: number;
+  /** Guild XP credited once, when the milestone is announced. */
+  readonly xpReward: number;
+  readonly announce: boolean;
+  readonly enabled: boolean;
+}
+
+function def(
+  key: string,
+  label: string,
+  type: MilestoneType,
+  metric: MilestoneMetric,
+  threshold: number,
+): MilestoneDefinition {
+  return { id: null, key, label, type, metric, threshold, xpReward: 0, announce: true, enabled: true };
 }
 
 /**
- * Thresholds worth announcing, per metric. Round numbers on purpose: the point
- * is a moment the guild recognises, not every incremental gain.
+ * What a guild is measured against before it configures anything.
+ *
+ * Round numbers on purpose: the point is a moment the guild recognises, not
+ * every incremental gain. All carry `xpReward: 0` — recognition is free, and a
+ * guild opts into paying for progress rather than opting out.
  */
-const THRESHOLDS: Readonly<Record<string, { type: MilestoneCandidate["type"]; steps: readonly number[] }>> = {
-  networth: {
-    type: "NETWORTH_THRESHOLD",
-    steps: [1e9, 5e9, 1e10, 2.5e10, 5e10, 1e11],
-  },
-  catacombsLevel: {
-    type: "CATACOMBS_LEVEL",
-    steps: [10, 20, 25, 30, 35, 40, 45, 50],
-  },
-  skillAverage: {
-    type: "SKILL_LEVEL",
-    steps: [20, 30, 40, 45, 50, 55, 60],
-  },
-  senitherWeight: {
-    type: "CUSTOM",
-    steps: [5_000, 10_000, 15_000, 20_000, 25_000],
-  },
-};
+export const DEFAULT_MILESTONE_DEFINITIONS: readonly MilestoneDefinition[] = [
+  def("networth:1b", "1b networth", "NETWORTH_THRESHOLD", "networth", 1e9),
+  def("networth:5b", "5b networth", "NETWORTH_THRESHOLD", "networth", 5e9),
+  def("networth:10b", "10b networth", "NETWORTH_THRESHOLD", "networth", 1e10),
+  def("networth:25b", "25b networth", "NETWORTH_THRESHOLD", "networth", 2.5e10),
+  def("networth:50b", "50b networth", "NETWORTH_THRESHOLD", "networth", 5e10),
+  def("networth:100b", "100b networth", "NETWORTH_THRESHOLD", "networth", 1e11),
+  def("catacombs:10", "Catacombs 10", "CATACOMBS_LEVEL", "catacombsLevel", 10),
+  def("catacombs:20", "Catacombs 20", "CATACOMBS_LEVEL", "catacombsLevel", 20),
+  def("catacombs:25", "Catacombs 25", "CATACOMBS_LEVEL", "catacombsLevel", 25),
+  def("catacombs:30", "Catacombs 30", "CATACOMBS_LEVEL", "catacombsLevel", 30),
+  def("catacombs:35", "Catacombs 35", "CATACOMBS_LEVEL", "catacombsLevel", 35),
+  def("catacombs:40", "Catacombs 40", "CATACOMBS_LEVEL", "catacombsLevel", 40),
+  def("catacombs:45", "Catacombs 45", "CATACOMBS_LEVEL", "catacombsLevel", 45),
+  def("catacombs:50", "Catacombs 50", "CATACOMBS_LEVEL", "catacombsLevel", 50),
+  def("skill-average:20", "Skill average 20", "SKILL_LEVEL", "skillAverage", 20),
+  def("skill-average:30", "Skill average 30", "SKILL_LEVEL", "skillAverage", 30),
+  def("skill-average:40", "Skill average 40", "SKILL_LEVEL", "skillAverage", 40),
+  def("skill-average:45", "Skill average 45", "SKILL_LEVEL", "skillAverage", 45),
+  def("skill-average:50", "Skill average 50", "SKILL_LEVEL", "skillAverage", 50),
+  def("skill-average:55", "Skill average 55", "SKILL_LEVEL", "skillAverage", 55),
+  def("skill-average:60", "Skill average 60", "SKILL_LEVEL", "skillAverage", 60),
+  def("weight:5000", "5,000 weight", "CUSTOM", "senitherWeight", 5_000),
+  def("weight:10000", "10,000 weight", "CUSTOM", "senitherWeight", 10_000),
+  def("weight:15000", "15,000 weight", "CUSTOM", "senitherWeight", 15_000),
+  def("weight:20000", "20,000 weight", "CUSTOM", "senitherWeight", 20_000),
+  def("weight:25000", "25,000 weight", "CUSTOM", "senitherWeight", 25_000),
+  def("slayer:1m", "1m slayer XP", "SLAYER_TIER", "slayerXp", 1e6),
+  def("slayer:5m", "5m slayer XP", "SLAYER_TIER", "slayerXp", 5e6),
+  def("slayer:10m", "10m slayer XP", "SLAYER_TIER", "slayerXp", 1e7),
+];
+
+/**
+ * The defaults with a guild's own definitions layered over them, by key.
+ *
+ * Merged rather than replaced so a guild that changes one threshold does not
+ * silently lose the other twenty-nine — and so a default can be switched off by
+ * storing the same key with `enabled: false`, which a replace-everything model
+ * could not express. Disabled definitions are dropped here, so callers never
+ * have to remember to check the flag.
+ */
+export function resolveDefinitions(
+  guildDefinitions: readonly MilestoneDefinition[] = [],
+): readonly MilestoneDefinition[] {
+  const byKey = new Map<string, MilestoneDefinition>();
+  for (const d of DEFAULT_MILESTONE_DEFINITIONS) byKey.set(d.key, d);
+  for (const d of guildDefinitions) byKey.set(d.key, d);
+  return [...byKey.values()].filter((d) => d.enabled);
+}
+
+export interface MilestoneCandidate {
+  readonly minecraftAccountId: string;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly thresholdValue: number;
+  /** The definition that recognised it; null for a built-in default. */
+  readonly definitionId: string | null;
+  readonly key: string;
+  readonly label: string;
+  readonly xpReward: number;
+  readonly announce: boolean;
+}
 
 /**
  * Thresholds crossed between two snapshots.
@@ -150,24 +245,36 @@ const THRESHOLDS: Readonly<Record<string, { type: MilestoneCandidate["type"]; st
  * previous value means the account was never captured before, and nothing is
  * emitted — otherwise the first snapshot of a long-standing member would
  * announce every threshold they ever passed at once.
+ *
+ * A definition added *after* a member already passed its threshold will never
+ * fire for them, for the same reason: this reports crossings, not standings.
  */
 export function detectMilestones(
   minecraftAccountId: string,
+  definitions: readonly MilestoneDefinition[],
   previous: SnapshotMetrics | null,
   current: SnapshotMetrics,
 ): readonly MilestoneCandidate[] {
   if (previous === null) return [];
 
   const found: MilestoneCandidate[] = [];
-  for (const [metric, rule] of Object.entries(THRESHOLDS)) {
-    const before = previous[metric as keyof SnapshotMetrics];
-    const after = current[metric as keyof SnapshotMetrics];
+  for (const d of definitions) {
+    if (!d.enabled) continue;
+    const before = previous[d.metric];
+    const after = current[d.metric];
     if (before === null || after === null) continue;
-
-    for (const threshold of rule.steps) {
-      if (before < threshold && after >= threshold) {
-        found.push({ minecraftAccountId, type: rule.type, metric, thresholdValue: threshold });
-      }
+    if (before < d.threshold && after >= d.threshold) {
+      found.push({
+        minecraftAccountId,
+        type: d.type,
+        metric: d.metric,
+        thresholdValue: d.threshold,
+        definitionId: d.id,
+        key: d.key,
+        label: d.label,
+        xpReward: d.xpReward,
+        announce: d.announce,
+      });
     }
   }
   return found;
@@ -178,6 +285,11 @@ export interface MilestoneDetectDeps {
   recentSnapshots(minecraftAccountId: string): Promise<readonly SnapshotMetrics[]>;
   /** Insert, ignoring a duplicate — the unique constraint is the real guard. */
   record(candidate: MilestoneCandidate): Promise<boolean>;
+  /**
+   * What this guild recognises. Omitted means the built-in defaults, which is
+   * what a guild that has configured nothing is measured against.
+   */
+  definitions?: readonly MilestoneDefinition[];
   guildId?: string | null;
 }
 
@@ -186,8 +298,9 @@ export async function detectAndRecord(minecraftAccountId: string, deps: Mileston
   const [current, previous] = await deps.recentSnapshots(minecraftAccountId);
   if (!current) return 0;
 
+  const definitions = resolveDefinitions(deps.definitions ?? []);
   let recorded = 0;
-  for (const candidate of detectMilestones(minecraftAccountId, previous ?? null, current)) {
+  for (const candidate of detectMilestones(minecraftAccountId, definitions, previous ?? null, current)) {
     if (await deps.record(candidate)) recorded += 1;
   }
   return recorded;

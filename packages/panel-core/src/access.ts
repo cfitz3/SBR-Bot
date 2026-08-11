@@ -32,6 +32,10 @@ export type PanelPage =
   | "events"
   | "members"
   | "mapping"
+  | "xp"
+  | "milestones"
+  | "tickets"
+  | "wordlist"
   | "health";
 
 /**
@@ -52,6 +56,22 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   recruitment: "OFFICER",
   settings: "ADMIN",
   mapping: "ADMIN",
+  // Weights and caps decide what every member's standing is worth, and the
+  // manual adjustment on the same page writes to the ledger by hand. Both are
+  // configuration in the strict sense, so the page sits with the other config.
+  xp: "ADMIN",
+  // What the guild recognises, and what it pays for reaching it. Configuration
+  // in the same sense the XP weights are — the achievements themselves stay in
+  // the bots, where the members who earned them can see them.
+  milestones: "ADMIN",
+  // The ticket menu and the panel that advertises it. Configuration: it decides
+  // what a member may open and which staff get pulled in, and the tickets
+  // themselves stay in the bot where the people in them are.
+  tickets: "ADMIN",
+  // The chat filter and the escalation ladder. Both decide what happens to a
+  // member automatically, with nobody in the loop at the moment it happens,
+  // which is exactly the kind of thing that belongs behind the config tier.
+  wordlist: "ADMIN",
   health: "ADMIN",
 };
 

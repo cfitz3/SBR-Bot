@@ -8,13 +8,13 @@ end lists every difference, which is the working list for the tightening pass.
 
 Sources of truth for this file:
 
-- `packages/commands-bridge/src/handlers.ts` — 22 member specs
+- `packages/commands-bridge/src/handlers.ts` — 24 member specs
 - `packages/commands-bridge/src/handlers-community.ts` — 9 community specs + 2 button routes
 - `packages/commands-bridge/src/ingame.ts` — the `!` surface and its aliases
 - `packages/commands-admin/src/handlers.ts` — 26 staff specs
 - the two dispatchers, for the gates every command passes through
 
-**Totals: 31 member commands, 26 staff commands, 13 reachable in-game, 2 button routes.**
+**Totals: 33 member commands, 26 staff commands, 15 reachable in-game, 2 button routes.**
 
 ---
 
@@ -26,8 +26,8 @@ The two bots gate differently, and the difference matters for the redefinition.
 handler → usage capture. Never throws.
 
 - **Capability** is checked only when the spec declares one. Exactly ten do
-  (`RUN_COMMAND`): `stats`, `skills`, `slayer`, `dungeons`, `networth`,
-  `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 21 are
+  (`RUN_COMMAND`): `stats`, `skills`, `slayers`, `dungeons`, `networth`,
+  `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 23 are
   ungated — any member can run them. Denial reads *"You don't have permission to
   use that command."*
 - **Cooldown** is per `surface:command:user` in Redis, from the spec's
@@ -56,7 +56,7 @@ success, latency), best-effort.
 
 ---
 
-## 2. Bridge bot — member commands (31)
+## 2. Bridge bot — member commands (33)
 
 `player?` defaults to the caller's linked account; unlinked and no `player`
 given replies with the NOT_LINKED failure. `profile?` defaults to the member's
@@ -70,7 +70,7 @@ line — the text is what the in-game surface renders.
 | `/link` | `ign*` | 10s | Bind a Discord account to an IGN by matching Hypixel's Discord social field against the caller's handle | Ephemeral `Linked to {ign}. ✅`, or the specific link failure (social unset, mismatch, already owned) |
 | `/verify` | `ign?` | 10s | Re-run the same social check; with no argument it re-checks the account already on file — the repair path for a stale link | Ephemeral `Verified as {ign}. ✅`, or `Nothing to verify — use /link <ign> first.` |
 | `/unlink` | — | 10s | Drop the caller's linked account | Ephemeral `Unlinked {ign}.` |
-| `/me` | — | 10s | The caller's own summary; never accepts a player | **Ephemeral** stats embed (skills, slayers, dungeons, networth) |
+| `/me` | — | 10s | The caller's own summary; never accepts a player | **Ephemeral** stats embed (skills, slayers, dungeons, networth, and — when XP is wired — a guild standing line reading level, total XP and tenure) |
 | `/profile` | `player?` `profile?` | 10s | With `profile:` shows that one; without, lists every profile on the account so the member can see what `/setprofile` accepts | Profile embed, or profile-list embed |
 | `/setprofile` | `profile*` (autocomplete) | 10s | Choose the profile all the caller's lookups default to | Ephemeral `Your lookups now default to {name}.`; `No profile called "x" on your account.` when unknown |
 
@@ -83,11 +83,12 @@ erroring.
 | Command | Options | CD | Cap | Purpose | Output |
 |---|---|---|---|---|---|
 | `/stats` | `player?` `profile?` | 15s | ✔ | Broad overview — one profile fetch backs four parallel reads | Stats embed; text `{ign}: SA 45.3, cata 42, nw 8.2b` |
-| `/skills` | `player?` `profile?` `skill?` | 15s | ✔ | Skill levels and XP to next, or one skill | Skills embed; text `{ign}: skill average N` |
-| `/slayer` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and boss kills | Slayers embed; text `{ign}: N slayer xp` |
-| `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level, classes, floor bests | Dungeons embed; text `{ign}: catacombs N` |
-| `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate with category breakdown | Networth embed; text `{ign}: {total}` |
-| `/milestones` | `player?` | 15s | — | Thresholds the player has crossed (top 10) | Milestones embed; text `{ign}: N milestone(s) recorded` |
+| `/skills` | `player?` `profile?` `skill?` | 15s | ✔ | Skill levels and XP to next, or one skill. Twelve skills including Hunting; capped skills are marked `✦` and counted in the header | Skills embed; text `{ign}: skill average N` |
+| `/slayers` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and per-tier boss kills. Naming one boss switches to its full tier breakdown | Slayers embed; text `{ign}: N slayer xp` |
+| `/slayer` | as `/slayers` | 15s | ✔ | **Deprecated alias.** Answers identically, with `` `/slayer` is now `/slayers`. `` in front. Remove after one release | as `/slayers` |
+| `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level and progress to the next, class levels and average, completions per floor (`F…` normal, `M…` master), fastest S+ | Dungeons embed; text `{ign}: catacombs N` |
+| `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate; six largest categories with their share of the total and their three most valuable items | Networth embed; text `{ign}: {total}` |
+| `/milestones` | `player?` | 15s | — | Guild achievements + standing: earned (top 5) and closest unearned (top 5) w/ progress | Achievements embed; text `{ign}: N/M achievements · next: {label}` |
 | `/progress` | `metric?` (4 choices) `range?` (1–365, default 30) | 15s | — | The **caller's** progression over time; requires a link | Progress embed; text `{ign}: networth over 30d — +N` or `not enough history` |
 
 `/progress` falls back to `networth` for an unrecognised metric rather than
@@ -113,7 +114,7 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 | `/price` | `item*` (autocomplete) | 5s | Blended market value | Price embed; text `{id}: {coins}` |
 | `/bazaar` | `item*` | 5s | Bazaar order book | Bazaar embed; text `{id}: buy X / sell Y`. An item not sold on the bazaar says so and points at `/lowestbin` rather than reporting an outage |
 | `/lowestbin` | `item*` | 5s | Cheapest BIN listing | Embed; text `{id}: {coins}` or `no BIN listing` |
-| `/auctions` | `item?` `player?` | 15s | Two questions, one command: an item's cheapest listings, or a player's own. **`item:` wins when both are given** | Auctions embed; text `N listing(s)` / `N active auction(s)` |
+| `/auctions` | `item?` `player?` | 15s | Two questions, one command: an item's cheapest listings, or a player's own. **`item:` wins when both are given.** A player's auctions split into sold-unclaimed (with the coins waiting), expired-unsold and active; already-collected auctions are dropped | Auctions embed; text `{ign}: N active · X to claim · N expired` |
 
 ### 2.5 Guild & meta
 
@@ -121,6 +122,25 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 |---|---|---|---|---|
 | `/help` | — | 3s | Static catalog, grouped Account / Stats / Optimize / Market / Guild / Events / Groups / Help | Ephemeral 8-line list |
 | `/online` | — | 30s | Guild roster read live from the Mineflayer session (the Hypixel guild endpoint carries no presence) | Roster embed by rank. **Two failures kept distinct**: no bridge configured here (permanent) vs bridge offline right now (retryable) |
+| `/standing` | `member?` (user) | 10s | Guild XP, level, rank and the per-source breakdown behind it | Standing embed; text `{name}: level N ({xp} xp)`. **Public for yourself, ephemeral for anyone else** |
+
+| `/leaderboard` | `category?` (choice of 8), `page?`, `days?` | 15s | Guild rankings over wealth, tenure, skill average, catacombs, slayer, Discord activity, guild chat and XP | Ranked embed with the caller's own row appended; text = top five on one line |
+
+`/leaderboard` ranks **only active members**, and **only positive values** —
+zero and unknown are both absent from a board rather than sitting at the bottom,
+because "no data" and "worst in the guild" are different claims. Ties share a
+rank (1, 2, 2, 4) and the footer quotes the **oldest** reading on the page, not
+the newest. The four snapshot-backed boards are keyed by Minecraft uuid, so an
+unlinked caller gets the board but no "you are here" line. Full rules in
+`COMMANDS.md` §19.
+
+`/standing` is keyed by **Discord id, not IGN** — XP is attributed to a person
+on the platform, so an unlinked speaker has no standing to report. Three answers
+are kept apart on purpose: XP not wired here says *"Guild XP isn't switched on
+here."* (never "0", which would be a different and untrue claim), a member with
+no ledger rows gets the encouraging empty state, and everyone else gets the
+embed. Someone else's standing stays ephemeral because printing a member's rank
+into a channel on request invites exactly the comparison nobody asked for.
 
 `/online` is Discord-only by design — in-game the answer is `/g online`, which
 costs the bridge account nothing. The 30s cooldown and the transport's shared
@@ -156,7 +176,9 @@ closes when it expires."*
 
 | Command | Options | CD | Purpose | Output |
 |---|---|---|---|---|
-| `/ticket` | `action?` (open/list/close, default open) `category?` (5 choices) `subject?` `id?` `reason?` | 30s | One command, three actions | All ephemeral. open → `Opened ticket {id}. Staff will pick it up.`; list → the caller's own tickets only (seeing everyone's would leak reports and appeals); close → `Closed ticket {id}.` |
+| `/ticket` | `action?` (open/list/close, default open) `type?` (autocompleted from the guild's menu) `category?` (deprecated, the 5 fixed choices) `subject?` `id?` `reason?` | 30s | One command, three actions | All ephemeral. open → `Opened {type} ticket {id}. {the type's prompt, or "Staff will pick it up."}`; an unknown type lists the keys on offer, and a guild with every type switched off gets `Tickets aren't open here right now.`; list → the caller's own tickets only (seeing everyone's would leak reports and appeals); close → `Closed ticket {id}.` |
+
+`type:` is autocompleted rather than a fixed choice list because the menu is per-guild and editable at any time, while slash-command choices are frozen at registration — a guild adding a type would otherwise need the whole command re-registered before anyone could pick it. Guilds that have configured nothing see the five built-ins (`support`, `report`, `appeal`, `application`, `other`), which are exactly the old `category:` values, so `category:` keeps working unchanged.
 
 ### 2.9 Button routes
 
@@ -170,18 +192,23 @@ cannot drift.
 
 ---
 
-## 3. In-game surface (`!`) — 13 commands
+## 3. In-game surface (`!`) — 15 commands
 
 A translation layer over the same dispatcher, not a second implementation. What
 it adds: prefix parsing, positional→named argument mapping, an allow-list, IGN
 identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 
 - **Allow-list is the authorization boundary.** Only specs carrying `inGame`
-  are reachable: `help`, `profile`, `stats`, `skills`, `slayer`, `dungeons`,
-  `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs` (all `true`), and
-  `lfg` (`"linked"` — the only in-game write, attributed to its author, so the
-  speaking IGN must resolve to a Discord account first). Everything else is
+  are reachable: `help`, `profile`, `stats`, `skills`, `slayers`, `dungeons`,
+  `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs`, `leaderboard`
+  (all `true`), and
+  `lfg` and `standing` (`"linked"` — `lfg` is the only in-game write and is
+  attributed to its author, and `standing` is keyed by Discord id, so both need
+  the speaking IGN to resolve to a Discord account first). Everything else is
   silently unknown; naming Discord-only commands would just invite attempts.
+  `!standing` takes **no positional argument** — guild chat proves which
+  *player* is speaking but not which Discord account they mean by a name, so it
+  only ever answers for the speaker.
 - **Silence is the default answer** — a non-command, an unknown word, or a
   cooldown all reply with nothing rather than chat noise Hypixel counts against
   the bridge account. A bare prefix and `! stats` (space) are not triggers.
@@ -213,14 +240,14 @@ destructive command requiring `confirm:true`.
 
 | Command | Role | Options | Purpose | Output |
 |---|---|---|---|---|
-| `/warn` | MOD | `target*` `reason?` | Formal warning | Confirmation with the case id |
+| `/warn` | MOD | `target*` `reason?` | Formal warning; may trip the escalation ladder (ADMIN_BOT.md §5.1) | Confirmation with the case id, plus what was auto-escalated if anything |
 | `/mute` | MOD | `target*` `duration*` `reason?` | One action across **both** surfaces — Discord timeout and Hypixel guild-chat mute. Duration is required because Hypixel chat mutes are always time-bounded | Confirmation naming the surfaces that took effect, plus the expiry |
 | `/ban` ✱ | OFFICER | `target*` `reason?` `duration?` `confirm?` | Ban, optionally temporary | Confirmation + expiry |
 | `/kick` ✱ | MOD | `target*` `reason?` `confirm?` | Remove from the server. **Audit is written before the Discord effect**, so a kick that succeeds in Discord is never missing from the log | Confirmation |
 | `/purge` ✱ | MOD | `count*` (1–100) `user?` `channel?` `confirm?` | Bulk-delete recent messages | Ephemeral count of messages **actually** deleted (Discord silently skips >14d), and a `NOTE` action recording it |
 | `/member-note` | MOD | `target*` `note*` | Private staff note | Ephemeral confirmation |
 | `/infractions` | MOD | `target*` | A member's history | Paged embeds |
-| `/audit` | MOD | `actor?` `target?` `type?` (9 choices) `days?` (1–365) | Search the moderation log, limit 100 | Paged embeds |
+| `/audit` | MOD | `actor?` `target?` `type?` (9 choices) `days?` (1–365) `in_force?` | Search the moderation log, newest 100 (says so when there are more) | Paged embeds |
 
 ### 4.2 Safety
 

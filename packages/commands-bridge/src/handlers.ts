@@ -3,16 +3,19 @@
  * render. The registry wires these with capability + cooldown metadata, and the
  * Discord registration payload is derived from the same specs.
  */
-import { flattenEmbed } from "@sbr/shared-types";
-import type { AdviceDTO, HypixelResult, LinkActor, ProgressMetric } from "@sbr/shared-types";
+import { categoryFor, flattenEmbed, LEADERBOARD_CATEGORIES, LEADERBOARD_LABELS } from "@sbr/shared-types";
+import type { AdviceDTO, AuctionsDTO, HypixelResult, LinkActor, ProgressMetric } from "@sbr/shared-types";
 import type {
   AutocompleteHandler,
   CommandContext,
   CommandHandler,
+  CommandOptionSpec,
   CommandSpec,
   HandlerDeps,
 } from "./types.js";
 import { communitySpecs } from "./handlers-community.js";
+import { permSpecs } from "./handlers-perms.js";
+import { funSpecs } from "./fun.js";
 import {
   renderAccessoriesEmbed,
   renderAdviceEmbed,
@@ -20,9 +23,11 @@ import {
   renderBazaarEmbed,
   renderDungeonsEmbed,
   renderFailure,
+  renderLeaderboardEmbed,
+  renderLeaderboardLine,
   renderLinkError,
   renderLowestBinEmbed,
-  renderMilestonesEmbed,
+  renderAchievementsEmbed,
   renderNetworth,
   renderNetworthEmbed,
   renderPriceEmbed,
@@ -32,6 +37,7 @@ import {
   renderRosterEmbed,
   renderSkillsEmbed,
   renderSlayersEmbed,
+  renderStandingEmbed,
   renderStatsEmbed,
   formatCoins,
   formatLevel,
@@ -68,12 +74,12 @@ const help: CommandHandler = async () => ({
   ephemeral: true,
   text: [
     "Account: /link /verify /unlink /me /profile /setprofile",
-    "Stats: /stats /skills /slayer /dungeons /networth /progress /milestones",
+    "Stats: /stats /skills /slayers /dungeons /networth /progress /milestones",
     "Optimize: /missing /nextupgrade /whatnext",
     "Market: /price /bazaar /lowestbin /auctions",
     "Guild: /online",
     "Events: /events /create-event /rsvp /attendance",
-    "Groups: /lfg /runs /joinrun /leaverun",
+    "Groups: /lfg /runs /joinrun /leaverun /perm",
     "Help: /ticket /help",
   ].join("\n"),
 });
@@ -175,17 +181,104 @@ const me: CommandHandler = async (ctx, deps) => {
   if (!linked.ok || linked.value === null) {
     return { ephemeral: true, text: renderFailure("NOT_LINKED") };
   }
-  const [summary, slayers, dungeons, nw] = await Promise.all([
+  const [summary, slayers, dungeons, nw, standingRow, record] = await Promise.all([
     deps.progression.getProfileSummary(linked.value.minecraftUuid),
     deps.progression.getSlayers(linked.value.minecraftUuid),
     deps.progression.getDungeons(linked.value.minecraftUuid),
     deps.progression.getNetworth(linked.value.minecraftUuid),
+    // `/me` is the one lookup that knows the account and the person are the
+    // same, so it is the one that can show both. Absorbed on failure: a stats
+    // card is still worth sending without the guild half.
+    deps.xp?.standing(ctx.guildId, ctx.userId).catch(() => null) ?? null,
+    // Same argument, and the same absorption — a member's own record is only
+    // ever readable here because the id is the caller's own.
+    deps.record?.forMember(ctx.guildId, ctx.userId).catch(() => null) ?? null,
   ]);
   return {
     ephemeral: true,
     text: `${linked.value.ign}: ${renderNetworth(nw)}`,
-    embed: renderStatsEmbed(linked.value.ign, summary, slayers, dungeons, nw),
+    embed: renderStatsEmbed(
+      linked.value.ign,
+      summary,
+      slayers,
+      dungeons,
+      nw,
+      standingRow,
+      record !== null && record.ok ? record.value : null,
+    ),
   };
+};
+
+/**
+ * `/standing` — guild XP, level and where it came from.
+ *
+ * Keyed by Discord id, not by IGN, because that is what XP is attributed to: a
+ * member is a person on the platform, and an unlinked IGN has no standing to
+ * report (see the ledger's attribution rule in DOMAIN_MODEL.md §XP).
+ */
+const standing: CommandHandler = async (ctx, deps) => {
+  if (deps.xp === undefined) {
+    // Says "off", not "zero". A member reading a 0 would reasonably conclude
+    // they had earned nothing, which is a different and untrue claim.
+    return { ephemeral: true, text: "Guild XP isn't switched on here." };
+  }
+
+  const targetId = ctx.args.getUser("member") ?? ctx.userId;
+  const self = targetId === ctx.userId;
+
+  const found = await deps.xp.standing(ctx.guildId, targetId);
+  const linked = await deps.identity.resolveByDiscordId(targetId);
+  const name = linked.ok && linked.value !== null ? linked.value.ign : self ? "You" : "That member";
+
+  if (found === null) {
+    return {
+      ephemeral: true,
+      text: self
+        ? "You haven't earned any guild XP yet — chat, run commands, or show up in guild for a day and it'll start counting."
+        : `${name} hasn't earned any guild XP yet.`,
+    };
+  }
+
+  const embed = renderStandingEmbed(name, found);
+  // Someone else's standing stays ephemeral: it is theirs to publish, and a
+  // command that prints a member's rank into a channel on request invites
+  // exactly the comparison nobody asked for.
+  return { ephemeral: !self, text: flattenEmbed(embed), embed };
+};
+
+/**
+ * `/leaderboard` — one category, one page.
+ *
+ * Every category is DB-local: snapshots, counters, balances and join dates. The
+ * command makes no Hypixel call at all, which is why it can afford a short
+ * cooldown and a public reply where `/stats` cannot.
+ */
+const leaderboard: CommandHandler = async (ctx, deps) => {
+  if (deps.leaderboards === undefined) {
+    return { ephemeral: true, text: "Leaderboards aren't switched on here." };
+  }
+
+  const raw = ctx.args.getString("category") ?? "xp";
+  const category = categoryFor(raw);
+  if (category === null) {
+    // Names the whole catalog rather than guessing: a member who typed
+    // something close wants to see the list, not a board they didn't ask for.
+    return {
+      ephemeral: true,
+      text: `No leaderboard called "${raw}". Try: ${LEADERBOARD_CATEGORIES.join(", ")}.`,
+    };
+  }
+
+  const days = ctx.args.getNumber("days");
+  const page = await deps.leaderboards.page({
+    guildId: ctx.guildId,
+    category,
+    discordId: ctx.userId,
+    page: ctx.args.getNumber("page") ?? 1,
+    ...(days === null ? {} : { windowDays: days }),
+  });
+
+  return { ephemeral: false, text: renderLeaderboardLine(page), embed: renderLeaderboardEmbed(page) };
 };
 
 const skills: CommandHandler = async (ctx, deps) => {
@@ -299,16 +392,31 @@ const setprofileAutocomplete: AutocompleteHandler = async (focused, ctx, deps) =
     .filter((c) => typed === "" || c.name.toLowerCase().includes(typed));
 };
 
+/**
+ * `/milestones` — the guild's achievements with the member's standing against
+ * them, not a bare list of what they crossed. Public rather than ephemeral:
+ * achievements are the thing the guild celebrates, and announcing them is the
+ * point (see the announcer in DOMAIN_MODEL.md §Milestones).
+ */
 const milestones: CommandHandler = async (ctx, deps) => {
   const target = await resolveTarget(ctx, deps);
   if ("problem" in target) return { ephemeral: true, text: target.problem };
 
-  const result = await deps.progression.getMilestones(target.uuid, 10);
-  const list = result.ok ? result.value : [];
+  const result = await deps.progression.getAchievements(target.uuid, ctx.guildId);
+  if (!result.ok) {
+    return { ephemeral: true, text: "Couldn't read achievements just now — try again shortly." };
+  }
+  const data = result.value;
+  const next = data.upcoming[0];
   return {
     ephemeral: false,
-    text: `${target.ign}: ${list.length} milestone(s) recorded`,
-    embed: renderMilestonesEmbed(target.ign, list),
+    // The text line is the whole reply on the in-game surface, so it carries the
+    // headline and the nearest target rather than deferring to the embed.
+    text: data.configured
+      ? `${target.ign}: ${data.earnedCount}/${data.totalCount} achievements` +
+        (next ? ` · next: ${next.label}` : "")
+      : "Achievements aren't switched on here.",
+    embed: renderAchievementsEmbed(target.ign, data),
   };
 };
 
@@ -482,6 +590,17 @@ const lowestbin: CommandHandler = async (ctx, deps) => {
 };
 
 /**
+ * The one-line form for in-game chat, where there is no embed. Unclaimed coins
+ * lead: it is the only part of an auction summary that needs acting on.
+ */
+function auctionsText(ign: string, data: AuctionsDTO): string {
+  const claim =
+    data.claimValue === null ? "" : ` · ${formatCoins(data.claimValue)} to claim`;
+  const back = data.expired.length > 0 ? ` · ${data.expired.length} expired` : "";
+  return `${ign}: ${data.active.length} active${claim}${back}`;
+}
+
+/**
  * `/auctions` answers two questions with one command: an item's cheapest
  * listings, or a player's own. `item:` wins when both are given, because it is
  * the more specific ask.
@@ -508,7 +627,7 @@ const auctions: CommandHandler = async (ctx, deps) => {
   return {
     ephemeral: false,
     text: result.ok
-      ? `${target.ign}: ${result.value.data.listings.length} active auction(s)`
+      ? auctionsText(target.ign, result.value.data)
       : renderFailure(result.error.state),
     embed: renderAuctionsEmbed(target.ign, result),
   };
@@ -547,6 +666,21 @@ const TARGET_OPTIONS = [
   { name: "profile", description: "Skyblock profile name", type: "string" as const },
 ];
 
+/** Named once: `/slayers` and its deprecated `/slayer` alias must stay identical. */
+const SLAYER_BOSS_OPTION: CommandOptionSpec = {
+  name: "boss",
+  description: "One slayer only — shows the per-tier kill breakdown",
+  type: "string",
+  choices: [
+    { name: "Zombie", value: "zombie" },
+    { name: "Spider", value: "spider" },
+    { name: "Wolf", value: "wolf" },
+    { name: "Enderman", value: "enderman" },
+    { name: "Blaze", value: "blaze" },
+    { name: "Vampire", value: "vampire" },
+  ],
+};
+
 export function buildBridgeRegistry(): Map<string, CommandSpec> {
   const specs: CommandSpec[] = [
     {
@@ -583,6 +717,65 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       description: "Show your own profile summary",
       cooldownMs: 10_000,
       handler: me,
+    },
+    {
+      name: "standing",
+      description: "Your guild XP, level and where it came from",
+      options: [
+        {
+          name: "member",
+          description: "Whose standing to show (defaults to you)",
+          type: "user",
+          // Discord-only: guild chat can prove which *player* is speaking but
+          // not which Discord account they mean by a name, and standing is
+          // attributed to the latter.
+          inGamePositional: false,
+        },
+      ],
+      cooldownMs: 10_000,
+      // Reachable in guild chat, but only for a linked speaker — the surface
+      // resolves the IGN to a Discord id before the handler runs, which is
+      // exactly the identity standing is keyed by.
+      inGame: "linked",
+      handler: standing,
+    },
+    {
+      name: "leaderboard",
+      description: "Guild rankings — wealth, tenure, skills, activity and XP",
+      options: [
+        {
+          name: "category",
+          description: "Which board to show (defaults to guild XP)",
+          type: "string",
+          choices: LEADERBOARD_CATEGORIES.map((id) => ({
+            name: LEADERBOARD_LABELS[id],
+            value: id,
+          })),
+        },
+        {
+          name: "page",
+          description: "Page of results",
+          type: "number",
+          minValue: 1,
+          // Discord-only. Guild chat gets the top five on one line, and a second
+          // positional would make `!top wealth 2` ambiguous with a category.
+          inGamePositional: false,
+        },
+        {
+          name: "days",
+          description: "Window for the activity boards (default 30)",
+          type: "number",
+          minValue: 1,
+          maxValue: 365,
+          inGamePositional: false,
+        },
+      ],
+      cooldownMs: 15_000,
+      // A read-only view of the guild's own numbers, keyed by nothing the caller
+      // has to prove — the viewer line is the only personalised part, and it is
+      // simply absent for an unlinked speaker.
+      inGame: true,
+      handler: leaderboard,
     },
     {
       name: "profile",
@@ -630,28 +823,25 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       handler: skills,
     },
     {
-      name: "slayer",
-      description: "Slayer XP, tiers and boss kills",
-      options: [
-        ...TARGET_OPTIONS,
-        {
-          name: "boss",
-          description: "One slayer only",
-          type: "string",
-          choices: [
-            { name: "Zombie", value: "zombie" },
-            { name: "Spider", value: "spider" },
-            { name: "Wolf", value: "wolf" },
-            { name: "Enderman", value: "enderman" },
-            { name: "Blaze", value: "blaze" },
-            { name: "Vampire", value: "vampire" },
-          ],
-        },
-      ],
+      name: "slayers",
+      description: "Slayer XP, tiers and per-tier boss kills",
+      options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
       capability: "RUN_COMMAND",
       cooldownMs: 15_000,
       inGame: true,
       handler: slayer,
+    },
+    {
+      // Kept for one release after the rename. Same handler, same options — the
+      // dispatcher adds the "now /slayers" notice from `deprecatedBy`.
+      name: "slayer",
+      description: "Deprecated — use /slayers",
+      options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
+      capability: "RUN_COMMAND",
+      cooldownMs: 15_000,
+      inGame: true,
+      handler: slayer,
+      deprecatedBy: "slayers",
     },
     {
       name: "dungeons",
@@ -810,6 +1000,8 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       autocomplete: itemAutocomplete,
     },
     ...communitySpecs(),
+    ...permSpecs(),
+    ...funSpecs(),
   ];
   return new Map(specs.map((s) => [s.name, s]));
 }

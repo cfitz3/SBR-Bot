@@ -4,10 +4,10 @@
  * where the ports meet their real implementations.
  */
 import { loadConfig, type AppConfig } from "@sbr/config";
-import { disconnectDb, pingDb, progressionRepository, workerJobLogSink } from "@sbr/db";
+import { assertDatabaseReady, disconnectDb, pingDb, progressionRepository, workerJobLogSink } from "@sbr/db";
 import { HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
 import { JobRunner } from "@sbr/jobs";
-import { NetworthServiceImpl, type NetworthEngine } from "@sbr/pricing";
+import { NetworthServiceImpl, summariseNetworth, type NetworthEngine } from "@sbr/pricing";
 import {
   ProgressionServiceImpl,
   type ProfileProvider,
@@ -48,6 +48,10 @@ export interface WorkerContext {
 export async function createWorkerContext(): Promise<WorkerContext> {
   const config = loadConfig();
   const log = createLogger({ level: config.logLevel, name: "workers" });
+
+  // Prisma connects lazily, so a wrong or absent Postgres would otherwise only
+  // show up later as an endless drip of failing queries. Check once, up front.
+  await assertDatabaseReady();
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis);
 
@@ -66,9 +70,7 @@ export async function createWorkerContext(): Promise<WorkerContext> {
         (museum ?? undefined) as Record<string, unknown> | undefined,
         bankBalance ?? 0,
       );
-      const result = await calc.getNetworth();
-      const total = typeof result.networth === "number" ? result.networth : null;
-      return { total, breakdown: {} };
+      return summariseNetworth(await calc.getNetworth());
     },
   };
 

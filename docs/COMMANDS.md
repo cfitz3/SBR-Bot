@@ -39,12 +39,13 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/stats` | Broad stat overview for a player | Public | `player?`, `profile?` | Embed: skills avg, slayers, dungeons, networth, weight | Player/profile not found; API disabled | Cache→Live |
-| `/skills` | Detailed skill levels + XP to next | Public | `player?`, `profile?`, `skill?` | Embed/table of all skills or one skill breakdown | Player not found | Cache→Live |
-| `/slayer` | Slayer XP, tiers, boss kills | Public | `player?`, `profile?`, `boss?` | Embed per-slayer breakdown | Player not found | Cache→Live |
-| `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level, classes, S+ counts | Player not found; no dungeon data | Cache→Live |
-| `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
+| `/skills` | Detailed skill levels + XP to next | Public | `player?`, `profile?`, `skill?` | Embed/table of all skills or one skill breakdown, with each skill's cap and a count of those at it | Player not found | Cache→Live |
+| `/slayers` | Slayer XP, tiers, per-tier boss kills | Public | `player?`, `profile?`, `boss?` | Embed per-slayer breakdown; naming one boss adds its per-tier kill counts | Player not found | Cache→Live |
+| `/slayer` | **Deprecated** alias of `/slayers`, kept for one release | Public | as `/slayers` | Same answer, prefixed with the new name | — | Cache→Live |
+| `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
+| `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
 | `/progress` | Progression over time vs. snapshots | Linked | `metric?`, `range?` | Embed/chart-link: delta since last snapshot | No snapshots yet for account | DB (`ProfileSnapshot`) + Cache (latest) |
-| `/milestones` | Achievements/thresholds the player has crossed | Public | `player?` | List of `Milestone` records w/ dates | No milestones recorded | DB (`Milestone`) |
+| `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned (newest first, with XP paid) + closest unearned w/ progress bars, `n/total` headline, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet" | DB (`Milestone`, `MilestoneDefinition`, `ProfileSnapshot`) |
 
 ---
 
@@ -55,7 +56,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/price` | Best estimated value of an item | Public | `item` (autocomplete), `qty?` | Embed: bazaar/AH/BIN value summary | Item unknown; no market data | Cache (`pricing`) → Live refresh |
 | `/bazaar` | Bazaar buy/sell/order data for an item | Public | `item` (autocomplete) | Embed: insta-buy/sell, order book summary | Item not on bazaar | Cache→Live (bazaar endpoint) |
 | `/lowestbin` | Lowest BIN for an item | Public | `item` (autocomplete) | Embed: lowest BIN + link | Item has no active BIN | Cache→Live (AH) |
-| `/auctions` | Active auctions for a player or item | Public | `player?` **or** `item?` | List of active auctions (price, ends) | Neither/both args; none active | Cache→Live (AH) |
+| `/auctions` | A player's auction standing, or an item's cheapest listings | Public | `player?` **or** `item?` | For a player: sold-but-unclaimed (with the coins waiting), expired-unsold, and active. For an item: cheapest listings | Neither/both args; none active | Cache→Live (AH) |
 
 ---
 
@@ -88,11 +89,68 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/lfg` | Create a looking-for-group post | Linked | `activity`, `slots`, `details?` | Public LFG embed w/ join button | Cooldown; too many open posts | DB (`LFGPost`) + Cache (`lfg:open:*` TTL) |
+| `/lfg` | Create a looking-for-group post | Linked | `activity`, `slots?`, `title?`, `details?`, `perm?`, `permname?` | Public LFG embed w/ join / leave / close buttons | Cooldown; too many open posts; no such perm | DB (`LFGPost`) + Cache (`lfg:open:*` TTL) |
 | `/runs` | List open runs/LFG posts | Public | `activity?` | List of open `LFGPost`s | None open | Cache (`lfg:open:*`) → DB |
 | `/joinrun` | Join an open run | Linked | `run_id` | Updated party roster; DM/ping | Run full/closed; already joined | DB + Cache (slot update) |
 | `/leaverun` | Leave a run you joined | Linked | `run_id` | Updated roster | Not in run; run closed | DB + Cache |
+| `/editrun` | Change a run you host | Linked (owner or staff) | `id`, `title?`, `details?`, `slots?` | Updated embed | Nothing to change; not yours; run finished; slots below the current party | DB |
+| `/closerun` | End a run | Linked (owner or staff) | `id` | Embed marked closed, buttons disabled | Not yours; already closed | DB |
 | `/rsvp` | RSVP to a scheduled event | Public | `event_id`, `state` (going/maybe/no) | Updated RSVP + counts | Event full→waitlist; event past | DB (`EventRSVP`) |
+| `/perm` | Standing parties — the group you always run with | Linked | `action` (info/list/create/roster-add/roster-remove/disband/default), `perm?`, `name?`, `activity?`, `ign?`, `role?`, `slot?`, `notes?` | Roster embed: seat, IGN, linked mention, cata/SA | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileSnapshot` for enrichment |
+
+### `/lfg` — runs
+
+A post is a row; the message is a view of it. Every button carries the post id
+in its `customId` (`run:<postId>:join|leave|close`), so the board survives a
+restart and nothing ever has to look a post up by the message it was sent as.
+
+- **Perm autofill.** `perm:true` brings the author's default perm for that
+  activity; `permname:F7 core` names one, and wins over `perm:true` when both are
+  given. Seats are taken in roster order until the party is full, the author is
+  never duplicated, and seats with no linked Discord account are skipped — there
+  is nobody to mention. A missing *default* is not an error (`perm:true` means
+  "bring my usual party if I have one"); a missing *named* perm is.
+- **Edits never kick anybody.** Shrinking `slots` below the current party is
+  refused rather than silently truncating it. Raising slots on a full post
+  reopens it, so the new seat is actually reachable.
+- **Closing is a decision, expiring is not.** A closed post names who closed it;
+  an expired one just says expired. Owner or staff (`MENTION`) may close; the
+  buttons stay visible but disabled, so the message still reads as the run it was.
+- **The board never blocks the reply.** Publishing to the configured `lfg`
+  channel and refreshing the embed absorb their own failures — a broken channel
+  binding must not turn a successful join into an error in a member's face.
+
+**In-game shape stays `!lfg <activity> [slots] [details]`.** Guild chat has no
+named arguments, so `title`, `perm` and `permname` are marked
+`inGamePositional: false` and take no token there.
+
+### `/perm` — standing parties
+
+A **perm** is a fixed party a member runs with repeatedly: a name, an activity,
+and a roster of seats. One command with an `action` option rather than seven
+top-level commands, for the same reason `/ticket` is one command.
+
+Three properties are worth stating because they are load-bearing:
+
+- **Addressed by name.** Names are unique per guild while a perm is *active*,
+  compared case-insensitively, and freed for reuse on disband — enforced by a
+  partial unique index, since people type `/perm perm:F7 core` from memory in
+  guild chat. Ids still work anywhere a name does.
+- **Rosters are keyed by IGN.** A linked Discord account and a uuid are attached
+  when they can be resolved and their absence is never an error. Perms are formed
+  in-game, and most of a Hypixel guild has never linked an account.
+- **Enrichment never calls Hypixel.** The in-guild marking comes from the 6 h
+  member cache and the cata/SA columns from the newest stored `ProfileSnapshot`,
+  one query each for the whole roster. `inGuild` is three-valued: a cold or
+  unreachable cache renders as *nothing*, not as "left the guild".
+
+Owner-or-staff may edit or disband a perm; only the owner may mark one as their
+`/lfg` autofill default, because that is a personal preference rather than
+administration. Disbanding is a status change, never a delete — a roster is a
+record of who ran together.
+
+**Not in the web panel, deliberately.** Who someone runs dungeons with is not
+staff configuration (`PLATFORM_EXPANSION_PLAN.md` §4).
 
 ---
 
@@ -181,6 +239,8 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/ticket` | Manage tickets (open/assign/close on behalf) | Staff | `action` (open/assign/close), `user?`, `category?`, `reason?` | Ticket thread + status | Ticket not found; already closed | DB (`Ticket`) + Discord API |
 
+What a member may open is configuration, not a command: the ticket menu (`TicketTypeConfig`) and the panel that advertises it (`TicketPanelConfig`) are edited on the panel's admin-only **Tickets** page. The bot reads that menu — see COMMAND_INVENTORY.md §2.8 for the member-facing `/ticket`. A guild that configures nothing offers the five built-in types, which are the fixed `TicketCategory` values.
+
 ---
 
 ## 15. Admin Bot — Server Safety & Audit
@@ -211,19 +271,225 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 **Design constraints**
 - **Prefix-based**, not slash: e.g. `!stats <ign>`, `!nw`, `!price <item>`, `!lfg <activity>`, `!help`. Prefix and enabled set come from `GuildConfig`.
 - **Output is truncated/paginated** to fit Minecraft chat (single line, ~256 char cap); rich embeds collapse to a compact one-liner (e.g. `Player — Cata 42 | SA 45.3 | NW 8.2b | SnrW 12,340`).
-- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayer, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`). **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
+- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayers, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. The **fun** commands (§20) are in-game too: they read nothing about anybody and write nothing anybody is accountable for. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
+- **Arguments are positional**, in the spec's declared order, with the last one
+  absorbing the rest of the line so multi-word values work. There is no
+  `key:value` syntax, so an option only Discord should see is declared
+  `inGamePositional: false` — otherwise adding one silently re-maps the free-text
+  argument at the end (this is why `!lfg <activity> [slots] [details]` still works
+  after `/lfg` gained `title`, `perm` and `permname`).
+- **A command name may start with a digit** (`!8ball`). The name pattern exists
+  to keep punctuation — `!!!`, `!?` — from being parsed as a command, and an
+  unrecognised name still ends in silence, so it is no stricter than that.
 - **Cooldowns are stricter** (per-IGN Redis `cd:ingame:*`) because guild chat is spam-prone and rate-limited by Hypixel itself.
 - **Identity is by IGN → `LinkedAccount`.** If the IGN isn't linked, commands still work for public lookups but personalized commands (`/me`, `/whatnext`) reply with a "link on Discord" hint.
 
 | In-game command | Maps to | Perms | Data |
 |-----------------|---------|-------|------|
-| `!stats`, `!skills`, `!slayer`, `!dungeons`, `!nw` | `/stats` … `/networth` | `RELAY_MESSAGE`+`RUN_COMMAND` | Cache→Live |
+| `!stats`, `!skills`, `!sl`, `!dungeons`, `!nw` | `/stats` … `/networth` | `RELAY_MESSAGE`+`RUN_COMMAND` | Cache→Live |
 | `!price`, `!bz`, `!lbin` | `/price`,`/bazaar`,`/lowestbin` | Run cmd | Cache→Live |
 | `!weight` | `progression` (Senither/farming) | Run cmd | Cache→Live |
 | `!lfg`, `!runs` | `/lfg`,`/runs` | Run cmd (linked) | DB + Cache |
+| `!perm` | `/perm` | Run cmd (linked) | DB + member cache |
+| `!standing` | `/standing` | Run cmd (linked) | DB (`XpBalance`, `XpEvent`) |
 | `!help` | `/help` (condensed) | Public | Static |
+| `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank`, `!cringe` | §20 | Public | None (Redis counter for `!cringe`) |
+
+`!standing` is `"linked"` although it writes nothing. XP is attributed to a
+Discord account, so an IGN that resolves to no link has no standing to report —
+here the link is the *lookup key*, not a permission.
 
 **In-game error handling:** invalid command → short usage hint; on cooldown → silent or `⌛` reply; API failure → `⚠ data unavailable, try later`; unauthorized → `no permission` one-liner. Errors never dump stack traces into guild chat.
+
+---
+
+## 18. Member Bot — Guild XP & Standing
+
+Guild XP is a **platform-side** progression track: it measures participation in
+*this guild* (guild XP contributed, chat, commands, events, tenure), not
+Skyblock progress. Nothing here reads Hypixel except the GEXP figure the roster
+scan already stores.
+
+| Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
+|---------|---------|-------|------------------|--------|-------------------------|------|
+| `/standing` | A member's guild XP, level, rank and where the XP came from | Linked | `member?` | Embed: level + progress bar, rank, tenure, per-source breakdown | XP not enabled; member has never earned any | DB (`XpBalance`, `XpEvent`) |
+| `/me` | Personal summary; now also carries level, total XP, rank and the caller's own record | Linked | — | Existing embed + "Guild standing", "Tenure" and "Your record" fields | (standing and record failures degrade silently) | DB |
+
+**Visibility.** `/standing` with no argument is public in-channel; `/standing
+member:` is **ephemeral**. Someone else's standing is theirs to publish, and a
+command that posts it for them turns a lookup into an announcement.
+
+**Freshness.** Standings are derived, not live: the `xp-aggregate` job weights
+each day's activity counters into the ledger every three hours (see
+`WORKERS.md`). The embed says so in its footer rather than implying today's
+chat is already counted.
+
+**Two documented deviations from the original plan (Phase 5):**
+
+- **`/profile` shows no standing.** `/profile` addresses a *player* by IGN,
+  while standing is keyed by Discord id, and `IdentityService` exposes no
+  IGN → Discord id resolution. Widening that interface for a decorative field
+  would have touched every fake of it in the test suite. Standing therefore
+  lands on `/me` — the one lookup certain the account and the person are the
+  same — and on `/standing member:`.
+- **`/me` carries a record, but not through the moderation service.** The
+  deviation as first written said `/me` would show no infractions at all,
+  because the member `HandlerDeps` holds no `ModerationService` and adding one
+  for a count would hand every member-facing handler the audit log and the
+  ability to punish people. Phase 10 kept that constraint and dropped the
+  conclusion: `MemberRecordSource` takes a guild and a member id, has no write
+  path, and returns a DTO with no ids in it, so the widest thing a member
+  surface can do with it is exactly what `/me` does. See §Your record below.
+
+**"Your record" on `/me` (Phase 10).** A member's own standing with staff, as
+one field on their own card:
+
+- **Absent for a clean member.** A field reading "0 warnings" on every card
+  trains everyone to skip the section, and the one time it says something would
+  look the same as the times it does not.
+- **What is being enforced right now**, soonest to end first, with anything
+  permanent last — "your mute ends in an hour" is the line being looked for, and
+  a standing ban is not news that was missed. Expiry-aware through the same
+  check the audit surfaces use, so a mute whose clock ran out is not listed
+  because a sweep has not cleared its flag yet.
+- **The reason staff typed is shown.** It is the member's own punishment and
+  they were told it at the time; a mute whose reason is a secret is one they can
+  only guess how to avoid repeating.
+- **Warnings inside the escalation window**, counted by the same function the
+  ladder fires off — if the card says two, the third is the one that escalates.
+- **What the next warning would cost**, when it lands on a rung. Omitted when
+  the ladder is off, when no policy source is wired, and when the next warning
+  falls between rungs, because promising a punishment that will not happen is
+  worse than promising nothing.
+- **Only ever the caller's own.** `/stats <player>` addresses an IGN and never
+  carries a record; the source is keyed by the Discord id `/me` already knows is
+  the caller's.
+
+**Anti-abuse** is split across the two moments it can be enforced (see
+`DOMAIN_MODEL.md`): per-message length and per-user cooldown at *capture*, daily
+caps at *aggregation*. A capped day is silently capped — no member is told they
+have hit a limit, because that is an instruction on how to farm just under it.
+
+---
+
+## 19. Member Bot — Leaderboards
+
+Eight boards over data the platform already keeps. Nothing here fetches from
+Hypixel at command time: every value is read from a table some job has already
+filled, which is why a board answers in one query and why it can be honest about
+how old its numbers are.
+
+| Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
+|---------|---------|-------|------------------|--------|-------------------------|------|
+| `/leaderboard` | Guild rankings across eight categories | Member | `category?` (choice, default `xp`), `page?`, `days?` (1–365, activity boards only) | Embed: ranked page with 🥇🥈🥉, the viewer's own row appended, footer with page, total ranked, window and staleness | Leaderboards not enabled; unknown category (lists the real ones) | DB (`ProfileSnapshot`, `GuildMember`, `ActivityDaily`, `XpBalance`) |
+
+**The catalog is closed.** `wealth`, `tenure`, `skill-average`, `catacombs`,
+`slayer`, `discord-activity`, `guild-chat`, `xp`. A leaderboard is a claim about
+the guild, and each of these has a stated source and a stated freshness — an
+open-ended "rank by any metric" surface could make neither promise. Common
+spellings are accepted (`nw`, `cata`, `sa`, `gc`, `top`), so guild chat does not
+have to type the canonical id.
+
+**Sources and freshness.**
+
+| Family | Source | How fresh |
+|--------|--------|-----------|
+| `SNAPSHOT` — wealth, skill average, catacombs, slayer | newest `ProfileSnapshot` per linked account | up to one snapshot cycle behind (~6–12h) — the *only* family that can be stale |
+| `TENURE` — tenure | `GuildMember.joinedAt` | exact, derived at read time |
+| `ACTIVITY` — Discord activity, guild chat | summed `ActivityDaily` over a rolling window (default 30d) | same counters XP is derived from |
+| `XP` — guild XP | `XpBalance`, rebuilt by `xp-aggregate` | up to three hours behind |
+
+The footer reports the **oldest** reading on the page, never the newest: the
+page is only as current as its stalest row, and quoting the freshest would
+overstate it.
+
+**Ranking rules.**
+
+- **Competition ranking** — 1, 2, 2, 4. Tied members share a rank and consume
+  the ones after it, so "third place" is never two different people.
+- **Ties break by label ascending**, purely so repeated calls return the same
+  order. It is not a claim that one tied member is ahead of the other.
+- **Non-positive values are not ranked at all.** A member with zero guild chat
+  is absent from the guild-chat board rather than ranked last, and a profile
+  with its API off is *unknown*, not "poorest in the guild".
+- **Only active members of the guild are ranked.** Someone who left keeps their
+  history — the ledger and the snapshots are not rewritten — but a leaderboard
+  is a statement about the guild as it stands.
+
+**Where am I.** The caller's own row is appended below the page rather than
+merged into it: it answers a different question, and slotting a rank-41 row into
+the top ten would misrepresent the ranking. A caller who is not ranked simply
+has no such line — including an unlinked caller on a snapshot board, whose
+values are keyed by uuid.
+
+**In guild chat**, `!leaderboard` / `!top` returns the top five on one line. The
+`page` and `days` options are Discord-only: in-game args are positional, and a
+second number would make `!top wealth 2` ambiguous with a category.
+
+**No panel surface.** Leaderboards are member-facing, and the web panel is
+admin-only — there is deliberately no leaderboard page, and no staff control
+over who appears on one.
+
+---
+
+## 20. Member Bot — Fun
+
+Seven commands whose entire job is that guild chat is a social room. They are
+listed here because they are held to constraints the rest of the platform is
+not, and those constraints are the design.
+
+| Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
+|---------|---------|-------|------------------|--------|-------------------------|------|
+| `/8ball` | Ask the magic 8-ball | Member | `question` (required) | One of the classic twenty answers | Nothing asked | None |
+| `/roll` | Roll dice | Member | `dice?` (`100`, `d20`, `2d6`; default `100`) | Total, plus each die for 2–8 dice | Unparseable, or beyond `20d1000` | None |
+| `/coinflip` | Flip a coin | Member | — | Heads or Tails | — | None |
+| `/rps` | Rock, paper, scissors | Member | `throw` (choice, required) | The two throws and the verdict | Not one of the three | None |
+| `/guildquote` | A quote from the guild's collection | Member | — | One quote | Nothing quotable (every attempt was filtered) | `GuildSetting` `fun.quotes` |
+| `/rank` | An unofficial vibe rank | Member | `player?` (default you) | A title, a score out of 100, and a disclaimer | Not a Minecraft name; unlinked caller with no name given | None |
+| `/cringe` | Add one to somebody's cringe tally | Member | `player` (required) | The new total | Not a Minecraft name; no counter wired | Redis `fun:tally:*` |
+
+**They never echo what somebody typed.** `/8ball` answers without repeating the
+question, `/rps` echoes only the throw it managed to parse out of a fixed set,
+and `/rank` and `/cringe` accept a Minecraft name or nothing. The bridge speaks
+with the guild's voice, so a command that repeats arbitrary text is a way to make
+the guild say anything — through a path the chat filter was never asked about.
+
+**A stored quote is screened before it is said.** `/guildquote` is the one
+command here with an author, and an old quote can outlive the standards of the
+people who added it, so it goes through the same compiled filter a relayed
+message does (the same instance, so the two cannot drift apart on a stale
+cache). A quote that fails is skipped, up to three attempts — a guild whose whole
+list trips the filter says "nothing quotable right now" rather than walking a
+hundred entries on every call. With no filter wired, quotes are said as stored.
+
+**A vibe rank sticks.** `/rank` hashes the subject rather than rolling, so the
+same person gets the same rank next week. A joke rank that rerolls is a random
+number generator; one that sticks is something people compare and argue about.
+The reply says it is not a real rank, because guild ranks are a real thing with
+real permissions attached.
+
+**The only state is a counter.** `/cringe` increments a Redis key keyed by the
+*typed name* — never by a Discord id — with a 90-day expiry reset on every bump,
+so a joke nobody is still telling disappears on its own. The port behind it can
+only add: there is no read, no reset and no listing, because a tally that can be
+enumerated is a leaderboard, and a leaderboard about who is cringe is a
+different decision than the one made here.
+
+**Cooldowns are 5–15s**, longer than the lookups'. A lookup answers a question
+once; these are the commands somebody will happily run twenty times to see a
+different number.
+
+**No guild config, no panel surface.** The only configurable thing is the quote
+list, in `GuildSetting` `fun.quotes` — a JSON array of strings, bounded on
+*read* at 100 entries of 200 characters, with anything unreadable falling back
+to the shipped quotes. There is no command and no panel page to edit it, which
+is deliberate for now: the shipped list is about Skyblock rather than about
+anybody, and a staff-editable quote list is a content-moderation surface that
+should be designed as one rather than added as a side effect of a dice roller.
+
+**Shipped quotes are about the game, not about players.** A shipped quote list
+that made jokes at a type of player would be the platform picking on someone in
+a room where nobody chose it.
 
 ---
 

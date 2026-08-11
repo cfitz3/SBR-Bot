@@ -159,6 +159,24 @@ Auditability is the bot's backbone — **if it changed state, it's in the log.**
 - **Attribution is non-negotiable:** actions are always tied to the invoking human via their session/identity — the bot never performs an unattributed action, and service/automated actions (auto-infractions, anti-raid auto-mutes) are logged as `source=SYSTEM` with the triggering rule id.
 - **Surfacing:** queryable via `/audit` (Officer+) and the panel's Moderation/Audit view, filterable by actor/target/type/date, paginated, exportable to CSV.
 
+### 5.1 Warning escalation
+
+A warning is only worth issuing if the third one means something different from the first. Left to staff memory it doesn't: nobody counts back through an audit log before typing `/warn`, so the ladder ends up living in the head of whichever staffer is online. `@sbr/moderation`'s `escalation.ts` makes it a rule the platform applies the moment a warning lands.
+
+**Default ladder** (a guild that has configured nothing gets this): 3 warnings → 1h mute · 5 → 24h mute · 7 → 7-day ban. The window is 90 days. The top rung is deliberately not permanent — a ban a rule decided on should still be one a staffer can look at afterwards.
+
+**Guild configuration** lives in the `GuildSetting` KV under `moderation.escalation`: `{ enabled, windowDays, rungs: [{ warns, action, durationSeconds }] }`. Rungs layer over the built-in ones **by warn count**, the same way milestone definitions and ticket types layer — editing the 3-warning rung leaves 5 and 7 alone. `enabled: false` turns the whole ladder off; there is no way to delete a single default rung, because a policy that can half-delete itself is harder to reason about than one that is either the defaults, your edits, or nothing. Anything unparseable in the stored value falls back to the default rather than failing, since it is hand-editable JSON and a mangled row must not silently switch escalation off.
+
+**Rules worth stating:**
+- **A rung fires on the warning that reaches it**, not on every warning past it. A member at four warnings against rungs of 3 and 5 is not re-muted by warning four; since the count climbs by one per warning, each rung fires exactly once.
+- **Warnings age out.** Without a window, one bad week two years ago sits between a member and a ban forever.
+- **Escalation runs after the warning is recorded**, and never fails it. If the escalation is refused — the bot lacks the permission, the settings store is down — the warning still stands and the refusal is logged. The record of the warning is the part that must not be lost.
+- **The escalation goes through `applyAction` like any other punishment**, so the rank guard, the duration guard and the enforcement mirror all apply to it.
+
+**Attribution deviates from the `SYSTEM` convention above, on purpose.** An auto-escalation is attributed to the staffer whose warning tripped it, not to a synthetic system actor. They took the action that caused it, an audit row whose actor is nobody is a row nobody can be asked about, and routing it through the same actor is what keeps the rank guard meaningful — escalation cannot reach somebody the warning itself was not allowed to touch. The row is still identifiable as automatic: its reason reads `Automatic escalation: N warnings in M days`, which `isEscalation()` is the single reader of. `/warn` reports the escalation back to the staffer by asking what is being enforced now, so they know before deciding whether to do anything further.
+
+**The member sees the ladder they are on.** `/me` in the member bot carries a "Your record" field — what is being enforced right now, how many warnings still count inside the window, and which rung the next one lands on (COMMANDS.md §Your record). It reads through `MemberRecordSource`, a one-member read-only port rather than this service, so the member bot gains no ability to read anybody else's history or to act on anyone. The count and the expiry check are the same functions used here, so a member is never told a number staff would dispute.
+
 ---
 
 ## 6. Anti-Raid & Safety Controls

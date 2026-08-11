@@ -7,21 +7,28 @@
 import { loadConfig, type AppConfig } from "@sbr/config";
 import {
   communityRepository,
+  assertDatabaseReady,
   disconnectDb,
   guildConfigRepository,
   guildRepository,
   identityRepository,
+  milestoneDefinitionRepository,
+  ticketConfigRepository,
   moderationRepository,
   panelRepository,
   rankResolver,
+  wordlistRepository,
+  activitySink,
+  xpRepository,
 } from "@sbr/db";
 import { AnalyticsServiceImpl } from "@sbr/analytics";
 import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { HypixelClient } from "@sbr/hypixel";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { ModerationServiceImpl } from "@sbr/moderation";
+import { ESCALATION_SETTING_KEY, ModerationServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
 import { PanelMutations, PanelService, type ConfigAuditSink } from "@sbr/panel-core";
+import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
 import { createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
@@ -52,6 +59,10 @@ export interface PanelApp {
 export async function createPanelApp(): Promise<PanelApp> {
   const config = loadConfig();
   const log = createLogger({ level: config.logLevel, name: "web-panel" });
+
+  // Prisma connects lazily, so a wrong or absent Postgres would otherwise only
+  // show up later as an endless drip of failing queries. Check once, up front.
+  await assertDatabaseReady();
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis);
 
@@ -78,6 +89,10 @@ export async function createPanelApp(): Promise<PanelApp> {
     // Discord permission needs a gateway connection, which this process does not
     // have. Wiring a `false` here would block every action instead.
     botCaps: { async canPerform() { return true; } },
+    // Warnings escalate on a ladder the guild can edit; the policy lives in the
+    // settings KV, read fresh on each warning so an edit takes effect on the
+    // next one rather than at the next restart.
+    escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
     logger: log,
   });
 
@@ -102,12 +117,41 @@ export async function createPanelApp(): Promise<PanelApp> {
     logger: log,
   });
 
+  /**
+   * XP, for the admin config page and for hand-written adjustments.
+   *
+   * The cooldown gate is the same Redis adapter the bots pass, and for the same
+   * reason the identity service gets a live Hypixel client: the panel commands
+   * the service, it does not reimplement a slimmer one. Nothing the panel calls
+   * consults the gate today — configuration and adjustment are not rate-limited
+   * activity — but a service built with a stub would start lying the moment one
+   * of them did.
+   */
+  const xp = new XpService({
+    repo: xpRepository,
+    activity: activitySink,
+    cooldowns: adapters.cooldowns,
+    logger: log,
+  });
+
+  /**
+   * The chat filter, over the same repository the admin bot's `/wordlist-*`
+   * commands use. Nothing about a rule is panel-specific: the bridge compiles
+   * whatever this writes, so an edit here and an edit from Discord are the same
+   * edit made through the same validation.
+   */
+  const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
+
   const panel = new PanelService({
     roles: rankResolver,
+    xp,
     community,
     moderation,
     reads: panelRepository,
     config: guildConfig,
+    milestones: milestoneDefinitionRepository,
+    tickets: ticketConfigRepository,
+    wordlist,
     heartbeats: adapters.heartbeat,
     logger: log,
   });
@@ -138,6 +182,10 @@ export async function createPanelApp(): Promise<PanelApp> {
     moderation,
     community,
     identity,
+    xp,
+    milestones: milestoneDefinitionRepository,
+    tickets: ticketConfigRepository,
+    wordlist,
     limiter: adapters.cooldowns,
     audit,
     analytics,

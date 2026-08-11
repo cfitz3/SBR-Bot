@@ -27,11 +27,24 @@ One Node process (`apps/web-panel/src/server.ts`, zero-dependency `node:http`) s
 - **Charts are drawn as inline SVG** (`client/chart.ts`) over series the server has already zero-filled and grouped (`panel-core/src/series.ts`). Shaping happens server-side so the raw rollup rows stay the API's contract, the browser receives arrays it can draw without re-deriving the bucket grid, and the zero-filling is unit-tested under `node --test` rather than in a browser.
 - **The chart list is discovered from the data**, not hardcoded: a metric appears on the page the day something starts emitting it. Today that is only `command.used`.
 
-**Built so far:** every page in §3 — Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Recruitment + Tickets (§3.7), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4) and Mapping (§3.9) — each with the writes its section describes, over the pipeline below.
+**Built so far:** every page in §3 — Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Recruitment + Tickets (§3.7), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4), Mapping (§3.9), XP (§3.12), Milestones (§3.13), Tickets (§3.14) and Filter (§3.15) — each with the writes its section describes, over the pipeline below.
 
 Partial within the built pages, and deliberate: the recruitment queue shows applicants' answers but not their fetched Skyblock stats; Mapping takes role and channel ids by hand rather than through a live Discord picker, which needs the bot to enumerate; Health reports process liveness and job freshness but not queue depths or the Hypixel budget; the operational actions of §3.11 (requeue, force sync) are not wired; and Events schedules and cancels but does not announce, edit or mark attendance — see §3.8 for why.
 
 **The editing unit is a field, not a form.** Each control saves itself and carries its own status line, because every domain service underneath takes one value (`setChannel`, `setFeature`, `setBridgeSuspended`) and a page-wide submit would report "saved" for a write that applied four of its five parts. The two exceptions submit as a unit because their parts are not separately storable: the moderation action form (§3.6), where a type without a reason is a row the audit log should never hold, and the event scheduler (§3.8), where a title without a start time is not an event. Controls that write on change (toggles, the role dropdown) snap back when the server refuses, so a widget never displays a value that was never stored.
+
+### Transport: HTTP or HTTPS
+
+`WEB_PANEL_SCHEME` decides how the panel is reached, and **defaults to `https`** — running without TLS is always a deliberate act, never the result of an omitted setting. The scheme is a declaration by the operator rather than something the server sniffs, because the three things that depend on it disagree about what they can observe: a cookie's `Secure` flag has to be decided before any request arrives, the CSRF origin check needs the public address (which behind a proxy is not the address this process bound), and only the operator knows whether something in front is terminating TLS.
+
+| Setting | Effect |
+| --- | --- |
+| `WEB_PANEL_SCHEME=https` (default) | Session and CSRF cookies are marked `Secure`. TLS is terminated by a reverse proxy in front of this port, or in-process when `WEB_PANEL_TLS_CERT`/`WEB_PANEL_TLS_KEY` are both set. |
+| `WEB_PANEL_SCHEME=http` | Cookies are issued without `Secure`, and the server logs a startup warning naming the tradeoff. For a VPS on a bare IP with no certificate yet. |
+| `WEB_PANEL_PUBLIC_URL` | The origin the CSRF check compares against. Falls back to `DISCORD_OAUTH_REDIRECT_URI`, then to the local bind address — so the check is *active* on a bare-IP box rather than silently disabled, which is what the previous derivation did when the redirect URI was unset. |
+| `WEB_PANEL_ALLOW_INSECURE=true` | Required to run `http` under `NODE_ENV=production`. |
+
+`packages/config` rejects the combinations that would otherwise fail invisibly at login time, since each presents as "login succeeds but I'm never logged in" rather than as an error: a public URL whose scheme contradicts `WEB_PANEL_SCHEME`, an `https` callback under an `http` panel (the callback never arrives), a plaintext callback on a non-loopback host under the `https` default (the browser drops the `Secure` cookie), TLS material supplied alone or alongside `http`, and plaintext production without the acknowledgement. Loopback callbacks are exempt from the plaintext check because browsers treat `http://localhost` as a secure context, which is what lets the secure default work on a dev box with no certificate.
 
 ### Write path
 
@@ -44,7 +57,13 @@ Writes live in `PanelMutations` (`panel-core/src/mutations.ts`), a sibling of `P
 - **Rate limit** is per user and per mutation on `cd:web:{mutation}:{discordId}` — a guard against a stuck key or a double-clicked toggle, not a quota.
 - **Audit.** Every authorized attempt is captured as `CommandUsage(surface=WEB_PANEL)`, failures included, so a burst of refused writes is visible. Config changes additionally go through a `ConfigAuditSink`; they are *not* written as `ModerationAction`s, whose `type` enum describes actions taken on a person. Today the sink emits a typed analytics event; the port is what makes a durable `ConfigAudit` table a wiring change later.
 
-Available now: `config.channel`, `config.role-mapping`, `config.feature`, `config.recruitment`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.cancel`, `member.role`, `member.unlink`.
+Available now: `config.channel`, `config.setting`, `config.screening`, `config.role-mapping`, `config.feature`, `config.recruitment`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.cancel`, `member.role`, `member.unlink`.
+
+**`config.channel` accepts whatever `CONFIG_CHANNEL_SLOTS` lists**, not a copy of that list. The registry in `@sbr/shared-types` is what the mutation validates against *and* what the Mapping page renders a control for, so a slot cannot exist as a control that saves into a rejection, nor as an accepted name with no way to set it. The browser half cannot import the registry at runtime (no bundler, so a bare specifier would not resolve), so its copy lives in `client/pages/channel-slots.ts` beside a Node test that fails when the two lists differ.
+
+**`config.setting` is the write path for config that isn't worth a column** — embed templates, per-feature payloads. The key namespace is open by design: a feature becomes configurable by picking a key, not by editing the mutation layer. What this layer enforces is what is true of every setting — a dotted lowercase key, a value that round-trips through JSON, and a 64 KiB ceiling — and it audits the key and byte count, never the payload, because a template can carry someone's words. Its tier is Admin: the keys are not enumerable here, so the one mutation has to sit at the highest tier any of them would need. Shape validation belongs to whichever feature owns the key; there is no generic settings editor, and reads of a setting arrive with the page that needs one.
+
+**`config.screening` is the one setting with its own validated surface.** It writes the same `GuildSetting` row `config.setting` could — `screening.policy` — but it is the setting whose contents decide whether a stranger is admitted to the guild with nobody looking, so it gets a named mutation that checks every field and **rejects unknown keys**. That strictness is the deliberate mirror of the evaluator's read path, which is tolerant: a stored policy written years ago must still evaluate, so `parsePolicy` degrades a malformed field to its default rather than taking screening offline. A policy being typed *now* should fail at the keyboard instead, because a typo'd `minCatacomb` silently accepted would read back as "no dungeon requirement" and look identical to a working setting. The form sends the whole policy on every save — a partial write against a policy someone else just edited is a lost update nobody would notice until the wrong person got in — and `autoAccept` is refused unless `enabled` is also set, since "accept automatically without screening" is a configuration no admin means to save. Unlike `config.setting`, the audit records the policy in full: it is numbers and switches with nobody's words in it, and "who lowered the bar, and to what" is the question that audit exists to answer.
 
 **The actor is handed to each mutation, not read by it.** `run()` passes the authenticated `discordId` into the mutation body, so an action cannot be attributed to anyone but the signed-in user even if the request body claims otherwise — a body-supplied `actorDiscordId` is ignored, and there is a test that says so.
 
@@ -87,8 +106,8 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 |---------------|----------|----------|
 | `MEMBER` (non-staff) | *No panel access* (redirect to a member landing / their own linked info only) | — |
 | `MODERATOR` (Staff) | Overview, Analytics (read), Moderation/Infractions, Tickets, Events (read) | Issue/read infractions, manage tickets, mark attendance |
-| `OFFICER` | + Recruitment/Applications, Events (full), Bridge control | Applications decisions, create events, bridge suspend/unsuspend, wordlist |
-| `ADMIN` / `OWNER` | + Settings, Feature flags, Role/Channel mapping, Health | All configuration, role/channel mapping, feature toggles, recruitment settings |
+| `OFFICER` | + Recruitment/Applications, Events (full), Bridge control | Applications decisions, create events, bridge suspend/unsuspend |
+| `ADMIN` / `OWNER` | + Settings, Feature flags, Role/Channel mapping, Health, XP, Milestones, Ticket config, Filter | All configuration, role/channel mapping, feature toggles, recruitment settings, XP policy, milestone definitions, ticket types, chat-filter rules and the escalation ladder |
 
 **Enforcement rules**
 - Every guild-scoped API route resolves `(session.discordId, guildId) → GuildMember` via `packages/identity` and checks the required tier **server-side**; the UI hiding a control is never the only guard.
@@ -125,6 +144,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 - Edit `GuildConfig`: prefixes, timezone, cooldown defaults, recruitment thresholds, notification defaults, bridge behavior toggles.
 - Validated forms; on save → write through `config.SettingsService` → Postgres + Redis cache invalidation + pub/sub so bots reload live.
 - **Bot-gated** fields clearly marked; changing a channel/role field cross-links to the mapping page.
+- **Join screening** (`BRIDGE_BOT.md` §6A): the entry bar, the scammer-list behaviour and the auto-accept switch, on their own card. Always shows the policy *in force* — a guild that has never saved one reads back the platform defaults, because rendering blanks would say "nothing is configured" while the scammer check is already running.
 - **Access:** Admin+ (edit); Staff read-only view.
 
 ### 3.5 Analytics & Reports
@@ -137,6 +157,8 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 ### 3.6 Moderation / Infractions View
 - Searchable/filterable list of `Infraction` + `ModerationAction` (by member, actor, type, severity, date, active/expired).
 - Per-member drill-down: full case history, notes, active mutes/bans with expiry.
+- An **In force now** card lists only what is currently being enforced (`ModerationService.listInForce`). It answers a different question from the history table below it: "is this person already muted" is what decides whether to escalate, and reading it off a history means checking every row's expiry by eye. With no target it is the guild-wide list of live mutes and bans.
+- Each history row carries a resolved state — **in force / expired / lifted**, and nothing at all for a warn or kick, which had no duration to run out. The state is computed on the server (`ModerationActionVM.state`, from `@sbr/moderation`'s `punishmentState`) rather than read off the `active` flag: the expiry sweep clears that flag, so a flag-only reading would credit a staffer with every unmute the clock performed.
 - Actions (permission-gated): issue warn/note, revoke/adjust an active mute/ban, view but not alter another staffer's higher-rank actions.
 - **Bridge suspensions** surfaced here and on Overview; officers can suspend/unsuspend with reason.
 - Writes go through `moderation.ModerationService` (audit + Redis enforcement mirror + analytics event).
@@ -167,7 +189,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 ### 3.9 Feature Flags & Role/Channel Mapping
 - **Feature flags:** per-guild toggles from `GuildConfig.features` (e.g. in-game commands, LFG, networth, antiraid). Toggling invalidates cache + pub/sub to bots.
 - **Role mapping:** map platform roles (`MODERATOR`/`OFFICER`/`ADMIN`) → Discord role IDs, and set the verified-member role. Uses a live Discord role picker (needs bot present to enumerate roles).
-- **Channel mapping:** assign functional channels (bridge, staff, log, applications, events) → Discord channel IDs, validated against the guild's channels.
+- **Channel mapping:** assign functional channels → Discord channel IDs, validated against the guild's channels. Every slot in `CONFIG_CHANNEL_SLOTS` gets a control: the five originals (bridge, staff, log, applications, events) plus LFG, tickets, milestones, leaderboard and modlog. The page reads them from `GuildRuntimeConfig.channels`, the canonical binding map — which is why a slot nothing has ever written still shows up as "not set" instead of vanishing. (It read that map over five mirrored `*ChannelId` columns until Phase 11 backfilled and dropped them; the page never had to change.)
 - **View/edit raw role IDs & channel IDs** with validation and a "resolve name" preview; invalid/stale IDs flagged.
 - **Bot-gated:** picker requires `INSTALLED`; degrades to manual-ID entry with validation warnings if the bot can't enumerate.
 - **Access:** Admin+.
@@ -187,6 +209,42 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 - Operational actions (Admin+): retry/requeue a failed job, force a sync, restart bridge session (where safe).
 - **Access:** Admin+ (Staff may get a read-only subset).
 
+### 3.12 Guild XP
+- **Per-source rules:** for each `XpSource` — whether it counts, its weight, its daily cap (blank = uncapped), its cooldown in seconds, and, for the two message sources, the minimum message length. Sources with no stored row render as **off**: a missing row *is* "disabled", and showing a guessed default would put a number on screen that nobody chose and no job reads.
+- **Manual adjustment:** a signed amount against one member, with a **required reason** that is stored on the ledger row itself, not only in the audit trail — a member asking where 5,000 XP came from should be answerable from their own history. Armed-then-confirmed, and the form clears on success, because an adjustment is not a setting that can be corrected by typing a different value; the only way back is a second adjustment.
+- **Not retroactive, and the page says so.** Weights are read when `xp-aggregate` derives a day, so a change lands on today's still-open counters and everything after; already-scored days keep the numbers they were scored under.
+- **No standings, no leaderboard, no activity counters.** Those are member-facing and live behind `/standing` and `/leaderboard`. The panel owns the *rules* everyone is scored by, not the scores.
+- **Degrades to a sentence** when XP is not wired into the deployment: the page says it is not enabled rather than rendering seven dead controls.
+- **Access:** Admin+ (both writes, matching the page — an Officer-tier write behind an Admin-only page would be a permission nobody could exercise).
+
+### 3.13 Milestones
+- **Definitions, not standings.** Each row is one thing the guild recognises: its key, the metric it reads (`MILESTONE_METRICS`), the threshold, the type, whether it is announced, and what reaching it pays. Who has reached what is member-facing and stays in the bots behind `/milestones`.
+- **Built-in defaults are listed alongside a guild's own rows**, because they are already in force — listing only stored rows would show an empty page for a guild that is in fact recognising thirty things. A default carries `source: "DEFAULT"` and `id: null`, so the first edit is a create: editing one writes a guild row that shadows it by key.
+- **Every control saves the whole definition** rather than a patch, since for a default there is nothing on the server to merge a patch against.
+- **Removal is for guild rows only.** The way to stop recognising a built-in is to switch it off, which stores it disabled — deleting a row that does not exist would just make the default reappear.
+- **Access:** Admin+.
+
+### 3.14 Tickets
+- **The menu and the panel, not the tickets.** This page owns what a member may open with `/ticket` and the embed that advertises it. The tickets themselves — and whatever a member wrote in one — stay in the bot and in the Recruitment/Tickets queue, where the people in them are.
+- **Ticket types** layer exactly like milestone definitions: five built-ins (`support`, `report`, `appeal`, `application`, `other` — the same five values the old fixed `category:` option offered) are listed with `source: "DEFAULT"`, a guild's stored row shadows the built-in with the same key, and a key the built-ins don't know is that guild's own type, sorted in by position. A guild that configures nothing stores nothing, and a built-in added in a later release reaches every guild.
+- **Per type:** offered or not, the name a member sees, the prompt they are asked when they open one, the category channel it opens under, the staff role ids pulled in (deduped on save, so nobody is pinged twice), the menu position, and which fixed `TicketCategory` it is filed under for reporting.
+- **The key is typed, not derived from the name.** It is what a member passes to `/ticket type:` and what a guild row joins on; a key that moved when somebody reworded the name would break saved commands and shadow nothing.
+- **Turning every type off closes ticketing** without touching the history — `/ticket` then says so rather than opening one under a category nobody watches. The command reads this same resolved list, so a member can never open a type the editor says is switched off.
+- **The panel** holds its channel, title and description. Where it was last posted is recorded server-side, not typed here — moving it to another channel is a re-post, and changing the channel clears the stored message id so a later edit doesn't update a message in a channel the admin moved away from.
+- **Access:** Admin+ — a type names the staff roles it pulls in and the category channel it opens under, which is role and channel configuration.
+
+### 3.15 Filter
+
+- **Two things that act on members with nobody in the loop.** The chat filter's rules fire at relay time, and the escalation ladder mutes or bans off a warning count. Both are configuration rather than a record of what somebody did, which is what separates this page from Moderation next door.
+- **The rules are shown in full, patterns included** — that is the point of the page. It is not what sets the tier: `/wordlist` in the admin bot already lists the same patterns to Staff, and a filter nobody who moderates can read is a filter nobody can maintain.
+- **The audit trail records which rule changed, to what, and by whom — never the pattern.** A trail that reproduced every entry would be a second copy of exactly the thing nobody wanted written down. `patternLength` is recorded instead, which is enough to tell an edit from a rewrite.
+- **Every control saves the whole rule**, because the mutation validates the *result*: changing only the match type can turn a legal substring into an invalid regex, or into a collision with a rule three rows down, and neither is visible from the changed field alone. A rule keeps its id across an edit — remove-and-re-add would reorder the list under whoever was reading it and orphan the rule id in an older bridge log line.
+- **A rule may be switched off rather than deleted.** Off keeps the row and stops it matching; delete is the irreversible one.
+- **The note a `/wordlist-add` carried is left alone.** It is not on `WordlistRuleDTO`, so this page has never seen it — an omitted `note` means "leave it", and only an explicit `null` clears it. The alternative would have every panel edit quietly delete what a staffer typed in Discord.
+- **The ladder is displayed as it is in force**, built-ins included (ADMIN_BOT.md §5.1). There is nothing stored until the first save, so a row-by-row editor would have to pretend otherwise; saving writes the ladder exactly as shown, which turns the built-ins on display into that guild's own. A mute rung with no duration is refused here rather than dropped on the way back in — `parseEscalationPolicy` would discard it silently, leaving an admin with a step that never fires.
+- **Rules and ladder are independent.** Escalation runs off the moderation service, which every deployment has, so a deployment without the chat filter still gets the ladder editor.
+- **Access:** Admin+, and deliberately one tier above the bot's own `/wordlist-add` and `/wordlist-remove`, which are Officer. The asymmetry is the ladder: an officer adding one rule is a bounded act with an audit line behind it, while this page hands over the rungs that mute and ban on a count, and that is guild configuration in the same sense as ticket types and role mapping. An officer who needs to add a rule mid-incident still has the command.
+
 ---
 
 ## 4. Data Sources per Page
@@ -204,6 +262,10 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 | Flags/Mapping | `config` + live Discord roles/channels (bot) | `config` → DB + cache + pub/sub |
 | Linked Members | DB (`GuildMember`,`LinkedAccount`) + `hypixel` | DB + Redis (re-verify) |
 | Health | `WorkerJobLog` + live BullMQ + bot heartbeats + `rl:hypixel` | Requeue/force-sync (workers) |
+| XP | `xp` (`XpSourceConfig`) | `xp` → `XpSourceConfig`, `XpEvent` (adjustments) + audit |
+| Milestones | `milestones` (`MilestoneDefinition` layered over built-in defaults) | `MilestoneDefinition` + audit |
+| Tickets | `tickets` (`TicketTypeConfig` layered over built-in defaults, `TicketPanelConfig`) | `TicketTypeConfig`, `TicketPanelConfig` + audit |
+| Filter | `wordlist` (`WordlistEntry`) + `GuildSetting['moderation.escalation']` layered over the built-in ladder | `WordlistEntry`, `GuildSetting` + audit |
 
 ---
 
@@ -222,7 +284,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 1. **Login only via Discord OAuth**; sessions in Redis, tokens encrypted, sliding expiry + refresh rotation.
 2. **Guild visibility = Discord `MANAGE_GUILD` ∩ platform `Guild` record**, re-validated on entry.
 3. **Every guild-scoped action authorized server-side** against `GuildMember.role`; UI gating is cosmetic only.
-4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (recruitment/events/bridge) < Admin/Owner (settings/flags/mapping/health).
+4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (recruitment/events/bridge) < Admin/Owner (settings/flags/mapping/health/XP/milestones/ticket config/chat filter + escalation). Note the split: working a ticket is Staff, but *configuring which tickets exist* is Admin, because a type names roles and channels. The filter sits at the same tier for the same kind of reason: a rule blocks or shadow-mutes at relay time and a ladder rung mutes or bans off a count, both with nobody in the loop.
 5. **Rank hierarchy** enforced on actions targeting people.
 6. **Bot-gated configuration** — anything the bot must enforce is disabled (with explanation) when the bot is missing or under-permissioned.
 7. **All writes audited** and rate-limited; **all writes go through shared domain services**, never around them.

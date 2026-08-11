@@ -20,6 +20,7 @@
     "@sbr/analytics": "*",
     "@sbr/moderation": "*",
     "@sbr/observability": "*",
+    "@sbr/screening": "*",
     "@sbr/shared-types": "*"
   }
 }

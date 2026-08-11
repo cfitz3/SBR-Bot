@@ -7,6 +7,7 @@
 import { loadConfig, type AppConfig } from "@sbr/config";
 import {
   communityRepository,
+  assertDatabaseReady,
   disconnectDb,
   guildConfigRepository,
   guildRepository,
@@ -15,7 +16,7 @@ import {
   rankResolver,
   wordlistRepository,
 } from "@sbr/db";
-import { ModerationServiceImpl, SafetyServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
+import { ESCALATION_SETTING_KEY, ModerationServiceImpl, SafetyServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { HypixelClient } from "@sbr/hypixel";
 import { CommunityServiceImpl } from "@sbr/community";
@@ -59,6 +60,10 @@ export type AdminStatusDetails = Readonly<Record<string, string | number | boole
 export async function createAdminApp(): Promise<AdminApp> {
   const config = loadConfig();
   const log = createLogger({ level: config.logLevel, name: "admin-bot" });
+
+  // Prisma connects lazily, so a wrong or absent Postgres would otherwise only
+  // show up later as an endless drip of failing queries. Check once, up front.
+  await assertDatabaseReady();
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis);
 
@@ -74,6 +79,10 @@ export async function createAdminApp(): Promise<AdminApp> {
     enforcement: adapters.enforcement,
     // Until the discord.js permission check exists, assume the bot can enforce.
     botCaps: { async canPerform() { return true; } },
+    // Warnings escalate on a ladder the guild can edit; the policy lives in the
+    // settings KV, read fresh on each warning so an edit takes effect on the
+    // next one rather than at the next restart.
+    escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
     logger: log,
   });
 

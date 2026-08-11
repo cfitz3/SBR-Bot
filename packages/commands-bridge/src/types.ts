@@ -14,11 +14,18 @@ import type {
   GuildConfigService,
   GuildRosterSource,
   IdentityService,
+  LeaderboardService,
+  LFGPostDTO,
   MarketService,
+  MemberRecordSource,
   OptionType,
+  PermService,
   PlayerLookup,
   PricingService,
   ProgressionService,
+  TallyStore,
+  TextScreen,
+  XpService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 
@@ -68,6 +75,11 @@ export interface HandlerDeps {
   readonly market: MarketService;
   readonly community: CommunityService;
   /**
+   * Standing parties. Member-facing only — the panel deliberately has no perm
+   * surface, so this service is wired into the bots and nowhere else.
+   */
+  readonly perms: PermService;
+  /**
    * Live in-game presence for `/online`. Optional because it exists only where
    * a Mineflayer session does — the admin bot and the panel wire the same
    * handler deps and have no bridge to ask.
@@ -75,7 +87,69 @@ export interface HandlerDeps {
   readonly roster?: GuildRosterSource;
   readonly config: GuildConfigService;
   readonly analytics: AnalyticsService;
+  /**
+   * The LFG board in the configured `lfg` channel. Optional for the same reason
+   * as `roster`: only a surface with a Discord client can publish one, and a
+   * deployment without it still gets working `/lfg` replies — they just live in
+   * the channel the command was run in.
+   */
+  readonly lfgBoard?: LfgBoard;
+  /**
+   * XP and standing. Optional so a deployment can run with XP switched off
+   * entirely — `/standing` then says so rather than reporting zero, which reads
+   * as "you have earned nothing" and is a different claim.
+   */
+  readonly xp?: XpService;
+  /**
+   * Guild leaderboards. Optional for the same reason as `xp`: several boards are
+   * derived from XP and activity, and a deployment without those should say the
+   * boards are off rather than publish a table of zeroes.
+   *
+   * Member-facing only — there is no panel surface for leaderboards by design.
+   */
+  readonly leaderboards?: LeaderboardService;
+  /**
+   * A member's own standing with staff, for `/me`. Deliberately not the
+   * moderation service: this port reads one member's record and cannot write,
+   * so adding it here does not hand every member-facing handler the audit log.
+   *
+   * Optional like the rest — a deployment whose member bot has no database
+   * access simply shows a card without the section.
+   */
+  readonly record?: MemberRecordSource;
+  /**
+   * The chat filter, asked rather than edited. `!guildquote` says something a
+   * staffer stored months ago, and this is how that line is held to the same
+   * standard as a relayed message without giving the member bot a write path
+   * into the guild's wordlist.
+   */
+  readonly screen?: TextScreen;
+  /**
+   * Running totals for the joke counters. Optional because they are pure fun
+   * and a deployment without Redis should lose `!cringe`, not `/me`.
+   */
+  readonly tallies?: TallyStore;
+  /**
+   * Where randomness comes from, for the fun commands. Injected so their tests
+   * can assert on an outcome instead of on a distribution; production leaves it
+   * unset and gets `Math.random`.
+   */
+  readonly random?: () => number;
   readonly logger: Logger;
+}
+
+/**
+ * Publishes an LFG post to the guild's board and keeps it current.
+ *
+ * Both methods absorb their own failures: a board that cannot be reached must
+ * not turn a successful join into an error message. The post is the record; the
+ * message is a view of it.
+ */
+export interface LfgBoard {
+  /** Post the embed into the `lfg` channel and remember where it landed. */
+  publish(post: LFGPostDTO): Promise<void>;
+  /** Re-render the post where it was published. A no-op for an unpublished post. */
+  refresh(post: LFGPostDTO): Promise<void>;
 }
 
 export type CommandHandler = (ctx: CommandContext, deps: HandlerDeps) => Promise<CommandReply>;
@@ -111,6 +185,15 @@ export interface CommandOptionSpec {
   readonly choices?: readonly Choice[];
   readonly minValue?: number;
   readonly maxValue?: number;
+  /**
+   * Whether guild chat can reach this option positionally. Defaults to true.
+   *
+   * In-game args are pure position — there is no `key:value` syntax and the last
+   * option absorbs the rest of the line, so *every* option added to a spec eats a
+   * token from the free-text one at the end. Marking an option `false` keeps it
+   * Discord-only and leaves the in-game shape of the command as it was.
+   */
+  readonly inGamePositional?: boolean;
 }
 
 /**
@@ -141,6 +224,12 @@ export interface CommandSpec {
   readonly inGame?: boolean | "linked";
   readonly handler: CommandHandler;
   readonly autocomplete?: AutocompleteHandler;
+  /**
+   * The command that replaced this one. Set on an alias kept for one release
+   * after a rename so members' muscle memory keeps working; the dispatcher
+   * prefixes the reply with a notice, and the transport can grey it out.
+   */
+  readonly deprecatedBy?: string;
 }
 
 /** Cooldown gate (Redis-backed at wiring time; in-memory for tests/single-instance). */

@@ -4,8 +4,11 @@ import { test } from "node:test";
 import {
   detectAndRecord,
   detectMilestones,
+  resolveDefinitions,
   snapshotProfiles,
+  DEFAULT_MILESTONE_DEFINITIONS,
   type MilestoneCandidate,
+  type MilestoneDefinition,
   type SnapshotMetrics,
   type SnapshotWrite,
   type TrackedAccount,
@@ -13,8 +16,11 @@ import {
 
 const NOW = new Date("2026-08-07T12:00:00.000Z");
 
+/** What a guild that has configured nothing is measured against. */
+const DEFAULTS = resolveDefinitions();
+
 function metrics(over: Partial<SnapshotMetrics> = {}): SnapshotMetrics {
-  return { networth: null, skillAverage: null, catacombsLevel: null, senitherWeight: null, ...over };
+  return { networth: null, skillAverage: null, catacombsLevel: null, slayerXp: null, senitherWeight: null, ...over };
 }
 
 function account(over: Partial<TrackedAccount> = {}): TrackedAccount {
@@ -124,14 +130,20 @@ test("the event-tracked cohort gets distinct sequences so several rows fit in on
 });
 
 test("crossing a threshold produces exactly one milestone", () => {
-  const found = detectMilestones("a1", metrics({ catacombsLevel: 29 }), metrics({ catacombsLevel: 31 }));
-  assert.deepEqual(found, [
-    { minecraftAccountId: "a1", type: "CATACOMBS_LEVEL", metric: "catacombsLevel", thresholdValue: 30 },
-  ]);
+  const found = detectMilestones("a1", DEFAULTS, metrics({ catacombsLevel: 29 }), metrics({ catacombsLevel: 31 }));
+  assert.equal(found.length, 1);
+  assert.partialDeepStrictEqual(found[0], {
+    minecraftAccountId: "a1",
+    type: "CATACOMBS_LEVEL",
+    metric: "catacombsLevel",
+    thresholdValue: 30,
+    key: "catacombs:30",
+    definitionId: null,
+  });
 });
 
 test("a jump past several thresholds reports each one", () => {
-  const found = detectMilestones("a1", metrics({ networth: 5e8 }), metrics({ networth: 1.1e10 }));
+  const found = detectMilestones("a1", DEFAULTS, metrics({ networth: 5e8 }), metrics({ networth: 1.1e10 }));
   assert.deepEqual(
     found.map((m) => m.thresholdValue),
     [1e9, 5e9, 1e10],
@@ -139,17 +151,17 @@ test("a jump past several thresholds reports each one", () => {
 });
 
 test("staying below or already above a threshold reports nothing", () => {
-  assert.deepEqual(detectMilestones("a1", metrics({ catacombsLevel: 31 }), metrics({ catacombsLevel: 33 })), []);
-  assert.deepEqual(detectMilestones("a1", metrics({ catacombsLevel: 5 }), metrics({ catacombsLevel: 9 })), []);
+  assert.deepEqual(detectMilestones("a1", DEFAULTS, metrics({ catacombsLevel: 31 }), metrics({ catacombsLevel: 33 })), []);
+  assert.deepEqual(detectMilestones("a1", DEFAULTS, metrics({ catacombsLevel: 5 }), metrics({ catacombsLevel: 9 })), []);
 });
 
 test("a first-ever snapshot announces nothing, rather than every threshold at once", () => {
-  assert.deepEqual(detectMilestones("a1", null, metrics({ networth: 5e10, catacombsLevel: 45 })), []);
+  assert.deepEqual(detectMilestones("a1", DEFAULTS, null, metrics({ networth: 5e10, catacombsLevel: 45 })), []);
 });
 
 test("an unreadable metric on either side is skipped instead of read as zero", () => {
-  assert.deepEqual(detectMilestones("a1", metrics({ networth: null }), metrics({ networth: 1e10 })), []);
-  assert.deepEqual(detectMilestones("a1", metrics({ networth: 1e8 }), metrics({ networth: null })), []);
+  assert.deepEqual(detectMilestones("a1", DEFAULTS, metrics({ networth: null }), metrics({ networth: 1e10 })), []);
+  assert.deepEqual(detectMilestones("a1", DEFAULTS, metrics({ networth: 1e8 }), metrics({ networth: null })), []);
 });
 
 test("only newly recorded milestones are counted — a duplicate insert is not a new one", async () => {
@@ -173,4 +185,86 @@ test("an account with a single snapshot yields nothing to compare", async () => 
     record: async () => true,
   });
   assert.equal(recorded, 0);
+});
+
+// ── guild-configured definitions ────────────────────────────────────────────
+
+function definition(over: Partial<MilestoneDefinition> = {}): MilestoneDefinition {
+  return {
+    id: "d1",
+    key: "catacombs:30",
+    label: "Catacombs 30",
+    type: "CATACOMBS_LEVEL",
+    metric: "catacombsLevel",
+    threshold: 30,
+    xpReward: 0,
+    announce: true,
+    enabled: true,
+    ...over,
+  };
+}
+
+test("a guild definition overrides the default with the same key, and keeps the rest", () => {
+  const resolved = resolveDefinitions([definition({ threshold: 32, xpReward: 500 })]);
+  const cata30 = resolved.find((d) => d.key === "catacombs:30");
+  assert.equal(cata30?.threshold, 32, "the guild's threshold wins");
+  assert.equal(cata30?.xpReward, 500);
+  assert.equal(cata30?.id, "d1", "and the candidate can point back at the row");
+  assert.equal(
+    resolved.length,
+    DEFAULT_MILESTONE_DEFINITIONS.length,
+    "overriding one default must not drop the others",
+  );
+});
+
+test("a guild can switch a default off by storing it disabled", () => {
+  const resolved = resolveDefinitions([definition({ enabled: false })]);
+  assert.equal(resolved.find((d) => d.key === "catacombs:30"), undefined);
+  assert.equal(resolved.length, DEFAULT_MILESTONE_DEFINITIONS.length - 1);
+});
+
+test("a guild's own key is added alongside the defaults", () => {
+  const resolved = resolveDefinitions([
+    definition({ id: "d9", key: "networth:250b", label: "250b networth", metric: "networth", threshold: 2.5e11 }),
+  ]);
+  assert.equal(resolved.length, DEFAULT_MILESTONE_DEFINITIONS.length + 1);
+});
+
+test("a disabled definition never fires, even passed directly", () => {
+  const found = detectMilestones(
+    "a1",
+    [definition({ enabled: false })],
+    metrics({ catacombsLevel: 29 }),
+    metrics({ catacombsLevel: 31 }),
+  );
+  assert.deepEqual(found, []);
+});
+
+test("a candidate carries the reward and the announce flag the definition set", async () => {
+  const attempted: MilestoneCandidate[] = [];
+  await detectAndRecord("a1", {
+    definitions: [definition({ xpReward: 250, announce: false })],
+    recentSnapshots: async () => [metrics({ catacombsLevel: 31 }), metrics({ catacombsLevel: 29 })],
+    record: async (c) => {
+      attempted.push(c);
+      return true;
+    },
+  });
+
+  assert.equal(attempted[0]?.xpReward, 250);
+  assert.equal(attempted[0]?.announce, false);
+  assert.equal(attempted[0]?.definitionId, "d1");
+});
+
+test("a definition added after the fact does not fire retroactively", () => {
+  // The member was already past 30 in the previous snapshot, so raising the bar
+  // to a level they had also already passed reports nothing: this detects
+  // crossings, not standings.
+  const found = detectMilestones(
+    "a1",
+    [definition({ threshold: 25 })],
+    metrics({ catacombsLevel: 29 }),
+    metrics({ catacombsLevel: 31 }),
+  );
+  assert.deepEqual(found, []);
 });

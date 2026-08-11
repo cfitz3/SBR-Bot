@@ -16,6 +16,6 @@
     { "path": "../../packages/progression" },
     { "path": "../../packages/redis" },
     { "path": "../../packages/observability" },
-    { "path": "../../packages/shared-types" }
+    { "path": "../../packages/shared-types" }, { "path": "../../packages/xp" }
   ]
 }

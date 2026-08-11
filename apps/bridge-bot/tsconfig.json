@@ -11,17 +11,21 @@
     { "path": "../../packages/bridge" },
     { "path": "../../packages/commands-bridge" },
     { "path": "../../packages/community" },
+    { "path": "../../packages/perms" }, { "path": "../../packages/xp" },
     { "path": "../../packages/config" },
     { "path": "../../packages/db" },
     { "path": "../../packages/guild-config" },
     { "path": "../../packages/hypixel" },
     { "path": "../../packages/identity" },
+    { "path": "../../packages/leaderboards" },
     { "path": "../../packages/discord-kit" },
     { "path": "../../packages/moderation" },
     { "path": "../../packages/observability" },
     { "path": "../../packages/pricing" },
     { "path": "../../packages/progression" },
     { "path": "../../packages/redis" },
+    { "path": "../../packages/screening" },
+    { "path": "../../packages/skykings" },
     { "path": "../../packages/shared-types" }
   ]
 }

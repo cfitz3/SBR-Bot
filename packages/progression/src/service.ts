@@ -7,6 +7,7 @@ import {
   err,
   ok,
   type AccessoryReportDTO,
+  type AchievementsDTO,
   type AdviceDTO,
   type AdviceItemDTO,
   type DataEnvelope,
@@ -22,6 +23,7 @@ import {
   type SkillsDTO,
   type SlayersDTO,
   type ProgressionRepository,
+  type MilestoneDefinitionReader,
   type SelectProfileError,
 } from "@sbr/shared-types";
 import type { NetworthService } from "@sbr/pricing";
@@ -29,6 +31,7 @@ import type { Logger } from "@sbr/observability";
 import type { ProfileProvider, SkyblockProfileData, UpgradePriceSource } from "./ports.js";
 import { parseDungeons, parseSkills, parseSlayers } from "./skyblock/parse.js";
 import { senitherWeight } from "./skyblock/weight.js";
+import { buildAchievements } from "./achievements.js";
 import { analyseAccessories, CATALOG_NOTE, type AccessoryReport, type CatalogEntry } from "./skyblock/accessories.js";
 import {
   buildNextSteps,
@@ -46,10 +49,23 @@ export interface ProgressionServiceDeps {
   readonly networth: NetworthService;
   /** Optional: without it, `/milestones` and `/progress` report "no history yet". */
   readonly repo?: ProgressionRepository;
+  /**
+   * Optional: the guild's milestone definitions. Without it `/milestones` can
+   * still list what a member has earned, but has nothing to measure them
+   * against, so it reports achievements as switched off.
+   */
+  readonly definitions?: MilestoneDefinitionReader;
   /** Optional: without it, `/nextupgrade` suggestions arrive without price tags. */
   readonly prices?: UpgradePriceSource;
   readonly logger: Logger;
 }
+
+/**
+ * How far back the achievements view reads recorded milestones. Generous
+ * because the counts it reports are lifetime ones — a cap that truncated would
+ * silently under-report a long-standing member's record.
+ */
+const ACHIEVEMENT_HISTORY_LIMIT = 500;
 
 const FOCUSES: readonly UpgradeFocus[] = ["dps", "ehp", "farming", "mining", "dungeons", "slayer", "general"];
 const GOALS: readonly Goal[] = ["weight", "networth", "dungeons", "slayer", "skills", "general"];
@@ -72,6 +88,7 @@ export class ProgressionServiceImpl implements ProgressionService {
   private readonly profiles: ProfileProvider;
   private readonly networth: NetworthService;
   private readonly repo: ProgressionRepository | undefined;
+  private readonly definitions: MilestoneDefinitionReader | undefined;
   private readonly prices: UpgradePriceSource | undefined;
   private readonly log: Logger;
 
@@ -79,6 +96,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     this.profiles = deps.profiles;
     this.networth = deps.networth;
     this.repo = deps.repo;
+    this.definitions = deps.definitions;
     this.prices = deps.prices;
     this.log = deps.logger.child({ service: "progression" });
   }
@@ -125,6 +143,24 @@ export class ProgressionServiceImpl implements ProgressionService {
   async getMilestones(uuid: string, limit = 10): Promise<Result<readonly MilestoneDTO[]>> {
     if (!this.repo) return ok([]);
     return ok(await this.repo.listMilestones(uuid, limit));
+  }
+
+  async getAchievements(uuid: string, guildId: string): Promise<Result<AchievementsDTO>> {
+    // No definitions reader means the deployment has no achievements at all, and
+    // the reply should say so rather than show an empty list, which reads as
+    // "you have earned nothing".
+    const configured = this.definitions !== undefined;
+    if (!this.repo) return ok(buildAchievements([], [], null, { configured }));
+
+    // Every recorded milestone, not a page: the totals and the earned list are
+    // both over the member's whole history, and a member with more than this
+    // many has out-achieved the definition set several times over.
+    const [definitions, earned, snapshot] = await Promise.all([
+      this.definitions?.list(guildId) ?? Promise.resolve([]),
+      this.repo.listMilestones(uuid, ACHIEVEMENT_HISTORY_LIMIT),
+      this.repo.latestSnapshot(uuid),
+    ]);
+    return ok(buildAchievements(definitions, earned, snapshot, { configured }));
   }
 
   async getProgress(
@@ -183,7 +219,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     });
 
     // NetworthService returns an honest DTO even on internal failure (total null).
-    const dto = nw.ok ? nw.value : { total: null, exact: false, missing: profile.requiredSections, breakdown: {} };
+    const dto = nw.ok ? nw.value : { total: null, exact: false, missing: profile.requiredSections, breakdown: {}, topItems: {} };
     if (!dto.exact) {
       this.log.debug("networth served as estimate", { uuid, missing: dto.missing });
     }
@@ -326,6 +362,7 @@ function toSummary(p: SkyblockProfileData): ProfileSummaryDTO {
     gameMode: p.gameMode,
     skillAverage: skills.average,
     catacombsLevel: dungeons.catacombsLevel,
+    slayerXp: slayers.totalExperience,
     senitherWeight: senitherWeight(skills, slayers, dungeons),
   };
 }

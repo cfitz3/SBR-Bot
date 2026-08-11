@@ -290,7 +290,12 @@ model Guild {
   updatedAt      DateTime    @updatedAt
 
   config        GuildConfig?
+  channels      GuildChannelBinding[]
+  settings      GuildSetting[]
   members       GuildMember[]
+  memberCache   GuildMemberCache[]
+  gexpDaily     GuildGexpDaily[]
+  scans         GuildScan[]
   permissions   BridgePermission[]
   wordlist      WordlistEntry[]
   infractions   Infraction[]
@@ -299,7 +304,16 @@ model Guild {
   applications  Application[]
   events        Event[]
   lfgPosts      LFGPost[]
+  perms         PermGroup[]
+  xpEvents      XpEvent[]
+  xpBalances    XpBalance[]
+  xpSources     XpSourceConfig[]
+  activityDaily ActivityDaily[]
+  screenings    GuildJoinScreening[]
   subscriptions NotificationSubscription[]
+  milestoneDefs MilestoneDefinition[]
+  ticketPanel   TicketPanelConfig?
+  ticketTypes   TicketTypeConfig[]
 
   @@index([discordGuildId])
 }
@@ -344,14 +358,217 @@ model SelectedSkyblockProfile {
 
 // ─────────────────────────── Config & Permissions ───────────────────────────
 
+/// One channel binding per (guild, slot).
+///
+/// Replaced the fixed `*ChannelId` columns on GuildConfig: adding a slot is a
+/// row rather than a migration, which is what lets the panel own the full set of
+/// guild-specific channels instead of some of them living in `.env`. Those
+/// columns are gone as of 20260811150000_drop_legacy_channel_columns — this
+/// table is now the only place a channel is recorded.
+model GuildChannelBinding {
+  id        String   @id @default(cuid())
+  guildId   String
+  /// See CONFIG_CHANNEL_SLOTS in @sbr/shared-types. Deliberately a string rather
+  /// than an enum: a new slot should not need a database migration, and the
+  /// value is narrowed by `isConfigChannelSlot` at every entry point.
+  slot      String
+  channelId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, slot])
+  @@index([guildId])
+}
+
+/// Typed-at-the-edge admin settings: embed templates, dropdown layouts, and the
+/// other per-guild payloads that would each otherwise be a column. Rows are
+/// written only by the panel and the admin bot; readers own the shape and treat
+/// an absent or malformed value as "use the platform default".
+model GuildSetting {
+  id        String   @id @default(cuid())
+  guildId   String
+  key       String
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, key])
+  @@index([guildId])
+}
+
+/// Rolling snapshot of the *in-game* guild roster, refreshed by `guild-scan`.
+///
+/// Distinct from GuildMember, which is platform membership keyed by Discord
+/// account: this table holds everyone in the Hypixel guild, including the many
+/// who have never linked a Discord account, and is what perm roster autofill,
+/// leaderboards and XP read so none of them costs a live Hypixel call.
+///
+/// Rows older than the cache TTL (6h) are stale, not wrong — a reader may serve
+/// them while saying so, which is far better than blocking on the API.
+model GuildMemberCache {
+  id          String    @id @default(cuid())
+  guildId     String
+  uuid        String
+  /// Resolved from Mojang opportunistically; null until a lookup succeeds, since
+  /// the guild endpoint returns uuids only.
+  ign         String?
+  guildRank   String?
+  joinedAt    DateTime?
+  /// Sum of the ~7-day expHistory window at the time of the scan.
+  weeklyGexp  Int       @default(0)
+  /// When this row was last confirmed present in-game. Doubles as the staleness
+  /// clock and as the left-the-guild tombstone check.
+  refreshedAt DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, uuid])
+  @@index([guildId, refreshedAt])
+}
+
+/// One row per member per day: Hypixel's own expHistory, de-duplicated into a
+/// permanent series. The rolling window upstream is only ~7 days, so this table
+/// is the only place long-run GEXP tenure and leaderboards can come from.
+///
+/// Idempotent on (guildId, uuid, day): re-scanning a day overwrites it, which is
+/// what makes today's still-climbing value converge rather than double-count.
+model GuildGexpDaily {
+  id      String   @id @default(cuid())
+  guildId String
+  uuid    String
+  day     DateTime @db.Date
+  gexp    Int      @default(0)
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, uuid, day])
+  @@index([guildId, day])
+}
+
+/// Audit row per scan attempt. Cheap, and the only way to answer "why is the
+/// roster stale" without reading worker logs.
+model GuildScan {
+  id          String    @id @default(cuid())
+  guildId     String
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  memberCount Int       @default(0)
+  /// UUIDs seen for the first time / no longer present, relative to the cache.
+  joined      String[]  @default([])
+  left        String[]  @default([])
+  error       String?
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, startedAt])
+}
+
+enum ScreeningVerdict {
+  /// Clears the bar on every axis the policy checks.
+  ACCEPT
+  /// Nothing disqualifying, but something a human should look at.
+  REVIEW
+  /// Fails a rule the policy treats as disqualifying.
+  DENY
+}
+
+enum ScreeningOutcome {
+  /// Screened, no decision yet — the state a REVIEW verdict rests in.
+  PENDING
+  /// `/g accept` was sent. Says nothing about whether it worked upstream.
+  ACCEPTED
+  /// Refused, by policy or by a human.
+  DENIED
+  /// Went stale unanswered, or the player withdrew.
+  EXPIRED
+  /// Observed joining without a request — an open guild, or an invite.
+  JOINED
+}
+
+/// One screening per join attempt: who asked, what we found out about them at
+/// that moment, and what happened next.
+///
+/// A row per *attempt*, not per player. Repeat requests are themselves a signal
+/// (three tries in a week reads differently from one), the stat block is a
+/// point-in-time reading that would be destroyed by an upsert, and the pair is
+/// what makes "who did we let in, on what evidence" answerable months later.
+///
+/// The stat columns duplicate what a ProfileSnapshot would hold, and do so
+/// deliberately: a snapshot needs a linked MinecraftAccount row, and an
+/// applicant is by definition somebody the platform has never met. These are
+/// the numbers as they stood at the door.
+model GuildJoinScreening {
+  id        String  @id @default(cuid())
+  guildId   String
+  uuid      String
+  ign       String
+  /// Resolved via the Hypixel social field or the SkyKings link, when either
+  /// knew. Null is ordinary — most applicants arrive unlinked.
+  discordId String?
+
+  requestedAt DateTime         @default(now())
+  verdict     ScreeningVerdict
+  /// 0–100. Higher is riskier; the thresholds that turn it into a verdict are
+  /// per-guild policy, so the number is stored and the cut is not.
+  riskScore   Int              @default(0)
+  /// Machine-readable reason codes (`SCAMMER_FLAGGED`, `NEW_ACCOUNT`, …), in the
+  /// order the policy raised them. Rendered to sentences at the surface.
+  reasons     String[]         @default([])
+
+  /// Three-valued on purpose: true = listed, false = SkyKings answered and had
+  /// nothing, null = we could not find out. Collapsing null into false is how an
+  /// outage becomes an all-clear.
+  scammer       Boolean?
+  scammerReason String?
+  /// Which identifier matched — `UUID` or `DISCORD`.
+  scammerSource String?
+
+  /// The stat block as it stood at the moment of the request. Every field is
+  /// nullable: an applicant with their API off is unreadable, not empty.
+  networth       BigInt?
+  skillAverage   Float?
+  catacombsLevel Float?
+  senitherWeight Float?
+  skyblockLevel  Float?
+  profileName    String?
+  firstLoginAt   DateTime?
+  lastLoginAt    DateTime?
+  /// Everything else worth keeping but not worth a column — slayer levels, the
+  /// SkyKings tracker's own figures, the guild they came from, API-visibility
+  /// flags. Read by the panel and by later analysis, never by a hot path.
+  metrics        Json      @default("{}")
+
+  outcome   ScreeningOutcome @default(PENDING)
+  decidedAt DateTime?
+  /// `AUTO` for a policy decision, otherwise the deciding staff member's
+  /// Discord id. A string rather than a relation: the decider may be the bot.
+  decidedBy String?
+  /// Set when screening itself failed, so a REVIEW caused by an outage is
+  /// distinguishable from one caused by the applicant.
+  error     String?
+  createdAt DateTime         @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, requestedAt])
+  /// "Have they tried before, and what happened?" — the repeat-attempt read.
+  @@index([guildId, uuid, requestedAt])
+  /// The staff queue: pending reviews, oldest first.
+  @@index([guildId, outcome, requestedAt])
+}
+
 model GuildConfig {
   id               String   @id @default(cuid())
   guildId          String   @unique
-  bridgeChannelId  String?
-  staffChannelId   String?
-  logChannelId     String?
-  applicationsChannelId String?
-  eventsChannelId  String?
+  /// Channels live in GuildChannelBinding, never here. The five `*ChannelId`
+  /// columns this model used to carry were dropped in
+  /// 20260811150000_drop_legacy_channel_columns, after their values were
+  /// backfilled into bindings.
   prefixes         String[] @default(["!"])
   timezone         String   @default("UTC")
   applicationsOpen Boolean  @default(false)
@@ -543,6 +760,26 @@ model LFGPost {
   members          String[]    @default([])
   status           LFGStatus   @default(OPEN)
   expiresAt        DateTime?
+  /// A short headline the author writes, e.g. "F7 carries, need healer".
+  /// Separate from `details` because one goes in the embed title and the other
+  /// in its body, and squashing them means the list view has nothing short to
+  /// show.
+  title            String?
+  /// Where the post was published, so the embed can be edited in place as
+  /// people join and leave rather than leaving a stale roster on screen.
+  /// Nullable because publishing can fail — a post that exists with no message
+  /// is recoverable; a post that only exists as a message is not.
+  channelId        String?
+  messageId        String?
+  /// The perm this post's roster was autofilled from, when it was. Kept for the
+  /// same reason a screening keeps its inputs: "why were those four already in
+  /// the party" should be answerable later.
+  permGroupId      String?
+  /// Closure is recorded, not inferred from `status`: "closed by the author at
+  /// 9pm" and "expired quietly overnight" are both CLOSED-ish states that mean
+  /// different things when someone asks what happened to a run.
+  closedAt          DateTime?
+  closedByDiscordId String?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
@@ -550,6 +787,180 @@ model LFGPost {
 
   @@index([guildId, status])
   @@index([guildId, activity, status])
+}
+
+enum PermStatus {
+  ACTIVE
+  DISBANDED
+}
+
+/// A "perm" — a permanent party. The standing roster people run an activity with,
+/// as opposed to `LFGPost`, which is one advertisement for one run.
+///
+/// Disbanding is a status change, not a delete: a perm's history is the only
+/// record of who ran with whom, and the roster is worth keeping after the party
+/// stops running together.
+model PermGroup {
+  id             String      @id @default(cuid())
+  guildId        String
+  ownerDiscordId String
+  name           String
+  activity       LFGActivity @default(OTHER)
+  status         PermStatus  @default(ACTIVE)
+  /// The perm `/lfg perm:true` autofills from when no perm is named. At most one
+  /// per (guild, owner, activity) — enforced by a partial unique index in the
+  /// migration, since Prisma cannot express a filtered unique constraint.
+  isDefault      Boolean     @default(false)
+  notes          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  guild   Guild        @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  members PermMember[]
+
+  @@index([guildId, ownerDiscordId, status])
+  @@index([guildId, activity, status])
+}
+
+/// One seat in a perm.
+///
+/// `ign` is the required identifier and `discordId`/`uuid` are both optional,
+/// which is the opposite of most tables here. A perm is formed in-game, where
+/// most of the guild has no linked Discord account and the only thing anyone
+/// knows about a teammate is what they type. Requiring a link would make the
+/// command unusable for the people it is for.
+model PermMember {
+  id          String   @id @default(cuid())
+  permGroupId String
+  discordId   String?
+  uuid        String?
+  ign         String
+  /// Free-form, validated per activity in `@sbr/perms`. Not an enum: Skyblock
+  /// class and role vocabulary changes far more often than we want migrations.
+  role        String
+  slot        Int      @default(0)
+  addedAt     DateTime @default(now())
+
+  permGroup PermGroup @relation(fields: [permGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([permGroupId, ign, role])
+  @@index([permGroupId, slot])
+}
+
+/// Where a unit of XP came from. The set is closed on purpose: every source
+/// needs a weight, a cap and a place in the `/standing` breakdown, so adding one
+/// is a deliberate change rather than a free-form string somebody invents.
+enum XpSource {
+  /// Hypixel guild experience, from GuildGexpDaily.
+  GEXP
+  DISCORD_MESSAGE
+  GUILD_CHAT_MESSAGE
+  /// Days as a platform member. Awarded per day, not as a lump.
+  TENURE
+  COMMAND_USAGE
+  /// Event attendance, from EventRSVP.
+  EVENT
+  /// A milestone's configured reward, credited once when it is announced.
+  MILESTONE
+  /// Staff adjustment, positive or negative. Always carries a reason in `meta`.
+  MANUAL
+}
+
+/// Append-only XP ledger. Every award records the raw quantity it came from and
+/// the weight applied, so a balance is explainable ("2,400 GEXP × 0.05") and
+/// rebuildable from scratch — a weight change re-derives history rather than
+/// silently disagreeing with it.
+model XpEvent {
+  id        String   @id @default(cuid())
+  guildId   String
+  discordId String
+  source    XpSource
+  /// Awarded XP, after weight and caps. Signed: MANUAL may take XP away.
+  amount    Int
+  /// What the amount was computed from — GEXP earned, messages sent, days.
+  rawValue  Int      @default(0)
+  day       DateTime @db.Date
+  /// Idempotency key, e.g. `gexp:<uuid>:2026-08-09`. Null for awards that are
+  /// genuinely one-off (MANUAL), where re-running is not a concern. Unique when
+  /// present, which is what makes a re-run of the aggregation job a no-op
+  /// instead of a second credit.
+  dedupeKey String?  @unique
+  meta      Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, discordId, day])
+  @@index([guildId, source, day])
+}
+
+/// Denormalized standing, rebuilt from the ledger by the xp-aggregate job. This
+/// is what `/standing` and the leaderboards read: a command must never sum the
+/// ledger live, or a busy guild turns a 60 ms reply into a table scan.
+model XpBalance {
+  id          String    @id @default(cuid())
+  guildId     String
+  discordId   String
+  totalXp     Int       @default(0)
+  level       Int       @default(0)
+  /// Per-source totals, keyed by XpSource. Denormalized for the breakdown so one
+  /// row answers the whole of `/standing`.
+  bySource    Json      @default("{}")
+  tenureDays  Int       @default(0)
+  lastAwardAt DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, discordId])
+  @@index([guildId, totalXp])
+}
+
+/// Panel-configured weight and anti-abuse limits per source. A missing row means
+/// the source is disabled — a guild that has configured nothing earns nothing,
+/// which is the safe direction for a system people will try to farm.
+model XpSourceConfig {
+  id          String   @id @default(cuid())
+  guildId     String
+  source      XpSource
+  enabled     Boolean  @default(true)
+  /// XP per unit of `rawValue`. Fractional (GEXP is thousands per day, XP is not).
+  weight      Float    @default(1)
+  /// Most XP this source may award one member in one day. Null = uncapped, which
+  /// only makes sense for sources bounded by something else (GEXP, TENURE).
+  dailyCap    Int?
+  /// Minimum gap between two countable actions, in seconds. Spam control for the
+  /// message sources; ignored by the aggregated ones.
+  cooldownSec Int      @default(0)
+  /// Minimum message length to count at all. Defeats "a" × 200.
+  minLength   Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, source])
+}
+
+/// Raw per-day activity counters. The hot path increments these (via Redis,
+/// drained by a job) and XP is derived from them afterwards — never awarded
+/// inline from a message event. That split is what makes caps enforceable: a
+/// counter can be re-read and re-weighted, an award already handed out cannot.
+model ActivityDaily {
+  id                String   @id @default(cuid())
+  guildId           String
+  discordId         String
+  day               DateTime @db.Date
+  discordMessages   Int      @default(0)
+  guildChatMessages Int      @default(0)
+  commandsUsed      Int      @default(0)
+  /// `/g online` hits. The playtime proxy — presence is sampled, never measured.
+  presenceSamples   Int      @default(0)
+  updatedAt         DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, discordId, day])
+  @@index([guildId, day])
 }
 
 model NotificationSubscription {
@@ -581,6 +992,9 @@ model ProfileSnapshot {
   networth           BigInt?
   skillAverage       Float?
   catacombsLevel     Float?
+  /// Total slayer XP across all bosses. BigInt because a maxed account clears
+  /// nine figures, and the leaderboard ranks on the sum, not the tiers.
+  slayerXp           BigInt?
   senitherWeight     Float?
   metrics            Json           @default("{}")
   createdAt          DateTime       @default(now())
@@ -594,10 +1008,49 @@ model ProfileSnapshot {
   @@index([eventId, minecraftAccountId, capturedAt]) // event leaderboard: latest per member
 }
 
+/// A threshold a guild considers worth recognising.
+///
+/// Staff-editable so a guild can set its own bar — the built-in defaults in
+/// `@sbr/jobs` are what a guild with no definitions is measured against, not a
+/// floor it has to keep.
+model MilestoneDefinition {
+  id          String        @id @default(cuid())
+  guildId     String
+  /// Stable identifier, e.g. "networth:10b". The detector keys replays off this
+  /// rather than the label, so renaming a milestone never re-announces it.
+  key         String
+  label       String
+  description String?
+  type        MilestoneType
+  /// Which snapshot field to compare — must be one the detector knows.
+  metric      String
+  threshold   BigInt
+  /// Guild XP credited once, when the milestone is announced. 0 = recognition
+  /// only, which is the default: a guild opts into paying for progress.
+  xpReward    Int           @default(0)
+  announce    Boolean       @default(true)
+  enabled     Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  milestones Milestone[]
+
+  @@unique([guildId, key])
+  @@index([guildId, enabled])
+}
+
 model Milestone {
   id                 String        @id @default(cuid())
   minecraftAccountId String
   guildId            String?
+  /// The definition that recognised this, when one did. Null for a milestone
+  /// from the built-in defaults, and SetNull on delete — deleting a definition
+  /// must not erase the fact that someone reached it.
+  definitionId       String?
+  /// Denormalized at detection time so the announcer can mention a person
+  /// without re-resolving a link that may since have changed.
+  discordId          String?
   type               MilestoneType
   metric             String
   thresholdValue     BigInt
@@ -606,12 +1059,14 @@ model Milestone {
   announced          Boolean       @default(false)
   createdAt          DateTime      @default(now())
 
-  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
-  snapshot         ProfileSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+  minecraftAccount MinecraftAccount     @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+  snapshot         ProfileSnapshot?     @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+  definition       MilestoneDefinition? @relation(fields: [definitionId], references: [id], onDelete: SetNull)
 
   @@unique([minecraftAccountId, type, metric, thresholdValue])
   @@index([minecraftAccountId, achievedAt])
-  @@index([announced])
+  /// The announcer's sweep: unannounced rows, oldest first.
+  @@index([announced, achievedAt])
 }
 
 model CommandUsage {
@@ -696,4 +1151,58 @@ model MetricRollup {
 
   @@index([guildId, metric, period, bucketStart])
   @@index([period, bucketStart])
+}
+
+/// The one ticket panel a guild posts, and where it lives.
+///
+/// One row per guild: a second panel would mean two places to open the same
+/// ticket, and the message id here is what lets the bot edit the posted panel
+/// in place instead of leaving a stale copy behind whenever the types change.
+model TicketPanelConfig {
+  id          String   @id @default(cuid())
+  guildId     String   @unique
+  /// Where the panel is posted. Null until an admin picks a channel.
+  channelId   String?
+  /// The panel message itself, so an edit updates rather than reposts.
+  messageId   String?
+  title       String   @default("Support")
+  description String?
+  /// Presentation the panel editor owns (colour, thumbnail); no behaviour here.
+  embed       Json     @default("{}")
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+}
+
+/// One kind of ticket a member can open.
+///
+/// Guilds layer these over the built-in types by `key`, exactly as milestone
+/// definitions do: a guild that has configured nothing still gets the five
+/// standard types, and adding a built-in later reaches every guild rather than
+/// only the ones seeded after the change.
+model TicketTypeConfig {
+  id              String         @id @default(cuid())
+  guildId         String
+  key             String
+  label           String
+  emoji           String?
+  /// Which of the fixed categories a ticket of this type is filed under. The
+  /// category drives routing and reporting; the type is what a member picks.
+  category        TicketCategory @default(SUPPORT)
+  /// Category channel new ticket channels are created under. Null = wherever
+  /// the transport defaults to.
+  parentChannelId String?
+  staffRoleIds    String[]       @default([])
+  /// Shown to the member when they choose this type — the question the guild
+  /// actually wants answered before staff pick the ticket up.
+  prompt          String?
+  position        Int            @default(0)
+  enabled         Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, key])
+  @@index([guildId, enabled])
 }

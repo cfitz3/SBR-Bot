@@ -25,12 +25,16 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `reminder-dispatch` | Scheduled (delayed jobs) | at offsets before events | Mark reminder sent (`reminderState`) | Backoff; skip if already sent | Missed/late reminder pings |
 | `event-transition` | Repeatable + delayed | every 1–5 min / at boundaries | Idempotent state guard (only valid transitions) | Backoff; re-evaluate from truth | Event status lags (SCHEDULED→LIVE→COMPLETED) |
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
+| `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
+| `xp-aggregate` | Repeatable (cron) | every 3 h (`48 */3 * * *`) | Derived awards upsert on `XpEvent.dedupeKey`; balances rebuilt from the whole ledger | 1 retry; global lock, 10 min TTL | Standings lag by up to a pass; nothing is lost — counters are re-derived next run |
 | `config-cache-invalidation` | Event (on write) + reconcile cron | on config change / 5–10 min | Version-stamped keys; last-writer-wins | Backoff; reconcile pass | Bots read stale config until reconcile |
 | `guild-roster-sync` | Repeatable | 5–15 min | Diff-based reconcile to DB | Backoff; per-guild lock | Roster/rank drift until next run |
+| `guild-scan` | Repeatable (cron) | every 6 h (`26 1,7,13,19 * * *`) | Upsert on `(guildId,uuid)`; GEXP upsert on `(guildId,uuid,day)` overwrites | 1 retry; global lock, 10 min TTL | Member cache ages past its 6 h TTL; a missed day of GEXP is unrecoverable |
 
-*(guild-roster-sync included as the membership counterpart to the required set.)*
+*(guild-roster-sync included as the membership counterpart to the required set;
+guild-scan is the in-game counterpart to both — see §2.14.)*
 
 ---
 
@@ -117,6 +121,17 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 - **Failure impact:** inactivity report delayed; no state mutated, so safe.
 - **Safety note:** deliberately advisory — automated removal is a staff decision, not a worker's, matching the Admin bot's "fail-safe" stance.
 
+### 2.9b `punishment-expiry`
+- **Trigger / frequency:** cron, every five minutes (`3-59/5 * * * *`), **timely** lane.
+- **Inputs:** `ModerationAction` rows that are `active`, of type `MUTE` or `BAN`, and whose `expiresAt` is in the past.
+- **Outputs:** those rows cleared to `active: false`.
+- **What it does not do:** it does not lift anything. The enforcement itself expires on Discord's own clock (a timeout ends when it ends) and on the Redis mirror's TTL; this job clears the *record*, so that what staff read matches what is actually being enforced. That is also why it lives in workers rather than the Admin bot — unlike `safety-sweep`, it never needs the gateway.
+- **Scope:** only `MUTE` and `BAN`. A `KICK` row stays flagged active forever because nothing lifts one, and clearing it would rewrite history to say somebody did.
+- **Idempotency:** the `WHERE` clause excludes everything it has already written, so a re-run is a no-op.
+- **Retry:** backoff, 3 attempts; a global lock stops two workers sweeping at once.
+- **Failure impact:** the `/audit in_force` list and the panel's "In force now" card over-report for up to one cadence — staff may believe a member is still muted after the mute ended.
+- **Timely, not bulk:** what it clears is what staff read to decide whether somebody is *already* being punished, and five minutes of "still muted" after a mute ended is a wrong answer to a question people act on.
+
 ### 2.10 `analytics-ingest` + `analytics-rollup`
 - **Trigger / frequency:** ingest = continuous stream consumer; rollups = hourly / daily (~00:15 guild-local, staggered) / weekly.
 - **Inputs:** `buf:analytics` Redis Stream (ingest); `AnalyticsEvent` raw facts (rollup).
@@ -125,6 +140,18 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 - **Retry:** ingest reclaims pending stream entries; rollups recompute the whole period (never incremental-partial).
 - **Failure impact:** analytics/charts lag by a period; no impact on live operation. (See `ANALYTICS.md`.)
 
+### 2.10b `xp-aggregate`
+- **Trigger / frequency:** repeatable cron `48 */3 * * *` — every three hours, 48 past the hour to keep clear of the roster and snapshot passes.
+- **Inputs:** `ActivityDaily` counters, `GuildGexpDaily`, `GuildMember` join dates, and the guild's `XpSourceConfig` rows.
+- **Outputs:** derived `XpEvent` rows, then a full rebuild of every `XpBalance` for the guild.
+- **Idempotency:** every derived award carries a `dedupeKey` and is **upserted**, not skipped. A day still in progress therefore *converges* — the next pass overwrites this morning's partial figure rather than adding to it — and a retry cannot double-credit.
+- **Window:** each run re-derives **yesterday and today**, for the same reason the analytics rollup recomputes its previous partition: today's counters are still climbing, and yesterday can still gain a late GEXP row from a scan that straddled midnight.
+- **Retry:** 1 retry, and a 10-minute global lock. The lock matters more than the retry: two overlapping runs would each rebuild balances from a ledger the other was still writing, and the loser's totals would win.
+- **Isolation:** one guild's failure is logged and skipped, never fatal to the pass — its counters are still sitting in the database for the next run to re-derive.
+- **Why not nightly:** a member who asks for their standing should not be told about the person they were yesterday. Not more often than three-hourly either, because each run rebuilds balances by reading a guild's whole ledger, and there is no member-visible difference between "an hour stale" and "three hours stale".
+- **Failure impact:** standings and the leaderboard lag; the ledger and the counters are untouched, so nothing needs repairing beyond the next successful run.
+- **Anti-abuse split:** daily caps are applied *here*, at aggregation; message length and per-user cooldowns are applied at capture, on the hot path. See `DOMAIN_MODEL.md` → `ActivityDaily` for why the two limits cannot live in the same place.
+
 ### 2.11 `config-cache-invalidation`
 - **Trigger / frequency:** event-driven on any config/permission/wordlist write; plus a reconcile cron every 5–10 min as a safety net.
 - **Inputs:** changed `GuildConfig`/`BridgePermission`/`WordlistEntry` (with version stamp).
@@ -132,6 +159,17 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 - **Idempotency:** keys are **version-stamped**; a stale invalidation for an older version is ignored (last-writer-wins).
 - **Retry:** backoff; the periodic reconcile pass repairs any missed invalidation (self-healing).
 - **Failure impact:** bots may read stale config for up to the reconcile interval — bounded, not indefinite.
+
+### 2.14 `guild-scan`
+- **Trigger / frequency:** repeatable cron `26 1,7,13,19 * * *` — every 6 h, offset from midnight so a scan lands shortly *before* the cache TTL expires rather than alongside every other daily job.
+- **Inputs:** Hypixel `guild` by id, per configured guild; Mojang session server for reverse uuid→name lookups.
+- **Outputs:** `GuildMemberCache` (full roster incl. unlinked members), `GuildGexpDaily` (one row per member per day), `GuildScan` (audit row).
+- **Idempotency:** members upsert on `(guildId,uuid)`; GEXP upserts on `(guildId,uuid,day)` with `gexp = EXCLUDED.gexp`. Today's value is still climbing, so the write is an **overwrite, never a sum** — a day scanned four times converges instead of quadrupling.
+- **Partial-failure rule:** a failed or throwing roster fetch writes **nothing** and removes **nobody**; it records a `GuildScan` row with the error and returns `skipped: "fetch-failed"`. A partial roster is a lie rather than a subset — treating one bad response as truth would evict the whole guild from the cache and read as ~125 people leaving.
+- **Mojang budget:** the guild endpoint returns uuids only. Names are resolved for cache rows that have none, capped per run (default 20) with joiners prioritised, and written with `COALESCE` so a skipped or failed lookup never nulls out a name already known. A cold start therefore fills in names over a few scans, which nobody notices.
+- **Retry:** one retry; global lock `lock:job:guild-scan`, 10 min TTL. One unreachable guild does not abort the others in the same run.
+- **Failure impact:** the member cache ages past its 6 h freshness window and commands warn rather than fail. The real cost is GEXP: Hypixel's `expHistory` window is only ~7 days wide, so a gap longer than that is permanently unrecoverable.
+- **Distinct from `guild-roster-sync`,** which reconciles Discord-keyed platform membership and drives roles and access. This job caches the in-game guild as it actually is.
 
 ---
 

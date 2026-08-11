@@ -52,15 +52,28 @@ const ALIASES: Readonly<Record<string, string>> = {
   lbin: "lowestbin",
   lb: "lowestbin",
   weight: "stats",
+  // Not `lb` — that has meant `lowestbin` since long before the boards existed,
+  // and quietly repointing a live shorthand is worse than having no shorthand.
+  top: "leaderboard",
+  leaderboards: "leaderboard",
   s: "stats",
   sk: "skills",
-  sl: "slayer",
+  sl: "slayers",
   dungs: "dungeons",
   cata: "dungeons",
   run: "runs",
   event: "events",
   h: "help",
   commands: "help",
+  // Fun (COMMANDS.md §19). `8b` and `dice` are what chat shortens these to; the
+  // rest are the names people reach for before they learn the real one.
+  "8b": "8ball",
+  eightball: "8ball",
+  flip: "coinflip",
+  cf: "coinflip",
+  dice: "roll",
+  quote: "guildquote",
+  gq: "guildquote",
 };
 
 export interface ParsedInGameCommand {
@@ -90,7 +103,11 @@ export function parseInGameCommand(line: string, prefix: string = INGAME_PREFIX)
   if (head === undefined) return null;
 
   const name = head.toLowerCase();
-  if (!/^[a-z][a-z0-9-]*$/.test(name)) return null;
+  // A digit is allowed to lead because `!8ball` is a command people actually
+  // type. The pattern's real job is rejecting punctuation — "!!!", "!?" and the
+  // rest of what excitable chat produces — and an unrecognised name still ends
+  // in silence, so being slightly more permissive here costs nothing.
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return null;
 
   return { name: ALIASES[name] ?? name, tokens: tokens.slice(1) };
 }
@@ -102,9 +119,14 @@ export function parseInGameCommand(line: string, prefix: string = INGAME_PREFIX)
  * is left so multi-word values work (`!price enchanted diamond block`). Boolean
  * and numeric coercion is `recordArgs`' job — a token that won't coerce reads as
  * absent, which handlers already treat as "not supplied".
+ *
+ * Options marked `inGamePositional: false` are skipped entirely. Without that,
+ * adding a Discord-only option to a spec would silently re-map guild chat: every
+ * declared option takes a token, so a new one in the middle shifts the free-text
+ * value at the end onto the wrong field.
  */
 export function positionalArgs(spec: CommandSpec, tokens: readonly string[]): CommandArgs {
-  const options = spec.options ?? [];
+  const options = (spec.options ?? []).filter((o) => o.inGamePositional !== false);
   const record: Record<string, string> = {};
 
   for (let i = 0; i < options.length && i < tokens.length; i += 1) {
@@ -125,6 +147,7 @@ function missingRequired(spec: CommandSpec, args: CommandArgs): readonly string[
 
 function usageHint(spec: CommandSpec, prefix: string): string {
   const shape = (spec.options ?? [])
+    .filter((o) => o.inGamePositional !== false)
     .map((o) => (o.required === true ? `<${o.name}>` : `[${o.name}]`))
     .join(" ");
   return `Usage: ${prefix}${spec.name}${shape ? ` ${shape}` : ""}`;

@@ -31,7 +31,6 @@ async function main(): Promise<void> {
   const handles = await startBridge(app, {
     discordToken: token,
     discordGuildId: process.env.DISCORD_GUILD_ID,
-    bridgeChannelId: process.env.BRIDGE_CHANNEL_ID,
     mc,
   });
   // Only meaningful with an in-game session; without one `/online` should keep

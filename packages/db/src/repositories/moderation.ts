@@ -130,11 +130,37 @@ export const moderationRepository = {
     if (query.sinceDays && query.sinceDays > 0) {
       where.createdAt = { gte: new Date(Date.now() - query.sinceDays * 24 * 60 * 60 * 1000) };
     }
+    if (query.inForceOnly) {
+      // Time-filtered here rather than after the fact: `take` would otherwise
+      // spend its budget on rows that are about to be dropped, and a page of
+      // "still in force" could come back half empty.
+      where.active = true;
+      where.type = query.type ?? { in: ["MUTE", "BAN"] };
+      where.OR = [{ expiresAt: null }, { expiresAt: { gt: new Date() } }];
+    }
     const rows = await prisma.moderationAction.findMany({
       where,
       orderBy: { createdAt: "desc" },
       take: Math.min(query.limit ?? 100, 500),
     });
     return rows.map(mapAction);
+  },
+
+  /**
+   * The expiry sweep. Only rows that hold enforcement are touched: a kick is
+   * flagged active forever because nothing lifts one, and clearing that flag
+   * would rewrite history to say somebody did.
+   */
+  async deactivateExpired(guildId: string | null, now: Date): Promise<number> {
+    const result = await prisma.moderationAction.updateMany({
+      where: {
+        ...(guildId === null ? {} : { guildId }),
+        active: true,
+        type: { in: ["MUTE", "BAN"] },
+        expiresAt: { not: null, lte: now },
+      },
+      data: { active: false },
+    });
+    return result.count;
   },
 };

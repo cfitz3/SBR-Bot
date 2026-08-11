@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { ApplicationDTO, EventDTO, LFGPostDTO, MemberSummaryDTO, RSVPState, TicketDTO } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { CommunityServiceImpl } from "./service.js";
-import type { CommunityRepository, EventRsvpInfo } from "./ports.js";
+import type { CommunityRepository, EventRsvpInfo, LfgInsert, LfgPatch, PermRosterLookup } from "./ports.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -18,9 +18,10 @@ function anEvent(over: Partial<EventDTO> = {}): EventDTO {
 
 function aPost(over: Partial<LFGPostDTO> = {}): LFGPostDTO {
   return {
-    id: "p1", guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", details: null,
+    id: "p1", guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", title: null, details: null,
     slotsTotal: 5, slotsFilled: 1, status: "OPEN", expiresAt: null,
     createdAt: "2026-08-01T00:00:00.000Z", members: ["111"],
+    channelId: null, messageId: null, permGroupId: null, closedAt: null, closedByDiscordId: null,
     ...over,
   };
 }
@@ -46,14 +47,22 @@ interface Fake {
   rsvps: Array<{ eventId: string; discordId: string; state: RSVPState }>;
   /** Last roster written by setLfgMembers, so slot arithmetic can be asserted. */
   rosters: Array<{ postId: string; members: readonly string[]; status: string }>;
+  /** What createLfg was actually asked to write, after perm resolution. */
+  created: LfgInsert[];
+  /** What updateLfg was asked to change, so "left alone" can be asserted. */
+  patches: Array<{ postId: string; patch: LfgPatch }>;
 }
 
 function repo(over: Partial<CommunityRepository> = {}): Fake {
   const rsvps: Fake["rsvps"] = [];
   const rosters: Fake["rosters"] = [];
+  const created: Fake["created"] = [];
+  const patches: Fake["patches"] = [];
   return {
     rsvps,
     rosters,
+    created,
+    patches,
     repo: {
       async listUpcomingEvents() { return []; },
       async listMembers() { return []; },
@@ -65,17 +74,34 @@ function repo(over: Partial<CommunityRepository> = {}): Fake {
       async getEvent() { return anEvent(); },
       async setEventStatus(_id, status) { return anEvent({ status }); },
       async getAttendance() { return null; },
-      async createLfg(input) { return aPost({ ...input, details: input.details ?? null }); },
+      async createLfg(input) {
+        created.push(input);
+        return aPost({
+          ...input,
+          members: [...input.members],
+          slotsFilled: input.members.length,
+          status: input.members.length >= input.slotsTotal ? "FULL" : "OPEN",
+        });
+      },
       async getLfg() { return null; },
       async listLfg() { return []; },
       async setLfgMembers(postId, members, status) {
         rosters.push({ postId, members, status });
         return aPost({ members: [...members], slotsFilled: members.length, status });
       },
+      async updateLfg(postId, patch) {
+        patches.push({ postId, patch });
+        return aPost(patch as Partial<LFGPostDTO>);
+      },
+      async closeLfg(_postId, closedByDiscordId, closedAt) {
+        return aPost({ status: "CLOSED", closedByDiscordId, closedAt: closedAt.toISOString() });
+      },
+      async bindLfgMessage(_postId, channelId, messageId) { return aPost({ channelId, messageId }); },
       async createTicket(input) { return aTicket({ ...input, subject: input.subject ?? null }); },
       async getTicket() { return null; },
       async closeTicket() { return aTicket({ status: "CLOSED" }); },
       async listTickets() { return []; },
+      async listTicketTypes() { return []; },
       async getApplication() { return null; },
       async decideApplication(_id, status, reviewer, reason) {
         return anApplication({ status, reviewerDiscordId: reviewer, decisionReason: reason });
@@ -263,6 +289,178 @@ test("joining a closed post fails", async () => {
   const r = await svcOf(f).joinLfg("p1", "222");
   assert.equal(r.ok, false);
   if (!r.ok) assert.equal(r.error.kind, "CLOSED");
+});
+
+// ── LFG: perm autofill ──
+
+/** A lookup with one default perm and one named perm, and nothing else. */
+function permLookup(over: Partial<PermRosterLookup> = {}): PermRosterLookup {
+  return {
+    async defaultRoster() { return { id: "perm1", name: "Main", discordIds: ["222", "333"] }; },
+    async namedRoster(_g, _o, name) {
+      return name === "Alts" ? { id: "perm2", name: "Alts", discordIds: ["444"] } : null;
+    },
+    ...over,
+  };
+}
+
+function svcWithPerms(fake: Fake, perms: PermRosterLookup): CommunityServiceImpl {
+  return new CommunityServiceImpl({ repo: fake.repo, logger: silent, now: NOW, perms });
+}
+
+test("perm:true fills the roster from the author's default perm", async () => {
+  const f = repo();
+  const r = await svcWithPerms(f, permLookup()).createLfg({
+    guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 5, perm: true,
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(f.created[0]?.members, ["111", "222", "333"]);
+  assert.equal(f.created[0]?.permGroupId, "perm1", "which perm it came from is worth recording");
+});
+
+test("the author holds the first seat even when the perm lists them too", async () => {
+  const f = repo();
+  const perms = permLookup({
+    async defaultRoster() { return { id: "perm1", name: "Main", discordIds: ["111", "222"] }; },
+  });
+  await svcWithPerms(f, perms).createLfg({
+    guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 5, perm: true,
+  });
+  assert.deepEqual(f.created[0]?.members, ["111", "222"], "nobody takes two seats");
+});
+
+test("autofill stops at the slot count rather than overfilling the post", async () => {
+  const f = repo();
+  const perms = permLookup({
+    async defaultRoster() { return { id: "perm1", name: "Main", discordIds: ["222", "333", "444"] }; },
+  });
+  const r = await svcWithPerms(f, perms).createLfg({
+    guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 2, perm: true,
+  });
+  assert.deepEqual(f.created[0]?.members, ["111", "222"]);
+  assert.equal(r.ok && r.value.status, "FULL", "a post that starts full says so");
+});
+
+test("perm:true with no default perm is an ordinary solo post, not an error", async () => {
+  const f = repo();
+  const perms = permLookup({ async defaultRoster() { return null; } });
+  const r = await svcWithPerms(f, perms).createLfg({
+    guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 5, perm: true,
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(f.created[0]?.members, ["111"]);
+  assert.equal(f.created[0]?.permGroupId, null);
+});
+
+test("naming a perm that does not exist is an error", async () => {
+  const r = await svcWithPerms(repo(), permLookup()).createLfg({
+    guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 5, perm: "Ghost",
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "NO_SUCH_PERM");
+});
+
+test("a named perm fills from that perm, not the default", async () => {
+  const f = repo();
+  await svcWithPerms(f, permLookup()).createLfg({
+    guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 5, perm: "Alts",
+  });
+  assert.deepEqual(f.created[0]?.members, ["111", "444"]);
+  assert.equal(f.created[0]?.permGroupId, "perm2");
+});
+
+test("without perms wired in, perm:true still posts and a named perm complains", async () => {
+  const f = repo();
+  const bare = svcOf(f);
+  assert.equal(
+    (await bare.createLfg({ guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 5, perm: true })).ok,
+    true,
+  );
+  const named = await bare.createLfg({
+    guildId: "g1", authorDiscordId: "111", activity: "DUNGEONS", slotsTotal: 5, perm: "Alts",
+  });
+  assert.equal(named.ok, false);
+  if (!named.ok) assert.equal(named.error.kind, "NO_SUCH_PERM");
+});
+
+// ── LFG: edit and close ──
+
+test("someone else's post cannot be edited", async () => {
+  const f = repo({ async getLfg() { return aPost(); } });
+  const r = await svcOf(f).editLfg({ postId: "p1", actorDiscordId: "999", title: "mine now" });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "NOT_YOURS");
+});
+
+test("staff can edit a post they did not write", async () => {
+  const f = repo({ async getLfg() { return aPost(); } });
+  const r = await svcOf(f).editLfg({ postId: "p1", actorDiscordId: "999", isStaff: true, title: "tidied" });
+  assert.equal(r.ok, true);
+  assert.deepEqual(f.patches[0]?.patch, { title: "tidied" });
+});
+
+test("an edit only writes the fields it was given", async () => {
+  const f = repo({ async getLfg() { return aPost({ details: "cata 30+" }); } });
+  await svcOf(f).editLfg({ postId: "p1", actorDiscordId: "111", title: "F7 carries" });
+  assert.deepEqual(Object.keys(f.patches[0]?.patch ?? {}), ["title"], "details must not be blanked by omission");
+});
+
+test("shrinking a post below the people already in it is refused", async () => {
+  const f = repo({ async getLfg() { return aPost({ members: ["111", "222", "333"], slotsFilled: 3 }); } });
+  const r = await svcOf(f).editLfg({ postId: "p1", actorDiscordId: "111", slotsTotal: 2 });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "SLOTS_BELOW_ROSTER");
+});
+
+test("raising the slot count on a full post reopens it", async () => {
+  const f = repo({
+    async getLfg() { return aPost({ slotsTotal: 2, slotsFilled: 2, members: ["111", "222"], status: "FULL" }); },
+  });
+  await svcOf(f).editLfg({ postId: "p1", actorDiscordId: "111", slotsTotal: 4 });
+  assert.equal(f.patches[0]?.patch.status, "OPEN");
+});
+
+test("a closed post cannot be edited", async () => {
+  const f = repo({ async getLfg() { return aPost({ status: "CLOSED" }); } });
+  const r = await svcOf(f).editLfg({ postId: "p1", actorDiscordId: "111", title: "reopen pls" });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "CLOSED");
+});
+
+test("closing records who closed it and when", async () => {
+  const f = repo({ async getLfg() { return aPost(); } });
+  const r = await svcOf(f).closeLfg("p1", "111");
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.value.closedByDiscordId, "111");
+    assert.equal(r.value.closedAt, NOW().toISOString());
+  }
+});
+
+test("only the author or staff can close a post", async () => {
+  const f = repo({ async getLfg() { return aPost(); } });
+  assert.equal((await svcOf(f).closeLfg("p1", "999")).ok, false);
+  assert.equal((await svcOf(f).closeLfg("p1", "999", true)).ok, true);
+});
+
+test("closing an already closed post fails rather than restamping it", async () => {
+  const f = repo({ async getLfg() { return aPost({ status: "CLOSED" }); } });
+  const r = await svcOf(f).closeLfg("p1", "111");
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "CLOSED");
+});
+
+test("binding a message records where the post was published", async () => {
+  const r = await svcOf(repo()).bindLfgMessage("p1", "c9", "m9");
+  assert.equal(r.ok, true);
+  if (r.ok) assert.equal(r.value.messageId, "m9");
+});
+
+test("binding a post that no longer exists is not found", async () => {
+  const f = repo({ async bindLfgMessage() { return null; } });
+  const r = await svcOf(f).bindLfgMessage("gone", "c9", "m9");
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "NOT_FOUND");
 });
 
 // ── Tickets ──

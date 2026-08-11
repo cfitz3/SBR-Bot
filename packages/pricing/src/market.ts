@@ -22,6 +22,7 @@ import {
   type MarketService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
+import { splitAuctions } from "./auctions.js";
 import type { ItemCatalog } from "./catalog.js";
 import type { BazaarProvider, BinListing, BinSource, PlayerAuctionProvider } from "./ports.js";
 
@@ -44,6 +45,8 @@ function toListing(l: BinListing): AuctionListingDTO {
     price: l.price,
     bin: l.bin,
     endsAt: l.endsAt === null ? null : new Date(l.endsAt).toISOString(),
+    highestBid: l.highestBid ?? null,
+    claimed: l.claimed ?? false,
   };
 }
 
@@ -119,21 +122,24 @@ export class MarketServiceImpl implements MarketService {
     const listings = [...result.value.data]
       .sort((a, b) => (a.endsAt ?? Infinity) - (b.endsAt ?? Infinity))
       .map(toListing);
-    return ok(reEnvelope(result.value, { listings }));
+    return ok(reEnvelope(result.value, { listings, ...splitAuctions(listings, this.now()) }));
   }
 
   async getItemAuctions(itemId: string): Promise<HypixelResult<AuctionsDTO>> {
     const entry = await this.d.bins.get(itemId);
     if (!entry) {
       return ok({
-        data: { listings: [] },
+        data: { listings: [], ...splitAuctions([], this.now()) },
         freshness: "STALE",
         source: "CACHE",
         fetchedAt: new Date(this.now()).toISOString(),
       });
     }
     return ok({
-      data: { listings: entry.cheapest.map(toListing) },
+      data: (() => {
+        const listings = entry.cheapest.map(toListing);
+        return { listings, ...splitAuctions(listings, this.now()) };
+      })(),
       freshness: this.now() - entry.fetchedAt > BIN_STALE_AFTER_MS ? "STALE" : "LIVE",
       source: "CACHE",
       fetchedAt: new Date(entry.fetchedAt).toISOString(),

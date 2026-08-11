@@ -18,6 +18,7 @@
     { "path": "../../packages/observability" },
     { "path": "../../packages/panel-core" },
     { "path": "../../packages/redis" },
-    { "path": "../../packages/shared-types" }
+    { "path": "../../packages/shared-types" },
+    { "path": "../../packages/xp" }
   ]
 }

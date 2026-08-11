@@ -17,6 +17,7 @@ import type {
   MemberStatus,
   MilestoneType,
   ModActionType,
+  PermStatus,
   RaidSensitivity,
   RSVPState,
   SkyblockGameMode,
@@ -80,6 +81,11 @@ export interface ProfileSummaryDTO {
   readonly gameMode: SkyblockGameMode;
   readonly skillAverage: number | null;
   readonly catacombsLevel: number | null;
+  /**
+   * Total slayer XP across every boss. Already parsed for the Senither weight,
+   * so carrying it costs nothing and saves the snapshot job a second read.
+   */
+  readonly slayerXp: number | null;
   readonly senitherWeight: number | null;
 }
 
@@ -139,6 +145,10 @@ export interface DungeonFloorDTO {
 export interface DungeonsDTO {
   readonly catacombsLevel: number | null;
   readonly catacombsExperience: number | null;
+  /** XP still needed for the next Catacombs level; null at cap or unknown. */
+  readonly catacombsXpToNext: number | null;
+  /** 0–1 through the current Catacombs level. Null when the level is unknown. */
+  readonly catacombsProgress: number | null;
   readonly selectedClass: string | null;
   readonly classAverage: number | null;
   readonly classes: readonly DungeonClassDTO[];
@@ -153,11 +163,22 @@ export interface DungeonsDTO {
  * readable; otherwise `total` is a lower-bound estimate and `missing` lists the
  * hidden sections (partial networth is never presented as exact).
  */
+export interface NetworthItemDTO {
+  readonly name: string;
+  readonly price: number;
+}
+
 export interface NetworthDTO {
   readonly total: number | null;
   readonly exact: boolean;
   readonly missing: readonly string[];
   readonly breakdown: Readonly<Record<string, number>>;
+  /**
+   * The few most valuable items in each category, keyed as `breakdown` is.
+   * Empty when the valuation engine reports totals only — an absent category
+   * here never means the category is empty.
+   */
+  readonly topItems: Readonly<Record<string, readonly NetworthItemDTO[]>>;
 }
 
 /** One accessory the member holds, with the magical power it actually contributes. */
@@ -265,10 +286,33 @@ export interface AuctionListingDTO {
   readonly bin: boolean;
   /** ISO timestamp, or null when the end time is unreadable. */
   readonly endsAt: string | null;
+  /** Highest bid so far; null when nobody has bid. */
+  readonly highestBid: number | null;
+  /** True once the seller has collected the coins or the item back. */
+  readonly claimed: boolean;
 }
 
+/**
+ * A player's auction house standing.
+ *
+ * `listings` is every auction, unsplit — `/auctions item:` uses it, and it is
+ * what the DTO has always carried. The three buckets below classify a *player's*
+ * auctions, which is a different question: what is still running, what sold and
+ * is waiting to be collected, and what came back unsold.
+ */
 export interface AuctionsDTO {
   readonly listings: readonly AuctionListingDTO[];
+  /** Still running. */
+  readonly active: readonly AuctionListingDTO[];
+  /** Ended with a winning bid, coins not yet collected. */
+  readonly unclaimed: readonly AuctionListingDTO[];
+  /** Ended with no bids — the item itself is waiting to be taken back. */
+  readonly expired: readonly AuctionListingDTO[];
+  /**
+   * Coins sitting in `unclaimed`. Null when nothing sold, which is different
+   * from a sale worth nothing.
+   */
+  readonly claimValue: number | null;
 }
 
 export interface InfractionDTO {
@@ -296,6 +340,47 @@ export interface ModerationActionDTO {
   readonly surfaces: readonly ModerationSurface[];
   readonly active: boolean;
   readonly createdAt: string;
+}
+
+/**
+ * What a member is told about their own record on `/me`.
+ *
+ * Deliberately smaller than the audit row it is derived from: no ids, no actor,
+ * no history of served punishments. A member asking "where do I stand" is
+ * asking about now — what is being enforced, how many warnings still count, and
+ * what the next one would cost. Everything else is staff's view of them, and
+ * `/infractions` is where staff read it.
+ */
+export interface MemberRecordDTO {
+  /** Warnings inside the escalation window — the count the ladder acts on. */
+  readonly warnings: number;
+  /** How far back that count reaches, so the number can be read honestly. */
+  readonly windowDays: number;
+  /** Punishments being enforced right now, soonest to end first. */
+  readonly inForce: readonly MemberPunishmentDTO[];
+  /**
+   * The rung the *next* warning would land on, or null when the ladder is off,
+   * or when the next warning falls between rungs. Shown because a warning that
+   * quietly moves someone one step from a ban is not much of a warning.
+   */
+  readonly nextEscalation: MemberEscalationDTO | null;
+}
+
+export interface MemberPunishmentDTO {
+  readonly type: ModActionType;
+  /**
+   * The reason staff typed. Shown to the member it is about: a punishment
+   * nobody explains is one they can only guess how to avoid repeating.
+   */
+  readonly reason: string;
+  /** Null means it does not expire on its own. */
+  readonly expiresAt: string | null;
+}
+
+export interface MemberEscalationDTO {
+  readonly warns: number;
+  readonly action: Extract<ModActionType, "MUTE" | "BAN">;
+  readonly durationSeconds: number | null;
 }
 
 export interface ApplicationDTO {
@@ -359,6 +444,60 @@ export interface LFGPostDTO {
   readonly createdAt: string;
   /** Everyone currently holding a slot, author first. */
   readonly members: readonly string[];
+  /** Short headline for the embed, or null when the author gave none. */
+  readonly title: string | null;
+  /**
+   * Where this post was published. Null until it lands — publishing can fail,
+   * and a post with no message is recoverable in a way that the reverse is not.
+   */
+  readonly channelId: string | null;
+  readonly messageId: string | null;
+  /** The perm the roster was autofilled from, if any. */
+  readonly permGroupId: string | null;
+  readonly closedAt: string | null;
+  readonly closedByDiscordId: string | null;
+}
+
+/**
+ * One seat in a perm.
+ *
+ * `ign` is the identity that always exists; `discordId` and `uuid` are filled in
+ * where we happen to know them. A perm is formed in-game, and most of a Hypixel
+ * guild has never linked a Discord account — requiring one would make the
+ * feature unusable for the people it is for.
+ */
+export interface PermMemberDTO {
+  readonly ign: string;
+  readonly role: string;
+  readonly slot: number;
+  readonly discordId: string | null;
+  readonly uuid: string | null;
+  /**
+   * Whether the member is still in the in-game guild, per the 6h member cache.
+   * Null when the cache has no reading at all (cold start), which is different
+   * from a confident "they left" and is rendered differently.
+   */
+  readonly inGuild: boolean | null;
+  /** From the newest ProfileSnapshot, when one exists. No live Hypixel call. */
+  readonly catacombsLevel: number | null;
+  readonly skillAverage: number | null;
+}
+
+/** `/perm info` — a standing party and its roster. */
+export interface PermGroupDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly ownerDiscordId: string;
+  readonly name: string;
+  readonly activity: LFGActivity;
+  readonly status: PermStatus;
+  readonly isDefault: boolean;
+  readonly notes: string | null;
+  readonly createdAt: string;
+  /** Seats in slot order. Empty on a freshly created perm. */
+  readonly members: readonly PermMemberDTO[];
+  /** Party size for the activity — how many seats the roster may hold. */
+  readonly capacity: number;
 }
 
 export interface TicketDTO {
@@ -374,6 +513,69 @@ export interface TicketDTO {
   readonly closedAt: string | null;
 }
 
+/**
+ * One entry in a guild's ticket menu.
+ *
+ * `key` is the stable identifier a member picks and a guild never edits; the
+ * label beside it is free text an admin can reword at will. A DEFAULT is a
+ * built-in that has no row yet — `id` is null, so the panel's first edit of it
+ * is a create rather than an update.
+ */
+export interface TicketTypeDTO {
+  readonly id: string | null;
+  readonly guildId: string;
+  readonly key: string;
+  readonly label: string;
+  readonly emoji: string | null;
+  /** Which enum the opened ticket is recorded under. Reporting stays comparable across guilds. */
+  readonly category: TicketCategory;
+  /** Category channel the ticket channel is created under. Null falls back to the guild default. */
+  readonly parentChannelId: string | null;
+  /** Roles pinged and granted access. Empty means the guild-wide staff role only. */
+  readonly staffRoleIds: readonly string[];
+  /** Shown to the member when they open this type — what to include in the first message. */
+  readonly prompt: string | null;
+  /** Menu order, ascending. Ties fall back to label. */
+  readonly position: number;
+  readonly enabled: boolean;
+  readonly source: "DEFAULT" | "GUILD";
+}
+
+/** What the panel may set. `key` identifies the type and is never edited. */
+export interface TicketTypeInput {
+  readonly key: string;
+  readonly label: string;
+  readonly emoji: string | null;
+  readonly category: TicketCategory;
+  readonly parentChannelId: string | null;
+  readonly staffRoleIds: readonly string[];
+  readonly prompt: string | null;
+  readonly position: number;
+  readonly enabled: boolean;
+}
+
+/**
+ * The ticket panel a guild posts in a channel.
+ *
+ * `channelId`/`messageId` record where it was last posted so a re-post edits
+ * that message instead of leaving a stale panel behind. Both null until posted.
+ */
+export interface TicketPanelConfigDTO {
+  readonly guildId: string;
+  readonly channelId: string | null;
+  readonly messageId: string | null;
+  readonly title: string;
+  readonly description: string | null;
+  readonly updatedAt: string | null;
+}
+
+/** What the panel may set on the panel itself. */
+export interface TicketPanelConfigInput {
+  readonly channelId: string | null;
+  readonly title: string;
+  readonly description: string | null;
+}
+
 export interface MilestoneDTO {
   readonly id: string;
   readonly minecraftUuid: string;
@@ -381,6 +583,129 @@ export interface MilestoneDTO {
   readonly metric: string;
   readonly thresholdValue: number;
   readonly achievedAt: string;
+  /** The definition's label where one recognised it, else null. */
+  readonly label: string | null;
+}
+
+/**
+ * A recorded milestone waiting to be posted.
+ *
+ * Carries the name and mention the announcement needs rather than ids to
+ * resolve: the sweep runs minutes to hours after detection, and re-deriving a
+ * member's IGN then would credit the wrong name to anyone who has since changed
+ * it. `discordId` is null for an account with no verified link — still worth
+ * announcing, just without a mention.
+ */
+export interface PendingMilestoneDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly discordId: string | null;
+  readonly ign: string | null;
+  readonly label: string;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly thresholdValue: number;
+  readonly achievedAt: string;
+}
+
+/**
+ * A guild-configured milestone threshold, as the panel edits it.
+ *
+ * `source` distinguishes the two rows the panel shows in one list: a `DEFAULT`
+ * is not stored anywhere and has no id, so the panel's edit action on one is a
+ * *create* that shadows it by key. Collapsing that distinction would let the
+ * panel issue an update against an id that does not exist.
+ */
+export interface MilestoneDefinitionDTO {
+  readonly id: string | null;
+  readonly guildId: string;
+  readonly key: string;
+  readonly label: string;
+  readonly description: string | null;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly threshold: number;
+  readonly xpReward: number;
+  readonly announce: boolean;
+  readonly enabled: boolean;
+  readonly source: "DEFAULT" | "GUILD";
+}
+
+/** What the panel may set. `key` identifies the definition and is never edited. */
+export interface MilestoneDefinitionInput {
+  readonly key: string;
+  readonly label: string;
+  readonly description?: string | null;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly threshold: number;
+  readonly xpReward: number;
+  readonly announce: boolean;
+  readonly enabled: boolean;
+}
+
+/**
+ * One reading of every metric a milestone can be defined against.
+ *
+ * Keys match `MILESTONE_METRICS` exactly so a definition's `metric` indexes
+ * this directly — the alternative, a switch per metric, is one place to forget
+ * when a metric is added.
+ */
+export interface SnapshotMetricsDTO {
+  /** ISO-8601 of the capture, for "as of" in the reply. */
+  readonly capturedAt: string;
+  readonly networth: number | null;
+  readonly skillAverage: number | null;
+  readonly catacombsLevel: number | null;
+  readonly slayerXp: number | null;
+  readonly senitherWeight: number | null;
+}
+
+/**
+ * One recognised achievement, seen from a member's side.
+ *
+ * The same shape carries an earned and an unearned one: what a member wants
+ * from `/milestones` is a single list of what the guild rewards and where they
+ * stand against it, and splitting the two into different types would force the
+ * renderer to say the same thing twice. `achievedAt` is the discriminator.
+ *
+ * `current` is null when the metric has never been measured for this member —
+ * distinct from a measured zero, which is real progress against a threshold.
+ */
+export interface AchievementDTO {
+  readonly key: string;
+  readonly label: string;
+  readonly description: string | null;
+  readonly type: MilestoneType;
+  readonly metric: string;
+  readonly threshold: number;
+  /** Guild XP the definition pays. Zero is normal — most defaults pay nothing. */
+  readonly xpReward: number;
+  readonly current: number | null;
+  /** `current / threshold`, clamped to 0–1. Null whenever `current` is. */
+  readonly progress: number | null;
+  /** ISO-8601 when first reached, or null while outstanding. */
+  readonly achievedAt: string | null;
+}
+
+/** A member's standing against every achievement their guild recognises. */
+export interface AchievementsDTO {
+  /** Newest first. */
+  readonly earned: readonly AchievementDTO[];
+  /** Closest first, by fraction of the threshold reached. */
+  readonly upcoming: readonly AchievementDTO[];
+  readonly earnedCount: number;
+  readonly totalCount: number;
+  /** Guild XP the earned set has paid out. */
+  readonly xpEarned: number;
+  /** When the snapshot behind `current` was taken; null if never snapshotted. */
+  readonly measuredAt: string | null;
+  /**
+   * False when no definitions could be read at all — the guild has achievements
+   * switched off, or the service was wired without them. Lets the reply say
+   * "off here" instead of "you have earned nothing", which is a different claim.
+   */
+  readonly configured: boolean;
 }
 
 /** The tracked metrics `/progress` can chart, keyed as `ProfileSnapshot` stores them. */

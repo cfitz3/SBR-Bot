@@ -94,6 +94,31 @@ export class JobRunner {
     error?: string,
   ): Promise<void> {
     const finishedAtMs = this.now();
+    // The job log is a record of what happened, not part of the work. When the
+    // sink is down — and it shares a database with most handlers, so it usually
+    // is down for the same reason the job failed — letting it throw would
+    // replace the real outcome with a bookkeeping error and reject `run()`,
+    // which is how a database outage surfaced as "safety sweep failed" every
+    // minute with the actual job status nowhere in the logs.
+    try {
+      await this.write(def, status, attempts, startedAtMs, finishedAtMs, error);
+    } catch (sinkError) {
+      this.log.warn("job log write failed", {
+        job: def.name,
+        status,
+        error: sinkError instanceof Error ? sinkError.message : String(sinkError),
+      });
+    }
+  }
+
+  private async write<T>(
+    def: JobDefinition<T>,
+    status: "COMPLETED" | "FAILED",
+    attempts: number,
+    startedAtMs: number,
+    finishedAtMs: number,
+    error?: string,
+  ): Promise<void> {
     await this.sink.record({
       queue: def.queue,
       type: def.name,

@@ -175,6 +175,16 @@ export const LFGStatus = {
 } as const;
 export type LFGStatus = (typeof LFGStatus)[keyof typeof LFGStatus];
 
+/**
+ * A perm is disbanded, never deleted: the roster is the only record of who ran
+ * with whom, and it stays worth reading after the party stops running.
+ */
+export const PermStatus = {
+  ACTIVE: "ACTIVE",
+  DISBANDED: "DISBANDED",
+} as const;
+export type PermStatus = (typeof PermStatus)[keyof typeof PermStatus];
+
 export const MilestoneType = {
   SKILL_LEVEL: "SKILL_LEVEL",
   CATACOMBS_LEVEL: "CATACOMBS_LEVEL",
@@ -184,6 +194,28 @@ export const MilestoneType = {
   CUSTOM: "CUSTOM",
 } as const;
 export type MilestoneType = (typeof MilestoneType)[keyof typeof MilestoneType];
+
+/**
+ * The snapshot fields a milestone threshold can be measured against.
+ *
+ * Here rather than in `@sbr/jobs` beside the detector, because the panel has to
+ * validate a metric arriving over HTTP and render one option per metric, and
+ * the panel cannot import the workers' package. Two lists would drift into a
+ * control that saves into a rejection.
+ */
+export const MILESTONE_METRICS = [
+  "networth",
+  "skillAverage",
+  "catacombsLevel",
+  "slayerXp",
+  "senitherWeight",
+] as const;
+export type MilestoneMetric = (typeof MILESTONE_METRICS)[number];
+
+/** Narrow an untrusted string — a panel body, a stored row — to a real metric. */
+export function isMilestoneMetric(value: unknown): value is MilestoneMetric {
+  return typeof value === "string" && (MILESTONE_METRICS as readonly string[]).includes(value);
+}
 
 export const CommandSurface = {
   BRIDGE_BOT: "BRIDGE_BOT",

@@ -41,6 +41,15 @@ test("ordinary chat, bare prefixes and punctuation are not commands", () => {
   assert.equal(parseInGameCommand("! stats"), null); // a space means it's chat
 });
 
+test("a command may start with a digit, but punctuation is still not a command", () => {
+  // `!8ball` is the reason the name pattern allows a leading digit; the pattern
+  // still exists to keep excitable chat from being parsed as commands.
+  assert.equal(parseInGameCommand("!8ball will it drop", "!")?.name, "8ball");
+  assert.equal(parseInGameCommand("!8b will it drop", "!")?.name, "8ball");
+  assert.equal(parseInGameCommand("!!!", "!"), null);
+  assert.equal(parseInGameCommand("!?", "!"), null);
+});
+
 test("the prefix is configurable", () => {
   assert.equal(parseInGameCommand("?stats Steve", "?")?.name, "stats");
   assert.equal(parseInGameCommand("!stats Steve", "?"), null);
@@ -71,6 +80,25 @@ test("earlier options take one token each", () => {
   const args = positionalArgs(spec, ["Steve", "needs", "carry"]);
   assert.equal(args.getString("player"), "Steve");
   assert.equal(args.getString("note"), "needs carry");
+});
+
+test("a Discord-only option takes no token, so the free-text one still absorbs the line", () => {
+  // Regression: /lfg gained title/perm/permname for Discord. Positionally those
+  // would have eaten "need" and "a healer", leaving details empty.
+  const spec: CommandSpec = {
+    ...priceSpec,
+    options: [
+      { name: "activity", description: "a", type: "string", required: true },
+      { name: "title", description: "t", type: "string", inGamePositional: false },
+      { name: "details", description: "d", type: "string" },
+      { name: "permname", description: "p", type: "string", inGamePositional: false },
+    ],
+  };
+  const args = positionalArgs(spec, ["dungeons", "need", "a", "healer"]);
+  assert.equal(args.getString("activity"), "dungeons");
+  assert.equal(args.getString("details"), "need a healer");
+  assert.equal(args.getString("title"), null);
+  assert.equal(args.getString("permname"), null);
 });
 
 // ───────────────────────────── flattening ─────────────────────────────
@@ -255,12 +283,23 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // The documented §17 set. Pinned exactly, because widening it is a security
   // decision — guild chat proves guild membership and nothing else.
   assert.deepEqual(names, [
-    "bazaar", "dungeons", "events", "help", "lfg", "lowestbin",
-    "networth", "price", "profile", "runs", "skills", "slayer", "stats",
-  ]);
+    // Fun (§19). They read nothing about anybody and write nothing anybody is
+    // accountable for, so they widen the surface by exactly one joke each.
+    "8ball", "coinflip", "cringe", "guildquote", "rank", "roll", "rps",
+    // Lookups (§17).
+    "bazaar", "dungeons", "events", "help", "leaderboard", "lfg", "lowestbin",
+    "networth", "perm", "price", "profile", "runs", "skills", "slayer", "slayers", "standing", "stats",
+  ].sort());
 
-  // Anything that writes is `"linked"`, never `true`.
-  assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name), ["lfg"]);
+  // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
+  // than in the `true` set because its read actions share one command with its
+  // writes, and the weaker of the two requirements would govern the pair.
+  // `/standing` writes nothing, but it is `"linked"` all the same: XP is
+  // attributed to a Discord account, and an IGN that resolves to none has no
+  // standing to report — the link *is* the lookup key, not a permission.
+  assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), [
+    "lfg", "perm", "standing",
+  ]);
 
   // And the identity commands stay Discord-only: `/link` in guild chat would
   // invite people to type an IGN at a surface that can't verify who they are.

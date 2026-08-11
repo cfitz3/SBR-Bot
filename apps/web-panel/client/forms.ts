@@ -380,3 +380,25 @@ export function validateThreshold(raw: string): string | null {
 export function parseThreshold(raw: string): number | null {
   return raw.length === 0 ? null : Number(raw);
 }
+
+/**
+ * Coins, kept as text all the way to the server.
+ *
+ * Never parsed to a number here: ten billion coins is past the point where a
+ * double is exact, and a threshold that silently shifts by a few coins is the
+ * kind of bug that only shows up in an argument about who should have got in.
+ */
+export function validateCoins(raw: string): string | null {
+  const text = raw.trim();
+  if (text.length === 0) return null;
+  return /^\d{1,30}$/.test(text) ? null : "Enter a whole number of coins in digits, or leave it blank.";
+}
+
+/** A required whole number inside a range, for the bounded screening counters. */
+export function validateWhole(raw: string, min: number, max: number): string | null {
+  const value = Number(raw.trim());
+  if (raw.trim().length === 0 || !Number.isInteger(value) || value < min || value > max) {
+    return `Enter a whole number between ${min} and ${max}.`;
+  }
+  return null;
+}

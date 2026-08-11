@@ -7,6 +7,14 @@
  * services the bots do (WEB_PANEL.md §7) and never reaches around them into the
  * database, so this file holds no SQL and no enforcement logic of its own.
  */
+import {
+  CONFIG_CHANNEL_SLOTS,
+  isConfigChannelSlot,
+  isMilestoneMetric,
+  MILESTONE_METRICS,
+  MilestoneType as MILESTONE_TYPES,
+  TicketCategory as TICKET_CATEGORIES,
+} from "@sbr/shared-types";
 import type {
   AnalyticsService,
   CommunityService,
@@ -15,19 +23,87 @@ import type {
   GuildConfigService,
   IdentityService,
   MemberRole,
+  MilestoneDefinitionInput,
+  MilestoneDefinitionService,
+  MilestoneType,
   ModActionType,
+  TicketCategory,
+  TicketConfigService,
+  TicketPanelConfigInput,
+  TicketTypeInput,
   ModerationService,
   RecruitmentSettings,
+  XpService,
+  XpSource,
+  XpSourcePolicyDTO,
+  WordAction,
+  WordlistError,
+  WordlistRuleUpdate,
+  WordlistService,
+  WordMatchType,
 } from "@sbr/shared-types";
+import { ESCALATION_SETTING_KEY, type EscalationAction } from "@sbr/moderation";
+import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
+import { XP_SOURCE_ORDER } from "./service.js";
 
 /** Every write the panel can perform, and the platform role it requires. */
 export const MUTATION_TIERS = {
   "config.channel": "ADMIN",
+  /**
+   * Free-form admin config (embed templates, per-feature payloads). Admin
+   * rather than Officer because the keys are not enumerable here: this one
+   * mutation is the write path for every setting a later feature invents, so
+   * its tier has to be the highest any of them would need.
+   */
+  "config.setting": "ADMIN",
   "config.role-mapping": "ADMIN",
   "config.feature": "ADMIN",
   "config.recruitment": "ADMIN",
+  /**
+   * The join-screening policy. Stored under the same `GuildSetting` row
+   * `config.setting` could write, but given its own mutation because this is
+   * the one setting whose contents decide whether a stranger is let into the
+   * guild without a human looking: it earns a validated, named surface rather
+   * than an opaque JSON blob.
+   */
+  "config.screening": "ADMIN",
+  /**
+   * XP source weights and anti-abuse limits, and hand-written ledger
+   * adjustments. Both are Admin because the XP page itself is Admin: a write
+   * reachable only from a page an Officer cannot open would be a tier nobody
+   * could exercise, and the two settings decide what the whole guild's
+   * standing means rather than what one member's does.
+   */
+  "xp.source": "ADMIN",
+  "xp.adjust": "ADMIN",
+  /**
+   * What the guild recognises as a milestone, and what reaching one pays.
+   * Admin because a definition carries an XP reward: at a lower tier this
+   * would be a way to mint standing without the XP page's gate.
+   */
+  "milestone.upsert": "ADMIN",
+  "milestone.remove": "ADMIN",
+  /**
+   * The ticket menu and the panel advertising it. Admin because a type names
+   * the staff roles pulled into a ticket and the category channel it opens
+   * under — reachable at a lower tier, it would be a way to route reports and
+   * appeals somewhere the people they are about can read them.
+   */
+  "ticket.type.upsert": "ADMIN",
+  "ticket.type.remove": "ADMIN",
+  "ticket.panel.save": "ADMIN",
+  /**
+   * The chat filter's rules and the escalation ladder. Admin because both act
+   * on members with nobody in the loop: a filter rule blocks or shadow-mutes at
+   * relay time, and a ladder rung mutes or bans off a warning count. A rule is
+   * also a pattern the bridge compiles and runs, which is not a thing to hand
+   * out one tier down.
+   */
+  "wordlist.upsert": "ADMIN",
+  "wordlist.delete": "ADMIN",
+  "moderation.defaults": "ADMIN",
   /** Bridge control is an Officer power in WEB_PANEL.md §2, not an Admin one. */
   "bridge.suspend": "OFFICER",
   /**
@@ -128,6 +204,18 @@ export interface PanelMutationsDeps {
   readonly moderation: ModerationService;
   readonly community: CommunityService;
   readonly identity: IdentityService;
+  /**
+   * Optional for the same reason the read side is: a deployment can run with
+   * XP switched off, and the page then says so. A missing service refuses the
+   * write rather than crashing the request.
+   */
+  readonly xp?: XpService;
+  /** Optional like XP: absent refuses the write instead of crashing. */
+  readonly milestones?: MilestoneDefinitionService;
+  /** Optional like XP: absent refuses the write instead of crashing. */
+  readonly tickets?: TicketConfigService;
+  /** Optional like XP: absent refuses the write instead of crashing. */
+  readonly wordlist?: WordlistService;
   readonly limiter: MutationLimiter;
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
@@ -142,8 +230,6 @@ function limiterKey(discordId: string, mutation: MutationName): string {
   return `cd:web:${mutation}:${discordId}`;
 }
 
-const CHANNEL_SLOTS: readonly ConfigChannelSlot[] = ["bridge", "staff", "log", "applications", "events"];
-
 const MEMBER_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "ADMIN", "OWNER"];
 
 /**
@@ -154,8 +240,70 @@ const MEMBER_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "
  */
 const SNOWFLAKE = /^\d{17,20}$/;
 
+/** Definition keys are ours to shape: lowercase, with `:` grouping a family. */
+const MILESTONE_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
+const MILESTONE_LABEL_MAX = 80;
+const MILESTONE_DESC_MAX = 500;
+/** A reward big enough to matter, small enough not to rewrite the leaderboard. */
+const MAX_MILESTONE_REWARD = 1_000_000;
+
+/**
+ * Ticket type keys share the milestone shape: lowercase and hyphenated. They
+ * are what a member types into `/ticket type:`, so they stay short and typable.
+ */
+const TICKET_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
+const TICKET_LABEL_MAX = 80;
+/** Long enough for a real question, short enough to fit an ephemeral reply. */
+const TICKET_PROMPT_MAX = 500;
+/** Emoji come from Discord's picker; the cap only stops someone pasting a novel. */
+const TICKET_EMOJI_MAX = 64;
+/** More staff roles than this on one type means the ping is no longer a ping. */
+const MAX_TICKET_STAFF_ROLES = 10;
+/** Menu positions are a small ordering hint, not an index into anything. */
+const MAX_TICKET_POSITION = 999;
+const TICKET_PANEL_TITLE_MAX = 120;
+
+/**
+ * Filter-rule bounds. The pattern cap is generous for a word and mean for a
+ * regex, which is the intent: a pattern is compiled and run against every
+ * relayed message, so a pathological one is a cost in the hot path rather than
+ * a storage problem.
+ */
+const WORDLIST_PATTERN_MAX = 200;
+const WORDLIST_NOTE_MAX = 500;
+/** Severity is a staff-facing weight, not a score with arithmetic behind it. */
+const MAX_WORD_SEVERITY = 10;
+const WORD_MATCH_TYPES: readonly WordMatchType[] = ["EXACT", "SUBSTRING", "REGEX", "WILDCARD"];
+const WORD_ACTIONS: readonly WordAction[] = ["FLAG", "REPLACE", "BLOCK", "SHADOW_MUTE"];
+
+/** A ladder longer than this is a sign somebody is editing it by mistake. */
+const MAX_ESCALATION_RUNGS = 10;
+const MAX_ESCALATION_WARNS = 100;
+/** Matches the clamp `parseEscalationPolicy` applies when reading it back. */
+const MAX_ESCALATION_WINDOW_DAYS = 365;
+
 /** Feature flag names are keys in a config JSON blob; keep them boring. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
+
+/**
+ * Admin setting keys: a dotted namespace, e.g. `tickets.panel`, `xp.weights`.
+ *
+ * Deliberately not a closed list. A setting exists because some feature stores
+ * a payload under a name it owns, and enumerating them here would mean every
+ * new feature had to edit this file to become configurable. The shape rule is
+ * what stops a caller writing a key it can never read back.
+ */
+const SETTING_KEY = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){0,3}$/;
+
+/**
+ * Ceiling on one stored setting, in characters of JSON.
+ *
+ * These land in a single row read on the config path, so a setting is meant to
+ * be a template or a small table — not a place to park a member list. 64 KiB is
+ * far above anything the platform stores and far below anything that would make
+ * a config read expensive.
+ */
+const SETTING_MAX_CHARS = 64 * 1024;
 
 /** Database ids (cuid/uuid). Shape-checked so a lookup miss means "not found". */
 const ENTITY_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -209,6 +357,37 @@ const MAX_CAPACITY = 1_000;
  */
 const ASSIGNABLE_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "ADMIN"];
 
+/**
+ * Bounds on an XP source's weight.
+ *
+ * Fractional and small at the top end, because the raw values these multiply
+ * differ by orders of magnitude: GEXP arrives in the thousands per day and
+ * wants a weight well under one, while a message is a single unit and wants a
+ * weight above it. A ceiling of 1000 is far past any sane setting and still
+ * catches the accident this guards against — a weight typed into the cap field
+ * or a stray extra zero turning one member's chatter into a permanent lead.
+ */
+const MAX_SOURCE_WEIGHT = 1_000;
+
+/** A day's ceiling for one member from one source. Generous; not unbounded. */
+const MAX_DAILY_CAP = 1_000_000;
+
+/** A day. Anything longer is a disabled source expressed the confusing way. */
+const MAX_COOLDOWN_SEC = 24 * 60 * 60;
+
+/** Message length gate. Above this a source would count nothing anyone types. */
+const MAX_MIN_LENGTH = 500;
+
+/**
+ * Ceiling on one hand-written ledger adjustment, either direction.
+ *
+ * Adjustments exist to correct a mistake or to pay out an event, not to seed a
+ * standing from nothing — and unlike every other award on the ledger, nothing
+ * derived this one from an activity that can be re-counted, so an error here is
+ * only ever fixed by a second adjustment somebody has to notice first.
+ */
+const MAX_ADJUSTMENT = 1_000_000;
+
 export class PanelMutations {
   private readonly d: PanelMutationsDeps;
   private readonly log: Logger;
@@ -229,15 +408,59 @@ export class PanelMutations {
     channelId: unknown,
   ): Promise<MutationResult> {
     return this.run(session, guildId, "config.channel", async () => {
-      if (typeof slot !== "string" || !CHANNEL_SLOTS.includes(slot as ConfigChannelSlot)) {
-        return invalid(`slot must be one of ${CHANNEL_SLOTS.join(", ")}`);
+      // The registry in shared-types is the one list: what the API accepts and
+      // what the UI renders are the same set, so a slot cannot exist as a
+      // control that saves into a rejection.
+      if (!isConfigChannelSlot(slot)) {
+        return invalid(`slot must be one of ${CONFIG_CHANNEL_SLOTS.join(", ")}`);
       }
       // null clears the slot; anything else must look like a channel id.
       if (channelId !== null && (typeof channelId !== "string" || !SNOWFLAKE.test(channelId))) {
         return invalid("channelId must be a Discord id or null");
       }
-      const result = await this.d.config.setChannel(guildId, slot as ConfigChannelSlot, channelId);
+      const result = await this.d.config.setChannel(guildId, slot, channelId);
       return { result, change: { slot, channelId } };
+    });
+  }
+
+  /**
+   * Write one free-form admin setting.
+   *
+   * The value is opaque to this layer — its shape belongs to whichever feature
+   * owns the key, and validating it here would put two copies of that shape in
+   * the codebase. What is enforced is what is true of *every* setting: a
+   * well-formed key, and a value that round-trips through JSON at a sane size.
+   */
+  async setSetting(
+    session: PanelSession | null,
+    guildId: string,
+    key: unknown,
+    value: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "config.setting", async () => {
+      if (typeof key !== "string" || !SETTING_KEY.test(key)) {
+        return invalid("key must be a dotted lowercase name, e.g. tickets.panel");
+      }
+      if (value === undefined) return invalid("value is required; send null to clear the setting");
+
+      let encoded: string;
+      try {
+        // Catches cycles and non-JSON values (functions, BigInt) before they
+        // reach the repository, where the same failure would surface as an
+        // opaque driver error.
+        encoded = JSON.stringify(value) ?? "null";
+      } catch {
+        return invalid("value must be JSON");
+      }
+      if (encoded.length > SETTING_MAX_CHARS) {
+        return invalid(`value must be under ${SETTING_MAX_CHARS} characters of JSON`);
+      }
+
+      const result = await this.d.config.setSetting(guildId, key, value);
+      // The key, not the payload: a setting may hold a message template with
+      // someone's words in it, and the audit trail records who changed what
+      // named thing, not a copy of its contents.
+      return { result, change: { key, bytes: encoded.length } };
     });
   }
 
@@ -316,6 +539,612 @@ export class PanelMutations {
       };
       const result = await this.d.config.setRecruitment(guildId, settings);
       return { result, change: { ...settings } };
+    });
+  }
+
+  /**
+   * Replace the guild's join-screening policy.
+   *
+   * Validated strictly, and deliberately so — the exact opposite of the
+   * evaluator's `parsePolicy`, which fills anything malformed from the defaults
+   * rather than taking screening offline. The pair is intentional: **tolerant
+   * read, strict write.** A stored policy written years ago must still evaluate;
+   * a policy being typed *now* should fail at the keyboard, where someone can
+   * fix it, rather than silently degrade into a default that quietly stops
+   * enforcing the bar they thought they had set.
+   *
+   * That is also why an unknown key is rejected instead of ignored. A typo'd
+   * `minCatacomb` accepted here would read back as "no dungeon requirement",
+   * and the admin would have no way to tell that from the setting working.
+   *
+   * The whole policy is sent on every save, not a patch: the form shows every
+   * field, and a partial write against a policy someone else just edited is a
+   * lost update nobody would notice until the wrong person got in.
+   */
+  async setScreeningPolicy(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "config.screening", async () => {
+      const parsed = readScreeningPolicy(input);
+      if (typeof parsed === "string") return invalid(parsed);
+
+      const stored = serializePolicy(parsed);
+      const result = await this.d.config.setSetting(guildId, SCREENING_POLICY_KEY, stored);
+      // Recorded in full, unlike `config.setting`, which logs only the key: a
+      // screening policy is numbers and switches with nobody's words in it, and
+      // "who lowered the bar, and to what" is the question this audit exists to
+      // answer.
+      return { result, change: { ...stored } };
+    });
+  }
+
+  // ─────────────────────────── xp ───────────────────────────
+
+  /**
+   * Configure one XP source: whether it counts, what it is worth, and the
+   * anti-abuse limits that bound it.
+   *
+   * One source per write, unlike the screening policy's whole-form save. The
+   * difference is that the sources are independent — nothing about the GEXP
+   * weight is invalidated by someone else changing the message cooldown, so a
+   * per-row save costs no consistency and lets the page save a toggle without
+   * re-posting six settings it did not touch.
+   *
+   * Nothing here is retroactive, and the UI should say so: the weights are read
+   * when `xp-aggregate` derives a day, so a change lands on today's still-open
+   * counters and on everything after, while yesterday keeps the numbers it was
+   * scored under.
+   */
+  async setXpSource(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "xp.source", async () => {
+      const xp = this.d.xp;
+      if (xp === undefined) return unavailable("XP is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const source = body["source"];
+      if (typeof source !== "string" || !XP_SOURCE_ORDER.includes(source as XpSource)) {
+        return invalid(`source must be one of ${XP_SOURCE_ORDER.join(", ")}`);
+      }
+      if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+
+      // Fractional, so this one is bounded rather than integer-checked.
+      const weight = body["weight"];
+      if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0 || weight > MAX_SOURCE_WEIGHT) {
+        return invalid(`weight must be between 0 and ${MAX_SOURCE_WEIGHT}`);
+      }
+      // null is "uncapped", which is a real choice for GEXP and tenure — those
+      // are already bounded by what Hypixel reports and by the calendar.
+      const dailyCap = body["dailyCap"];
+      if (dailyCap !== null && !isCount(dailyCap, MAX_DAILY_CAP)) {
+        return invalid(`dailyCap must be a whole number up to ${MAX_DAILY_CAP}, or null for uncapped`);
+      }
+      const cooldownSec = body["cooldownSec"];
+      if (!isCount(cooldownSec, MAX_COOLDOWN_SEC)) {
+        return invalid(`cooldownSec must be a whole number of seconds up to ${MAX_COOLDOWN_SEC}`);
+      }
+      const minLength = body["minLength"];
+      if (!isCount(minLength, MAX_MIN_LENGTH)) {
+        return invalid(`minLength must be a whole number up to ${MAX_MIN_LENGTH}`);
+      }
+
+      const policy: XpSourcePolicyDTO = {
+        source: source as XpSource,
+        enabled: body["enabled"],
+        weight,
+        dailyCap,
+        cooldownSec,
+        minLength,
+      };
+      try {
+        await xp.setSourcePolicy(guildId, policy);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // Recorded in full, like the screening policy and for the same reason:
+      // these are numbers and switches with nobody's words in them, and "who
+      // made chat worth ten times more, and when" is the question this answers.
+      return { result: { ok: true }, change: { ...policy } };
+    });
+  }
+
+  /**
+   * Credit or debit a member's XP by hand.
+   *
+   * The amount is signed and the reason is required, because this is the one
+   * award on the ledger that no counter can explain: every other row can be
+   * re-derived from the activity that produced it, while this one exists only
+   * because a person decided it should. The reason is that person's account of
+   * why, and it is stored on the ledger row itself, not merely in the audit
+   * trail — a member asking where 5,000 XP came from should be answerable from
+   * their own history.
+   *
+   * Zero is refused rather than accepted as a no-op: an adjustment of nothing
+   * is a typo in the amount field, and writing it would put a ledger row and an
+   * audit entry in front of anyone reviewing the guild for no reason at all.
+   */
+  async adjustXp(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "xp.adjust", async (actorDiscordId) => {
+      const xp = this.d.xp;
+      if (xp === undefined) return unavailable("XP is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const discordId = body["discordId"];
+      if (typeof discordId !== "string" || !SNOWFLAKE.test(discordId)) {
+        return invalid("discordId must be a Discord id");
+      }
+      const amount = body["amount"];
+      if (typeof amount !== "number" || !Number.isInteger(amount) || amount === 0) {
+        return invalid("amount must be a non-zero whole number");
+      }
+      if (Math.abs(amount) > MAX_ADJUSTMENT) {
+        return invalid(`amount must be within ±${MAX_ADJUSTMENT}`);
+      }
+      const reason = typeof body["reason"] === "string" ? body["reason"].trim() : "";
+      if (reason.length === 0) return invalid("a reason is required");
+      if (reason.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
+
+      try {
+        // The returned standing is discarded on purpose. `adjust` writes the
+        // ledger row before it reads a standing back, so a null here would mean
+        // the read found nothing — not that the write failed — and reporting
+        // that as an error would tell the admin to retry a change that landed.
+        await xp.adjust(guildId, discordId, amount, reason, actorDiscordId);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { discordId, amount, reason } };
+    });
+  }
+
+  // ─────────────────────────── milestones ───────────────────────────
+
+  /**
+   * Create or edit one milestone definition.
+   *
+   * Keyed by `key`, so editing a built-in default is a create that shadows it
+   * and switching one off is a store with `enabled: false`. The panel never
+   * has to write the other twenty-nine defaults to change one of them, and a
+   * default added by a later release still reaches a guild that has customised
+   * something else.
+   */
+  async upsertMilestone(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "milestone.upsert", async () => {
+      const milestones = this.d.milestones;
+      if (milestones === undefined) return unavailable("Milestones are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const key = body["key"];
+      if (typeof key !== "string" || !MILESTONE_KEY.test(key)) {
+        return invalid("key must be a short lowercase name, e.g. networth:1b");
+      }
+      const label = body["label"];
+      if (typeof label !== "string" || label.trim().length === 0 || label.length > MILESTONE_LABEL_MAX) {
+        return invalid(`label must be 1–${MILESTONE_LABEL_MAX} characters`);
+      }
+      const description = body["description"] ?? null;
+      if (description !== null && (typeof description !== "string" || description.length > MILESTONE_DESC_MAX)) {
+        return invalid(`description must be under ${MILESTONE_DESC_MAX} characters, or null`);
+      }
+      const type = body["type"];
+      if (typeof type !== "string" || !(type in MILESTONE_TYPES)) {
+        return invalid(`type must be one of ${Object.keys(MILESTONE_TYPES).join(", ")}`);
+      }
+      // The metric decides which snapshot field is compared; anything outside
+      // the list would store a definition that can never fire, which reads on
+      // the page as configured and behaves as absent.
+      const metric = body["metric"];
+      if (!isMilestoneMetric(metric)) {
+        return invalid(`metric must be one of ${MILESTONE_METRICS.join(", ")}`);
+      }
+      const threshold = body["threshold"];
+      if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold <= 0) {
+        return invalid("threshold must be a positive number");
+      }
+      if (!isCount(body["xpReward"], MAX_MILESTONE_REWARD)) {
+        return invalid(`xpReward must be a whole number up to ${MAX_MILESTONE_REWARD}`);
+      }
+      if (typeof body["announce"] !== "boolean") return invalid("announce must be a boolean");
+      if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+
+      const definition: MilestoneDefinitionInput = {
+        key,
+        label: label.trim(),
+        description: description as string | null,
+        type: type as MilestoneType,
+        metric,
+        threshold,
+        xpReward: body["xpReward"],
+        announce: body["announce"],
+        enabled: body["enabled"],
+      };
+      try {
+        await milestones.upsert(guildId, definition);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // Recorded in full: a definition is numbers, switches and a label
+      // somebody wrote for public display — there is nothing private in it, and
+      // "who made this milestone worth 5,000 XP" is the question the trail is
+      // for.
+      return { result: { ok: true }, change: { ...definition } };
+    });
+  }
+
+  /**
+   * Drop a guild's definition row.
+   *
+   * A shadowed default reverts to the built-in rather than disappearing — to
+   * stop recognising one of those, store it disabled instead. Milestones
+   * already recorded against it are untouched: deleting the definition changes
+   * what the guild recognises from now on, it does not unmake the fact that
+   * somebody reached it.
+   */
+  async removeMilestone(session: PanelSession | null, guildId: string, key: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "milestone.remove", async () => {
+      const milestones = this.d.milestones;
+      if (milestones === undefined) return unavailable("Milestones are not enabled on this deployment");
+      if (typeof key !== "string" || !MILESTONE_KEY.test(key)) return invalid("key must be a definition key");
+
+      let removed: boolean;
+      try {
+        removed = await milestones.remove(guildId, key);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // A key with no row is not an error: the page may have been showing a
+      // built-in default, and "there is nothing of yours to remove" is the
+      // state the caller wanted to reach.
+      return { result: { ok: true }, change: { key, removed } };
+    });
+  }
+
+  // ───────────────────────────── tickets ─────────────────────────────
+
+  /**
+   * Create or update one ticket type.
+   *
+   * Layered over the built-ins by key, exactly as milestone definitions are:
+   * editing a built-in stores a row that shadows it, and switching one off is a
+   * store with `enabled: false`. The panel never writes the other four to
+   * change one, and a built-in added by a later release still reaches a guild
+   * that has customised something else.
+   */
+  async upsertTicketType(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.type.upsert", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const key = body["key"];
+      if (typeof key !== "string" || !TICKET_KEY.test(key)) {
+        return invalid("key must be a short lowercase name, e.g. staff-app");
+      }
+      const label = body["label"];
+      if (typeof label !== "string" || label.trim().length === 0 || label.length > TICKET_LABEL_MAX) {
+        return invalid(`label must be 1–${TICKET_LABEL_MAX} characters`);
+      }
+      const emoji = body["emoji"] ?? null;
+      if (emoji !== null && (typeof emoji !== "string" || emoji.length > TICKET_EMOJI_MAX)) {
+        return invalid("emoji must be a short string, or null");
+      }
+      // The category is the fixed enum a ticket is filed under; the type is what
+      // a member picks. Anything outside the enum would store a row the bot
+      // could read but never open a ticket with.
+      const category = body["category"];
+      if (typeof category !== "string" || !(category in TICKET_CATEGORIES)) {
+        return invalid(`category must be one of ${Object.keys(TICKET_CATEGORIES).join(", ")}`);
+      }
+      const parentChannelId = body["parentChannelId"] ?? null;
+      if (parentChannelId !== null && (typeof parentChannelId !== "string" || !SNOWFLAKE.test(parentChannelId))) {
+        return invalid("parentChannelId must be a Discord channel id, or null");
+      }
+      const staffRoleIds = body["staffRoleIds"];
+      if (
+        !Array.isArray(staffRoleIds) ||
+        staffRoleIds.length > MAX_TICKET_STAFF_ROLES ||
+        !staffRoleIds.every((r): r is string => typeof r === "string" && SNOWFLAKE.test(r))
+      ) {
+        return invalid(`staffRoleIds must be up to ${MAX_TICKET_STAFF_ROLES} Discord role ids`);
+      }
+      const prompt = body["prompt"] ?? null;
+      if (prompt !== null && (typeof prompt !== "string" || prompt.length > TICKET_PROMPT_MAX)) {
+        return invalid(`prompt must be under ${TICKET_PROMPT_MAX} characters, or null`);
+      }
+      if (!isCount(body["position"], MAX_TICKET_POSITION)) {
+        return invalid(`position must be a whole number up to ${MAX_TICKET_POSITION}`);
+      }
+      if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+
+      const type: TicketTypeInput = {
+        key,
+        label: label.trim(),
+        emoji: emoji as string | null,
+        category: category as TicketCategory,
+        parentChannelId: parentChannelId as string | null,
+        // Duplicate role ids would ping the same people twice; deduped here
+        // rather than at the repository, so the audit records what was stored.
+        staffRoleIds: [...new Set(staffRoleIds)],
+        prompt: prompt as string | null,
+        position: body["position"],
+        enabled: body["enabled"],
+      };
+      try {
+        await tickets.upsertType(guildId, type);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // Recorded in full: a type is a label, a category and a list of role ids
+      // meant for public display — nothing private in it, and "who pointed
+      // appeals at this channel" is the question the trail is for.
+      return { result: { ok: true }, change: { ...type, staffRoleIds: [...type.staffRoleIds] } };
+    });
+  }
+
+  /**
+   * Drop a guild's ticket-type row.
+   *
+   * A shadowed built-in reverts to the default rather than disappearing — to
+   * stop offering one of those, store it disabled instead. Tickets already
+   * opened under it are untouched: their category is recorded on the ticket,
+   * not looked up through this row.
+   */
+  async removeTicketType(session: PanelSession | null, guildId: string, key: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.type.remove", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof key !== "string" || !TICKET_KEY.test(key)) return invalid("key must be a ticket type key");
+
+      let removed: boolean;
+      try {
+        removed = await tickets.removeType(guildId, key);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // A key with no row is not an error, for the same reason as milestones:
+      // the page may have been showing a built-in.
+      return { result: { ok: true }, change: { key, removed } };
+    });
+  }
+
+  /** Save the ticket panel's channel and wording. */
+  async saveTicketPanel(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.panel.save", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const channelId = body["channelId"] ?? null;
+      if (channelId !== null && (typeof channelId !== "string" || !SNOWFLAKE.test(channelId))) {
+        return invalid("channelId must be a Discord channel id, or null");
+      }
+      const title = body["title"];
+      if (typeof title !== "string" || title.trim().length === 0 || title.length > TICKET_PANEL_TITLE_MAX) {
+        return invalid(`title must be 1–${TICKET_PANEL_TITLE_MAX} characters`);
+      }
+      const description = body["description"] ?? null;
+      if (description !== null && (typeof description !== "string" || description.length > DESCRIPTION_MAX)) {
+        return invalid(`description must be under ${DESCRIPTION_MAX} characters, or null`);
+      }
+
+      const panel: TicketPanelConfigInput = {
+        channelId: channelId as string | null,
+        title: title.trim(),
+        description: description as string | null,
+      };
+      try {
+        await tickets.savePanel(guildId, panel);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { ...panel } };
+    });
+  }
+
+  // ───────────────────────────── wordlist ─────────────────────────────
+
+  /**
+   * Add a filter rule, or edit one that already exists.
+   *
+   * One mutation rather than two, because it is one form: an admin fixing a
+   * severity and an admin adding a word fill in identical fields, and the only
+   * difference is whether an id came along. The id is what keeps an edit an
+   * edit — remove-and-re-add would reorder the list under whoever was reading
+   * it and orphan the rule id sitting in an older bridge log line.
+   */
+  async upsertWordlistRule(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.upsert", async (actorDiscordId) => {
+      const wordlist = this.d.wordlist;
+      if (wordlist === undefined) return unavailable("The chat filter is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const rawId = body["id"] ?? null;
+      if (rawId !== null && (typeof rawId !== "string" || !ENTITY_ID.test(rawId))) {
+        return invalid("id must be a rule id, or null to add a new rule");
+      }
+      const id = rawId as string | null;
+
+      const rawPattern = body["pattern"];
+      if (typeof rawPattern !== "string" || rawPattern.trim().length === 0 || rawPattern.length > WORDLIST_PATTERN_MAX) {
+        return invalid(`pattern must be 1–${WORDLIST_PATTERN_MAX} characters`);
+      }
+      // Only the outer whitespace: a substring rule for "free nitro" is two words
+      // on purpose, and trimming inside it would quietly change what it catches.
+      const pattern = rawPattern.trim();
+
+      const matchType = body["matchType"];
+      if (typeof matchType !== "string" || !WORD_MATCH_TYPES.includes(matchType as WordMatchType)) {
+        return invalid(`matchType must be one of ${WORD_MATCH_TYPES.join(", ")}`);
+      }
+      const action = body["action"];
+      if (typeof action !== "string" || !WORD_ACTIONS.includes(action as WordAction)) {
+        return invalid(`action must be one of ${WORD_ACTIONS.join(", ")}`);
+      }
+      const severity = body["severity"];
+      if (!isCount(severity, MAX_WORD_SEVERITY) || severity < 1) {
+        return invalid(`severity must be a whole number from 1 to ${MAX_WORD_SEVERITY}`);
+      }
+      // Absent and null differ here. `WordlistRuleDTO` does not carry the note,
+      // so the page editing a rule has never seen one — if an omitted field
+      // meant "clear it", every edit from the panel would quietly delete the
+      // note a staffer typed into `/wordlist-add`. Omitted leaves it alone;
+      // an explicit null is the only thing that clears it.
+      const note = body["note"];
+      if (note !== undefined && note !== null && (typeof note !== "string" || note.length > WORDLIST_NOTE_MAX)) {
+        return invalid(`note must be under ${WORDLIST_NOTE_MAX} characters, null to clear it, or omitted`);
+      }
+      const enabled = body["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+
+      // The pattern is deliberately absent from the audit record. A filter list
+      // is the one piece of guild config whose contents *are* the slurs and scam
+      // URLs it exists to catch, and a trail that reproduces every one of them
+      // is a second copy of the thing nobody wanted written down. Which rule
+      // changed, to what settings, and by whom is all still here.
+      const change: Record<string, unknown> = {
+        id,
+        matchType,
+        action,
+        severity,
+        enabled,
+        patternLength: pattern.length,
+      };
+
+      try {
+        if (id === null) {
+          const added = await wordlist.add({
+            guildId,
+            pattern,
+            matchType: matchType as WordMatchType,
+            action: action as WordAction,
+            severity,
+            addedByDiscordId: actorDiscordId,
+            note: (note ?? null) as string | null,
+          });
+          if (!added.ok) return { error: wordlistRefusal(added.error) };
+          // A new rule is stored live; honour a form that asked for otherwise
+          // rather than leaving it enforcing for the seconds until someone
+          // notices the toggle didn't take.
+          if (!enabled) await wordlist.update(guildId, added.value.id, { enabled: false });
+          return { result: { ok: true }, change: { ...change, id: added.value.id } };
+        }
+
+        const patch: WordlistRuleUpdate = {
+          pattern,
+          matchType: matchType as WordMatchType,
+          action: action as WordAction,
+          severity,
+          enabled,
+          ...(note === undefined ? {} : { note: note as string | null }),
+        };
+        const updated = await wordlist.update(guildId, id, patch);
+        if (!updated.ok) return { error: wordlistRefusal(updated.error) };
+        // Scoped by guild in the repository, so this also covers a rule id
+        // pasted in from somewhere else: it simply does not exist here.
+        if (updated.value === null) return invalid("no rule in this guild has that id");
+        return { result: { ok: true }, change };
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+    });
+  }
+
+  /**
+   * Delete a filter rule outright.
+   *
+   * To stop a rule firing but keep the record of it, save it disabled instead —
+   * this is the irreversible one.
+   */
+  async deleteWordlistRule(session: PanelSession | null, guildId: string, id: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.delete", async () => {
+      const wordlist = this.d.wordlist;
+      if (wordlist === undefined) return unavailable("The chat filter is not enabled on this deployment");
+      if (typeof id !== "string" || !ENTITY_ID.test(id)) return invalid("id must be a rule id");
+
+      let removed: boolean;
+      try {
+        const result = await wordlist.remove(guildId, id);
+        if (!result.ok) return { error: { kind: "SERVICE_ERROR", detail: describe(result.error) } };
+        // Nothing matched is not an error, as with milestones and ticket types:
+        // two admins on the same page both pressing delete should both succeed.
+        removed = result.value !== null;
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // The pattern is left out of the trail here for the reason given above.
+      return { result: { ok: true }, change: { id, removed } };
+    });
+  }
+
+  /**
+   * Save the auto-warn escalation ladder (ADMIN_BOT.md §5.1).
+   *
+   * Written through the settings KV rather than a table of its own: it is one
+   * small document per guild, read on every warning and rewritten about once a
+   * year. Only the guild's own rungs are stored — the built-ins are layered
+   * underneath at read time, so a rung added by a later release still reaches a
+   * guild that customised a different one.
+   */
+  async setModerationDefaults(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "moderation.defaults", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const enabled = body["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+      const windowDays = body["windowDays"];
+      if (!isCount(windowDays, MAX_ESCALATION_WINDOW_DAYS) || windowDays < 1) {
+        return invalid(`windowDays must be a whole number from 1 to ${MAX_ESCALATION_WINDOW_DAYS}`);
+      }
+      const rawRungs = body["rungs"];
+      if (!Array.isArray(rawRungs) || rawRungs.length > MAX_ESCALATION_RUNGS) {
+        return invalid(`rungs must be a list of up to ${MAX_ESCALATION_RUNGS} steps`);
+      }
+
+      const rungs: { warns: number; action: EscalationAction; durationSeconds: number | null }[] = [];
+      const seen = new Set<number>();
+      for (const raw of rawRungs) {
+        if (typeof raw !== "object" || raw === null) return invalid("each rung must be an object");
+        const rung = raw as Record<string, unknown>;
+
+        const warns = rung["warns"];
+        if (!isCount(warns, MAX_ESCALATION_WARNS) || warns < 1) {
+          return invalid(`each rung's warns must be a whole number from 1 to ${MAX_ESCALATION_WARNS}`);
+        }
+        // Two rungs at one count is a ladder with an unanswerable step: the
+        // later one would silently win, which is not what the form showed.
+        if (seen.has(warns)) return invalid(`two rungs both fire at ${warns} warnings`);
+        seen.add(warns);
+
+        const action = rung["action"];
+        if (action !== "MUTE" && action !== "BAN") return invalid("each rung's action must be MUTE or BAN");
+
+        const rawDuration = rung["durationSeconds"] ?? null;
+        if (rawDuration !== null && (!isCount(rawDuration, MAX_DURATION_SECONDS) || rawDuration < 1)) {
+          return invalid(`durationSeconds must be a whole number of seconds under ${MAX_DURATION_SECONDS}, or null`);
+        }
+        const durationSeconds = rawDuration as number | null;
+        // Refused here rather than dropped on the way back in: `parsePolicy`
+        // would discard this rung silently, and an admin who saved a ladder
+        // should not have to notice later that one step of it never fires.
+        if (action === "MUTE" && durationSeconds === null) {
+          return invalid("a mute rung needs a duration — the mute path refuses an endless one");
+        }
+        rungs.push({ warns, action, durationSeconds });
+      }
+
+      // Stored sorted, so a hand-read of the setting is a ladder in order.
+      rungs.sort((a, b) => a.warns - b.warns);
+      const policy = { enabled, windowDays, rungs };
+      const result = await this.d.config.setSetting(guildId, ESCALATION_SETTING_KEY, policy);
+      return { result, change: { enabled, windowDays, rungs: rungs.map((r) => ({ ...r })) } };
     });
   }
 
@@ -665,6 +1494,36 @@ function invalid(detail: string): Step {
   return { error: { kind: "INVALID_INPUT", detail } };
 }
 
+/**
+ * A write whose service isn't wired into this deployment.
+ *
+ * SERVICE_ERROR rather than INVALID_INPUT: nothing is wrong with what the
+ * caller sent, and telling them to fix their input would send them editing a
+ * form that was never going to save.
+ */
+function unavailable(detail: string): Step {
+  return { error: { kind: "SERVICE_ERROR", detail } };
+}
+
+/**
+ * A refused filter rule, in words the person editing the form can act on.
+ *
+ * INVALID_INPUT rather than SERVICE_ERROR for both: an unparseable regex and a
+ * pattern that already exists are things the admin typed, and the form is where
+ * they get fixed. The service's own `detail` carries the regex engine's
+ * complaint, which is more useful than anything this layer could paraphrase.
+ */
+function wordlistRefusal(error: WordlistError): MutationError {
+  return error.kind === "DUPLICATE"
+    ? { kind: "INVALID_INPUT", detail: "this guild already has a rule with that pattern and match type" }
+    : { kind: "INVALID_INPUT", detail: error.detail };
+}
+
+/** A whole number in `[0, max]` — the shape every XP limit shares. */
+function isCount(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= max;
+}
+
 /** Domain errors are tagged unions or Errors; either way the audit wants a word. */
 function describe(error: unknown): string {
   if (error && typeof error === "object" && "kind" in error && typeof error.kind === "string") {
@@ -676,6 +1535,140 @@ function describe(error: unknown): string {
 
 // Sentinels for the tri-state thresholds. Distinct objects rather than
 // undefined/null, because both of those are meaningful *values* here.
+// ── screening policy validation ─────────────────────────────────────────────
+
+const SCREENING_FLAGS = [
+  "enabled",
+  "autoAccept",
+  "denyOnScammer",
+  "reviewOnScammerUnknown",
+  "denyOnPriorExpulsion",
+  "reviewOnUnreadable",
+] as const;
+
+/** Nullable bars. Null means "do not check this", which is not the same as 0. */
+const SCREENING_BARS = [
+  "minSkyblockLevel",
+  "minSkillAverage",
+  "minCatacombs",
+  "minSenitherWeight",
+  "minAccountAgeDays",
+  "maxInactiveDays",
+] as const;
+
+/**
+ * Upper bound on any bar.
+ *
+ * Deliberately one loose ceiling rather than a per-stat one. A table saying
+ * "skill average tops out at 60" is a piece of game trivia that goes stale with
+ * the next Skyblock update, and a stale ceiling rejects a policy that is
+ * perfectly reasonable. What this actually needs to catch is Infinity, NaN and
+ * a slipped decimal point, and one bound does that.
+ */
+const BAR_MAX = 1e9;
+
+const SCREENING_COUNTS = {
+  repeatWindowDays: { min: 1, max: 365 },
+  maxAttemptsInWindow: { min: 1, max: 100 },
+  /** A risk score, so its range is the score's range. */
+  reviewAtRisk: { min: 0, max: 100 },
+} as const;
+
+const SCREENING_KEYS: readonly string[] = [
+  ...SCREENING_FLAGS,
+  ...SCREENING_BARS,
+  ...Object.keys(SCREENING_COUNTS),
+  "minNetworth",
+];
+
+/** Coins, as the form sends them: digits in a string, so 10b survives JSON. */
+const COINS = /^\d{1,30}$/;
+
+/**
+ * Validate a screening policy payload. Returns the policy, or the message to
+ * show the admin — never a half-applied policy.
+ */
+function readScreeningPolicy(input: unknown): ScreeningPolicy | string {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return "body must be an object";
+  const body = input as Record<string, unknown>;
+
+  const unknownKeys = Object.keys(body).filter((k) => !SCREENING_KEYS.includes(k));
+  if (unknownKeys.length > 0) return `unknown field(s): ${unknownKeys.join(", ")}`;
+
+  const flags: Record<string, boolean> = {};
+  for (const key of SCREENING_FLAGS) {
+    const value = body[key];
+    if (typeof value !== "boolean") return `${key} must be a boolean`;
+    flags[key] = value;
+  }
+
+  const bars: Record<string, number | null> = {};
+  for (const key of SCREENING_BARS) {
+    const value = body[key];
+    if (value === null || value === undefined) {
+      bars[key] = null;
+      continue;
+    }
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > BAR_MAX) {
+      return `${key} must be a number between 0 and ${BAR_MAX}, or null for no requirement`;
+    }
+    bars[key] = value;
+  }
+
+  const counts: Record<string, number> = {};
+  for (const [key, range] of Object.entries(SCREENING_COUNTS)) {
+    const value = body[key];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < range.min || value > range.max) {
+      return `${key} must be a whole number between ${range.min} and ${range.max}`;
+    }
+    counts[key] = value;
+  }
+
+  const raw = body["minNetworth"];
+  let minNetworth: bigint | null = null;
+  if (raw !== null && raw !== undefined) {
+    // A number is accepted because a small threshold typed into a number field
+    // is a reasonable thing to send; anything past 2^53 has to arrive as a
+    // string, because by then a double has already lost the digits.
+    if (typeof raw === "number") {
+      if (!Number.isFinite(raw) || raw < 0 || !Number.isSafeInteger(raw)) {
+        return "minNetworth must be a whole number of coins, or a digit string for large values";
+      }
+      minNetworth = BigInt(raw);
+    } else if (typeof raw === "string" && COINS.test(raw.trim())) {
+      minNetworth = BigInt(raw.trim());
+    } else {
+      return "minNetworth must be a string of digits, a whole number, or null";
+    }
+  }
+
+  // `autoAccept` is the switch that admits a stranger with nobody watching, so
+  // the one cross-field rule guards it: with screening off, nothing is
+  // evaluated, and an accept flag left on would mean "admit everyone".
+  if (flags["autoAccept"] && !flags["enabled"]) {
+    return "autoAccept requires enabled: with screening off, nothing is checked before accepting";
+  }
+
+  return {
+    enabled: flags["enabled"]!,
+    autoAccept: flags["autoAccept"]!,
+    denyOnScammer: flags["denyOnScammer"]!,
+    reviewOnScammerUnknown: flags["reviewOnScammerUnknown"]!,
+    denyOnPriorExpulsion: flags["denyOnPriorExpulsion"]!,
+    reviewOnUnreadable: flags["reviewOnUnreadable"]!,
+    minSkyblockLevel: bars["minSkyblockLevel"]!,
+    minSkillAverage: bars["minSkillAverage"]!,
+    minCatacombs: bars["minCatacombs"]!,
+    minSenitherWeight: bars["minSenitherWeight"]!,
+    minNetworth,
+    minAccountAgeDays: bars["minAccountAgeDays"]!,
+    maxInactiveDays: bars["maxInactiveDays"]!,
+    repeatWindowDays: counts["repeatWindowDays"]!,
+    maxAttemptsInWindow: counts["maxAttemptsInWindow"]!,
+    reviewAtRisk: counts["reviewAtRisk"]!,
+  };
+}
+
 const ABSENT = Symbol("absent");
 const INVALID = Symbol("invalid");
 

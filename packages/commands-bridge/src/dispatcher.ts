@@ -105,6 +105,12 @@ export class CommandDispatcher {
     }
 
     await this.captureUsage(name, ctx, success, this.now() - started);
+    // A renamed command still answers under its old name for a release, with the
+    // new name in front of the answer — telling someone their command is gone
+    // and then not answering it teaches them nothing and costs them the lookup.
+    if (spec.deprecatedBy !== undefined) {
+      return { ...reply, text: `\`/${name}\` is now \`/${spec.deprecatedBy}\`.\n${reply.text}` };
+    }
     return reply;
   }
 

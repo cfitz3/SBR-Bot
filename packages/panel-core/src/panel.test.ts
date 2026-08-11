@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  CONFIG_CHANNEL_SLOTS,
   ok,
   type CommunityService,
   type GuildConfigService,
   type GuildRuntimeConfig,
   type MemberRole,
+  type MilestoneDefinitionDTO,
+  type MilestoneDefinitionService,
+  type TicketConfigService,
+  type TicketTypeDTO,
+  type WordlistService,
   type ModerationService,
+  type XpService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { authorize, type PanelSession, type RoleResolver } from "./access.js";
 import type { HeartbeatReader, PanelReads, ServiceHeartbeat } from "./reads.js";
-import { EXPECTED_SERVICES, HEARTBEAT_STALE_MS, PanelService } from "./service.js";
+import { EXPECTED_SERVICES, HEARTBEAT_STALE_MS, PanelService, XP_SOURCE_ORDER } from "./service.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -73,6 +80,8 @@ const moderation = (n: number): ModerationService => ({
   async recordInfraction(i) { return ok({ ...i, id: "x", createdAt: "t" }); },
   async applyAction() { throw new Error("unused"); },
   async listActions() { return ok([]); },
+  async listInForce() { return ok([]); },
+  async sweepExpired() { return ok(0); },
   async listInfractions() {
     return ok(
       Array.from({ length: n }, (_v, i) => ({
@@ -129,11 +138,15 @@ const configService = (over: Partial<GuildRuntimeConfig> = {}): GuildConfigServi
   const partial: Partial<GuildConfigService> = {
     async get() {
       return ok({
-        guildId: "g1", bridgeChannelId: null, staffChannelId: null, logChannelId: null,
-        applicationsChannelId: null, eventsChannelId: null, prefixes: ["!"], timezone: "UTC",
+        guildId: "g1", channels: {}, prefixes: ["!"], timezone: "UTC",
         applicationsOpen: true, bridgeSuspended: false, features: {}, minWeight: null,
         minNetworth: null, roleMappings: {}, ...over,
       });
+    },
+    // No stored settings: the Settings page has to work for a guild that has
+    // never saved a screening policy, which is every guild on day one.
+    async getSetting() {
+      return null;
     },
   };
   return partial as GuildConfigService;
@@ -147,6 +160,10 @@ function svc(
     reads?: PanelReads;
     config?: GuildConfigService;
     heartbeats?: HeartbeatReader;
+    xp?: XpService;
+    milestones?: MilestoneDefinitionService;
+    tickets?: TicketConfigService;
+    wordlist?: WordlistService;
   } = {},
 ) {
   return new PanelService({
@@ -156,6 +173,10 @@ function svc(
     reads: over.reads ?? reads(),
     config: over.config ?? configService(),
     ...(over.heartbeats ? { heartbeats: over.heartbeats } : {}),
+    ...(over.xp ? { xp: over.xp } : {}),
+    ...(over.milestones ? { milestones: over.milestones } : {}),
+    ...(over.tickets ? { tickets: over.tickets } : {}),
+    ...(over.wordlist ? { wordlist: over.wordlist } : {}),
     logger: silent,
   });
 }
@@ -261,6 +282,17 @@ test("recruitment surfaces the guild's thresholds alongside the queue", async ()
   assert.equal(r.access.allowed, true);
   assert.equal(r.data?.recruitmentOpen, false);
   assert.equal(r.data?.minWeight, 4000);
+});
+
+test("settings shows the screening policy in force, not an empty form", async () => {
+  // A guild that has never saved a policy is still being screened under the
+  // platform defaults. Rendering blanks would tell the admin that nothing is
+  // configured, when in fact the scammer check is already running.
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadSettings(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.screening.enabled, true);
+  assert.equal(r.data?.screening.autoAccept, false, "nobody is admitted automatically until someone opts in");
+  assert.equal(r.data?.screening.minNetworth, null);
 });
 
 // ── events + attendance ──
@@ -389,7 +421,206 @@ test("a heartbeat store that throws leaves the job table intact", async () => {
 test("an ADMIN reaches mapping and gets every channel slot, present or not", async () => {
   const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadMapping(session(), "g1");
   assert.equal(r.access.allowed, true);
-  assert.deepEqual(Object.keys(r.data?.channels ?? {}).sort(), [
-    "applications", "bridge", "events", "log", "staff",
-  ]);
+  // The whole registry, including the slots with no legacy column behind them:
+  // a slot missing from this map is a slot with no control on the page.
+  assert.deepEqual(Object.keys(r.data?.channels ?? {}).sort(), [...CONFIG_CHANNEL_SLOTS].sort());
+  assert.equal(r.data?.channels["milestones"], null);
+});
+
+test("a bound slot comes back from the canonical map, not from a legacy column", async () => {
+  const r = await svc({
+    roles: roles({ "111": "ADMIN" }),
+    config: configService({ channels: { lfg: "123456789012345678" } }),
+  }).loadMapping(session(), "g1");
+  assert.equal(r.data?.channels["lfg"], "123456789012345678");
+});
+
+// ── xp ──
+
+/** Only the two sources the guild has actually configured. */
+const xpService = (): XpService =>
+  ({
+    async policy() {
+      return {
+        DISCORD_MESSAGE: {
+          source: "DISCORD_MESSAGE", enabled: true, weight: 1, dailyCap: 200, cooldownSec: 60, minLength: 8,
+        },
+        GEXP: { source: "GEXP", enabled: true, weight: 0.01, dailyCap: null, cooldownSec: 0, minLength: 0 },
+      };
+    },
+  }) as unknown as XpService;
+
+test("the XP page lists every source, with unconfigured ones off rather than guessed", async () => {
+  // A source with no row is disabled, and the page has to say so: inventing a
+  // default weight would show an admin a number nobody chose and no job reads.
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: xpService() }).loadXp(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.sources.map((s) => s.source), [...XP_SOURCE_ORDER]);
+  assert.equal(r.data?.sources.find((s) => s.source === "GEXP")?.weight, 0.01);
+  const tenure = r.data?.sources.find((s) => s.source === "TENURE");
+  assert.equal(tenure?.enabled, false);
+  assert.equal(tenure?.weight, 0);
+});
+
+test("with XP unwired the page says so instead of showing seven dead controls", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadXp(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.sources, []);
+});
+
+test("an officer cannot open the XP page at all", async () => {
+  const r = await svc({ xp: xpService() }).loadXp(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+// ── milestones ──
+
+/** One built-in and one of the guild's own — the two states the page renders. */
+const milestoneService = (): MilestoneDefinitionService =>
+  ({
+    async list(guildId: string): Promise<readonly MilestoneDefinitionDTO[]> {
+      return [
+        {
+          id: null, guildId, key: "networth:1b", label: "1b networth", description: null,
+          type: "NETWORTH_THRESHOLD", metric: "networth", threshold: 1e9, xpReward: 500,
+          announce: true, enabled: true, source: "DEFAULT",
+        },
+        {
+          id: "d2", guildId, key: "cata:50", label: "Catacombs 50", description: null,
+          type: "CATACOMBS_LEVEL", metric: "catacombsLevel", threshold: 50, xpReward: 0,
+          announce: false, enabled: false, source: "GUILD",
+        },
+      ];
+    },
+  }) as unknown as MilestoneDefinitionService;
+
+test("the milestones page shows defaults and the guild's own rows together", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), milestones: milestoneService() })
+    .loadMilestones(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.definitions.map((d) => d.source), ["DEFAULT", "GUILD"]);
+  // A switched-off definition is listed, not filtered: the page has to render
+  // the control that turns it back on.
+  assert.equal(r.data?.definitions.find((d) => d.key === "cata:50")?.enabled, false);
+});
+
+test("with milestones unwired the page says so rather than showing an empty list", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadMilestones(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.definitions, []);
+});
+
+test("an officer cannot open the milestones page", async () => {
+  const r = await svc({ milestones: milestoneService() }).loadMilestones(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+// ── tickets ──
+
+/** One built-in and one of the guild's own — the two states the page renders. */
+const ticketService = (): TicketConfigService =>
+  ({
+    async listTypes(guildId: string): Promise<readonly TicketTypeDTO[]> {
+      return [
+        {
+          id: null, guildId, key: "support", label: "Support", emoji: null, category: "SUPPORT",
+          parentChannelId: null, staffRoleIds: [], prompt: null, position: 0, enabled: true,
+          source: "DEFAULT",
+        },
+        {
+          id: "t2", guildId, key: "appeal", label: "Appeal", emoji: null, category: "APPEAL",
+          parentChannelId: null, staffRoleIds: [], prompt: null, position: 1, enabled: false,
+          source: "GUILD",
+        },
+      ];
+    },
+    async getPanel(guildId: string) {
+      return { guildId, channelId: null, messageId: null, title: "Support", description: null, updatedAt: null };
+    },
+  }) as unknown as TicketConfigService;
+
+test("the tickets page shows built-ins and the guild's own rows together", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), tickets: ticketService() })
+    .loadTickets(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.types.map((t) => t.source), ["DEFAULT", "GUILD"]);
+  // A switched-off type is listed, not filtered: the page has to render the
+  // control that turns it back on.
+  assert.equal(r.data?.types.find((t) => t.key === "appeal")?.enabled, false);
+  assert.equal(r.data?.panel?.title, "Support");
+});
+
+test("with tickets unwired the page says so rather than showing an empty menu", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadTickets(session(), "g1");
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.types, []);
+  assert.equal(r.data?.panel, null);
+});
+
+test("an officer cannot open the tickets page", async () => {
+  const r = await svc({ tickets: ticketService() }).loadTickets(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+// ── the chat filter ──
+
+const wordlistService = (): WordlistService =>
+  ({
+    async list(guildId: string) {
+      return ok([
+        { id: "w1", guildId, pattern: "free nitro", matchType: "SUBSTRING", action: "BLOCK", severity: 5, enabled: true },
+        { id: "w2", guildId, pattern: "spoiler", matchType: "EXACT", action: "FLAG", severity: 1, enabled: false },
+      ]);
+    },
+  }) as unknown as WordlistService;
+
+test("the filter page lists every rule, switched off ones included", async () => {
+  const r = await svc({ roles: admin(), wordlist: wordlistService() }).loadWordlist(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  // A disabled rule is listed rather than filtered: the page has to render the
+  // control that switches it back on.
+  assert.deepEqual(r.data?.rules.map((rule) => rule.enabled), [true, false]);
+});
+
+test("a guild that has never configured a ladder gets the platform's own", async () => {
+  // The read layers guild rungs over the built-ins, so a guild with nothing
+  // stored still sees the three rungs that are actually in force.
+  const r = await svc({ roles: admin(), wordlist: wordlistService() }).loadWordlist(session(), "g1");
+
+  assert.equal(r.data?.escalation.enabled, true);
+  assert.equal(r.data?.escalation.windowDays, 90);
+  assert.deepEqual(r.data?.escalation.rungs.map((rung) => rung.warns), [3, 5, 7]);
+  assert.deepEqual(r.data?.escalation.rungs.map((rung) => rung.source), ["DEFAULT", "DEFAULT", "DEFAULT"]);
+});
+
+test("with the filter unwired the ladder is still editable", async () => {
+  // The two halves of the page are independent: escalation runs off the
+  // moderation service, which every deployment has, so an absent chat filter
+  // must not take the ladder editor down with it.
+  const r = await svc({ roles: admin() }).loadWordlist(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.rules, []);
+  assert.equal(r.data?.escalation.rungs.length, 3);
+});
+
+test("an officer cannot open the filter page", async () => {
+  const r = await svc({ wordlist: wordlistService() }).loadWordlist(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
 });

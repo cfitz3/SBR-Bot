@@ -7,22 +7,43 @@
 import { loadConfig, type AppConfig } from "@sbr/config";
 import {
   communityRepository,
+  assertDatabaseReady,
   disconnectDb,
   guildConfigRepository,
+  guildMemberDirectory,
   guildRepository,
   identityRepository,
+  leaderboardSource,
+  linkDirectory,
+  memberProgressSource,
+  milestoneAnnouncementRepository,
+  permRepository,
+  milestoneDefinitionRepository,
+  moderationRepository,
   progressionRepository,
   rankResolver,
+  screeningHistorySource,
+  screeningPolicySource,
+  screeningRepository,
+  xpRepository,
+  activitySink,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
+import { fetchHttp, HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
+import { SkykingsClient } from "@sbr/skykings";
+import { ScreeningService } from "@sbr/screening";
 import { CommunityServiceImpl } from "@sbr/community";
+import { PermServiceImpl } from "@sbr/perms";
+import { XpService } from "@sbr/xp";
+import { LeaderboardService } from "@sbr/leaderboards";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
+import { ESCALATION_SETTING_KEY, memberRecordSource } from "@sbr/moderation";
 import {
   ItemCatalog,
   MarketServiceImpl,
   NetworthServiceImpl,
   PricingServiceImpl,
+  summariseNetworth,
   type NetworthEngine,
 } from "@sbr/pricing";
 import { ProgressionServiceImpl, type ProfileProvider, type SkyblockProfileData } from "@sbr/progression";
@@ -33,15 +54,24 @@ import {
   buildBridgeRegistry,
   type CapabilityChecker,
   type HandlerDeps,
+  type LfgBoard,
   type UsageSink,
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
 import { createLogger, type Logger } from "@sbr/observability";
 import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
-import { err, ok, type GuildRosterSource, type PlayerLookup } from "@sbr/shared-types";
+import {
+  err,
+  ok,
+  type GuildRosterSource,
+  type MilestoneAnnouncerPort,
+  type PlayerLookup,
+  type TextScreen,
+} from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
+import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
 
 export interface BridgeApp {
   readonly config: AppConfig;
@@ -61,8 +91,30 @@ export interface BridgeApp {
   readonly inGame: InGameDispatcher;
   /** The relay pipeline used by the Discord/in-game transport adapters. */
   readonly bridge: BridgeService;
+  /**
+   * Join-request screening. Held by the app rather than the transport because
+   * the Mineflayer session is rebuilt on every reconnect and the screening
+   * service holds no session state — only clients and policy.
+   */
+  readonly screening: ScreeningService;
+  /**
+   * The announcement queue. Exposed on the app rather than reached for in the
+   * transport so the sweeper can be handed a fake in tests without a database.
+   */
+  readonly milestones: MilestoneAnnouncerPort;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
+  /**
+   * Count a Discord message towards XP. Separate from the relay so a message
+   * anywhere in the server counts, not only one in the bridge channel.
+   */
+  creditDiscordMessage(guildId: string, discordId: string, text: string): Promise<void>;
+  /**
+   * Count a guild-chat line towards XP, resolving the speaker's IGN to a linked
+   * account first. An unlinked IGN earns nothing: XP is attributed to a platform
+   * member and a chat line alone cannot name one.
+   */
+  creditGuildChat(guildId: string, ign: string, text: string): Promise<void>;
   /**
    * Hand the composition the live `/g online` reader once the Mineflayer
    * session exists.
@@ -82,6 +134,8 @@ export interface BridgeApp {
    * withholding the beat until ready would render that as DOWN.
    */
   setStatusSource(source: (() => BridgeStatusDetails) | null): void;
+  /** Hand the composition the Discord-backed LFG board once the client exists. */
+  setLfgBoard(board: LfgBoard | null): void;
   shutdown(): Promise<void>;
 }
 
@@ -91,6 +145,10 @@ export type BridgeStatusDetails = Readonly<Record<string, string | number | bool
 export async function createBridgeApp(): Promise<BridgeApp> {
   const config = loadConfig();
   const log = createLogger({ level: config.logLevel, name: "bridge-bot" });
+
+  // Prisma connects lazily, so a wrong or absent Postgres would otherwise only
+  // show up later as an endless drip of failing queries. Check once, up front.
+  await assertDatabaseReady();
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis);
 
@@ -111,9 +169,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
         (museum ?? undefined) as Record<string, unknown> | undefined,
         bankBalance ?? 0,
       );
-      const result = await calc.getNetworth();
-      const total = typeof result.networth === "number" ? result.networth : null;
-      return { total, breakdown: {} };
+      return summariseNetworth(await calc.getNetworth());
     },
   };
   const networth = new NetworthServiceImpl({ engine, logger: log });
@@ -148,6 +204,10 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     profiles,
     networth,
     repo: progressionRepository,
+    // `/milestones` measures a member against what this guild recognises, so it
+    // needs the definitions the panel edits — read-only here; the bots never
+    // write configuration.
+    definitions: milestoneDefinitionRepository,
     // Upgrade advice reads prices out of the sweep cache only. A cold cache
     // costs a price tag, not the advice — never a live auction call, which
     // would put a Hypixel round-trip behind every suggestion.
@@ -182,6 +242,15 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
   const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
+  // Roster enrichment reads the Phase 2 member cache and stored snapshots, never
+  // Hypixel: `/perm info` on a five-stack would otherwise be five live calls.
+  const perms = new PermServiceImpl({
+    repo: permRepository,
+    directory: guildMemberDirectory,
+    progress: memberProgressSource,
+    links: linkDirectory,
+    logger: log,
+  });
   // The bridge asks "am I suspended?" on every relayed line, so its config is
   // cached hard. Publishing and subscribing is what keeps that cache from being
   // the reason a panel toggle appears to do nothing for ten seconds.
@@ -191,9 +260,38 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
 
+  // Screening. Every dependency is optional at the domain boundary, so a
+  // missing SkyKings key degrades to "every applicant is unchecked" — recorded
+  // honestly and held for staff — rather than to an unguarded door.
+  const skykings = new SkykingsClient({ apiKey: config.skykings.apiKey, fetch: fetchHttp, logger: log });
+  const screening = new ScreeningService({
+    repo: screeningRepository,
+    scammer: skykingsScammerLookup(skykings),
+    stats: applicantStatsSource({ hypixel, progression, skykings, logger: log }),
+    history: screeningHistorySource,
+    policy: screeningPolicySource,
+    links: { discordIdForUuid: identityRepository.findMinecraftOwnerDiscordId },
+    logger: log,
+  });
+
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
+  // XP counts activity; it never awards inline. The cooldown gate is the same
+  // Redis one the dispatcher uses, under its own `xp:` key space, so an XP
+  // cooldown can never eat a command cooldown or vice versa.
+  const xp = new XpService({ repo: xpRepository, activity: activitySink, cooldowns: adapters.cooldowns, logger: log });
+  // Read-only over data the other services already maintain, so it needs no
+  // cooldown gate of its own beyond the command cooldown.
+  const leaderboards = new LeaderboardService(leaderboardSource);
   const capabilities: CapabilityChecker = { can: (g, u, c) => identity.hasCapability(g, u, c) };
-  const usage: UsageSink = { capture: (u) => analytics.capture(u) };
+  const usage: UsageSink = {
+    async capture(u) {
+      await analytics.capture(u);
+      // Command XP hangs off the usage sink rather than the dispatcher so both
+      // surfaces are covered by one hook — and only successful, attributed
+      // invocations count, so a failed command cannot be farmed.
+      if (u.success && u.guildId !== null && u.discordId !== null) await xp.recordCommand(u.guildId, u.discordId);
+    },
+  };
 
   // Indirection, not a mutable dep: the handlers hold this object for the life
   // of the process while the session behind it comes and goes with reconnects.
@@ -204,6 +302,41 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
   };
 
+  // Same indirection for the LFG board, which additionally needs the Discord
+  // client — built from the app, so it cannot be a constructor argument. Before
+  // it is set every call is a no-op, which is the right answer: the post is
+  // already saved, and only its card in the channel is missing.
+  let liveBoard: LfgBoard | null = null;
+  const lfgBoard: LfgBoard = {
+    async publish(post) {
+      await liveBoard?.publish(post);
+    },
+    async refresh(post) {
+      await liveBoard?.refresh(post);
+    },
+  };
+
+  // A member's own record, over the same audit tables the admin bot writes —
+  // read-only, one member at a time, and no escalation policy needed beyond the
+  // one the warning ladder already reads, so `/me` can say what the next warning
+  // would cost.
+  const record = memberRecordSource({
+    repo: moderationRepository,
+    escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
+  });
+
+  // The same compiled filter the relay uses, narrowed to a yes/no. Sharing the
+  // instance rather than building a second one is the point: a quote the bot
+  // says and a message a member relays are held to one set of rules, warmed by
+  // one cache, and cannot drift apart on a stale copy.
+  const wordlistFilter = new WordlistFilterImpl();
+  const screen: TextScreen = {
+    async isClean(guildId, text) {
+      const verdict = await wordlistFilter.check(guildId, text);
+      return verdict.action === "ALLOW";
+    },
+  };
+
   const handlerDeps: HandlerDeps = {
     identity,
     progression,
@@ -211,9 +344,16 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     pricing,
     market,
     community,
+    perms,
     roster,
     config: guildConfig,
     analytics,
+    lfgBoard,
+    xp,
+    leaderboards,
+    record,
+    screen,
+    tallies: adapters.tallies,
     logger: log,
   };
 
@@ -247,7 +387,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
 
   const bridge = new BridgeService({
     guard: new BridgeGuardImpl(redis, identity),
-    wordlist: new WordlistFilterImpl(),
+    wordlist: wordlistFilter,
     flood: new FloodControlImpl(redis),
     logger: log,
   });
@@ -269,14 +409,27 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     log,
     dispatcher,
     handlerDeps,
+    milestones: milestoneAnnouncementRepository,
     inGame,
     bridge,
+    screening,
     resolveGuild: guildRepository.resolveInternalId,
+    async creditDiscordMessage(guildId, discordId, text) {
+      await xp.recordMessage(guildId, discordId, "DISCORD_MESSAGE", text);
+    },
+    async creditGuildChat(guildId, ign, text) {
+      const discordId = await identityRepository.findDiscordIdByIgn(ign).catch(() => null);
+      if (discordId === null) return;
+      await xp.recordMessage(guildId, discordId, "GUILD_CHAT_MESSAGE", text);
+    },
     setRosterSource(source) {
       liveRoster = source;
     },
     setStatusSource(source) {
       liveStatus = source;
+    },
+    setLfgBoard(board) {
+      liveBoard = board;
     },
     async shutdown() {
       stopHeartbeat();

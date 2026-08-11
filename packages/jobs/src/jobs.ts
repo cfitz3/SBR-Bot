@@ -69,6 +69,30 @@ export function defineAnalyticsRollupJob(rollup: () => Promise<number>): JobDefi
 }
 
 /**
+ * xp-aggregate: weight a day's activity counters into ledger entries and
+ * rebuild every balance from the ledger.
+ *
+ * Retries once and holds a long lock. Both follow from the job being
+ * idempotent by construction — derived awards carry a dedupe key and the
+ * repository upserts on it, so a retry converges on the same ledger rather than
+ * double-crediting. The lock matters more than the retry does: two overlapping
+ * runs would each rebuild balances from a ledger the other is still writing,
+ * and the loser's totals would win.
+ *
+ * Returns the number of ledger rows written across every guild.
+ */
+export function defineXpAggregateJob(aggregate: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "xp-aggregate",
+    queue: "progression",
+    lockKey: "lock:job:xp-aggregate",
+    lockTtlMs: 10 * 60_000,
+    maxRetries: 1,
+    handler: aggregate,
+  };
+}
+
+/**
  * ah-ended-ingest: fold completed sales into per-item statistics.
  *
  * No retries. The endpoint is a rolling 60-minute window, so a retry two minutes
@@ -172,6 +196,49 @@ export function defineRosterSyncJob(sync: () => Promise<number>): JobDefinition<
     lockTtlMs: 5 * 60_000,
     maxRetries: 2,
     handler: sync,
+  };
+}
+
+/**
+ * guild-scan: refresh the in-game roster cache and the GEXP series.
+ *
+ * A long lock because it is one Hypixel call plus a bounded batch of Mojang
+ * lookups per guild, and a single retry because the cache is a 6-hour rolling
+ * window — a run that fails has hours before anything downstream notices, and
+ * the next run recomputes the same state from scratch.
+ */
+export function defineGuildScanJob(scan: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "guild-scan",
+    queue: "progression",
+    lockKey: "lock:job:guild-scan",
+    lockTtlMs: 10 * 60_000,
+    maxRetries: 1,
+    handler: scan,
+  };
+}
+
+/**
+ * punishment-expiry: clear the `active` flag on mutes and bans whose duration
+ * has run out.
+ *
+ * Enforcement itself needs nothing from this job — a Discord timeout lifts on
+ * Discord's clock and the Redis mirror on its TTL. What expires without help is
+ * the *record*: the audit tables would otherwise keep listing a member as muted
+ * long after the mute stopped, which is what staff read when deciding whether
+ * somebody is already being punished. Runs in the workers process rather than
+ * the admin bot precisely because it needs no gateway.
+ *
+ * Idempotent, so retries are free. Returns the number of rows cleared.
+ */
+export function definePunishmentExpiryJob(sweep: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "punishment-expiry",
+    queue: "safety",
+    lockKey: "lock:job:punishment-expiry",
+    lockTtlMs: 60_000,
+    maxRetries: 3,
+    handler: sweep,
   };
 }
 

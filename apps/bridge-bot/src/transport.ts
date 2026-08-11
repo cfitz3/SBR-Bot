@@ -12,14 +12,25 @@ import {
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type Message,
+  type TextBasedChannel,
 } from "discord.js";
 import { createBot, type Bot } from "mineflayer";
-import { buildBridgeRegistry, communityButtonReplies, parseRsvpState } from "@sbr/commands-bridge";
+import {
+  buildBridgeRegistry,
+  communityButtonReplies,
+  lfgButtons,
+  parseRsvpState,
+  renderLfgEmbed,
+  type LfgBoard,
+} from "@sbr/commands-bridge";
 import { EchoLedger } from "@sbr/bridge";
-import { ComponentRouter, interactionArgs, respond, toSlashCommands } from "@sbr/discord-kit";
-import type { GuildRosterDTO, GuildRosterSource } from "@sbr/shared-types";
+import { ComponentRouter, interactionArgs, respond, toActionRow, toEmbed, toSlashCommands } from "@sbr/discord-kit";
+import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
+import { startMilestoneAnnouncer } from "./milestones.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
+import { acceptCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
+import { chatLine, staffReport } from "@sbr/screening";
 
 export interface GuildChatLine {
   readonly name: string;
@@ -104,15 +115,84 @@ export function registerCommunityButtons(app: BridgeApp, components: ComponentRo
       await interaction.reply({ content: "That button is from an older version and no longer works.", ephemeral: true });
       return;
     }
-    const reply = await communityButtonReplies.run(postId, interaction.user.id, action, app.handlerDeps);
+    // Only `close` needs the guild, and only to decide whether the presser is
+    // staff; a failed resolve leaves the author's own close working.
+    const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
+    const reply = await communityButtonReplies.run(postId, interaction.user.id, action, guildId, app.handlerDeps);
     await interaction.reply({ content: reply.text, ephemeral: true });
   });
+}
+
+/** A text channel this bot can actually post in — i.e. not a partial group DM. */
+type SendableChannel = Extract<TextBasedChannel, { send: unknown; messages: unknown }>;
+
+/**
+ * The LFG board: an `LfgBoard` backed by the guild's `lfg` channel binding.
+ *
+ * Every failure is swallowed and logged. The post in the database is the record
+ * of the run; the message is only a view of it, and losing the view must never
+ * turn a successful join into an error in somebody's face. The one thing worth
+ * being careful about is the binding: a message is only recorded once the send
+ * has actually succeeded, so a post never points at a message that isn't there.
+ */
+export function createLfgBoard(app: BridgeApp, discord: Client): LfgBoard {
+  async function textChannel(channelId: string): Promise<SendableChannel | null> {
+    const channel = await discord.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) return null;
+    return channel as SendableChannel;
+  }
+
+  return {
+    async publish(post: LFGPostDTO): Promise<void> {
+      const channelId = await app.handlerDeps.config.getChannel(post.guildId, "lfg").catch(() => null);
+      // No board configured is a normal state, not a fault: the command still
+      // answered in the channel it was run in.
+      if (!channelId) return;
+      const channel = await textChannel(channelId);
+      if (!channel) {
+        app.log.warn("lfg channel is bound to something I can't post in", { channelId });
+        return;
+      }
+      const message = await channel
+        .send({
+          embeds: [toEmbed(renderLfgEmbed(post))],
+          components: lfgButtons(post).map(toActionRow),
+          // The post carries a title and notes somebody typed; a stray @everyone
+          // in them is not a licence to ping the server.
+          allowedMentions: { users: [...post.members] },
+        })
+        .catch((e: unknown) => {
+          app.log.warn("could not publish lfg post", { postId: post.id, error: String(e) });
+          return null;
+        });
+      if (!message) return;
+      await app.handlerDeps.community.bindLfgMessage(post.id, channel.id, message.id);
+    },
+
+    async refresh(post: LFGPostDTO): Promise<void> {
+      if (post.channelId === null || post.messageId === null) return;
+      const channel = await textChannel(post.channelId);
+      if (!channel) return;
+      const message = await channel.messages.fetch(post.messageId).catch(() => null);
+      // A deleted message is not an error worth reporting: somebody tidied the
+      // channel, and the run carries on without its card.
+      if (!message) return;
+      await message
+        .edit({
+          embeds: [toEmbed(renderLfgEmbed(post))],
+          components: lfgButtons(post).map(toActionRow),
+          allowedMentions: { users: [...post.members] },
+        })
+        .catch((e: unknown) => {
+          app.log.warn("could not refresh lfg post", { postId: post.id, error: String(e) });
+        });
+    },
+  };
 }
 
 export interface BridgeTransportOptions {
   readonly discordToken: string;
   readonly discordGuildId: string | undefined;
-  readonly bridgeChannelId: string | undefined;
   readonly mc: { host: string; port: number; username: string; version: string } | null;
 }
 
@@ -248,6 +328,21 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     return internalGuildId;
   }
 
+  /**
+   * Where the relay lands, resolved per message rather than captured at boot.
+   *
+   * The binding is the only source, and it is changed from the panel or
+   * `/set-channel` while the bot is running — so a channel move takes effect on
+   * the next message rather than the next deploy. The service caches, so this is
+   * not a query per chat line. An unbound guild relays nowhere, which is the
+   * honest answer: there is no env var to fall back to any more, and a bot
+   * quietly posting into a channel nobody configured was the failure the
+   * fallback used to cause.
+   */
+  async function resolveBridgeChannel(guildId: string): Promise<string | null> {
+    return app.handlerDeps.config.getChannel(guildId, "bridge");
+  }
+
   const discord = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   });
@@ -259,6 +354,31 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     onError: (namespace, error) => app.log.error("component handler threw", { namespace, error: String(error) }),
   });
   registerCommunityButtons(app, components);
+  // The board needs the client, and the client is built from the app, so it is
+  // handed over here rather than composed in.
+  app.setLfgBoard(createLfgBoard(app, discord));
+
+  // The announcer needs a live client, so like the board it is built here and
+  // torn down with the transport.
+  const announcer = startMilestoneAnnouncer({
+    milestones: app.milestones,
+    getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "milestones"),
+    async post(channelId, embed, mentionDiscordId) {
+      const channel = await discord.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+      const message = await (channel as SendableChannel)
+        .send({
+          embeds: [toEmbed(embed)],
+          // Only the member being congratulated is pingable. The label comes
+          // from guild configuration, and a role or everyone mention typed into
+          // one must not become a server-wide ping.
+          allowedMentions: mentionDiscordId === null ? { parse: [] } : { users: [mentionDiscordId] },
+        })
+        .catch(() => null);
+      return message !== null;
+    },
+    log: app.log,
+  });
 
   discord.on(Events.InteractionCreate, (i) => {
     // Each branch catches its own failure: an unhandled rejection here would
@@ -426,6 +546,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // reply is a server message block, not chat, so it never parses as chat.
       captureRosterLine(str);
 
+      // Join notices are server messages too, so this must come before the
+      // guild-chat parse rather than inside it.
+      const join = parseJoinEvent(str);
+      if (join) {
+        relay("join-screening", () => handleJoin(bot, join));
+        return;
+      }
+
       const parsed = parseGuildChat(str);
       if (!parsed) return;
 
@@ -442,7 +570,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
 
       relay("game→discord", async () => {
         const guildId = await resolveInternalGuild();
-        if (guildId) await relayGameToDiscord(app, discord, opts.bridgeChannelId, guildId, parsed);
+        if (guildId) await relayGameToDiscord(app, discord, await resolveBridgeChannel(guildId), guildId, parsed);
+      });
+      // Guild chat counts towards XP whether or not it relays anywhere — the
+      // bridge channel binding is a routing decision, not a statement about who
+      // was talking.
+      relay("xp:guild-chat", async () => {
+        const guildId = await resolveInternalGuild();
+        if (guildId) await app.creditGuildChat(guildId, parsed.name, parsed.message);
       });
       // A `!` line is still chat, so it relays above as well as running here —
       // otherwise Discord sees an answer to a question it never saw asked.
@@ -504,10 +639,22 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   discord.on(Events.MessageCreate, (msg: Message) => {
     const bot = session.bot;
     if (msg.author.bot || !bot) return;
-    if (opts.bridgeChannelId && msg.channelId !== opts.bridgeChannelId) return;
+    relay("xp:discord-message", async () => {
+      const guildId = await resolveInternalGuild();
+      // Counted before the bridge-channel check on purpose: a message anywhere
+      // in the server is Discord activity, and only the *relay* cares which
+      // channel it was in.
+      if (guildId) await app.creditDiscordMessage(guildId, msg.author.id, msg.content);
+    });
+
     relay("discord→game", async () => {
       const guildId = await resolveInternalGuild();
       if (!guildId) return;
+      // Channel check moved inside the hop because the binding is per guild and
+      // read asynchronously; an unbound guild relays nothing rather than
+      // relaying every channel it can see.
+      const bridgeChannelId = await resolveBridgeChannel(guildId);
+      if (bridgeChannelId === null || msg.channelId !== bridgeChannelId) return;
       if (!spawned) {
         app.log.warn("dropped discord→game message: not connected in-game yet", { messageId: msg.id });
         return;
@@ -515,6 +662,104 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       await relayDiscordToGame(app, guildId, msg, (line) => sayInGuildChat(bot, line));
     });
   });
+
+  // ── join screening ────────────────────────────────────────────────────────
+  //
+  // Hypixel prints the request notice to everyone with the invite permission,
+  // and prints it again if the applicant retries. `seenRecently` collapses that
+  // to one screening: a duplicate would double the Hypixel and SkyKings calls
+  // and post the staff report twice for one person.
+  const recentJoins = new Map<string, number>();
+  const JOIN_DEDUPE_MS = 60_000;
+
+  function seenRecently(key: string): boolean {
+    const now = Date.now();
+    for (const [k, at] of recentJoins) if (now - at > JOIN_DEDUPE_MS) recentJoins.delete(k);
+    if (recentJoins.has(key)) return true;
+    recentJoins.set(key, now);
+    return false;
+  }
+
+  /**
+   * Screen a join request, or record a completed join.
+   *
+   * Nothing here throws into the chat handler: `relay` catches, and every step
+   * that could fail is allowed to leave the rest working. In particular a
+   * failure to resolve the applicant's uuid ends the screening — we will not
+   * accept somebody we could not identify — while a failure to post the staff
+   * report only costs the report, because the row is already written.
+   */
+  async function handleJoin(bot: Bot, event: GuildJoinEvent): Promise<void> {
+    if (seenRecently(`${event.kind}:${event.ign.toLowerCase()}`)) return;
+
+    const guildId = await resolveInternalGuild();
+    if (!guildId) return;
+
+    const resolved = await app.handlerDeps.players.resolveIgn(event.ign);
+    if (!resolved) {
+      app.log.warn("join event for an unresolvable name — not screened", { ign: event.ign, kind: event.kind });
+      return;
+    }
+
+    // Somebody who is already in is not a candidate for a gate. The screening
+    // is still run and recorded, because "who joined, and what did they look
+    // like at the time" is the metric this feature exists to capture — it is
+    // only the accept/deny half that does not apply.
+    const { screening, id, shouldAccept } = await app.screening.screen({
+      guildId,
+      uuid: resolved.uuid,
+      ign: resolved.ign,
+    });
+
+    if (event.kind === "JOINED") {
+      await app.screening.decide(id, "JOINED", "AUTO");
+      await postStaffReport(guildId, `**${resolved.ign} joined the guild.**
+${staffReport(screening)}`);
+      return;
+    }
+
+    if (shouldAccept) {
+      // A raw command, not `/gc`: this is an instruction to Hypixel, not a line
+      // of guild chat, so it must not go through the echo-suppressing sender.
+      if (spawned) bot.chat(acceptCommand(resolved.ign));
+      await app.screening.decide(id, "ACCEPTED", "AUTO");
+    } else if (screening.verdict === "DENY") {
+      await app.screening.decide(id, "DENIED", "AUTO");
+    }
+
+    // The public line is deliberately vague — see `chatLine`. Said only when we
+    // actually acted, so a request quietly queued for staff does not announce
+    // itself to the guild.
+    if (shouldAccept || screening.verdict === "DENY") {
+      sayInGuildChat(bot, chatLine(screening), true);
+    }
+
+    await postStaffReport(
+      guildId,
+      shouldAccept
+        ? `**Auto-accepted ${resolved.ign}.**
+${staffReport(screening)}`
+        : `**Join request from ${resolved.ign} — ${screening.verdict.toLowerCase()}.**
+${staffReport(screening)}`,
+    );
+  }
+
+  /**
+   * Post to the guild's `staff` channel. Silent when the slot is unbound: a
+   * guild that has not configured one still gets screening, recorded and
+   * decided, it just has nowhere for the write-up to go.
+   */
+  async function postStaffReport(guildId: string, content: string): Promise<void> {
+    const channelId = await app.handlerDeps.config.getChannel(guildId, "staff");
+    if (!channelId) return;
+    const channel = await discord.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) return;
+    // The report quotes a stranger's IGN and a third-party listing reason,
+    // neither of which we control; mentions stay unparsed.
+    await channel.send({ content, allowedMentions: { parse: [] } }).catch((e: unknown) => {
+      app.log.warn("could not post screening report", { error: String(e) });
+    });
+  }
 
   /**
    * Run a relay hop detached from its event handler. Without the catch, one bad
@@ -575,6 +820,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     async destroy() {
       // Stop reconnecting before closing anything, so the `end` this triggers
       // isn't answered with a fresh login.
+      announcer.stop();
       stopping = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
@@ -620,7 +866,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
 async function relayGameToDiscord(
   app: BridgeApp,
   discord: Client,
-  bridgeChannelId: string | undefined,
+  bridgeChannelId: string | null,
   guildId: string,
   parsed: GuildChatLine,
 ): Promise<void> {

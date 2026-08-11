@@ -12,8 +12,13 @@ import {
   analyticsJobRepository,
   eventJobRepository,
   maintenanceJobRepository,
+  moderationRepository,
   snapshotJobRepository,
+  milestoneDefinitionRepository,
   guildRepository,
+  guildScanRepository,
+  xpRepository,
+  activitySink,
 } from "@sbr/db";
 import {
   defineAnalyticsIngestJob,
@@ -23,12 +28,15 @@ import {
   defineConfigInvalidationJob,
   defineEndedAuctionJob,
   defineEventTransitionJob,
+  defineGuildScanJob,
   defineInactivityScanJob,
   defineMilestoneDetectJob,
   defineProfileSnapshotJob,
+  definePunishmentExpiryJob,
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
   defineRosterSyncJob,
+  defineXpAggregateJob,
   detectAndRecord,
   dispatchReminders,
   ingestAnalytics,
@@ -36,13 +44,16 @@ import {
   invalidateConfigCaches,
   refreshBazaar,
   refreshResources,
+  scanGuild,
   scanInactivity,
   snapshotProfiles,
   sweepAuctions,
   syncRoster,
   transitionEvents,
   type JobDefinition,
+  type MilestoneDefinition,
 } from "@sbr/jobs";
+import { XpService } from "@sbr/xp";
 import type { WorkerContext } from "./composition.js";
 
 /** How long a swept BIN reading stays readable before the key expires. */
@@ -56,6 +67,17 @@ const RESOURCE_TTL_SECONDS = 12 * 60 * 60;
 const RESOURCE_NAMES = ["skills", "collections", "items"] as const;
 /** Cap on accounts examined for milestones per run, to bound a cold start. */
 const MILESTONE_BATCH = 200;
+
+/**
+ * `YYYY-MM-DD`, `offsetDays` from today, in UTC. XP's day grain is UTC
+ * everywhere — counters, awards and this job all have to agree on where the
+ * boundary is, and UTC is the only clock all three can read without a guild
+ * timezone.
+ */
+function dayString(offsetDays: number): string {
+  const at = new Date(Date.now() + offsetDays * 24 * 60 * 60_000);
+  return at.toISOString().slice(0, 10);
+}
 
 export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefinition<number>> {
   const { keys, client } = ctx.redis;
@@ -184,6 +206,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
               networth: networth.ok ? networth.value.data.total : null,
               skillAverage: summary.value.data.skillAverage,
               catacombsLevel: summary.value.data.catacombsLevel,
+              slayerXp: summary.value.data.slayerXp,
               senitherWeight: summary.value.data.senitherWeight,
             },
           };
@@ -196,19 +219,106 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
 
   const milestones: JobDefinition<number> = {
     ...defineMilestoneDetectJob(async () => {
-      const accounts = await snapshotJobRepository.listAccountsWithHistory(MILESTONE_BATCH);
+      const xp = new XpService({
+        repo: xpRepository,
+        activity: activitySink,
+        cooldowns: ctx.adapters.cooldowns,
+        logger: ctx.log,
+      });
+      const targets = await snapshotJobRepository.listAccountsForDetection(MILESTONE_BATCH);
+      // One read per guild rather than one per account: a batch is mostly the
+      // same handful of guilds, and the definitions do not change mid-run.
+      const definitionsByGuild = new Map<string, readonly MilestoneDefinition[]>();
+
       let recorded = 0;
-      for (const accountId of accounts) {
-        recorded += await detectAndRecord(accountId, {
+      for (const target of targets) {
+        if (target.guildId !== null && !definitionsByGuild.has(target.guildId)) {
+          definitionsByGuild.set(
+            target.guildId,
+            await milestoneDefinitionRepository.listForDetection(target.guildId),
+          );
+        }
+        const definitions = target.guildId === null ? [] : definitionsByGuild.get(target.guildId) ?? [];
+
+        recorded += await detectAndRecord(target.minecraftAccountId, {
           recentSnapshots: (id) => snapshotJobRepository.recentSnapshots(id),
-          // guildId stays null: a milestone belongs to the account, and the
-          // account can be in more than one guild.
-          record: (candidate) => snapshotJobRepository.record(candidate, null),
+          definitions,
+          record: async (candidate) => {
+            const isNew = await snapshotJobRepository.record(candidate, target.guildId, target.discordId);
+            if (!isNew) return false;
+
+            // Paid at detection, not at announcement: `announce` governs
+            // whether the guild sees it, and a milestone a guild chose to
+            // recognise quietly is still one it meant to reward. The dedupe key
+            // is the milestone's own id, so a replay credits nothing twice.
+            if (candidate.xpReward > 0 && target.guildId !== null && target.discordId !== null) {
+              try {
+                await xp.awardMilestone(
+                  target.guildId,
+                  target.discordId,
+                  candidate.xpReward,
+                  `${target.minecraftAccountId}:${candidate.key}`,
+                  candidate.label,
+                );
+              } catch (error) {
+                // The milestone row is already committed and the announcer will
+                // still post it. Losing the reward is worth reporting; losing
+                // the rest of the batch to it is not.
+                ctx.log.error("milestone reward failed", {
+                  key: candidate.key,
+                  discordId: target.discordId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            return true;
+          },
         });
       }
       return recorded;
     }),
     lockKey: keys.lockJob("milestones"),
+  };
+
+  const xpAggregate: JobDefinition<number> = {
+    ...defineXpAggregateJob(async () => {
+      // Built per run rather than per registry, because every job body here is
+      // a closure that touches the context only when the queue invokes it — the
+      // service is cheap and stateless, and constructing it eagerly would make
+      // this the one definition that needs live adapters just to be listed.
+      // The cooldown gate is passed because the service takes one, not because
+      // aggregation consults it; nothing on this path is rate-limited.
+      const xp = new XpService({
+        repo: xpRepository,
+        activity: activitySink,
+        cooldowns: ctx.adapters.cooldowns,
+        logger: ctx.log,
+      });
+      const guilds = await guildRepository.listActive();
+      // Yesterday as well as today, for the same reason the analytics rollup
+      // recomputes its previous partition: today's counters are still climbing,
+      // and yesterday can still gain a late GEXP row from a guild scan that
+      // straddled midnight. Both passes overwrite by dedupe key, so re-deriving
+      // a day converges rather than double-crediting it.
+      const days = [dayString(-1), dayString(0)];
+      let written = 0;
+      for (const guild of guilds) {
+        for (const day of days) {
+          try {
+            const summary = await xp.aggregate(guild.id, day);
+            written += summary.awardsWritten;
+            ctx.log.debug("xp aggregated", { guildId: guild.id, ...summary });
+          } catch (error) {
+            // One guild's bad day must not cost every other guild its run —
+            // the next pass re-derives this day from counters that are still
+            // sitting in the database untouched.
+            ctx.log.warn("xp aggregate failed", { guildId: guild.id, day, error: String(error) });
+          }
+        }
+      }
+      return written;
+    }),
+    lockKey: keys.lockJob("xp-aggregate"),
   };
 
   // ───────────────────────────── community ─────────────────────────────
@@ -280,6 +390,56 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("roster"),
   };
 
+  const guildScan: JobDefinition<number> = {
+    ...defineGuildScanJob(async () => {
+      const guilds = await guildRepository.listActive();
+      let members = 0;
+      for (const guild of guilds) {
+        const hypixelGuildId = guild.hypixelGuildId;
+        if (!hypixelGuildId) {
+          // Nothing to scan, and nothing worth an audit row every six hours.
+          ctx.log.debug("guild scan skipped: no hypixel guild linked", { guildId: guild.id });
+          continue;
+        }
+        const result = await scanGuild(guild.id, {
+          async fetchRoster() {
+            const remote = await ctx.hypixel.getGuild(hypixelGuildId, "id");
+            return remote.ok ? remote.value.data.members : null;
+          },
+          listCached: (id) => guildScanRepository.listCache(id),
+          async resolveNames(uuids) {
+            const names: Record<string, string> = {};
+            // Sequential on purpose: Mojang rate-limits hard and this batch is
+            // small and never on a user's critical path.
+            for (const uuid of uuids) {
+              const name = await ctx.hypixel.resolveIgn(uuid).catch(() => null);
+              if (name !== null) names[uuid] = name;
+            }
+            return names;
+          },
+          upsertMembers: (id, rows) => guildScanRepository.upsertMembers(id, rows),
+          removeMembers: (id, uuids) => guildScanRepository.removeMembers(id, uuids),
+          writeGexp: (id, rows) => guildScanRepository.writeGexp(id, rows),
+          recordScan: (id, result, error) => guildScanRepository.recordScan(id, result, error),
+        });
+        if (result.skipped) {
+          ctx.log.warn("guild scan incomplete", { guildId: guild.id, reason: result.skipped });
+          continue;
+        }
+        ctx.log.info("guild scanned", {
+          guildId: guild.id,
+          members: result.memberCount,
+          joined: result.joined.length,
+          left: result.left.length,
+          gexpRows: result.gexpRows,
+        });
+        members += result.memberCount;
+      }
+      return members;
+    }),
+    lockKey: keys.lockJob("guild-scan"),
+  };
+
   const inactivity: JobDefinition<number> = {
     ...defineInactivityScanJob(async () => {
       const guilds = await guildRepository.listActive();
@@ -300,6 +460,18 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
       return flagged;
     }),
     lockKey: keys.lockJob("inactivity"),
+  };
+
+  /**
+   * Expired mutes and bans, cleared from the audit tables.
+   *
+   * The clock is read here rather than passed from the schedule so a job that
+   * waited behind a queue backlog sweeps up to when it actually ran, not to
+   * when it was due.
+   */
+  const punishmentExpiry: JobDefinition<number> = {
+    ...definePunishmentExpiryJob(() => moderationRepository.deactivateExpired(null, new Date())),
+    lockKey: keys.lockJob("punishment-expiry"),
   };
 
   // ───────────────────────────── analytics ─────────────────────────────
@@ -398,7 +570,10 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     eventTransition,
     reminders,
     rosterSync,
+    guildScan,
     inactivity,
+    punishmentExpiry,
+    xpAggregate,
     analyticsIngest,
     analyticsRollup,
     configInvalidation,
