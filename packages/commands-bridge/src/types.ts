@@ -194,6 +194,12 @@ export interface CommandSpec {
   readonly inGame?: boolean | "linked";
   readonly handler: CommandHandler;
   readonly autocomplete?: AutocompleteHandler;
+  /**
+   * The command that replaced this one. Set on an alias kept for one release
+   * after a rename so members' muscle memory keeps working; the dispatcher
+   * prefixes the reply with a notice, and the transport can grey it out.
+   */
+  readonly deprecatedBy?: string;
 }
 
 /** Cooldown gate (Redis-backed at wiring time; in-memory for tests/single-instance). */

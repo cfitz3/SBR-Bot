@@ -4,11 +4,12 @@
  * Discord registration payload is derived from the same specs.
  */
 import { categoryFor, flattenEmbed, LEADERBOARD_CATEGORIES, LEADERBOARD_LABELS } from "@sbr/shared-types";
-import type { AdviceDTO, HypixelResult, LinkActor, ProgressMetric } from "@sbr/shared-types";
+import type { AdviceDTO, AuctionsDTO, HypixelResult, LinkActor, ProgressMetric } from "@sbr/shared-types";
 import type {
   AutocompleteHandler,
   CommandContext,
   CommandHandler,
+  CommandOptionSpec,
   CommandSpec,
   HandlerDeps,
 } from "./types.js";
@@ -72,7 +73,7 @@ const help: CommandHandler = async () => ({
   ephemeral: true,
   text: [
     "Account: /link /verify /unlink /me /profile /setprofile",
-    "Stats: /stats /skills /slayer /dungeons /networth /progress /milestones",
+    "Stats: /stats /skills /slayers /dungeons /networth /progress /milestones",
     "Optimize: /missing /nextupgrade /whatnext",
     "Market: /price /bazaar /lowestbin /auctions",
     "Guild: /online",
@@ -577,6 +578,17 @@ const lowestbin: CommandHandler = async (ctx, deps) => {
 };
 
 /**
+ * The one-line form for in-game chat, where there is no embed. Unclaimed coins
+ * lead: it is the only part of an auction summary that needs acting on.
+ */
+function auctionsText(ign: string, data: AuctionsDTO): string {
+  const claim =
+    data.claimValue === null ? "" : ` · ${formatCoins(data.claimValue)} to claim`;
+  const back = data.expired.length > 0 ? ` · ${data.expired.length} expired` : "";
+  return `${ign}: ${data.active.length} active${claim}${back}`;
+}
+
+/**
  * `/auctions` answers two questions with one command: an item's cheapest
  * listings, or a player's own. `item:` wins when both are given, because it is
  * the more specific ask.
@@ -603,7 +615,7 @@ const auctions: CommandHandler = async (ctx, deps) => {
   return {
     ephemeral: false,
     text: result.ok
-      ? `${target.ign}: ${result.value.data.listings.length} active auction(s)`
+      ? auctionsText(target.ign, result.value.data)
       : renderFailure(result.error.state),
     embed: renderAuctionsEmbed(target.ign, result),
   };
@@ -641,6 +653,21 @@ const TARGET_OPTIONS = [
   { name: "player", description: "Minecraft username (defaults to you)", type: "string" as const },
   { name: "profile", description: "Skyblock profile name", type: "string" as const },
 ];
+
+/** Named once: `/slayers` and its deprecated `/slayer` alias must stay identical. */
+const SLAYER_BOSS_OPTION: CommandOptionSpec = {
+  name: "boss",
+  description: "One slayer only — shows the per-tier kill breakdown",
+  type: "string",
+  choices: [
+    { name: "Zombie", value: "zombie" },
+    { name: "Spider", value: "spider" },
+    { name: "Wolf", value: "wolf" },
+    { name: "Enderman", value: "enderman" },
+    { name: "Blaze", value: "blaze" },
+    { name: "Vampire", value: "vampire" },
+  ],
+};
 
 export function buildBridgeRegistry(): Map<string, CommandSpec> {
   const specs: CommandSpec[] = [
@@ -784,28 +811,25 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       handler: skills,
     },
     {
-      name: "slayer",
-      description: "Slayer XP, tiers and boss kills",
-      options: [
-        ...TARGET_OPTIONS,
-        {
-          name: "boss",
-          description: "One slayer only",
-          type: "string",
-          choices: [
-            { name: "Zombie", value: "zombie" },
-            { name: "Spider", value: "spider" },
-            { name: "Wolf", value: "wolf" },
-            { name: "Enderman", value: "enderman" },
-            { name: "Blaze", value: "blaze" },
-            { name: "Vampire", value: "vampire" },
-          ],
-        },
-      ],
+      name: "slayers",
+      description: "Slayer XP, tiers and per-tier boss kills",
+      options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
       capability: "RUN_COMMAND",
       cooldownMs: 15_000,
       inGame: true,
       handler: slayer,
+    },
+    {
+      // Kept for one release after the rename. Same handler, same options — the
+      // dispatcher adds the "now /slayers" notice from `deprecatedBy`.
+      name: "slayer",
+      description: "Deprecated — use /slayers",
+      options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
+      capability: "RUN_COMMAND",
+      cooldownMs: 15_000,
+      inGame: true,
+      handler: slayer,
+      deprecatedBy: "slayers",
     },
     {
       name: "dungeons",

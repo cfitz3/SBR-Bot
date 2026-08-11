@@ -41,6 +41,7 @@ import {
   MarketServiceImpl,
   NetworthServiceImpl,
   PricingServiceImpl,
+  summariseNetworth,
   type NetworthEngine,
 } from "@sbr/pricing";
 import { ProgressionServiceImpl, type ProfileProvider, type SkyblockProfileData } from "@sbr/progression";
@@ -159,9 +160,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
         (museum ?? undefined) as Record<string, unknown> | undefined,
         bankBalance ?? 0,
       );
-      const result = await calc.getNetworth();
-      const total = typeof result.networth === "number" ? result.networth : null;
-      return { total, breakdown: {} };
+      return summariseNetworth(await calc.getNetworth());
     },
   };
   const networth = new NetworthServiceImpl({ engine, logger: log });

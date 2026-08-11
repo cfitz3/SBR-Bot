@@ -146,6 +146,10 @@ export interface AuctionDTO {
   /** Ask price for a BIN, current highest bid otherwise. Null if unreadable. */
   readonly price: number | null;
   readonly endsAt: number | null;
+  /** Highest bid so far; null when nobody has bid. Zero would read as a 0-coin bid. */
+  readonly highestBid: number | null;
+  /** True once the seller has collected it — Hypixel keeps such rows for a while. */
+  readonly claimed: boolean;
 }
 
 export interface AuctionPageDTO {
@@ -175,6 +179,7 @@ export interface RawAuction {
   readonly starting_bid?: number;
   readonly highest_bid_amount?: number;
   readonly end?: number;
+  readonly claimed?: boolean;
 }
 
 export interface EndedAuctionDTO {

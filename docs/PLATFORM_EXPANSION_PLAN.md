@@ -56,7 +56,7 @@ wiring → tests → docs. No phase begins before the previous one typechecks an
 | **5** | **XP & standing** *(shipped)* | XP ledger + balances, source weights/caps config, anti-abuse gates, `xp-aggregate` job, `/standing` + `/me` (see §3 for the `/profile` deviation) | 1, 2 |
 | **6** | **Leaderboards** *(shipped)* | `/leaderboard` (bot + bridge only) across wealth, tenure, SA, cata, slayer, Discord activity, guild chat | 5 |
 | **7** | **Milestones/achievements** *(shipped)* | `MilestoneDefinition` (panel-configured), XP/standing-aware detection job, `/milestones` | 5 |
-| **8** | **Stat command expansion** | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
+| **8** | **Stat command expansion** *(shipped)* | `/skills` caps, `/slayers` (renamed) tiers, `/dungeons` bosses+classes, `/networth` categories+top items, `/auctions` active/expired/unclaimed | — (parallel-safe) |
 | **9** | **Ticketing config** | `TicketPanelConfig`/`TicketTypeConfig`, panel editor, `/ticket` reads config | 1 |
 | **10** | **Moderation & wordlist** | `/audit` fixes, expiry-aware punishments, infractions on `/me`, wordlist panel CRUD, auto-warn escalation | 1, 5 |
 | **11** | **Fun bridge commands + legacy cleanup** | Themed prefix commands; drop mirrored legacy channel columns and `BRIDGE_CHANNEL_ID` fallback | all |

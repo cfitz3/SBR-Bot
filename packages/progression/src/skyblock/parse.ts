@@ -46,11 +46,20 @@ const SKILLS: readonly { readonly name: string; readonly key: string; readonly m
   { name: "Farming", key: "FARMING", max: 60 },
   { name: "Mining", key: "MINING", max: 60 },
   { name: "Combat", key: "COMBAT", max: 60 },
-  { name: "Foraging", key: "FORAGING", max: 50 },
+  // The Foraging update made 50 a soft cap: levels 51-57 are unlocked with
+  // Fig/Mangrove/Helix logs and Agatha's milestones, on the same curve. Capping
+  // at 50 here would report a 57 as a 50, which is worse than reporting a
+  // ceiling most players cannot yet reach.
+  { name: "Foraging", key: "FORAGING", max: 57 },
   { name: "Fishing", key: "FISHING", max: 50 },
   { name: "Enchanting", key: "ENCHANTING", max: 60 },
   { name: "Alchemy", key: "ALCHEMY", max: 50 },
   { name: "Taming", key: "TAMING", max: 60 },
+  // Added with the Foraging update: levelled by hunting mobs and by fusing and
+  // syphoning attribute shards. Counts toward the average like any other
+  // gameplay skill, which does move every member's average down until they
+  // level it — a real change in a real statistic, not a reporting artefact.
+  { name: "Hunting", key: "HUNTING", max: 50 },
   { name: "Carpentry", key: "CARPENTRY", max: 50 },
   { name: "Runecrafting", key: "RUNECRAFTING", max: 25 },
   { name: "Social", key: "SOCIAL", max: 25 },
@@ -171,6 +180,8 @@ export function parseDungeons(member: unknown): DungeonsDTO {
     return {
       catacombsLevel: null,
       catacombsExperience: null,
+      catacombsXpToNext: null,
+      catacombsProgress: null,
       selectedClass: null,
       classAverage: null,
       classes: [],
@@ -188,9 +199,13 @@ export function parseDungeons(member: unknown): DungeonsDTO {
 
   const selected = dig(dungeons, "selected_dungeon_class");
 
+  const cata = cataXp === null ? null : levelFromXp(CATACOMBS_XP, cataXp, 50);
+
   return {
-    catacombsLevel: cataXp === null ? null : levelFromXp(CATACOMBS_XP, cataXp, 50).level,
+    catacombsLevel: cata?.level ?? null,
     catacombsExperience: cataXp,
+    catacombsXpToNext: cata?.xpToNext ?? null,
+    catacombsProgress: cata?.progress ?? null,
     selectedClass: typeof selected === "string" && selected.length > 0 ? selected : null,
     classAverage: classes.reduce((sum, c) => sum + c.level, 0) / classes.length,
     classes,

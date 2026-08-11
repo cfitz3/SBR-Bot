@@ -10,6 +10,8 @@ export {
   type NetworthServiceDeps,
   type NetworthRequest,
 } from "./networth.js";
+export { summariseNetworth } from "./skyhelper.js";
+export { splitAuctions } from "./auctions.js";
 export { MarketServiceImpl, type MarketServiceDeps } from "./market.js";
 export { ItemCatalog, type ItemCatalogDeps } from "./catalog.js";
 export type {
@@ -18,6 +20,7 @@ export type {
   NetworthEngine,
   NetworthEngineInput,
   NetworthComputation,
+  NetworthItem,
   BazaarProvider,
   BazaarSnapshot,
   BazaarProductQuote,

@@ -39,10 +39,11 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/stats` | Broad stat overview for a player | Public | `player?`, `profile?` | Embed: skills avg, slayers, dungeons, networth, weight | Player/profile not found; API disabled | Cache→Live |
-| `/skills` | Detailed skill levels + XP to next | Public | `player?`, `profile?`, `skill?` | Embed/table of all skills or one skill breakdown | Player not found | Cache→Live |
-| `/slayer` | Slayer XP, tiers, boss kills | Public | `player?`, `profile?`, `boss?` | Embed per-slayer breakdown | Player not found | Cache→Live |
-| `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level, classes, S+ counts | Player not found; no dungeon data | Cache→Live |
-| `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
+| `/skills` | Detailed skill levels + XP to next | Public | `player?`, `profile?`, `skill?` | Embed/table of all skills or one skill breakdown, with each skill's cap and a count of those at it | Player not found | Cache→Live |
+| `/slayers` | Slayer XP, tiers, per-tier boss kills | Public | `player?`, `profile?`, `boss?` | Embed per-slayer breakdown; naming one boss adds its per-tier kill counts | Player not found | Cache→Live |
+| `/slayer` | **Deprecated** alias of `/slayers`, kept for one release | Public | as `/slayers` | Same answer, prefixed with the new name | — | Cache→Live |
+| `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
+| `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
 | `/progress` | Progression over time vs. snapshots | Linked | `metric?`, `range?` | Embed/chart-link: delta since last snapshot | No snapshots yet for account | DB (`ProfileSnapshot`) + Cache (latest) |
 | `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned (newest first, with XP paid) + closest unearned w/ progress bars, `n/total` headline, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet" | DB (`Milestone`, `MilestoneDefinition`, `ProfileSnapshot`) |
 
@@ -55,7 +56,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/price` | Best estimated value of an item | Public | `item` (autocomplete), `qty?` | Embed: bazaar/AH/BIN value summary | Item unknown; no market data | Cache (`pricing`) → Live refresh |
 | `/bazaar` | Bazaar buy/sell/order data for an item | Public | `item` (autocomplete) | Embed: insta-buy/sell, order book summary | Item not on bazaar | Cache→Live (bazaar endpoint) |
 | `/lowestbin` | Lowest BIN for an item | Public | `item` (autocomplete) | Embed: lowest BIN + link | Item has no active BIN | Cache→Live (AH) |
-| `/auctions` | Active auctions for a player or item | Public | `player?` **or** `item?` | List of active auctions (price, ends) | Neither/both args; none active | Cache→Live (AH) |
+| `/auctions` | A player's auction standing, or an item's cheapest listings | Public | `player?` **or** `item?` | For a player: sold-but-unclaimed (with the coins waiting), expired-unsold, and active. For an item: cheapest listings | Neither/both args; none active | Cache→Live (AH) |
 
 ---
 
@@ -268,7 +269,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 **Design constraints**
 - **Prefix-based**, not slash: e.g. `!stats <ign>`, `!nw`, `!price <item>`, `!lfg <activity>`, `!help`. Prefix and enabled set come from `GuildConfig`.
 - **Output is truncated/paginated** to fit Minecraft chat (single line, ~256 char cap); rich embeds collapse to a compact one-liner (e.g. `Player — Cata 42 | SA 45.3 | NW 8.2b | SnrW 12,340`).
-- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayer, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
+- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayers, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
 - **Arguments are positional**, in the spec's declared order, with the last one
   absorbing the rest of the line so multi-word values work. There is no
   `key:value` syntax, so an option only Discord should see is declared
@@ -280,7 +281,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 
 | In-game command | Maps to | Perms | Data |
 |-----------------|---------|-------|------|
-| `!stats`, `!skills`, `!slayer`, `!dungeons`, `!nw` | `/stats` … `/networth` | `RELAY_MESSAGE`+`RUN_COMMAND` | Cache→Live |
+| `!stats`, `!skills`, `!sl`, `!dungeons`, `!nw` | `/stats` … `/networth` | `RELAY_MESSAGE`+`RUN_COMMAND` | Cache→Live |
 | `!price`, `!bz`, `!lbin` | `/price`,`/bazaar`,`/lowestbin` | Run cmd | Cache→Live |
 | `!weight` | `progression` (Senither/farming) | Run cmd | Cache→Live |
 | `!lfg`, `!runs` | `/lfg`,`/runs` | Run cmd (linked) | DB + Cache |

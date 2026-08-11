@@ -57,7 +57,7 @@ const networthStub = (dto: NetworthDTO): NetworthService => ({
 test("getProfileSummary maps fields and preserves freshness", async () => {
   const svc = new ProgressionServiceImpl({
     profiles: providerOk(profileData(), "STALE"),
-    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {} }),
+    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {}, topItems: {} }),
     logger: silent,
   });
   const r = await svc.getProfileSummary("uuid-aria");
@@ -75,7 +75,7 @@ test("getProfileSummary maps fields and preserves freshness", async () => {
 test("getProfileSummary propagates MISSING_PROFILE", async () => {
   const svc = new ProgressionServiceImpl({
     profiles: providerFail("MISSING_PROFILE"),
-    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {} }),
+    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {}, topItems: {} }),
     logger: silent,
   });
   const r = await svc.getProfileSummary("uuid-ghost");
@@ -86,7 +86,7 @@ test("getProfileSummary propagates MISSING_PROFILE", async () => {
 test("getNetworth composes valuation and preserves freshness", async () => {
   const svc = new ProgressionServiceImpl({
     profiles: providerOk(profileData(), "LIVE"),
-    networth: networthStub({ total: 8_200_000_000, exact: true, missing: [], breakdown: { gear: 8.2e9 } }),
+    networth: networthStub({ total: 8_200_000_000, exact: true, missing: [], breakdown: { gear: 8.2e9 }, topItems: {} }),
     logger: silent,
   });
   const r = await svc.getNetworth("uuid-aria");
@@ -101,7 +101,7 @@ test("getNetworth composes valuation and preserves freshness", async () => {
 test("getNetworth propagates RATE_LIMITED from the profile read", async () => {
   const svc = new ProgressionServiceImpl({
     profiles: providerFail("RATE_LIMITED"),
-    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {} }),
+    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {}, topItems: {} }),
     logger: silent,
   });
   const r = await svc.getNetworth("uuid-aria");

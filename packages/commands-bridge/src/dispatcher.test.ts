@@ -15,6 +15,7 @@ import {
   type AccessoryReportDTO,
   type AdviceDTO,
   type AnalyticsService,
+  type AuctionListingDTO,
   type AuctionsDTO,
   type BazaarQuoteDTO,
   type CommunityService,
@@ -144,17 +145,29 @@ function progression(over: Partial<ProgressionService> = {}): ProgressionService
       return live<DungeonsDTO>({
         catacombsLevel: 36,
         catacombsExperience: 4_000_000,
+        catacombsXpToNext: 500_000,
+        catacombsProgress: 0.5,
         selectedClass: "berserk",
         classAverage: 30,
         classes: [{ name: "berserk", level: 35, experience: 3_000_000 }],
-        floors: [{ floor: "7", completions: 210, fastestSPlusMs: 220_000 }],
-        masterFloors: [],
+        floors: [
+          { floor: "6", completions: 40, fastestSPlusMs: null },
+          { floor: "7", completions: 210, fastestSPlusMs: 220_000 },
+          { floor: "8", completions: 0, fastestSPlusMs: null },
+        ],
+        masterFloors: [{ floor: "5", completions: 12, fastestSPlusMs: null }],
         played: true,
       });
     },
     async getNetworth() {
       const env: DataEnvelope<NetworthDTO> = {
-        data: { total: 8_200_000_000, exact: false, missing: ["inventory"], breakdown: {} },
+        data: {
+          total: 8_200_000_000,
+          exact: false,
+          missing: ["inventory"],
+          breakdown: { bank: 4_100_000_000, personal_vault: 2_050_000_000 },
+          topItems: { personal_vault: [{ name: "Hyperion", price: 1_000_000_000 }] },
+        },
         freshness: "LIVE",
         source: "LIVE",
         fetchedAt: "t",
@@ -280,14 +293,28 @@ const market = (over: Partial<MarketService> = {}): MarketService => ({
     return live<LowestBinDTO>({ itemId, displayName: "Hyperion", price: 900_000_000, listings: 4 });
   },
   async getPlayerAuctions() {
+    const running: AuctionListingDTO = {
+      auctionId: "a1", itemName: "Hyperion", price: 950_000_000, bin: true,
+      endsAt: null, highestBid: null, claimed: false,
+    };
+    const sold: AuctionListingDTO = {
+      auctionId: "a2", itemName: "Terminator", price: 500_000_000, bin: false,
+      endsAt: "2026-01-01T00:00:00Z", highestBid: 500_000_000, claimed: false,
+    };
+    const unsold: AuctionListingDTO = {
+      auctionId: "a3", itemName: "Aspect of the End", price: 1_000, bin: true,
+      endsAt: "2026-01-01T00:00:00Z", highestBid: null, claimed: false,
+    };
     return live<AuctionsDTO>({
-      listings: [
-        { auctionId: "a1", itemName: "Hyperion", price: 950_000_000, bin: true, endsAt: null },
-      ],
+      listings: [running, sold, unsold],
+      active: [running],
+      unclaimed: [sold],
+      expired: [unsold],
+      claimValue: 500_000_000,
     });
   },
   async getItemAuctions() {
-    return live<AuctionsDTO>({ listings: [] });
+    return live<AuctionsDTO>({ listings: [], active: [], unclaimed: [], expired: [], claimValue: null });
   },
   async searchItems(query) {
     return [{ itemId: "HYPERION", displayName: "Hyperion" }].filter((m) =>
@@ -503,7 +530,7 @@ test("networth marks stale data as cached", async () => {
   const stale = progression({
     async getNetworth() {
       return ok({
-        data: { total: 1_000_000_000, exact: true, missing: [], breakdown: {} },
+        data: { total: 1_000_000_000, exact: true, missing: [], breakdown: {}, topItems: {} },
         freshness: "STALE",
         source: "CACHE",
         fetchedAt: "t",
@@ -541,11 +568,25 @@ test("networth carries an embed with the staleness footer", async () => {
   assert.match(r.embed?.footer ?? "", /as of/);
 });
 
+test("networth breaks the total down by category, largest share first", async () => {
+  const fields = (await makeDispatcher().dispatch("networth", ctx())).embed?.fields ?? [];
+  assert.deepEqual(
+    fields.map((f) => f.name),
+    ["Bank — 50%", "Personal Vault — 25%"],
+  );
+});
+
+test("a category names the items carrying its value", async () => {
+  const fields = (await makeDispatcher().dispatch("networth", ctx())).embed?.fields ?? [];
+  const vault = fields.find((f) => f.name.startsWith("Personal Vault"));
+  assert.equal(vault?.value, "2.05b\n• Hyperion **1.00b**");
+});
+
 test("a cached-during-outage reading says so in the footer", async () => {
   const stale = progression({
     async getNetworth() {
       return ok({
-        data: { total: 1_000_000_000, exact: true, missing: [], breakdown: {} },
+        data: { total: 1_000_000_000, exact: true, missing: [], breakdown: {}, topItems: {} },
         freshness: "STALE",
         source: "CACHE",
         fetchedAt: new Date(Date.now() - 90 * 60_000).toISOString(),
@@ -638,10 +679,28 @@ test("a skills-API-off profile says so instead of showing an empty table", async
   assert.match(r.embed?.description ?? "", /skill API is turned off/);
 });
 
-test("slayer shows tier out of max", async () => {
-  const r = await makeDispatcher().dispatch("slayer", ctx());
+test("slayers shows tier out of max", async () => {
+  const r = await makeDispatcher().dispatch("slayers", ctx());
   assert.match(r.embed?.fields?.[0]?.value ?? "", /Tier 8\/9/);
   assert.equal(r.embed?.fields?.[0]?.name, "Zombie");
+});
+
+test("naming one boss gets the per-tier kill breakdown, zeroes included", async () => {
+  const r = await makeDispatcher().dispatch(
+    "slayers",
+    ctx({ args: recordArgs({ boss: "zombie" }) }),
+  );
+  const value = r.embed?.fields?.[0]?.value ?? "";
+  assert.match(value, /T5 120/);
+  // Tiers below the highest are listed at zero rather than skipped.
+  assert.match(value, /T1 0 · T2 0 · T3 0 · T4 0 · T5 120/);
+});
+
+test("/slayer still answers, prefixed with its new name", async () => {
+  const r = await makeDispatcher().dispatch("slayer", ctx());
+  assert.match(r.text, /`\/slayer` is now `\/slayers`/);
+  // Still a real answer, not just a redirect.
+  assert.match(r.embed?.fields?.[0]?.value ?? "", /Tier 8\/9/);
 });
 
 test("dungeons reports the fastest S+ as a duration", async () => {
@@ -650,11 +709,28 @@ test("dungeons reports the fastest S+ as a duration", async () => {
   assert.equal(best?.value, "3m 40s");
 });
 
+test("dungeons lists completions per floor, master mode apart from normal", async () => {
+  const fields = (await makeDispatcher().dispatch("dungeons", ctx())).embed?.fields ?? [];
+  const normal = fields.find((f) => f.name.startsWith("Floor completions"));
+  // Totalled in the heading, and F8 is absent because it has never been cleared.
+  assert.equal(normal?.name, "Floor completions (250)");
+  assert.equal(normal?.value, "F6 **40** · F7 **210**");
+  assert.equal(fields.find((f) => f.name.startsWith("Master mode"))?.value, "M5 **12**");
+});
+
+test("dungeons shows how far the next catacombs level is", async () => {
+  const fields = (await makeDispatcher().dispatch("dungeons", ctx())).embed?.fields ?? [];
+  const progress = fields.find((f) => f.name === "Progress");
+  assert.match(progress?.value ?? "", /50%/);
+  assert.match(progress?.value ?? "", /500,000 XP to next level/);
+});
+
 test("dungeons distinguishes never-played from unreadable", async () => {
   const none = progression({
     async getDungeons() {
       return live<DungeonsDTO>({
-        catacombsLevel: null, catacombsExperience: null, selectedClass: null,
+        catacombsLevel: null, catacombsExperience: null,
+        catacombsXpToNext: null, catacombsProgress: null, selectedClass: null,
         classAverage: null, classes: [], floors: [], masterFloors: [], played: false,
       });
     },
@@ -868,8 +944,19 @@ test("auctions with an item reads the sweep cache", async () => {
 test("auctions without an item falls back to the caller's own listings", async () => {
   const r = await makeDispatcher().dispatch("auctions", ctx());
   assert.match(r.embed?.title ?? "", /Auctions — Aria/);
-  assert.equal((r.embed?.fields ?? [])[0]?.name, "Hyperion");
-  assert.match((r.embed?.fields ?? [])[0]?.value ?? "", /950\.00m \(BIN\)/);
+  const active = (r.embed?.fields ?? []).find((f) => f.name.startsWith("Active"));
+  assert.match(active?.value ?? "", /Hyperion — 950\.00m \(BIN\)/);
+});
+
+test("auctions separates what sold from what came back, and totals the claim", async () => {
+  const r = await makeDispatcher().dispatch("auctions", ctx());
+  const fields = r.embed?.fields ?? [];
+  // Coins to collect lead, because that is what the seller acts on first.
+  assert.deepEqual(
+    fields.map((f) => f.name),
+    ["Sold, unclaimed (1)", "Expired, unsold (1)", "Active (1)"],
+  );
+  assert.match(r.embed?.description ?? "", /500\.00m\*\* waiting to be claimed/);
 });
 
 test("item autocomplete offers display names against catalog ids", async () => {

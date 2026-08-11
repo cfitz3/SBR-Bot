@@ -145,6 +145,10 @@ export interface DungeonFloorDTO {
 export interface DungeonsDTO {
   readonly catacombsLevel: number | null;
   readonly catacombsExperience: number | null;
+  /** XP still needed for the next Catacombs level; null at cap or unknown. */
+  readonly catacombsXpToNext: number | null;
+  /** 0–1 through the current Catacombs level. Null when the level is unknown. */
+  readonly catacombsProgress: number | null;
   readonly selectedClass: string | null;
   readonly classAverage: number | null;
   readonly classes: readonly DungeonClassDTO[];
@@ -159,11 +163,22 @@ export interface DungeonsDTO {
  * readable; otherwise `total` is a lower-bound estimate and `missing` lists the
  * hidden sections (partial networth is never presented as exact).
  */
+export interface NetworthItemDTO {
+  readonly name: string;
+  readonly price: number;
+}
+
 export interface NetworthDTO {
   readonly total: number | null;
   readonly exact: boolean;
   readonly missing: readonly string[];
   readonly breakdown: Readonly<Record<string, number>>;
+  /**
+   * The few most valuable items in each category, keyed as `breakdown` is.
+   * Empty when the valuation engine reports totals only — an absent category
+   * here never means the category is empty.
+   */
+  readonly topItems: Readonly<Record<string, readonly NetworthItemDTO[]>>;
 }
 
 /** One accessory the member holds, with the magical power it actually contributes. */
@@ -271,10 +286,33 @@ export interface AuctionListingDTO {
   readonly bin: boolean;
   /** ISO timestamp, or null when the end time is unreadable. */
   readonly endsAt: string | null;
+  /** Highest bid so far; null when nobody has bid. */
+  readonly highestBid: number | null;
+  /** True once the seller has collected the coins or the item back. */
+  readonly claimed: boolean;
 }
 
+/**
+ * A player's auction house standing.
+ *
+ * `listings` is every auction, unsplit — `/auctions item:` uses it, and it is
+ * what the DTO has always carried. The three buckets below classify a *player's*
+ * auctions, which is a different question: what is still running, what sold and
+ * is waiting to be collected, and what came back unsold.
+ */
 export interface AuctionsDTO {
   readonly listings: readonly AuctionListingDTO[];
+  /** Still running. */
+  readonly active: readonly AuctionListingDTO[];
+  /** Ended with a winning bid, coins not yet collected. */
+  readonly unclaimed: readonly AuctionListingDTO[];
+  /** Ended with no bids — the item itself is waiting to be taken back. */
+  readonly expired: readonly AuctionListingDTO[];
+  /**
+   * Coins sitting in `unclaimed`. Null when nothing sold, which is different
+   * from a sale worth nothing.
+   */
+  readonly claimValue: number | null;
 }
 
 export interface InfractionDTO {

@@ -8,6 +8,7 @@ import type {
   AccessorySuggestionDTO,
   AchievementsDTO,
   AdviceDTO,
+  AuctionListingDTO,
   AuctionsDTO,
   BazaarQuoteDTO,
   DungeonsDTO,
@@ -94,6 +95,19 @@ export function renderNetworth(result: HypixelResult<NetworthDTO>): string {
   return `Networth: ${formatCoins(data.total)}${qualifier}${stale}`;
 }
 
+/** Categories shown. Six fits two clean rows of three in a Discord embed. */
+const NETWORTH_CATEGORIES = 6;
+
+/** `personal_vault` / `personalBank` → "Personal Vault" / "Personal Bank". */
+function categoryLabel(key: string): string {
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[_\s]+/)
+    .filter((word) => word.length > 0)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
 /**
  * The embed form of a networth reading. The footer carries the documented
  * "as of Xm ago" note, which is the only place a viewer can tell a live figure
@@ -112,8 +126,21 @@ export function renderNetworthEmbed(ign: string, result: HypixelResult<NetworthD
   const fields = Object.entries(data.breakdown)
     .filter((entry): entry is [string, number] => typeof entry[1] === "number")
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([name, value]) => ({ name, value: formatCoins(value), inline: true }));
+    .slice(0, NETWORTH_CATEGORIES)
+    .map(([name, value]) => {
+      // The share is what makes a breakdown actionable: "3.1b" means little
+      // without knowing it is most of the account.
+      const share =
+        data.total !== null && data.total > 0 ? ` — ${Math.round((value / data.total) * 100)}%` : "";
+      const top = (data.topItems[name] ?? [])
+        .map((item) => `• ${item.name} **${formatCoins(item.price)}**`)
+        .join("\n");
+      return {
+        name: `${categoryLabel(name)}${share}`,
+        value: top.length > 0 ? `${formatCoins(value)}\n${top}` : formatCoins(value),
+        inline: true,
+      };
+    });
 
   return {
     title: `${ign} — networth`,
@@ -213,22 +240,55 @@ export function renderSkillsEmbed(
     if (shown.length === 0) {
       return { description: `No skill called "${only ?? ""}".`, color: "NEUTRAL" };
     }
+    // Counted against the readable skills only: "3 maxed" out of a set half of
+    // which is hidden would overstate what we can actually see.
+    const readable = s.skills.filter((k) => k.level !== null);
+    const capped = readable.filter((k) => k.level !== null && k.level >= k.maxLevel);
     return {
-      description: `Skill average **${formatLevel(s.average)}**`,
+      description:
+        `Skill average **${formatLevel(s.average)}**` +
+        (readable.length > 0 ? ` · **${capped.length}/${readable.length}** at cap` : ""),
       fields: shown.map((k) => ({
-        name: k.name,
+        // The cap belongs next to the level: a 50 means something different in
+        // Alchemy (capped) than in Combat (ten levels to go), and the caps now
+        // differ per skill and move between updates.
+        name: k.level !== null && k.level >= k.maxLevel ? `${k.name} ✦` : k.name,
         // A hidden skill says so rather than showing a plausible-looking 0.
         value:
           k.level === null
             ? "hidden"
             : k.xpToNext === null
-              ? `${k.level} (max)`
-              : `${k.level} · ${formatNumber(Math.round(k.xpToNext))} xp to go`,
+              ? `${k.level}/${k.maxLevel} (max)`
+              : `${k.level}/${k.maxLevel} · ${formatNumber(Math.round(k.xpToNext))} xp to go`,
         inline: true,
       })),
       color: "SUCCESS",
     };
   });
+}
+
+function totalKills(kills: Readonly<Record<string, number>>): number {
+  return Object.values(kills).reduce((sum, n) => sum + n, 0);
+}
+
+/**
+ * Per-tier kill counts, lowest tier first.
+ *
+ * Tiers with no kills are listed as 0 rather than omitted: a gap in the list
+ * would read as a tier that does not exist, and "you have never killed a T5" is
+ * exactly the thing someone reads a slayer breakdown to find out.
+ */
+function tierBreakdown(kills: Readonly<Record<string, number>>): string {
+  const tiers = Object.keys(kills)
+    .map(Number)
+    .filter((n) => Number.isFinite(n));
+  const highest = tiers.length > 0 ? Math.max(...tiers) : 0;
+  if (highest === 0) return "No recorded kills.";
+  const parts: string[] = [];
+  for (let tier = 1; tier <= highest; tier += 1) {
+    parts.push(`T${tier} ${formatNumber(kills[String(tier)] ?? 0)}`);
+  }
+  return parts.join(" · ");
 }
 
 export function renderSlayersEmbed(
@@ -247,12 +307,18 @@ export function renderSlayersEmbed(
         color: "NEUTRAL",
       };
     }
+    // One boss gets the full per-tier breakdown; the overview stays compact,
+    // because five bosses x five tiers does not fit in an embed anyone reads.
+    const detailed = shown.length === 1;
     return {
       description: `Total slayer xp **${formatNumber(s.totalExperience)}**`,
       fields: shown.map((b) => ({
         name: `${b.boss.slice(0, 1).toUpperCase()}${b.boss.slice(1)}`,
-        value: `Tier ${b.tier}/${b.maxTier} · ${formatNumber(b.experience)} xp`,
-        inline: true,
+        value:
+          `Tier ${b.tier}/${b.maxTier} · ${formatNumber(b.experience)} xp` +
+          (detailed ? `
+${tierBreakdown(b.kills)}` : ` · ${formatNumber(totalKills(b.kills))} kills`),
+        inline: !detailed,
       })),
       color: "SUCCESS",
     };
@@ -270,6 +336,33 @@ export function renderDungeonsEmbed(ign: string, result: HypixelResult<DungeonsD
       { name: "Selected", value: d.selectedClass ?? "—", inline: true },
       ...d.classes.map((c) => ({ name: c.name, value: `${c.level}`, inline: true })),
     ];
+
+    // Where the next Catacombs level actually is. Shown only below the cap,
+    // where "0 XP to go" would be a misleading way to say "finished".
+    if (d.catacombsProgress !== null && d.catacombsXpToNext !== null) {
+      fields.push({
+        name: "Progress",
+        value: `${progressBar(d.catacombsProgress)}\n${formatNumber(d.catacombsXpToNext)} XP to next level`,
+        inline: false,
+      });
+    }
+
+    // Completions per floor — the answer to "what do they actually run", which
+    // a single headline level can't give.
+    for (const [label, prefix, list] of [
+      ["Floor completions", "F", d.floors],
+      ["Master mode", "M", d.masterFloors],
+    ] as const) {
+      const cleared = list.filter((f) => f.completions > 0);
+      if (cleared.length === 0) continue;
+      const total = cleared.reduce((sum, f) => sum + f.completions, 0);
+      fields.push({
+        name: `${label} (${formatNumber(total)})`,
+        value: cleared.map((f) => `${prefix}${f.floor} **${formatNumber(f.completions)}**`).join(" · "),
+        inline: false,
+      });
+    }
+
     // The highest floor with a recorded S+ is the one that says the most about
     // where a player actually runs.
     const best = [...d.floors, ...d.masterFloors]
@@ -785,6 +878,9 @@ export function renderLowestBinEmbed(result: HypixelResult<LowestBinDTO>): Embed
  * `/auctions` — a player's own listings, or the cheapest listings for an item.
  * The two share a renderer because they answer the same shape of question.
  */
+/** Rows per bucket. An embed field caps at 1024 characters; ten lines fits. */
+const AUCTIONS_PER_BUCKET = 10;
+
 export function renderAuctionsEmbed(
   subject: string,
   result: HypixelResult<AuctionsDTO>,
@@ -794,18 +890,51 @@ export function renderAuctionsEmbed(
     if (data.listings.length === 0) {
       return { description: `No active auctions for ${subject}.`, color: "NEUTRAL" };
     }
+
+    const line = (l: AuctionListingDTO): string => {
+      const ends =
+        l.endsAt === null
+          ? ""
+          : ` • ends in ${formatDuration(Math.max(0, new Date(l.endsAt).getTime() - now))}`;
+      return `${l.itemName ?? "Unknown item"} — ${coinsOrUnknown(l.price)}${l.bin ? " (BIN)" : " (auction)"}${ends}`;
+    };
+
+    const fields = [];
+    // Ordered by what the seller should do next: collect the coins, take the
+    // unsold items back, then watch what is still running.
+    if (data.unclaimed.length > 0) {
+      fields.push({
+        name: `Sold, unclaimed (${data.unclaimed.length})`,
+        value: data.unclaimed
+          .slice(0, AUCTIONS_PER_BUCKET)
+          .map((l) => `${l.itemName ?? "Unknown item"} — **${coinsOrUnknown(l.highestBid)}**`)
+          .join("\n"),
+        inline: false,
+      });
+    }
+    if (data.expired.length > 0) {
+      fields.push({
+        name: `Expired, unsold (${data.expired.length})`,
+        value: data.expired
+          .slice(0, AUCTIONS_PER_BUCKET)
+          .map((l) => l.itemName ?? "Unknown item")
+          .join("\n"),
+        inline: false,
+      });
+    }
+    if (data.active.length > 0) {
+      fields.push({
+        name: `Active (${data.active.length})`,
+        value: data.active.slice(0, AUCTIONS_PER_BUCKET).map(line).join("\n"),
+        inline: false,
+      });
+    }
+
     return {
-      fields: data.listings.slice(0, 10).map((l) => {
-        const ends =
-          l.endsAt === null
-            ? ""
-            : ` • ends in ${formatDuration(Math.max(0, new Date(l.endsAt).getTime() - now))}`;
-        return {
-          name: l.itemName ?? "Unknown item",
-          value: `${coinsOrUnknown(l.price)}${l.bin ? " (BIN)" : " (auction)"}${ends}`,
-          inline: false,
-        };
-      }),
+      ...(data.claimValue !== null
+        ? { description: `**${formatCoins(data.claimValue)}** waiting to be claimed.` }
+        : {}),
+      fields,
       color: "SUCCESS",
     };
   });

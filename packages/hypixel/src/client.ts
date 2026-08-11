@@ -655,6 +655,10 @@ function normalizeAuction(raw: RawAuction): AuctionDTO {
     // falls back to the opening bid while nobody has bid yet.
     price: bin ? num(raw.starting_bid) : num(raw.highest_bid_amount) || num(raw.starting_bid),
     endsAt: num(raw.end),
+    // A BIN that sold reports its ask as the winning bid, so this is the amount
+    // waiting to be collected either way.
+    highestBid: (num(raw.highest_bid_amount) ?? 0) > 0 ? num(raw.highest_bid_amount) : null,
+    claimed: raw.claimed === true,
   };
 }
 

@@ -26,7 +26,7 @@ The two bots gate differently, and the difference matters for the redefinition.
 handler → usage capture. Never throws.
 
 - **Capability** is checked only when the spec declares one. Exactly ten do
-  (`RUN_COMMAND`): `stats`, `skills`, `slayer`, `dungeons`, `networth`,
+  (`RUN_COMMAND`): `stats`, `skills`, `slayers`, `dungeons`, `networth`,
   `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 23 are
   ungated — any member can run them. Denial reads *"You don't have permission to
   use that command."*
@@ -83,10 +83,11 @@ erroring.
 | Command | Options | CD | Cap | Purpose | Output |
 |---|---|---|---|---|---|
 | `/stats` | `player?` `profile?` | 15s | ✔ | Broad overview — one profile fetch backs four parallel reads | Stats embed; text `{ign}: SA 45.3, cata 42, nw 8.2b` |
-| `/skills` | `player?` `profile?` `skill?` | 15s | ✔ | Skill levels and XP to next, or one skill | Skills embed; text `{ign}: skill average N` |
-| `/slayer` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and boss kills | Slayers embed; text `{ign}: N slayer xp` |
-| `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level, classes, floor bests | Dungeons embed; text `{ign}: catacombs N` |
-| `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate with category breakdown | Networth embed; text `{ign}: {total}` |
+| `/skills` | `player?` `profile?` `skill?` | 15s | ✔ | Skill levels and XP to next, or one skill. Twelve skills including Hunting; capped skills are marked `✦` and counted in the header | Skills embed; text `{ign}: skill average N` |
+| `/slayers` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and per-tier boss kills. Naming one boss switches to its full tier breakdown | Slayers embed; text `{ign}: N slayer xp` |
+| `/slayer` | as `/slayers` | 15s | ✔ | **Deprecated alias.** Answers identically, with `` `/slayer` is now `/slayers`. `` in front. Remove after one release | as `/slayers` |
+| `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level and progress to the next, class levels and average, completions per floor (`F…` normal, `M…` master), fastest S+ | Dungeons embed; text `{ign}: catacombs N` |
+| `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate; six largest categories with their share of the total and their three most valuable items | Networth embed; text `{ign}: {total}` |
 | `/milestones` | `player?` | 15s | — | Guild achievements + standing: earned (top 5) and closest unearned (top 5) w/ progress | Achievements embed; text `{ign}: N/M achievements · next: {label}` |
 | `/progress` | `metric?` (4 choices) `range?` (1–365, default 30) | 15s | — | The **caller's** progression over time; requires a link | Progress embed; text `{ign}: networth over 30d — +N` or `not enough history` |
 
@@ -113,7 +114,7 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 | `/price` | `item*` (autocomplete) | 5s | Blended market value | Price embed; text `{id}: {coins}` |
 | `/bazaar` | `item*` | 5s | Bazaar order book | Bazaar embed; text `{id}: buy X / sell Y`. An item not sold on the bazaar says so and points at `/lowestbin` rather than reporting an outage |
 | `/lowestbin` | `item*` | 5s | Cheapest BIN listing | Embed; text `{id}: {coins}` or `no BIN listing` |
-| `/auctions` | `item?` `player?` | 15s | Two questions, one command: an item's cheapest listings, or a player's own. **`item:` wins when both are given** | Auctions embed; text `N listing(s)` / `N active auction(s)` |
+| `/auctions` | `item?` `player?` | 15s | Two questions, one command: an item's cheapest listings, or a player's own. **`item:` wins when both are given.** A player's auctions split into sold-unclaimed (with the coins waiting), expired-unsold and active; already-collected auctions are dropped | Auctions embed; text `{ign}: N active · X to claim · N expired` |
 
 ### 2.5 Guild & meta
 
@@ -196,7 +197,7 @@ it adds: prefix parsing, positional→named argument mapping, an allow-list, IGN
 identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 
 - **Allow-list is the authorization boundary.** Only specs carrying `inGame`
-  are reachable: `help`, `profile`, `stats`, `skills`, `slayer`, `dungeons`,
+  are reachable: `help`, `profile`, `stats`, `skills`, `slayers`, `dungeons`,
   `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs`, `leaderboard`
   (all `true`), and
   `lfg` and `standing` (`"linked"` — `lfg` is the only in-game write and is

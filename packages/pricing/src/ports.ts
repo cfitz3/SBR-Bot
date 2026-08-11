@@ -16,9 +16,21 @@ export interface PriceSource {
   getItem(itemId: string): Promise<PriceLookup | null>;
 }
 
+/** One valued item, as the engine costed it. */
+export interface NetworthItem {
+  readonly name: string;
+  readonly price: number;
+}
+
 export interface NetworthComputation {
   readonly total: number | null;
   readonly breakdown: Readonly<Record<string, number>>;
+  /**
+   * Items per category, most valuable first is not assumed — the honesty layer
+   * sorts. Absent when the engine cannot itemise (a total-only engine), which
+   * is different from a category that genuinely holds nothing.
+   */
+  readonly items?: Readonly<Record<string, readonly NetworthItem[]>>;
 }
 
 export interface NetworthEngineInput {
@@ -62,6 +74,10 @@ export interface BinListing {
   readonly price: number | null;
   readonly bin: boolean;
   readonly endsAt: number | null;
+  /** Highest bid so far; null when nobody has bid. Absent from sweep data. */
+  readonly highestBid?: number | null;
+  /** True once the seller collected it. Absent from sweep data, where every row is live. */
+  readonly claimed?: boolean;
 }
 
 export interface BinEntry {

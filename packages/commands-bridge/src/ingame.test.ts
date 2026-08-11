@@ -275,7 +275,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // decision — guild chat proves guild membership and nothing else.
   assert.deepEqual(names, [
     "bazaar", "dungeons", "events", "help", "leaderboard", "lfg", "lowestbin",
-    "networth", "perm", "price", "profile", "runs", "skills", "slayer", "standing", "stats",
+    "networth", "perm", "price", "profile", "runs", "skills", "slayer", "slayers", "standing", "stats",
   ]);
 
   // Anything that writes is `"linked"`, never `true`. `/perm` is here rather

@@ -227,6 +227,8 @@ test("whatnext names the weakest pillar", () => {
       dungeons: {
         catacombsLevel: 5,
         catacombsExperience: 10,
+    catacombsXpToNext: null,
+    catacombsProgress: null,
         selectedClass: null,
         classAverage: 4,
         classes: [],
@@ -246,6 +248,8 @@ test("a member who has never entered dungeons is told to start there", () => {
       dungeons: {
         catacombsLevel: null,
         catacombsExperience: null,
+    catacombsXpToNext: null,
+    catacombsProgress: null,
         selectedClass: null,
         classAverage: null,
         classes: [],

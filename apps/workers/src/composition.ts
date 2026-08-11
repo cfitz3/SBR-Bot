@@ -7,7 +7,7 @@ import { loadConfig, type AppConfig } from "@sbr/config";
 import { assertDatabaseReady, disconnectDb, pingDb, progressionRepository, workerJobLogSink } from "@sbr/db";
 import { HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
 import { JobRunner } from "@sbr/jobs";
-import { NetworthServiceImpl, type NetworthEngine } from "@sbr/pricing";
+import { NetworthServiceImpl, summariseNetworth, type NetworthEngine } from "@sbr/pricing";
 import {
   ProgressionServiceImpl,
   type ProfileProvider,
@@ -70,9 +70,7 @@ export async function createWorkerContext(): Promise<WorkerContext> {
         (museum ?? undefined) as Record<string, unknown> | undefined,
         bankBalance ?? 0,
       );
-      const result = await calc.getNetworth();
-      const total = typeof result.networth === "number" ? result.networth : null;
-      return { total, breakdown: {} };
+      return summariseNetworth(await calc.getNetworth());
     },
   };
 

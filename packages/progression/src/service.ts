@@ -219,7 +219,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     });
 
     // NetworthService returns an honest DTO even on internal failure (total null).
-    const dto = nw.ok ? nw.value : { total: null, exact: false, missing: profile.requiredSections, breakdown: {} };
+    const dto = nw.ok ? nw.value : { total: null, exact: false, missing: profile.requiredSections, breakdown: {}, topItems: {} };
     if (!dto.exact) {
       this.log.debug("networth served as estimate", { uuid, missing: dto.missing });
     }

@@ -58,7 +58,7 @@ const ALIASES: Readonly<Record<string, string>> = {
   leaderboards: "leaderboard",
   s: "stats",
   sk: "skills",
-  sl: "slayer",
+  sl: "slayers",
   dungs: "dungeons",
   cata: "dungeons",
   run: "runs",
