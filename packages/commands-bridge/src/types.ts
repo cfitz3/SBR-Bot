@@ -17,6 +17,7 @@ import type {
   LeaderboardService,
   LFGPostDTO,
   MarketService,
+  MemberRecordSource,
   OptionType,
   PermService,
   PlayerLookup,
@@ -105,6 +106,15 @@ export interface HandlerDeps {
    * Member-facing only — there is no panel surface for leaderboards by design.
    */
   readonly leaderboards?: LeaderboardService;
+  /**
+   * A member's own standing with staff, for `/me`. Deliberately not the
+   * moderation service: this port reads one member's record and cannot write,
+   * so adding it here does not hand every member-facing handler the audit log.
+   *
+   * Optional like the rest — a deployment whose member bot has no database
+   * access simply shows a card without the section.
+   */
+  readonly record?: MemberRecordSource;
   readonly logger: Logger;
 }
 

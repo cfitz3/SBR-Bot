@@ -180,7 +180,7 @@ const me: CommandHandler = async (ctx, deps) => {
   if (!linked.ok || linked.value === null) {
     return { ephemeral: true, text: renderFailure("NOT_LINKED") };
   }
-  const [summary, slayers, dungeons, nw, standingRow] = await Promise.all([
+  const [summary, slayers, dungeons, nw, standingRow, record] = await Promise.all([
     deps.progression.getProfileSummary(linked.value.minecraftUuid),
     deps.progression.getSlayers(linked.value.minecraftUuid),
     deps.progression.getDungeons(linked.value.minecraftUuid),
@@ -189,11 +189,22 @@ const me: CommandHandler = async (ctx, deps) => {
     // same, so it is the one that can show both. Absorbed on failure: a stats
     // card is still worth sending without the guild half.
     deps.xp?.standing(ctx.guildId, ctx.userId).catch(() => null) ?? null,
+    // Same argument, and the same absorption — a member's own record is only
+    // ever readable here because the id is the caller's own.
+    deps.record?.forMember(ctx.guildId, ctx.userId).catch(() => null) ?? null,
   ]);
   return {
     ephemeral: true,
     text: `${linked.value.ign}: ${renderNetworth(nw)}`,
-    embed: renderStatsEmbed(linked.value.ign, summary, slayers, dungeons, nw, standingRow),
+    embed: renderStatsEmbed(
+      linked.value.ign,
+      summary,
+      slayers,
+      dungeons,
+      nw,
+      standingRow,
+      record !== null && record.ok ? record.value : null,
+    ),
   };
 };
 

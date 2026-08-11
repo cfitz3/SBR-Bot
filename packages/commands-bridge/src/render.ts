@@ -21,6 +21,7 @@ import type {
   LeaderboardValueFormat,
   LinkError,
   LowestBinDTO,
+  MemberRecordDTO,
   NetworthDTO,
   PriceDTO,
   ProfileSummaryDTO,
@@ -395,6 +396,12 @@ export function renderStatsEmbed(
    * id — only `/me` can be certain the two are the same person.
    */
   standing?: XpStandingDTO | null,
+  /**
+   * The caller's own record with staff. Same reason as `standing` for being
+   * optional, and one more: it is only ever the caller's, so a card about
+   * somebody else must not carry one.
+   */
+  record?: MemberRecordDTO | null,
 ): EmbedView {
   if (!profile.ok) {
     return { title: ign, description: renderFailure(profile.error.state), color: "NEUTRAL" };
@@ -404,6 +411,7 @@ export function renderStatsEmbed(
     networth.ok && networth.value.data.total !== null
       ? `${formatCoins(networth.value.data.total)}${networth.value.data.exact ? "" : "+"}`
       : "—";
+  const recordField = record === undefined || record === null ? null : renderMemberRecordField(record);
 
   return {
     title: `${ign} — stats`,
@@ -441,10 +449,54 @@ export function renderStatsEmbed(
             },
           ]
         : []),
+      ...(recordField === null ? [] : [recordField]),
     ],
     footer: stalenessFooter(profile.value),
     color: "INFO",
   };
+}
+
+/**
+ * "Where do I stand with staff", as one field on the caller's own card.
+ *
+ * Null for a member with nothing against them. A field reading "0 warnings" on
+ * every clean member's card would train everybody to skip past the section, and
+ * the one time it says something would look the same as the times it does not.
+ *
+ * The reason staff typed is shown. It is the member's own punishment, they were
+ * told it at the time, and a mute whose reason is a secret is one they can only
+ * guess how to avoid repeating.
+ */
+export function renderMemberRecordField(
+  record: MemberRecordDTO,
+  now: Date = new Date(),
+): { name: string; value: string; inline: boolean } | null {
+  const lines: string[] = [];
+
+  for (const punishment of record.inForce) {
+    const verb = punishment.type === "MUTE" ? "Muted" : punishment.type === "BAN" ? "Banned" : punishment.type;
+    const remaining =
+      punishment.expiresAt === null
+        ? ""
+        : ` · ends in ${formatDuration(Math.max(0, Date.parse(punishment.expiresAt) - now.getTime()))}`;
+    lines.push(`**${verb}**${remaining} — ${punishment.reason}`);
+  }
+
+  if (record.warnings > 0) {
+    const window = `in the last ${record.windowDays} days`;
+    const next =
+      record.nextEscalation === null
+        ? ""
+        : ` · one more → ${record.nextEscalation.action.toLowerCase()}${
+            record.nextEscalation.durationSeconds === null
+              ? ""
+              : ` for ${formatDuration(record.nextEscalation.durationSeconds * 1000)}`
+          }`;
+    lines.push(`${record.warnings} warning${record.warnings === 1 ? "" : "s"} ${window}${next}`);
+  }
+
+  if (lines.length === 0) return null;
+  return { name: "Your record", value: lines.join("\n"), inline: false };
 }
 
 // ── Standing (COMMANDS.md §18) ──────────────────────────────────────────────

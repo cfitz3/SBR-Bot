@@ -342,6 +342,47 @@ export interface ModerationActionDTO {
   readonly createdAt: string;
 }
 
+/**
+ * What a member is told about their own record on `/me`.
+ *
+ * Deliberately smaller than the audit row it is derived from: no ids, no actor,
+ * no history of served punishments. A member asking "where do I stand" is
+ * asking about now — what is being enforced, how many warnings still count, and
+ * what the next one would cost. Everything else is staff's view of them, and
+ * `/infractions` is where staff read it.
+ */
+export interface MemberRecordDTO {
+  /** Warnings inside the escalation window — the count the ladder acts on. */
+  readonly warnings: number;
+  /** How far back that count reaches, so the number can be read honestly. */
+  readonly windowDays: number;
+  /** Punishments being enforced right now, soonest to end first. */
+  readonly inForce: readonly MemberPunishmentDTO[];
+  /**
+   * The rung the *next* warning would land on, or null when the ladder is off,
+   * or when the next warning falls between rungs. Shown because a warning that
+   * quietly moves someone one step from a ban is not much of a warning.
+   */
+  readonly nextEscalation: MemberEscalationDTO | null;
+}
+
+export interface MemberPunishmentDTO {
+  readonly type: ModActionType;
+  /**
+   * The reason staff typed. Shown to the member it is about: a punishment
+   * nobody explains is one they can only guess how to avoid repeating.
+   */
+  readonly reason: string;
+  /** Null means it does not expire on its own. */
+  readonly expiresAt: string | null;
+}
+
+export interface MemberEscalationDTO {
+  readonly warns: number;
+  readonly action: Extract<ModActionType, "MUTE" | "BAN">;
+  readonly durationSeconds: number | null;
+}
+
 export interface ApplicationDTO {
   readonly id: string;
   readonly guildId: string;

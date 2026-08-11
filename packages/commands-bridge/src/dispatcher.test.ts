@@ -24,6 +24,8 @@ import {
   type TicketDTO,
   type LowestBinDTO,
   type MarketService,
+  type MemberRecordDTO,
+  type MemberRecordSource,
   type GuildConfigService,
   type GuildRosterDTO,
   type GuildRosterSource,
@@ -445,6 +447,7 @@ function makeDispatcher(over: {
   usage?: UsageSink;
   lfgBoard?: LfgBoard;
   xp?: XpService;
+  record?: MemberRecordSource;
   now?: () => number;
 } = {}) {
   return new CommandDispatcher({
@@ -464,6 +467,7 @@ function makeDispatcher(over: {
       analytics,
       ...(over.lfgBoard ? { lfgBoard: over.lfgBoard } : {}),
       ...(over.xp ? { xp: over.xp } : {}),
+      ...(over.record ? { record: over.record } : {}),
       logger: silent,
     },
     logger: silent,
@@ -1649,4 +1653,50 @@ test("me still renders when the XP lookup fails", async () => {
   const r = await makeDispatcher({ xp: broken }).dispatch("me", ctx());
   assert.match(r.embed?.title ?? "", /Aria/);
   assert.equal(r.embed?.fields?.find((f) => f.name === "Guild standing"), undefined);
+});
+
+function memberRecord(over: Partial<MemberRecordDTO> = {}): MemberRecordSource {
+  return {
+    async forMember() {
+      return ok({ warnings: 0, windowDays: 90, inForce: [], nextEscalation: null, ...over });
+    },
+  };
+}
+
+test("me tells a member what is being enforced and what the next warning costs", async () => {
+  const record = memberRecord({
+    warnings: 2,
+    inForce: [{ type: "MUTE", reason: "spamming ping", expiresAt: new Date(Date.now() + 3_600_000).toISOString() }],
+    nextEscalation: { warns: 3, action: "MUTE", durationSeconds: 3600 },
+  });
+  const r = await makeDispatcher({ record }).dispatch("me", ctx());
+  const field = r.embed?.fields?.find((f) => f.name === "Your record")?.value ?? "";
+  assert.match(field, /Muted/);
+  assert.match(field, /spamming ping/);
+  assert.match(field, /2 warnings in the last 90 days/);
+  assert.match(field, /one more → mute/);
+});
+
+test("a clean member's card carries no record section at all", async () => {
+  const r = await makeDispatcher({ record: memberRecord() }).dispatch("me", ctx());
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Your record"), undefined);
+});
+
+test("me still renders when the record lookup fails", async () => {
+  const broken: MemberRecordSource = {
+    async forMember() {
+      throw new Error("db down");
+    },
+  };
+  const r = await makeDispatcher({ record: broken }).dispatch("me", ctx());
+  assert.match(r.embed?.title ?? "", /Aria/);
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Your record"), undefined);
+});
+
+test("a card about somebody else never carries a record", async () => {
+  // `/stats` addresses an IGN; the record is the caller's own and must not
+  // follow the lookup onto another player's card.
+  const record = memberRecord({ warnings: 4 });
+  const r = await makeDispatcher({ record }).dispatch("stats", ctx({ args: recordArgs({ player: "Aria" }) }));
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Your record"), undefined);
 });

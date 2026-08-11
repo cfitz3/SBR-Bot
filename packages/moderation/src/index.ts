@@ -29,6 +29,7 @@ export {
   punishmentState,
   type PunishmentState,
 } from "./expiry.js";
+export { memberRecordSource, type MemberRecordSourceDeps } from "./record.js";
 export { SafetyServiceImpl, type SafetyServiceDeps } from "./safety.js";
 export {
   compileRule,

@@ -19,6 +19,7 @@ import {
   milestoneAnnouncementRepository,
   permRepository,
   milestoneDefinitionRepository,
+  moderationRepository,
   progressionRepository,
   rankResolver,
   screeningHistorySource,
@@ -36,6 +37,7 @@ import { PermServiceImpl } from "@sbr/perms";
 import { XpService } from "@sbr/xp";
 import { LeaderboardService } from "@sbr/leaderboards";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
+import { ESCALATION_SETTING_KEY, memberRecordSource } from "@sbr/moderation";
 import {
   ItemCatalog,
   MarketServiceImpl,
@@ -307,6 +309,15 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
   };
 
+  // A member's own record, over the same audit tables the admin bot writes —
+  // read-only, one member at a time, and no escalation policy needed beyond the
+  // one the warning ladder already reads, so `/me` can say what the next warning
+  // would cost.
+  const record = memberRecordSource({
+    repo: moderationRepository,
+    escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
+  });
+
   const handlerDeps: HandlerDeps = {
     identity,
     progression,
@@ -321,6 +332,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     lfgBoard,
     xp,
     leaderboards,
+    record,
     logger: log,
   };
 

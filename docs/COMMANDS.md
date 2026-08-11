@@ -309,7 +309,7 @@ scan already stores.
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/standing` | A member's guild XP, level, rank and where the XP came from | Linked | `member?` | Embed: level + progress bar, rank, tenure, per-source breakdown | XP not enabled; member has never earned any | DB (`XpBalance`, `XpEvent`) |
-| `/me` | Personal summary; now also carries level, total XP and rank | Linked | — | Existing embed + "Guild standing" and "Tenure" fields | (standing failures degrade silently) | DB |
+| `/me` | Personal summary; now also carries level, total XP, rank and the caller's own record | Linked | — | Existing embed + "Guild standing", "Tenure" and "Your record" fields | (standing and record failures degrade silently) | DB |
 
 **Visibility.** `/standing` with no argument is public in-channel; `/standing
 member:` is **ephemeral**. Someone else's standing is theirs to publish, and a
@@ -328,10 +328,38 @@ chat is already counted.
   would have touched every fake of it in the test suite. Standing therefore
   lands on `/me` — the one lookup certain the account and the person are the
   same — and on `/standing member:`.
-- **`/me` shows no open infractions.** The member `HandlerDeps` carries no
-  moderation service, by design: the member bot is not a surface that reads the
-  moderation log. Adding one for a count would give member-facing handlers a
-  dependency the rest of them have no business holding.
+- **`/me` carries a record, but not through the moderation service.** The
+  deviation as first written said `/me` would show no infractions at all,
+  because the member `HandlerDeps` holds no `ModerationService` and adding one
+  for a count would hand every member-facing handler the audit log and the
+  ability to punish people. Phase 10 kept that constraint and dropped the
+  conclusion: `MemberRecordSource` takes a guild and a member id, has no write
+  path, and returns a DTO with no ids in it, so the widest thing a member
+  surface can do with it is exactly what `/me` does. See §Your record below.
+
+**"Your record" on `/me` (Phase 10).** A member's own standing with staff, as
+one field on their own card:
+
+- **Absent for a clean member.** A field reading "0 warnings" on every card
+  trains everyone to skip the section, and the one time it says something would
+  look the same as the times it does not.
+- **What is being enforced right now**, soonest to end first, with anything
+  permanent last — "your mute ends in an hour" is the line being looked for, and
+  a standing ban is not news that was missed. Expiry-aware through the same
+  check the audit surfaces use, so a mute whose clock ran out is not listed
+  because a sweep has not cleared its flag yet.
+- **The reason staff typed is shown.** It is the member's own punishment and
+  they were told it at the time; a mute whose reason is a secret is one they can
+  only guess how to avoid repeating.
+- **Warnings inside the escalation window**, counted by the same function the
+  ladder fires off — if the card says two, the third is the one that escalates.
+- **What the next warning would cost**, when it lands on a rung. Omitted when
+  the ladder is off, when no policy source is wired, and when the next warning
+  falls between rungs, because promising a punishment that will not happen is
+  worse than promising nothing.
+- **Only ever the caller's own.** `/stats <player>` addresses an IGN and never
+  carries a record; the source is keyed by the Discord id `/me` already knows is
+  the caller's.
 
 **Anti-abuse** is split across the two moments it can be enforced (see
 `DOMAIN_MODEL.md`): per-message length and per-user cooldown at *capture*, daily

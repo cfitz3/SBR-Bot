@@ -467,7 +467,7 @@ model TicketTypeConfig {
 | Command | Change |
 | --- | --- |
 | `/lfg` | Posts an **embed** into the configured LFG channel; adds `title`, `perm` boolean and `permname`; `/editrun` + `/closerun` and a Close button for author or staff; tracks `messageId`. *Shipped.* |
-| `/me` | Gained "Guild standing" (level, total XP, rank) and "Tenure" fields. *Shipped, with two deviations below.* |
+| `/me` | Gained "Guild standing" (level, total XP, rank) and "Tenure" fields; Phase 10 added "Your record" — enforcement in force, warnings in the window, and what the next one costs. *Shipped, with two deviations below.* |
 | `/profile` | Unchanged. See the deviation note. |
 | `/slayer` → `/slayers` | Renamed with `/slayer` kept as a deprecated alias for one release; per-tier boss kill breakdown. *Shipped.* |
 | `/skills` | New skills + current caps, capped-skill markers. *Shipped.* |
@@ -486,10 +486,15 @@ model TicketTypeConfig {
   fake of it across sixteen files. Standing therefore lands on `/me` — the one
   lookup certain the account and the person are the same — and on
   `/standing member:`.
-- **`/me` shows no open infractions.** The member `HandlerDeps` carries no
-  moderation service, by design: the member bot does not read the moderation log.
-  Adding the dependency for a count would hand every member-facing handler a
-  reach it has no business having.
+- **`/me` carries a record, but not a moderation service.** As first written
+  this said `/me` would show no infractions: the member `HandlerDeps` carries no
+  `ModerationService` by design, and adding one for a count would hand every
+  member-facing handler the audit log and the ability to punish people. Phase 10
+  kept the constraint and dropped the conclusion — `MemberRecordSource`
+  (shared-types) takes a guild and a member id, has no write path, and returns a
+  DTO with no ids in it, so `/me` shows what is being enforced, the warnings
+  inside the escalation window and what the next warning would cost, and nothing
+  a member surface should not be able to ask.
 
 ### Bridge fun commands (Phase 11)
 `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank`, `!cringe` — rate-limited

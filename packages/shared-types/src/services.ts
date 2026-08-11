@@ -39,6 +39,7 @@ import type {
   LinkedIdentityDTO,
   LockdownStateDTO,
   LowestBinDTO,
+  MemberRecordDTO,
   MemberSummaryDTO,
   MilestoneDTO,
   MilestoneDefinitionDTO,
@@ -354,6 +355,20 @@ export interface ApplyActionInput {
   readonly reason: string;
   readonly durationSeconds?: number | null;
   readonly infractionId?: string | null;
+}
+
+/**
+ * A member's own record, and only ever their own.
+ *
+ * Separate from `ModerationService` on purpose. The member bot needs to answer
+ * "where do I stand" on `/me`, and handing it the moderation service to do that
+ * would give every member-facing handler the ability to read anybody's audit
+ * history and to issue punishments. This port takes the member's own id, has no
+ * write path, and returns a DTO with no ids in it — so the widest thing a
+ * member surface can do with it is exactly what `/me` does.
+ */
+export interface MemberRecordSource {
+  forMember(guildId: string, discordId: string): Promise<Result<MemberRecordDTO>>;
 }
 
 /** Moderation + audit (packages/moderation). Shared by admin-bot and web-panel. */
