@@ -15,6 +15,7 @@ import type {
   WordAction,
   WordMatchType,
 } from "@sbr/shared-types";
+import { isEscalation } from "@sbr/moderation";
 import type { AdminHandler, AdminCommandSpec } from "./types.js";
 import { parseDurationSeconds, renderModError } from "./util.js";
 import {
@@ -54,7 +55,19 @@ const warn: AdminHandler = async (ctx, deps) => {
     reason: ctx.args.getString("reason") ?? NO_REASON,
   });
   if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
-  return { ephemeral: false, text: `Warned <@${target}>. (case ${result.value.id})` };
+
+  // A warning can trip the escalation ladder, and the staffer who typed /warn is
+  // the one person who needs to know that it did — they are about to decide
+  // whether to do anything further. Read it back rather than have the service
+  // report it: what is being enforced *now* is the question, and that is a
+  // different question from what this call happened to write.
+  const enforced = await deps.moderation.listInForce(ctx.guildId, target);
+  const live = enforced.ok ? enforced.value.filter((a) => isEscalation(a.reason)) : [];
+  const escalated = live[0];
+  const note = escalated
+    ? ` Escalated automatically: ${escalated.type.toLowerCase()}${escalated.expiresAt ? ` until ${escalated.expiresAt}` : " (permanent)"}.`
+    : "";
+  return { ephemeral: false, text: `Warned <@${target}>. (case ${result.value.id})${note}` };
 };
 
 const mute: AdminHandler = async (ctx, deps) => {

@@ -240,7 +240,7 @@ destructive command requiring `confirm:true`.
 
 | Command | Role | Options | Purpose | Output |
 |---|---|---|---|---|
-| `/warn` | MOD | `target*` `reason?` | Formal warning | Confirmation with the case id |
+| `/warn` | MOD | `target*` `reason?` | Formal warning; may trip the escalation ladder (ADMIN_BOT.md §5.1) | Confirmation with the case id, plus what was auto-escalated if anything |
 | `/mute` | MOD | `target*` `duration*` `reason?` | One action across **both** surfaces — Discord timeout and Hypixel guild-chat mute. Duration is required because Hypixel chat mutes are always time-bounded | Confirmation naming the surfaces that took effect, plus the expiry |
 | `/ban` ✱ | OFFICER | `target*` `reason?` `duration?` `confirm?` | Ban, optionally temporary | Confirmation + expiry |
 | `/kick` ✱ | MOD | `target*` `reason?` `confirm?` | Remove from the server. **Audit is written before the Discord effect**, so a kick that succeeds in Discord is never missing from the log | Confirmation |

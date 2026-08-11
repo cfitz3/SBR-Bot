@@ -16,7 +16,7 @@ import {
   rankResolver,
   wordlistRepository,
 } from "@sbr/db";
-import { ModerationServiceImpl, SafetyServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
+import { ESCALATION_SETTING_KEY, ModerationServiceImpl, SafetyServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { HypixelClient } from "@sbr/hypixel";
 import { CommunityServiceImpl } from "@sbr/community";
@@ -79,6 +79,10 @@ export async function createAdminApp(): Promise<AdminApp> {
     enforcement: adapters.enforcement,
     // Until the discord.js permission check exists, assume the bot can enforce.
     botCaps: { async canPerform() { return true; } },
+    // Warnings escalate on a ladder the guild can edit; the policy lives in the
+    // settings KV, read fresh on each warning so an edit takes effect on the
+    // next one rather than at the next restart.
+    escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
     logger: log,
   });
 

@@ -45,6 +45,18 @@ export interface ModerationRepository {
   deactivateExpired(guildId: string | null, now: Date): Promise<number>;
 }
 
+/**
+ * Port: where a guild's escalation policy is stored.
+ *
+ * Deliberately `unknown` rather than a typed policy. It is a `GuildSetting` KV
+ * row — hand-editable JSON that predates any validation we might add — so the
+ * shape is checked by `parsePolicy` at the moment of use, in one place, rather
+ * than trusted at the boundary of every implementation of this port.
+ */
+export interface EscalationPolicySource {
+  readPolicy(guildId: string): Promise<unknown>;
+}
+
 /** A wordlist rule as it is written, before the store assigns it an id. */
 export interface NewWordlistRecord {
   readonly guildId: string;

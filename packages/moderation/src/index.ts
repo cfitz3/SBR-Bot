@@ -5,6 +5,22 @@
 export { ModerationServiceImpl, type ModerationServiceDeps } from "./service.js";
 export { rankOf, isPunitive, needsBotPermission } from "./rank.js";
 export {
+  countWarnsInWindow,
+  describeRung,
+  escalationReason,
+  isEscalation,
+  parsePolicy as parseEscalationPolicy,
+  resolveLadder,
+  rungFor,
+  DEFAULT_ESCALATION_WINDOW_DAYS,
+  DEFAULT_LADDER,
+  DEFAULT_POLICY as DEFAULT_ESCALATION_POLICY,
+  ESCALATION_SETTING_KEY,
+  type EscalationAction,
+  type EscalationPolicy,
+  type EscalationRung,
+} from "./escalation.js";
+export {
   describeState,
   expiredButFlaggedActive,
   holdsEnforcement,
@@ -26,6 +42,7 @@ export type {
   ModerationRepository,
   RankResolver,
   EnforcementMirror,
+  EscalationPolicySource,
   BotCapabilities,
   NewActionRecord,
   NewWordlistRecord,

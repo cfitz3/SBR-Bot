@@ -225,6 +225,34 @@ test("warn succeeds for a MODERATOR and reports the case id", async () => {
   assert.match(r.text, /act-1/);
 });
 
+test("warn tells the staffer when the ladder escalated it", async () => {
+  // The escalation is a separate row the service wrote; /warn learns about it
+  // by asking what is being enforced now, not from its own return value.
+  const mod = moderation({
+    async listInForce() {
+      return ok([
+        action({
+          id: "act-2",
+          type: "MUTE",
+          reason: "Automatic escalation: 3 warnings in 90 days",
+          expiresAt: "2026-08-06T01:00:00Z",
+        }),
+      ]);
+    },
+  });
+  const r = await make({ moderation: mod, roles: roles({ actor: "MODERATOR" }) }).dispatch("warn", ctx());
+  assert.match(r.text, /Warned/);
+  assert.match(r.text, /Escalated automatically: mute until 2026-08-06T01:00:00Z/);
+});
+
+test("warn says nothing about escalation when the live punishment was a staffer's", async () => {
+  const mod = moderation({
+    async listInForce() { return ok([action({ type: "MUTE", reason: "being a nuisance" })]); },
+  });
+  const r = await make({ moderation: mod, roles: roles({ actor: "MODERATOR" }) }).dispatch("warn", ctx());
+  assert.doesNotMatch(r.text, /Escalated/);
+});
+
 test("mute renders the cross-surface sweep and expiry", async () => {
   const mod = moderation({
     async applyAction(input: ApplyActionInput) {

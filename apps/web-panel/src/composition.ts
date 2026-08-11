@@ -25,7 +25,7 @@ import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { HypixelClient } from "@sbr/hypixel";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { ModerationServiceImpl } from "@sbr/moderation";
+import { ESCALATION_SETTING_KEY, ModerationServiceImpl } from "@sbr/moderation";
 import { PanelMutations, PanelService, type ConfigAuditSink } from "@sbr/panel-core";
 import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
@@ -88,6 +88,10 @@ export async function createPanelApp(): Promise<PanelApp> {
     // Discord permission needs a gateway connection, which this process does not
     // have. Wiring a `false` here would block every action instead.
     botCaps: { async canPerform() { return true; } },
+    // Warnings escalate on a ladder the guild can edit; the policy lives in the
+    // settings KV, read fresh on each warning so an edit takes effect on the
+    // next one rather than at the next restart.
+    escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
     logger: log,
   });
 

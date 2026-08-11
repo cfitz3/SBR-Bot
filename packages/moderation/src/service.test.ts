@@ -3,7 +3,14 @@ import { test } from "node:test";
 import type { AuditQuery, MemberRole, ModActionType, ModerationActionDTO } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { ModerationServiceImpl } from "./service.js";
-import type { BotCapabilities, EnforcementMirror, ModerationRepository, NewActionRecord, RankResolver } from "./ports.js";
+import type {
+  BotCapabilities,
+  EnforcementMirror,
+  EscalationPolicySource,
+  ModerationRepository,
+  NewActionRecord,
+  RankResolver,
+} from "./ports.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -40,9 +47,11 @@ function build(over: {
   ranks?: RankResolver;
   botCaps?: BotCapabilities;
   mirror?: EnforcementMirror;
+  escalation?: EscalationPolicySource;
 } = {}) {
   return new ModerationServiceImpl({
     repo: over.repoImpl ?? repo().repo,
+    ...(over.escalation ? { escalation: over.escalation } : {}),
     // Default: actor outranks target so punitive actions reach the later guards.
     ranks: over.ranks ?? ranks({ actor: "OFFICER", target: "MEMBER" }),
     enforcement: over.mirror ?? enforcement().mirror,
@@ -173,4 +182,91 @@ test("sweepExpired reports what it cleared and passes the clock down", async () 
   // The injected clock, not the wall clock: a sweep run against "now" in a test
   // that fixed the time everywhere else would clear rows the test never made.
   assert.equal((seenNow as unknown as Date).toISOString(), "2026-08-06T00:00:00.000Z");
+});
+
+// ── auto-warn escalation ────────────────────────────────────────────────────
+
+/** A repo whose warn history is fixed, so the ladder is the only variable. */
+function repoWithWarns(count: number): { repo: ModerationRepository; created: NewActionRecord[] } {
+  const base = repo();
+  const history: ModerationActionDTO[] = Array.from({ length: count }, (_, i) => ({
+    id: `w${i}`, guildId: "g1", type: "WARN", actorDiscordId: "actor", targetDiscordId: "target",
+    reason: "spam", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"],
+    active: true, createdAt: "2026-08-05T00:00:00.000Z",
+  }));
+  return {
+    created: base.created,
+    repo: { ...base.repo, async createAction(i) { base.created.push(i); return { ...i, id: "act", createdAt: "t" } as ModerationActionDTO; }, async listActions() { return history; } },
+  };
+}
+
+const policy = (value: unknown): EscalationPolicySource => ({ async readPolicy() { return value; } });
+
+test("the third warning in the window escalates to a mute", async () => {
+  const r = repoWithWarns(3);
+  const svc = build({ repoImpl: r.repo, escalation: policy(null) });
+  const result = await svc.applyAction(input("WARN"));
+  assert.equal(result.ok, true);
+
+  // Two rows written: the warning, then the escalation it tripped.
+  assert.deepEqual(r.created.map((a) => a.type), ["WARN", "MUTE"]);
+  const escalated = r.created[1]!;
+  assert.equal(escalated.durationSeconds, 3600);
+  assert.equal(escalated.reason, "Automatic escalation: 3 warnings in 90 days");
+  // Attributed to the staffer who warned, so the row has somebody to ask.
+  assert.equal(escalated.actorDiscordId, "actor");
+});
+
+test("a warning between rungs escalates to nothing", async () => {
+  const r = repoWithWarns(4);
+  await build({ repoImpl: r.repo, escalation: policy(null) }).applyAction(input("WARN"));
+  assert.deepEqual(r.created.map((a) => a.type), ["WARN"]);
+});
+
+test("a guild that has turned escalation off gets a warning and nothing else", async () => {
+  const r = repoWithWarns(3);
+  await build({ repoImpl: r.repo, escalation: policy({ enabled: false }) }).applyAction(input("WARN"));
+  assert.deepEqual(r.created.map((a) => a.type), ["WARN"]);
+});
+
+test("with no policy source wired, warnings are only warnings", async () => {
+  const r = repoWithWarns(7);
+  await build({ repoImpl: r.repo }).applyAction(input("WARN"));
+  assert.deepEqual(r.created.map((a) => a.type), ["WARN"]);
+});
+
+test("a guild rung overrides the default at that count", async () => {
+  const r = repoWithWarns(3);
+  const svc = build({
+    repoImpl: r.repo,
+    escalation: policy({ rungs: [{ warns: 3, action: "BAN", durationSeconds: null }] }),
+  });
+  await svc.applyAction(input("WARN"));
+  assert.deepEqual(r.created.map((a) => a.type), ["WARN", "BAN"]);
+  assert.equal(r.created[1]!.expiresAt, null);
+});
+
+test("an escalation the bot cannot enforce still leaves the warning standing", async () => {
+  // The warning is the record that must survive; a refused ban must not take it
+  // down with it.
+  const r = repoWithWarns(7);
+  const noBan: BotCapabilities = { async canPerform(_g, type) { return type !== "BAN"; } };
+  const result = await build({ repoImpl: r.repo, botCaps: noBan, escalation: policy(null) })
+    .applyAction(input("WARN"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(r.created.map((a) => a.type), ["WARN"]);
+});
+
+test("a policy source that throws does not fail the warning", async () => {
+  const r = repoWithWarns(3);
+  const broken: EscalationPolicySource = { async readPolicy() { throw new Error("settings down"); } };
+  const result = await build({ repoImpl: r.repo, escalation: broken }).applyAction(input("WARN"));
+  assert.equal(result.ok, true);
+  assert.deepEqual(r.created.map((a) => a.type), ["WARN"]);
+});
+
+test("escalation does not recurse — the mute it applies is not itself escalated", async () => {
+  const r = repoWithWarns(3);
+  await build({ repoImpl: r.repo, escalation: policy(null) }).applyAction(input("WARN"));
+  assert.equal(r.created.filter((a) => a.type === "MUTE").length, 1);
 });
