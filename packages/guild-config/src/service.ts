@@ -142,7 +142,14 @@ export class GuildConfigServiceImpl implements GuildConfigService {
     return this.write(guildId, () => this.repo.setRoleMapping(guildId, role, discordRoleId));
   }
 
-  private async write(guildId: string, apply: () => Promise<void>): Promise<Result<void>> {
+  async setHypixelGuild(guildId: string, hypixelGuildId: string | null): Promise<Result<void>> {
+    // The one write here whose failure an admin can act on: the id is unique, so
+    // a collision means another guild already holds it. `keepMessage` lets that
+    // reach them instead of the generic "couldn't save that setting".
+    return this.write(guildId, () => this.repo.setHypixelGuild(guildId, hypixelGuildId), true);
+  }
+
+  private async write(guildId: string, apply: () => Promise<void>, keepMessage = false): Promise<Result<void>> {
     try {
       await apply();
       this.cache.delete(guildId); // never leave a staffer looking at their own stale write
@@ -164,6 +171,7 @@ export class GuildConfigServiceImpl implements GuildConfigService {
         guildId,
         error: error instanceof Error ? error.message : "unknown",
       });
+      if (keepMessage && error instanceof Error) return err(error);
       return err(new Error("couldn't save that setting"));
     }
   }

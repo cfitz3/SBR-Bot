@@ -50,10 +50,12 @@ export async function loadPage<T>(path: string): Promise<ApiResult<T>> {
  *
  * Success carries no payload on purpose: a write is followed by re-reading the
  * page it changed, so returning a partial view model here would give the UI two
- * sources of truth for the same config and a way for them to disagree.
+ * sources of truth for the same config and a way for them to disagree. `note` is
+ * the exception and not a payload — it is a caveat about the write itself, which
+ * re-reading the page cannot recover.
  */
 export type WriteResult =
-  | { readonly kind: "ok" }
+  | { readonly kind: "ok"; readonly note?: string }
   | { readonly kind: "denied"; readonly reason: DenyReason }
   | { readonly kind: "error"; readonly message: string };
 
@@ -92,7 +94,10 @@ export async function postAction(
   const envelope = payload as MutationResult | { error?: string } | undefined;
   if (envelope && "access" in envelope) {
     if (!envelope.access.allowed) return { kind: "denied", reason: envelope.access.reason };
-    if (envelope.error === null) return { kind: "ok" };
+    if (envelope.error === null) {
+      const note = "note" in envelope ? envelope.note : undefined;
+      return { kind: "ok", ...(note === undefined ? {} : { note }) };
+    }
     return { kind: "error", message: describeWriteError(envelope.error) };
   }
 

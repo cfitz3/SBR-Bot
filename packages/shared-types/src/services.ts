@@ -450,6 +450,15 @@ export interface GuildConfigService {
   setSetting(guildId: string, key: string, value: unknown): Promise<Result<void>>;
   /** `/set-role type:mapping` — bind a platform role to a Discord role id. */
   setRoleMapping(guildId: string, role: MemberRole, discordRoleId: string | null): Promise<Result<void>>;
+  /**
+   * Bind the Hypixel guild this platform guild tracks, or null to unlink. Until
+   * this is set, roster sync and guild scan have nothing to sync and skip.
+   *
+   * The id is Hypixel's own 24-character guild id, not a name — resolving a name
+   * to one is the caller's job, because only the caller knows whether it can ask
+   * Hypixel right now.
+   */
+  setHypixelGuild(guildId: string, hypixelGuildId: string | null): Promise<Result<void>>;
 }
 
 /**

@@ -97,22 +97,31 @@ export async function createPanelApp(): Promise<PanelApp> {
   });
 
   /**
+   * One Hypixel client, shared by the identity service and by guild linking.
+   *
+   * Shared rather than built twice so both go through the same cache and the
+   * same rate gate — two clients would each hold their own budget against a
+   * per-key limit that is not divisible.
+   */
+  const hypixel = new HypixelClient({
+    ...(config.hypixel.apiKey ? { apiKey: config.hypixel.apiKey } : {}),
+    cache: adapters.hypixelCache,
+    rateGate: adapters.rateGate,
+    logger: log,
+  });
+
+  /**
    * The real identity service, not a repo shim.
    *
-   * It brings a Hypixel client with it, which this process would otherwise have
-   * no use for — but the panel's rule is that it commands the same services the
+   * It takes a Hypixel client, which this process would otherwise have little
+   * use for — but the panel's rule is that it commands the same services the
    * bots do. A panel-local shortcut to `identityRepository.unlink` would work
    * today and quietly skip whatever the service does about it tomorrow. The
    * client is inert until something calls it, and nothing on the read paths does.
    */
   const identity = new IdentityServiceImpl({
     repo: identityRepository,
-    social: new HypixelClient({
-      ...(config.hypixel.apiKey ? { apiKey: config.hypixel.apiKey } : {}),
-      cache: adapters.hypixelCache,
-      rateGate: adapters.rateGate,
-      logger: log,
-    }),
+    social: hypixel,
     roles: rankResolver,
     logger: log,
   });
@@ -186,6 +195,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     milestones: milestoneDefinitionRepository,
     tickets: ticketConfigRepository,
     wordlist,
+    hypixel,
     limiter: adapters.cooldowns,
     audit,
     analytics,

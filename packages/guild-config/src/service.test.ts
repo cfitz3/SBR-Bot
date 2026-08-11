@@ -28,6 +28,7 @@ function repo(over: Partial<GuildConfigRepository> = {}): GuildConfigRepository 
     async setFeature() {},
     async setRoleMapping() {},
     async setChannelBinding() {},
+    async setHypixelGuild() {},
     async getSetting() { return null; },
     async setSetting() {},
     ...over,
@@ -207,6 +208,48 @@ test("every write announces the guild so other processes drop their copy", async
   await svc.setFeature("g1", "events", false);
   await svc.setRoleMapping("g2", "OFFICER", "role-9");
   assert.deepEqual(published, ["g1", "g1", "g2"]);
+});
+
+test("linking a Hypixel guild clears the cache and announces it like any other write", async () => {
+  // It writes a different table from every other method here, which is exactly
+  // why it is worth asserting: a link that skipped the fan-out would leave the
+  // bots serving "no guild linked" for the rest of their TTL.
+  const published: string[] = [];
+  let linked: unknown;
+  let reads = 0;
+  const svc = new GuildConfigServiceImpl({
+    repo: repo({
+      async get() { reads += 1; return row(); },
+      async setHypixelGuild(_g, id) { linked = id; },
+    }),
+    broadcast: { async publish(guildId) { published.push(guildId); } },
+    logger: silent,
+    ttlMs: 60_000,
+  });
+
+  await svc.get("g1");
+  assert.equal((await svc.setHypixelGuild("g1", "abc")).ok, true);
+  await svc.get("g1");
+
+  assert.equal(linked, "abc");
+  assert.deepEqual(published, ["g1"]);
+  assert.equal(reads, 2, "the write should have dropped the cached config");
+});
+
+test("a collision on the unique link reaches the caller in words they can act on", async () => {
+  const svc = new GuildConfigServiceImpl({
+    repo: repo({
+      async setHypixelGuild() { throw new Error("another guild on this platform is already linked to that Hypixel guild"); },
+    }),
+    logger: silent,
+  });
+
+  // Unlike every other write here, this failure is not "the database is having a
+  // day" — it is a real answer, and flattening it to "couldn't save that
+  // setting" would leave the admin retyping a correct id.
+  const result = await svc.setHypixelGuild("g1", "abc");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error.message, /already linked/);
 });
 
 test("a broadcast that fails does not fail the write that was already durable", async () => {

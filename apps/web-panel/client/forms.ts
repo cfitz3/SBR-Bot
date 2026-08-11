@@ -49,10 +49,13 @@ export function statusSlot(): StatusSlot {
       el.className = `field-status field-status-${state}`;
       el.textContent =
         state === "saving" ? "Saving…"
-        : state === "saved" ? "Saved"
+        : state === "saved" ? (message ?? "Saved")
         : state === "error" ? (message ?? "Couldn't save that.")
         : "";
-      if (state === "saved") {
+      // A plain "Saved" is safe to clear — the control itself now shows the new
+      // value. A note says something the control does not ("linked, but
+      // unconfirmed"), so it stays until the next write replaces it.
+      if (state === "saved" && message === undefined) {
         window.setTimeout(() => {
           if (token === mine) slot.set("idle");
         }, 4_000);
@@ -67,7 +70,7 @@ export async function attempt(slot: StatusSlot, save: () => Promise<WriteResult>
   slot.set("saving");
   const result = await save();
   if (result.kind === "ok") {
-    slot.set("saved");
+    slot.set("saved", result.note);
     return true;
   }
   // A denial here is not a bug in the field — it's the server restating the tier

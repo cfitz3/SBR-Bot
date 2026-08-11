@@ -388,6 +388,23 @@ test("expHistory entries that aren't a day and a count are dropped, not propagat
   assert.equal(dto.members[0]?.weeklyGexp, 512);
 });
 
+test("getGuild by name queries ?name= and encodes what it was given", async () => {
+  // The onboarding path: an admin linking a guild knows its name, not its id.
+  // Encoding matters because a guild name is the one free-text lookup key here —
+  // raw, "SkyBlock Royalty & Co" would send a query for something else entirely.
+  const urls: string[] = [];
+  const { fetcher } = fakeFetcher((url) => {
+    urls.push(url);
+    return res(200, { success: true, guild: { _id: "g1", name: "SkyBlock Royalty & Co", members: [] } });
+  });
+  const c = new HypixelClient({ logger: silentLogger, http: fetcher, sleep: noopSleep });
+
+  const result = await c.getGuild("SkyBlock Royalty & Co", "name");
+
+  assert.equal(result.ok, true);
+  assert.match(urls[0] ?? "", /\/guild\?name=SkyBlock%20Royalty%20%26%20Co$/);
+});
+
 test("a guild that does not exist is MISSING_PROFILE, not an error", async () => {
   const result = await client({ success: true, guild: null }).getGuild("nope");
   assert.equal(result.ok, false);

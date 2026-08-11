@@ -280,6 +280,26 @@ export const guildConfigRepository = {
     });
   },
 
+  /**
+   * Bind or clear the Hypixel guild. Writes `Guild`, not `GuildConfig` — see the
+   * note on this method in `@sbr/guild-config`'s port.
+   *
+   * `Guild.hypixelGuildId` is unique, so a second guild claiming one already
+   * taken arrives as P2002. Translated here rather than left to surface as a
+   * driver error, because it is the one failure an admin can act on: the id is
+   * right, it just belongs to a guild already on this platform.
+   */
+  async setHypixelGuild(guildId: string, hypixelGuildId: string | null): Promise<void> {
+    try {
+      await prisma.guild.update({ where: { id: guildId }, data: { hypixelGuildId } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        throw new Error("another guild on this platform is already linked to that Hypixel guild");
+      }
+      throw error;
+    }
+  },
+
   async getSetting(guildId: string, key: string): Promise<unknown> {
     const row = await prisma.guildSetting.findUnique({
       where: { guildId_key: { guildId, key } },

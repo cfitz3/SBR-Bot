@@ -182,10 +182,19 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
     }),
   );
 
-  // No mutation exists for these two yet, so they are shown rather than hidden:
-  // "what timezone do the schedules use" is a question this page should answer
-  // even while the answer is only editable from a staff command.
+  // The Hypixel link is editable; the two below it are not. They are shown
+  // rather than hidden because "what timezone do the schedules use" is a
+  // question this page should answer even while a staff command owns the answer.
   const identity = fieldGroup(
+    textField({
+      label: "Hypixel guild",
+      value: result.data.guild?.hypixelGuildId ?? "",
+      hint:
+        "The guild whose roster syncs here. Enter its name or its 24-character id; " +
+        "clear the field to unlink. Nothing syncs until this is set.",
+      placeholder: "Guild name or id",
+      save: (raw) => postAction(guildId, "config.hypixel", { guild: raw }),
+    }),
     textField({
       label: "Timezone",
       value: config.timezone,
