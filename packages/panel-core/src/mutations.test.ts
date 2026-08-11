@@ -18,6 +18,9 @@ import {
   type MilestoneDefinitionService,
   type TicketConfigService,
   type TicketTypeDTO,
+  type WordlistError,
+  type WordlistRuleDTO,
+  type WordlistService,
   type ModerationService,
   type Result,
   type XpService,
@@ -152,6 +155,36 @@ function ticketRecorder(recorded: Recorded, removed = true): TicketConfigService
   };
 }
 
+/**
+ * The chat filter, recorded the same way. `refuse` stands in for the service's
+ * own validation — an unparseable regex or a pattern that already exists — which
+ * this layer has to turn into something the form can show.
+ */
+function wordlistRecorder(
+  recorded: Recorded,
+  over: { refuse?: WordlistError; missing?: boolean } = {},
+): WordlistService {
+  return {
+    async list() { return ok([]); },
+    async add(input) {
+      recorded.calls.push({ method: "addWordlistRule", args: [input] });
+      if (over.refuse) return err(over.refuse);
+      return ok({ ...input, id: "w1", severity: input.severity ?? 1, enabled: true } as WordlistRuleDTO);
+    },
+    async update(guildId, id, patch) {
+      recorded.calls.push({ method: "updateWordlistRule", args: [guildId, id, patch] });
+      if (over.refuse) return err(over.refuse);
+      if (over.missing === true) return ok(null);
+      return ok({ id, guildId, pattern: "x", matchType: "SUBSTRING", action: "BLOCK", severity: 1, enabled: true });
+    },
+    async remove(guildId, ref) {
+      recorded.calls.push({ method: "removeWordlistRule", args: [guildId, ref] });
+      return ok(over.missing === true ? null : ({ id: ref } as WordlistRuleDTO));
+    },
+    async test() { return ok({ text: "", matched: [], action: "ALLOW", replacement: null }); },
+  };
+}
+
 /** Allows everything unless the key is in `blocked` — the real gate is Redis. */
 function limiter(recorded: Recorded, blocked: readonly string[] = []): MutationLimiter {
   return {
@@ -177,6 +210,12 @@ function make(
     /** Same, for a deployment without ticketing. */
     noTickets?: boolean;
     ticketTypeRemoved?: boolean;
+    /** Same, for a deployment without the chat filter. */
+    noWordlist?: boolean;
+    /** What the filter service refuses with, when it refuses. */
+    wordlistRefusal?: WordlistError;
+    /** The rule id names nothing in this guild. */
+    wordlistMissing?: boolean;
   } = {},
 ) {
   const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
@@ -195,6 +234,14 @@ function make(
     ...(over.noTickets === true
       ? {}
       : { tickets: ticketRecorder(recorded, over.ticketTypeRemoved ?? true) }),
+    ...(over.noWordlist === true
+      ? {}
+      : {
+          wordlist: wordlistRecorder(recorded, {
+            ...(over.wordlistRefusal ? { refuse: over.wordlistRefusal } : {}),
+            ...(over.wordlistMissing === true ? { missing: true } : {}),
+          }),
+        }),
     limiter: limiter(recorded, over.blocked ?? []),
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
@@ -1163,5 +1210,214 @@ test("an officer cannot change what a member may open", async () => {
 
   assert.equal((await mutations.upsertTicketType(session(), "g1", ticketTypeBody())).access.allowed, false);
   assert.equal((await mutations.removeTicketType(session(), "g1", "support")).access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+// ── the chat filter ──
+
+const ruleBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: null,
+  pattern: "free nitro",
+  matchType: "SUBSTRING",
+  action: "BLOCK",
+  severity: 3,
+  enabled: true,
+  ...over,
+});
+
+test("a rule with no id is added, and one with an id is edited in place", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.upsertWordlistRule(session(), "g1", ruleBody())).ok, true);
+  assert.equal(recorded.calls[0]?.method, "addWordlistRule");
+
+  assert.equal((await mutations.upsertWordlistRule(session(), "g1", ruleBody({ id: "w1" }))).ok, true);
+  assert.equal(recorded.calls[1]?.method, "updateWordlistRule");
+  assert.deepEqual(recorded.calls[1]?.args.slice(0, 2), ["g1", "w1"]);
+});
+
+test("the audit records which rule changed and how, but never the pattern", async () => {
+  // The list is by construction a collection of slurs and scam URLs; a trail
+  // that reproduces every one of them is a second copy of exactly that.
+  const { mutations, recorded } = make();
+
+  await mutations.upsertWordlistRule(session(), "g1", ruleBody({ id: "w7", pattern: "a slur" }));
+
+  const change = recorded.audits[0]?.change as Record<string, unknown>;
+  assert.equal(recorded.audits[0]?.mutation, "wordlist.upsert");
+  assert.deepEqual(change, {
+    id: "w7",
+    matchType: "SUBSTRING",
+    action: "BLOCK",
+    severity: 3,
+    enabled: true,
+    patternLength: 6,
+  });
+  assert.equal(JSON.stringify(recorded.audits).includes("a slur"), false);
+});
+
+test("an omitted note leaves the one a staffer typed into /wordlist-add alone", async () => {
+  // The DTO doesn't carry the note, so the panel has never seen it. If omitted
+  // meant "clear", every edit from this page would quietly delete it.
+  const { mutations, recorded } = make();
+
+  await mutations.upsertWordlistRule(session(), "g1", ruleBody({ id: "w1" }));
+  assert.equal("note" in (recorded.calls[0]?.args[2] as Record<string, unknown>), false);
+
+  await mutations.upsertWordlistRule(session(), "g1", ruleBody({ id: "w1", note: null }));
+  assert.equal((recorded.calls[1]?.args[2] as Record<string, unknown>)["note"], null);
+});
+
+test("a rule the relay could not run is refused before it reaches the store", async () => {
+  const { mutations, recorded } = make();
+
+  const cases: Record<string, unknown>[] = [
+    { pattern: "" },
+    { pattern: "   " },
+    { pattern: "x".repeat(201) },
+    { matchType: "FUZZY" },
+    { action: "DELETE" },
+    { severity: 0 },
+    { severity: 11 },
+    { severity: 1.5 },
+    { enabled: "yes" },
+    { id: "not a valid id!" },
+    { note: "x".repeat(501) },
+  ];
+
+  for (const [i, over] of cases.entries()) {
+    const result = await mutations.upsertWordlistRule(session(), "g1", ruleBody(over));
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  assert.deepEqual(recorded.calls, []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("the service's own refusals come back as something the form can show", async () => {
+  const bad = make({ wordlistRefusal: { kind: "INVALID_PATTERN", detail: "Unterminated group" } });
+  const refused = await bad.mutations.upsertWordlistRule(session(), "g1", ruleBody({ matchType: "REGEX" }));
+  assert.equal(refused.error?.kind, "INVALID_INPUT");
+  // The regex engine's own complaint, which is more use than a paraphrase.
+  assert.equal(refused.error?.detail, "Unterminated group");
+
+  const dupe = make({ wordlistRefusal: { kind: "DUPLICATE" } });
+  const collided = await dupe.mutations.upsertWordlistRule(session(), "g1", ruleBody());
+  assert.equal(collided.error?.kind, "INVALID_INPUT");
+  assert.match(collided.error?.detail ?? "", /already has a rule/);
+  assert.deepEqual(dupe.recorded.audits, []);
+});
+
+test("editing a rule id that names nothing here is refused rather than silently doing nothing", async () => {
+  const { mutations, recorded } = make({ wordlistMissing: true });
+
+  const result = await mutations.upsertWordlistRule(session(), "g1", ruleBody({ id: "w1" }));
+
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("removing a rule that is already gone is a success, reported as nothing removed", async () => {
+  const { mutations, recorded } = make({ wordlistMissing: true });
+
+  const result = await mutations.deleteWordlistRule(session(), "g1", "w1");
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [{ method: "removeWordlistRule", args: ["g1", "w1"] }]);
+  assert.deepEqual(recorded.audits[0]?.change, { id: "w1", removed: false });
+});
+
+test("with the filter unwired, every write refuses instead of crashing the request", async () => {
+  const { mutations, recorded } = make({ noWordlist: true });
+
+  assert.equal((await mutations.upsertWordlistRule(session(), "g1", ruleBody())).error?.kind, "SERVICE_ERROR");
+  assert.equal((await mutations.deleteWordlistRule(session(), "g1", "w1")).error?.kind, "SERVICE_ERROR");
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("an officer cannot edit the filter", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.upsertWordlistRule(session(), "g1", ruleBody())).access.allowed, false);
+  assert.equal((await mutations.deleteWordlistRule(session(), "g1", "w1")).access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+// ── the escalation ladder ──
+
+const ladderBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  enabled: true,
+  windowDays: 90,
+  rungs: [
+    { warns: 5, action: "BAN", durationSeconds: null },
+    { warns: 3, action: "MUTE", durationSeconds: 3600 },
+  ],
+  ...over,
+});
+
+test("a saved ladder reaches the settings key the warning path reads, in order", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setModerationDefaults(session(), "g1", ladderBody());
+
+  assert.equal(result.ok, true);
+  const [guildId, key, value] = recorded.calls[0]?.args as [string, string, Record<string, unknown>];
+  assert.equal(guildId, "g1");
+  assert.equal(key, "moderation.escalation");
+  // Sorted on the way in, so a hand-read of the setting is a ladder in order.
+  assert.deepEqual(value["rungs"], [
+    { warns: 3, action: "MUTE", durationSeconds: 3600 },
+    { warns: 5, action: "BAN", durationSeconds: null },
+  ]);
+  assert.equal(recorded.audits[0]?.mutation, "moderation.defaults");
+});
+
+test("a ladder that would half-work is refused rather than trimmed on the way back in", async () => {
+  const { mutations, recorded } = make();
+
+  const cases: Record<string, unknown>[] = [
+    { enabled: "yes" },
+    { windowDays: 0 },
+    { windowDays: 366 },
+    { windowDays: 7.5 },
+    { rungs: "none" },
+    { rungs: Array.from({ length: 11 }, (_, i) => ({ warns: i + 1, action: "BAN", durationSeconds: null })) },
+    { rungs: [{ warns: 0, action: "BAN", durationSeconds: null }] },
+    { rungs: [{ warns: 3, action: "KICK", durationSeconds: null }] },
+    // A mute with no end: parsePolicy would drop this rung silently, leaving an
+    // admin with a ladder whose third step never fires.
+    { rungs: [{ warns: 3, action: "MUTE", durationSeconds: null }] },
+    { rungs: [{ warns: 3, action: "MUTE", durationSeconds: 0 }] },
+    // Two steps at one count: the later would win, which is not what was shown.
+    {
+      rungs: [
+        { warns: 3, action: "MUTE", durationSeconds: 60 },
+        { warns: 3, action: "BAN", durationSeconds: null },
+      ],
+    },
+  ];
+
+  for (const [i, over] of cases.entries()) {
+    const result = await mutations.setModerationDefaults(session(), "g1", ladderBody(over));
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  assert.deepEqual(recorded.calls, []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("an empty ladder with escalation off is a legitimate thing to save", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setModerationDefaults(session(), "g1", { enabled: false, windowDays: 30, rungs: [] });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.audits[0]?.change, { enabled: false, windowDays: 30, rungs: [] });
+});
+
+test("an officer cannot decide what a third warning does", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.setModerationDefaults(session(), "g1", ladderBody())).access.allowed, false);
   assert.deepEqual(recorded.calls, []);
 });

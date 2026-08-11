@@ -27,7 +27,7 @@ One Node process (`apps/web-panel/src/server.ts`, zero-dependency `node:http`) s
 - **Charts are drawn as inline SVG** (`client/chart.ts`) over series the server has already zero-filled and grouped (`panel-core/src/series.ts`). Shaping happens server-side so the raw rollup rows stay the API's contract, the browser receives arrays it can draw without re-deriving the bucket grid, and the zero-filling is unit-tested under `node --test` rather than in a browser.
 - **The chart list is discovered from the data**, not hardcoded: a metric appears on the page the day something starts emitting it. Today that is only `command.used`.
 
-**Built so far:** every page in §3 — Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Recruitment + Tickets (§3.7), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4), Mapping (§3.9) and XP (§3.12) — each with the writes its section describes, over the pipeline below.
+**Built so far:** every page in §3 — Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Recruitment + Tickets (§3.7), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4), Mapping (§3.9), XP (§3.12), Milestones (§3.13), Tickets (§3.14) and Filter (§3.15) — each with the writes its section describes, over the pipeline below.
 
 Partial within the built pages, and deliberate: the recruitment queue shows applicants' answers but not their fetched Skyblock stats; Mapping takes role and channel ids by hand rather than through a live Discord picker, which needs the bot to enumerate; Health reports process liveness and job freshness but not queue depths or the Hypixel budget; the operational actions of §3.11 (requeue, force sync) are not wired; and Events schedules and cancels but does not announce, edit or mark attendance — see §3.8 for why.
 
@@ -106,8 +106,8 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 |---------------|----------|----------|
 | `MEMBER` (non-staff) | *No panel access* (redirect to a member landing / their own linked info only) | — |
 | `MODERATOR` (Staff) | Overview, Analytics (read), Moderation/Infractions, Tickets, Events (read) | Issue/read infractions, manage tickets, mark attendance |
-| `OFFICER` | + Recruitment/Applications, Events (full), Bridge control | Applications decisions, create events, bridge suspend/unsuspend, wordlist |
-| `ADMIN` / `OWNER` | + Settings, Feature flags, Role/Channel mapping, Health | All configuration, role/channel mapping, feature toggles, recruitment settings |
+| `OFFICER` | + Recruitment/Applications, Events (full), Bridge control | Applications decisions, create events, bridge suspend/unsuspend |
+| `ADMIN` / `OWNER` | + Settings, Feature flags, Role/Channel mapping, Health, XP, Milestones, Ticket config, Filter | All configuration, role/channel mapping, feature toggles, recruitment settings, XP policy, milestone definitions, ticket types, chat-filter rules and the escalation ladder |
 
 **Enforcement rules**
 - Every guild-scoped API route resolves `(session.discordId, guildId) → GuildMember` via `packages/identity` and checks the required tier **server-side**; the UI hiding a control is never the only guard.
@@ -233,6 +233,18 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 - **The panel** holds its channel, title and description. Where it was last posted is recorded server-side, not typed here — moving it to another channel is a re-post, and changing the channel clears the stored message id so a later edit doesn't update a message in a channel the admin moved away from.
 - **Access:** Admin+ — a type names the staff roles it pulls in and the category channel it opens under, which is role and channel configuration.
 
+### 3.15 Filter
+
+- **Two things that act on members with nobody in the loop.** The chat filter's rules fire at relay time, and the escalation ladder mutes or bans off a warning count. Both are configuration rather than a record of what somebody did, which is what separates this page from Moderation next door.
+- **The rules are shown in full, patterns included** — that is the point of the page, and also why it sits at Admin+: the list is, by construction, a collection of the slurs and scam URLs the guild is filtering.
+- **The audit trail records which rule changed, to what, and by whom — never the pattern.** A trail that reproduced every entry would be a second copy of exactly the thing nobody wanted written down. `patternLength` is recorded instead, which is enough to tell an edit from a rewrite.
+- **Every control saves the whole rule**, because the mutation validates the *result*: changing only the match type can turn a legal substring into an invalid regex, or into a collision with a rule three rows down, and neither is visible from the changed field alone. A rule keeps its id across an edit — remove-and-re-add would reorder the list under whoever was reading it and orphan the rule id in an older bridge log line.
+- **A rule may be switched off rather than deleted.** Off keeps the row and stops it matching; delete is the irreversible one.
+- **The note a `/wordlist-add` carried is left alone.** It is not on `WordlistRuleDTO`, so this page has never seen it — an omitted `note` means "leave it", and only an explicit `null` clears it. The alternative would have every panel edit quietly delete what a staffer typed in Discord.
+- **The ladder is displayed as it is in force**, built-ins included (ADMIN_BOT.md §5.1). There is nothing stored until the first save, so a row-by-row editor would have to pretend otherwise; saving writes the ladder exactly as shown, which turns the built-ins on display into that guild's own. A mute rung with no duration is refused here rather than dropped on the way back in — `parseEscalationPolicy` would discard it silently, leaving an admin with a step that never fires.
+- **Rules and ladder are independent.** Escalation runs off the moderation service, which every deployment has, so a deployment without the chat filter still gets the ladder editor.
+- **Access:** Admin+.
+
 ---
 
 ## 4. Data Sources per Page
@@ -253,6 +265,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 | XP | `xp` (`XpSourceConfig`) | `xp` → `XpSourceConfig`, `XpEvent` (adjustments) + audit |
 | Milestones | `milestones` (`MilestoneDefinition` layered over built-in defaults) | `MilestoneDefinition` + audit |
 | Tickets | `tickets` (`TicketTypeConfig` layered over built-in defaults, `TicketPanelConfig`) | `TicketTypeConfig`, `TicketPanelConfig` + audit |
+| Filter | `wordlist` (`WordlistEntry`) + `GuildSetting['moderation.escalation']` layered over the built-in ladder | `WordlistEntry`, `GuildSetting` + audit |
 
 ---
 
@@ -271,7 +284,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 1. **Login only via Discord OAuth**; sessions in Redis, tokens encrypted, sliding expiry + refresh rotation.
 2. **Guild visibility = Discord `MANAGE_GUILD` ∩ platform `Guild` record**, re-validated on entry.
 3. **Every guild-scoped action authorized server-side** against `GuildMember.role`; UI gating is cosmetic only.
-4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (recruitment/events/bridge) < Admin/Owner (settings/flags/mapping/health/XP/milestones/ticket config). Note the split: working a ticket is Staff, but *configuring which tickets exist* is Admin, because a type names roles and channels.
+4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (recruitment/events/bridge) < Admin/Owner (settings/flags/mapping/health/XP/milestones/ticket config/chat filter + escalation). Note the split: working a ticket is Staff, but *configuring which tickets exist* is Admin, because a type names roles and channels. The filter sits at the same tier for the same kind of reason: a rule blocks or shadow-mutes at relay time and a ladder rung mutes or bans off a count, both with nobody in the loop.
 5. **Rank hierarchy** enforced on actions targeting people.
 6. **Bot-gated configuration** — anything the bot must enforce is disabled (with explanation) when the bot is missing or under-permissioned.
 7. **All writes audited** and rate-limited; **all writes go through shared domain services**, never around them.

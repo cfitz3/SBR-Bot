@@ -17,6 +17,7 @@ import {
   moderationRepository,
   panelRepository,
   rankResolver,
+  wordlistRepository,
   activitySink,
   xpRepository,
 } from "@sbr/db";
@@ -25,7 +26,7 @@ import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { HypixelClient } from "@sbr/hypixel";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { ESCALATION_SETTING_KEY, ModerationServiceImpl } from "@sbr/moderation";
+import { ESCALATION_SETTING_KEY, ModerationServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
 import { PanelMutations, PanelService, type ConfigAuditSink } from "@sbr/panel-core";
 import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
@@ -133,6 +134,14 @@ export async function createPanelApp(): Promise<PanelApp> {
     logger: log,
   });
 
+  /**
+   * The chat filter, over the same repository the admin bot's `/wordlist-*`
+   * commands use. Nothing about a rule is panel-specific: the bridge compiles
+   * whatever this writes, so an edit here and an edit from Discord are the same
+   * edit made through the same validation.
+   */
+  const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
+
   const panel = new PanelService({
     roles: rankResolver,
     xp,
@@ -142,6 +151,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     config: guildConfig,
     milestones: milestoneDefinitionRepository,
     tickets: ticketConfigRepository,
+    wordlist,
     heartbeats: adapters.heartbeat,
     logger: log,
   });
@@ -175,6 +185,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     xp,
     milestones: milestoneDefinitionRepository,
     tickets: ticketConfigRepository,
+    wordlist,
     limiter: adapters.cooldowns,
     audit,
     analytics,

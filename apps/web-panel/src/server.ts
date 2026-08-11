@@ -385,6 +385,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(res, await app.panel.loadMilestones(session, guildId));
         case "tickets":
           return sendPage(res, await app.panel.loadTickets(session, guildId));
+        case "wordlist":
+          return sendPage(res, await app.panel.loadWordlist(session, guildId));
         case "health":
           return sendPage(res, await app.panel.loadHealth(session, guildId));
         default:
@@ -525,6 +527,12 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.removeTicketType(session, guildId, b["key"]));
       case "ticket.panel.save":
         return sendMutation(res, await m.saveTicketPanel(session, guildId, b));
+      case "wordlist.upsert":
+        return sendMutation(res, await m.upsertWordlistRule(session, guildId, b));
+      case "wordlist.delete":
+        return sendMutation(res, await m.deleteWordlistRule(session, guildId, b["id"]));
+      case "moderation.defaults":
+        return sendMutation(res, await m.setModerationDefaults(session, guildId, b));
       case "bridge.suspend":
         return sendMutation(res, await m.setBridgeSuspended(session, guildId, b["suspended"]));
       case "moderation.action":

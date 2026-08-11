@@ -745,6 +745,19 @@ export type ApplicationError =
 export interface WordlistService {
   list(guildId: string): Promise<Result<readonly WordlistRuleDTO[]>>;
   add(input: NewWordlistRule): Promise<Result<WordlistRuleDTO, WordlistError>>;
+  /**
+   * Edit an existing rule in place. Null when the guild has no such rule.
+   *
+   * Separate from `add` because the two answer different questions: a rule
+   * being switched off, or having its severity corrected, is the same rule and
+   * must keep its id — remove-and-re-add would break every reference to it and
+   * reorder the list under whoever was reading it.
+   */
+  update(
+    guildId: string,
+    id: string,
+    patch: WordlistRuleUpdate,
+  ): Promise<Result<WordlistRuleDTO | null, WordlistError>>;
   /** Removes by rule id or by exact pattern; null when nothing matched. */
   remove(guildId: string, ref: string): Promise<Result<WordlistRuleDTO | null>>;
   test(guildId: string, text: string): Promise<Result<FilterTestDTO>>;
@@ -757,6 +770,19 @@ export interface NewWordlistRule {
   readonly action: WordAction;
   readonly severity?: number;
   readonly addedByDiscordId: string;
+  readonly note?: string | null;
+}
+
+/**
+ * A partial edit. Every field is optional and an omitted field is left alone —
+ * `null` is only meaningful for `note`, where it means "clear it".
+ */
+export interface WordlistRuleUpdate {
+  readonly pattern?: string;
+  readonly matchType?: WordMatchType;
+  readonly action?: WordAction;
+  readonly severity?: number;
+  readonly enabled?: boolean;
   readonly note?: string | null;
 }
 

@@ -35,6 +35,7 @@ export type PanelPage =
   | "xp"
   | "milestones"
   | "tickets"
+  | "wordlist"
   | "health";
 
 /**
@@ -67,6 +68,10 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // what a member may open and which staff get pulled in, and the tickets
   // themselves stay in the bot where the people in them are.
   tickets: "ADMIN",
+  // The chat filter and the escalation ladder. Both decide what happens to a
+  // member automatically, with nobody in the loop at the moment it happens,
+  // which is exactly the kind of thing that belongs behind the config tier.
+  wordlist: "ADMIN",
   health: "ADMIN",
 };
 

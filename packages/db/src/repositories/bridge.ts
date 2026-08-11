@@ -96,6 +96,39 @@ export const wordlistRepository = {
     return mapRule(row);
   },
 
+  /**
+   * Patch one rule. Scoped by guild as well as id for the same reason removal
+   * is: a rule id pasted in from another guild must not be editable here.
+   */
+  async update(
+    guildId: string,
+    id: string,
+    patch: {
+      pattern?: string;
+      matchType?: string;
+      action?: string;
+      severity?: number;
+      enabled?: boolean;
+      note?: string | null;
+    },
+  ): Promise<WordlistRuleDTO | null> {
+    const result = await prisma.wordlistEntry.updateMany({
+      where: { guildId, id },
+      data: {
+        ...(patch.pattern === undefined ? {} : { pattern: patch.pattern }),
+        ...(patch.matchType === undefined ? {} : { matchType: patch.matchType as WordMatchType }),
+        ...(patch.action === undefined ? {} : { action: patch.action as WordAction }),
+        ...(patch.severity === undefined ? {} : { severity: patch.severity }),
+        ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
+        ...(patch.note === undefined ? {} : { note: patch.note }),
+      },
+    });
+    if (result.count === 0) return null;
+    const rows = await prisma.wordlistEntry.findMany({ where: { guildId, id }, select: RULE_FIELDS });
+    const row = rows[0];
+    return row ? mapRule(row) : null;
+  },
+
   async removeById(guildId: string, id: string): Promise<WordlistRuleDTO | null> {
     // Delete scoped by guild as well as id: a rule id from another guild must
     // not be removable by pasting it into this one.

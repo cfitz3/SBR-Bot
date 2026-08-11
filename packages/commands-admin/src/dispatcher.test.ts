@@ -147,6 +147,7 @@ function wordlist(over: Partial<WordlistService> = {}): WordlistService {
     async add(i) {
       return ok({ id: "w1", guildId: i.guildId, pattern: i.pattern, matchType: i.matchType, action: i.action, severity: i.severity ?? 1, enabled: true });
     },
+    async update() { return ok(null); },
     async remove() { return ok(null); },
     async test(_g, text) {
       return ok<FilterTestDTO>({ text, matched: [], action: "ALLOW", replacement: null });

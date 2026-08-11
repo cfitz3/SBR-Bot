@@ -13,6 +13,7 @@ import type {
   ModerationSurface,
   WordAction,
   WordlistRuleDTO,
+  WordlistRuleUpdate,
   WordMatchType,
 } from "@sbr/shared-types";
 
@@ -72,6 +73,8 @@ export interface NewWordlistRecord {
 export interface WordlistRepository {
   list(guildId: string): Promise<readonly WordlistRuleDTO[]>;
   add(input: NewWordlistRecord): Promise<WordlistRuleDTO>;
+  /** Null when the guild has no rule with that id. */
+  update(guildId: string, id: string, patch: WordlistRuleUpdate): Promise<WordlistRuleDTO | null>;
   /** Null when no rule in this guild carries that id / pattern. */
   removeById(guildId: string, id: string): Promise<WordlistRuleDTO | null>;
   removeByPattern(guildId: string, pattern: string): Promise<WordlistRuleDTO | null>;

@@ -7,7 +7,13 @@
  * "commands, it doesn't bypass"), so nothing here mutates.
  */
 import { CONFIG_CHANNEL_SLOTS } from "@sbr/shared-types";
-import { punishmentState, type PunishmentState } from "@sbr/moderation";
+import {
+  parseEscalationPolicy,
+  punishmentState,
+  ESCALATION_SETTING_KEY,
+  type EscalationPolicy,
+  type PunishmentState,
+} from "@sbr/moderation";
 import type {
   AuditQuery,
   CommunityService,
@@ -19,6 +25,8 @@ import type {
   TicketConfigService,
   TicketPanelConfigDTO,
   TicketTypeDTO,
+  WordlistRuleDTO,
+  WordlistService,
   ModerationActionDTO,
   ModerationService,
   RsvpEntryDTO,
@@ -109,6 +117,14 @@ export interface OverviewVM {
  */
 export interface ModerationActionVM extends ModerationActionDTO {
   readonly state: PunishmentState;
+}
+
+export interface WordlistVM {
+  /** False when the deployment runs without the filter service wired. */
+  readonly installed: boolean;
+  readonly rules: readonly WordlistRuleDTO[];
+  /** Resolved, not raw: built-in rungs layered under whatever the guild stored. */
+  readonly escalation: EscalationPolicy;
 }
 
 export interface ModerationVM {
@@ -306,6 +322,8 @@ export interface PanelServiceDeps {
   readonly milestones?: MilestoneDefinitionService;
   /** Optional: absent means the Tickets page reports itself not installed. */
   readonly tickets?: TicketConfigService;
+  /** Optional: absent means the Wordlist page reports itself not installed. */
+  readonly wordlist?: WordlistService;
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
   readonly logger: Logger;
@@ -713,6 +731,29 @@ export class PanelService {
 
     const [types, panel] = await Promise.all([tickets.listTypes(guildId), tickets.getPanel(guildId)]);
     return { access, data: { installed: true, types, panel } };
+  }
+
+  /**
+   * The chat filter and the escalation ladder on one page.
+   *
+   * They are two halves of the same question — what the platform does about a
+   * member without a staffer present — and splitting them would mean an admin
+   * tuning the filter's severities had to open a different page to see what
+   * those severities eventually add up to.
+   */
+  async loadWordlist(session: PanelSession | null, guildId: string): Promise<PageResult<WordlistVM>> {
+    const access = await authorize(session, guildId, "wordlist", this.d.roles);
+    if (!access.allowed) return this.denied(access, "wordlist", guildId);
+
+    const wordlist = this.d.wordlist;
+    // The escalation policy is readable either way: it is a setting, not a
+    // service, and a deployment without the filter still escalates warnings.
+    const stored = await this.d.config.getSetting<unknown>(guildId, ESCALATION_SETTING_KEY);
+    const escalation = parseEscalationPolicy(stored);
+    if (wordlist === undefined) return { access, data: { installed: false, rules: [], escalation } };
+
+    const rules = await wordlist.list(guildId);
+    return { access, data: { installed: true, rules: rules.ok ? rules.value : [], escalation } };
   }
 
   async loadHealth(session: PanelSession | null, guildId: string): Promise<PageResult<HealthVM>> {

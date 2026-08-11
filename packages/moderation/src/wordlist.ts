@@ -16,6 +16,7 @@ import {
   type WordAction,
   type WordlistError,
   type WordlistRuleDTO,
+  type WordlistRuleUpdate,
   type WordlistService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
@@ -145,6 +146,42 @@ export class WordlistServiceImpl implements WordlistService {
       actor: input.addedByDiscordId,
     });
     return ok(rule);
+  }
+
+  /**
+   * Edit a rule in place.
+   *
+   * Validation and the duplicate check run on the *result* of the patch, not on
+   * what was sent: editing only the match type can turn a pattern that was a
+   * harmless substring into an invalid regex, and can collide with a rule that
+   * already exists — neither is visible from the patch alone.
+   */
+  async update(
+    guildId: string,
+    id: string,
+    patch: WordlistRuleUpdate,
+  ): Promise<Result<WordlistRuleDTO | null, WordlistError>> {
+    const existing = await this.repo.list(guildId);
+    const current = existing.find((r) => r.id === id);
+    if (!current) return ok(null);
+
+    const pattern = patch.pattern ?? current.pattern;
+    const matchType = patch.matchType ?? current.matchType;
+    const invalid = validatePattern(pattern, matchType);
+    if (invalid !== null) return err({ kind: "INVALID_PATTERN", detail: invalid });
+    if (existing.some((r) => r.id !== id && r.pattern === pattern && r.matchType === matchType)) {
+      return err({ kind: "DUPLICATE" });
+    }
+
+    const updated = await this.repo.update(guildId, id, patch);
+    if (updated) {
+      this.log.info("wordlist rule updated", {
+        guildId,
+        id,
+        fields: Object.keys(patch),
+      });
+    }
+    return ok(updated);
   }
 
   async remove(guildId: string, ref: string): Promise<Result<WordlistRuleDTO | null>> {

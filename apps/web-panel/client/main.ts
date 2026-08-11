@@ -21,6 +21,7 @@ import { renderSettings } from "./pages/settings.js";
 import { renderXp } from "./pages/xp.js";
 import { renderMilestones } from "./pages/milestones.js";
 import { renderTickets } from "./pages/tickets.js";
+import { renderWordlist } from "./pages/wordlist.js";
 
 interface GuildRoute {
   readonly guildId: string;
@@ -44,6 +45,7 @@ const GUILD_PAGES = [
   { id: "xp", label: "XP", render: renderXp },
   { id: "milestones", label: "Milestones", render: renderMilestones },
   { id: "tickets", label: "Tickets", render: renderTickets },
+  { id: "wordlist", label: "Filter", render: renderWordlist },
 ] as const;
 
 const viewEl = document.getElementById("view");

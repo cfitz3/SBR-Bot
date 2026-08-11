@@ -36,7 +36,13 @@ import type {
   XpService,
   XpSource,
   XpSourcePolicyDTO,
+  WordAction,
+  WordlistError,
+  WordlistRuleUpdate,
+  WordlistService,
+  WordMatchType,
 } from "@sbr/shared-types";
+import { ESCALATION_SETTING_KEY, type EscalationAction } from "@sbr/moderation";
 import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
@@ -88,6 +94,16 @@ export const MUTATION_TIERS = {
   "ticket.type.upsert": "ADMIN",
   "ticket.type.remove": "ADMIN",
   "ticket.panel.save": "ADMIN",
+  /**
+   * The chat filter's rules and the escalation ladder. Admin because both act
+   * on members with nobody in the loop: a filter rule blocks or shadow-mutes at
+   * relay time, and a ladder rung mutes or bans off a warning count. A rule is
+   * also a pattern the bridge compiles and runs, which is not a thing to hand
+   * out one tier down.
+   */
+  "wordlist.upsert": "ADMIN",
+  "wordlist.delete": "ADMIN",
+  "moderation.defaults": "ADMIN",
   /** Bridge control is an Officer power in WEB_PANEL.md §2, not an Admin one. */
   "bridge.suspend": "OFFICER",
   /**
@@ -198,6 +214,8 @@ export interface PanelMutationsDeps {
   readonly milestones?: MilestoneDefinitionService;
   /** Optional like XP: absent refuses the write instead of crashing. */
   readonly tickets?: TicketConfigService;
+  /** Optional like XP: absent refuses the write instead of crashing. */
+  readonly wordlist?: WordlistService;
   readonly limiter: MutationLimiter;
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
@@ -244,6 +262,25 @@ const MAX_TICKET_STAFF_ROLES = 10;
 /** Menu positions are a small ordering hint, not an index into anything. */
 const MAX_TICKET_POSITION = 999;
 const TICKET_PANEL_TITLE_MAX = 120;
+
+/**
+ * Filter-rule bounds. The pattern cap is generous for a word and mean for a
+ * regex, which is the intent: a pattern is compiled and run against every
+ * relayed message, so a pathological one is a cost in the hot path rather than
+ * a storage problem.
+ */
+const WORDLIST_PATTERN_MAX = 200;
+const WORDLIST_NOTE_MAX = 500;
+/** Severity is a staff-facing weight, not a score with arithmetic behind it. */
+const MAX_WORD_SEVERITY = 10;
+const WORD_MATCH_TYPES: readonly WordMatchType[] = ["EXACT", "SUBSTRING", "REGEX", "WILDCARD"];
+const WORD_ACTIONS: readonly WordAction[] = ["FLAG", "REPLACE", "BLOCK", "SHADOW_MUTE"];
+
+/** A ladder longer than this is a sign somebody is editing it by mistake. */
+const MAX_ESCALATION_RUNGS = 10;
+const MAX_ESCALATION_WARNS = 100;
+/** Matches the clamp `parseEscalationPolicy` applies when reading it back. */
+const MAX_ESCALATION_WINDOW_DAYS = 365;
 
 /** Feature flag names are keys in a config JSON blob; keep them boring. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
@@ -910,6 +947,207 @@ export class PanelMutations {
     });
   }
 
+  // ───────────────────────────── wordlist ─────────────────────────────
+
+  /**
+   * Add a filter rule, or edit one that already exists.
+   *
+   * One mutation rather than two, because it is one form: an admin fixing a
+   * severity and an admin adding a word fill in identical fields, and the only
+   * difference is whether an id came along. The id is what keeps an edit an
+   * edit — remove-and-re-add would reorder the list under whoever was reading
+   * it and orphan the rule id sitting in an older bridge log line.
+   */
+  async upsertWordlistRule(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.upsert", async (actorDiscordId) => {
+      const wordlist = this.d.wordlist;
+      if (wordlist === undefined) return unavailable("The chat filter is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const rawId = body["id"] ?? null;
+      if (rawId !== null && (typeof rawId !== "string" || !ENTITY_ID.test(rawId))) {
+        return invalid("id must be a rule id, or null to add a new rule");
+      }
+      const id = rawId as string | null;
+
+      const rawPattern = body["pattern"];
+      if (typeof rawPattern !== "string" || rawPattern.trim().length === 0 || rawPattern.length > WORDLIST_PATTERN_MAX) {
+        return invalid(`pattern must be 1–${WORDLIST_PATTERN_MAX} characters`);
+      }
+      // Only the outer whitespace: a substring rule for "free nitro" is two words
+      // on purpose, and trimming inside it would quietly change what it catches.
+      const pattern = rawPattern.trim();
+
+      const matchType = body["matchType"];
+      if (typeof matchType !== "string" || !WORD_MATCH_TYPES.includes(matchType as WordMatchType)) {
+        return invalid(`matchType must be one of ${WORD_MATCH_TYPES.join(", ")}`);
+      }
+      const action = body["action"];
+      if (typeof action !== "string" || !WORD_ACTIONS.includes(action as WordAction)) {
+        return invalid(`action must be one of ${WORD_ACTIONS.join(", ")}`);
+      }
+      const severity = body["severity"];
+      if (!isCount(severity, MAX_WORD_SEVERITY) || severity < 1) {
+        return invalid(`severity must be a whole number from 1 to ${MAX_WORD_SEVERITY}`);
+      }
+      // Absent and null differ here. `WordlistRuleDTO` does not carry the note,
+      // so the page editing a rule has never seen one — if an omitted field
+      // meant "clear it", every edit from the panel would quietly delete the
+      // note a staffer typed into `/wordlist-add`. Omitted leaves it alone;
+      // an explicit null is the only thing that clears it.
+      const note = body["note"];
+      if (note !== undefined && note !== null && (typeof note !== "string" || note.length > WORDLIST_NOTE_MAX)) {
+        return invalid(`note must be under ${WORDLIST_NOTE_MAX} characters, null to clear it, or omitted`);
+      }
+      const enabled = body["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+
+      // The pattern is deliberately absent from the audit record. A filter list
+      // is the one piece of guild config whose contents *are* the slurs and scam
+      // URLs it exists to catch, and a trail that reproduces every one of them
+      // is a second copy of the thing nobody wanted written down. Which rule
+      // changed, to what settings, and by whom is all still here.
+      const change: Record<string, unknown> = {
+        id,
+        matchType,
+        action,
+        severity,
+        enabled,
+        patternLength: pattern.length,
+      };
+
+      try {
+        if (id === null) {
+          const added = await wordlist.add({
+            guildId,
+            pattern,
+            matchType: matchType as WordMatchType,
+            action: action as WordAction,
+            severity,
+            addedByDiscordId: actorDiscordId,
+            note: (note ?? null) as string | null,
+          });
+          if (!added.ok) return { error: wordlistRefusal(added.error) };
+          // A new rule is stored live; honour a form that asked for otherwise
+          // rather than leaving it enforcing for the seconds until someone
+          // notices the toggle didn't take.
+          if (!enabled) await wordlist.update(guildId, added.value.id, { enabled: false });
+          return { result: { ok: true }, change: { ...change, id: added.value.id } };
+        }
+
+        const patch: WordlistRuleUpdate = {
+          pattern,
+          matchType: matchType as WordMatchType,
+          action: action as WordAction,
+          severity,
+          enabled,
+          ...(note === undefined ? {} : { note: note as string | null }),
+        };
+        const updated = await wordlist.update(guildId, id, patch);
+        if (!updated.ok) return { error: wordlistRefusal(updated.error) };
+        // Scoped by guild in the repository, so this also covers a rule id
+        // pasted in from somewhere else: it simply does not exist here.
+        if (updated.value === null) return invalid("no rule in this guild has that id");
+        return { result: { ok: true }, change };
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+    });
+  }
+
+  /**
+   * Delete a filter rule outright.
+   *
+   * To stop a rule firing but keep the record of it, save it disabled instead —
+   * this is the irreversible one.
+   */
+  async deleteWordlistRule(session: PanelSession | null, guildId: string, id: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.delete", async () => {
+      const wordlist = this.d.wordlist;
+      if (wordlist === undefined) return unavailable("The chat filter is not enabled on this deployment");
+      if (typeof id !== "string" || !ENTITY_ID.test(id)) return invalid("id must be a rule id");
+
+      let removed: boolean;
+      try {
+        const result = await wordlist.remove(guildId, id);
+        if (!result.ok) return { error: { kind: "SERVICE_ERROR", detail: describe(result.error) } };
+        // Nothing matched is not an error, as with milestones and ticket types:
+        // two admins on the same page both pressing delete should both succeed.
+        removed = result.value !== null;
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // The pattern is left out of the trail here for the reason given above.
+      return { result: { ok: true }, change: { id, removed } };
+    });
+  }
+
+  /**
+   * Save the auto-warn escalation ladder (ADMIN_BOT.md §5.1).
+   *
+   * Written through the settings KV rather than a table of its own: it is one
+   * small document per guild, read on every warning and rewritten about once a
+   * year. Only the guild's own rungs are stored — the built-ins are layered
+   * underneath at read time, so a rung added by a later release still reaches a
+   * guild that customised a different one.
+   */
+  async setModerationDefaults(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "moderation.defaults", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const enabled = body["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+      const windowDays = body["windowDays"];
+      if (!isCount(windowDays, MAX_ESCALATION_WINDOW_DAYS) || windowDays < 1) {
+        return invalid(`windowDays must be a whole number from 1 to ${MAX_ESCALATION_WINDOW_DAYS}`);
+      }
+      const rawRungs = body["rungs"];
+      if (!Array.isArray(rawRungs) || rawRungs.length > MAX_ESCALATION_RUNGS) {
+        return invalid(`rungs must be a list of up to ${MAX_ESCALATION_RUNGS} steps`);
+      }
+
+      const rungs: { warns: number; action: EscalationAction; durationSeconds: number | null }[] = [];
+      const seen = new Set<number>();
+      for (const raw of rawRungs) {
+        if (typeof raw !== "object" || raw === null) return invalid("each rung must be an object");
+        const rung = raw as Record<string, unknown>;
+
+        const warns = rung["warns"];
+        if (!isCount(warns, MAX_ESCALATION_WARNS) || warns < 1) {
+          return invalid(`each rung's warns must be a whole number from 1 to ${MAX_ESCALATION_WARNS}`);
+        }
+        // Two rungs at one count is a ladder with an unanswerable step: the
+        // later one would silently win, which is not what the form showed.
+        if (seen.has(warns)) return invalid(`two rungs both fire at ${warns} warnings`);
+        seen.add(warns);
+
+        const action = rung["action"];
+        if (action !== "MUTE" && action !== "BAN") return invalid("each rung's action must be MUTE or BAN");
+
+        const rawDuration = rung["durationSeconds"] ?? null;
+        if (rawDuration !== null && (!isCount(rawDuration, MAX_DURATION_SECONDS) || rawDuration < 1)) {
+          return invalid(`durationSeconds must be a whole number of seconds under ${MAX_DURATION_SECONDS}, or null`);
+        }
+        const durationSeconds = rawDuration as number | null;
+        // Refused here rather than dropped on the way back in: `parsePolicy`
+        // would discard this rung silently, and an admin who saved a ladder
+        // should not have to notice later that one step of it never fires.
+        if (action === "MUTE" && durationSeconds === null) {
+          return invalid("a mute rung needs a duration — the mute path refuses an endless one");
+        }
+        rungs.push({ warns, action, durationSeconds });
+      }
+
+      // Stored sorted, so a hand-read of the setting is a ladder in order.
+      rungs.sort((a, b) => a.warns - b.warns);
+      const policy = { enabled, windowDays, rungs };
+      const result = await this.d.config.setSetting(guildId, ESCALATION_SETTING_KEY, policy);
+      return { result, change: { enabled, windowDays, rungs: rungs.map((r) => ({ ...r })) } };
+    });
+  }
+
   // ─────────────────────────── moderation ───────────────────────────
 
   /**
@@ -1265,6 +1503,20 @@ function invalid(detail: string): Step {
  */
 function unavailable(detail: string): Step {
   return { error: { kind: "SERVICE_ERROR", detail } };
+}
+
+/**
+ * A refused filter rule, in words the person editing the form can act on.
+ *
+ * INVALID_INPUT rather than SERVICE_ERROR for both: an unparseable regex and a
+ * pattern that already exists are things the admin typed, and the form is where
+ * they get fixed. The service's own `detail` carries the regex engine's
+ * complaint, which is more useful than anything this layer could paraphrase.
+ */
+function wordlistRefusal(error: WordlistError): MutationError {
+  return error.kind === "DUPLICATE"
+    ? { kind: "INVALID_INPUT", detail: "this guild already has a rule with that pattern and match type" }
+    : { kind: "INVALID_INPUT", detail: error.detail };
 }
 
 /** A whole number in `[0, max]` — the shape every XP limit shares. */

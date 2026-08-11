@@ -36,6 +36,7 @@ export {
   type MappingVM,
   type MilestonesVM,
   type TicketsVM,
+  type WordlistVM,
   type XpVM,
   XP_SOURCE_ORDER,
   type HealthVM,

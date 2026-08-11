@@ -11,6 +11,7 @@ import {
   type MilestoneDefinitionService,
   type TicketConfigService,
   type TicketTypeDTO,
+  type WordlistService,
   type ModerationService,
   type XpService,
 } from "@sbr/shared-types";
@@ -163,6 +164,7 @@ function svc(
     xp?: XpService;
     milestones?: MilestoneDefinitionService;
     tickets?: TicketConfigService;
+    wordlist?: WordlistService;
   } = {},
 ) {
   return new PanelService({
@@ -175,6 +177,7 @@ function svc(
     ...(over.xp ? { xp: over.xp } : {}),
     ...(over.milestones ? { milestones: over.milestones } : {}),
     ...(over.tickets ? { tickets: over.tickets } : {}),
+    ...(over.wordlist ? { wordlist: over.wordlist } : {}),
     logger: silent,
   });
 }
@@ -568,6 +571,57 @@ test("with tickets unwired the page says so rather than showing an empty menu", 
 
 test("an officer cannot open the tickets page", async () => {
   const r = await svc({ tickets: ticketService() }).loadTickets(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+// ── the chat filter ──
+
+const wordlistService = (): WordlistService =>
+  ({
+    async list(guildId: string) {
+      return ok([
+        { id: "w1", guildId, pattern: "free nitro", matchType: "SUBSTRING", action: "BLOCK", severity: 5, enabled: true },
+        { id: "w2", guildId, pattern: "spoiler", matchType: "EXACT", action: "FLAG", severity: 1, enabled: false },
+      ]);
+    },
+  }) as unknown as WordlistService;
+
+test("the filter page lists every rule, switched off ones included", async () => {
+  const r = await svc({ roles: admin(), wordlist: wordlistService() }).loadWordlist(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  // A disabled rule is listed rather than filtered: the page has to render the
+  // control that switches it back on.
+  assert.deepEqual(r.data?.rules.map((rule) => rule.enabled), [true, false]);
+});
+
+test("a guild that has never configured a ladder gets the platform's own", async () => {
+  // The read layers guild rungs over the built-ins, so a guild with nothing
+  // stored still sees the three rungs that are actually in force.
+  const r = await svc({ roles: admin(), wordlist: wordlistService() }).loadWordlist(session(), "g1");
+
+  assert.equal(r.data?.escalation.enabled, true);
+  assert.equal(r.data?.escalation.windowDays, 90);
+  assert.deepEqual(r.data?.escalation.rungs.map((rung) => rung.warns), [3, 5, 7]);
+  assert.deepEqual(r.data?.escalation.rungs.map((rung) => rung.source), ["DEFAULT", "DEFAULT", "DEFAULT"]);
+});
+
+test("with the filter unwired the ladder is still editable", async () => {
+  // The two halves of the page are independent: escalation runs off the
+  // moderation service, which every deployment has, so an absent chat filter
+  // must not take the ladder editor down with it.
+  const r = await svc({ roles: admin() }).loadWordlist(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.rules, []);
+  assert.equal(r.data?.escalation.rungs.length, 3);
+});
+
+test("an officer cannot open the filter page", async () => {
+  const r = await svc({ wordlist: wordlistService() }).loadWordlist(session(), "g1");
   assert.equal(r.access.allowed, false);
   assert.equal(r.data, null);
 });
