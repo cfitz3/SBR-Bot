@@ -17,7 +17,7 @@ import {
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { authorize, type PanelSession, type RoleResolver } from "./access.js";
-import type { HeartbeatReader, PanelReads, ServiceHeartbeat } from "./reads.js";
+import type { HeartbeatReader, JobHealth, PanelReads, ServiceHeartbeat } from "./reads.js";
 import { EXPECTED_SERVICES, HEARTBEAT_STALE_MS, PanelService, XP_SOURCE_ORDER } from "./service.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
@@ -95,10 +95,8 @@ const moderation = (n: number): ModerationService => ({
 const COUNTS = {
   memberCount: 3, activeMemberCount: 3, linkedMemberCount: 2, verifiedMemberCount: 1,
   openTicketCount: 4, openInfractionCount: 5, activeActionCount: 1,
-  pendingApplicationCount: 2, upcomingEventCount: 1, recentJoinCount: 0, recentLeaveCount: 0,
+  upcomingEventCount: 1, recentJoinCount: 0, recentLeaveCount: 0,
 } as const;
-
-const HOUR = 3_600_000;
 
 function reads(over: Partial<PanelReads> = {}): PanelReads {
   const base: PanelReads = {
@@ -108,14 +106,6 @@ function reads(over: Partial<PanelReads> = {}): PanelReads {
       }));
     },
     async overviewCounts() { return COUNTS; },
-    async jobFreshness(jobs) {
-      return jobs.map((job) => ({
-        job,
-        lastSuccessAt: new Date(Date.now() - HOUR).toISOString(),
-        lastRunAt: new Date(Date.now() - HOUR).toISOString(),
-        lastStatus: "COMPLETED", durationMs: 10, error: null,
-      }));
-    },
     async lastSnapshotAt() { return null; },
     async listLinkedMembers() {
       return [
@@ -127,7 +117,6 @@ function reads(over: Partial<PanelReads> = {}): PanelReads {
     async listRollups() { return []; },
     async topCommands() { return []; },
     async listEvents() { return []; },
-    async listApplications() { return []; },
     async listTickets() { return []; },
     async listJobHealth() { return []; },
   };
@@ -206,7 +195,7 @@ test("loadOverview returns counts when authorized", async () => {
   assert.equal(r.access.allowed, true);
   assert.equal(r.data?.memberCount, 3);
   assert.equal(r.data?.openTicketCount, 4);
-  assert.equal(r.data?.pendingApplicationCount, 2);
+  assert.equal(r.data?.openInfractionCount, 5);
 });
 
 test("loadModeration returns the infraction view when authorized", async () => {
@@ -216,32 +205,50 @@ test("loadModeration returns the infraction view when authorized", async () => {
   assert.equal(r.data?.target, "target");
 });
 
-// ── freshness ──
+// ── job staleness ──
+//
+// Graded on the Health page. Overview used to carry a copy of this strip; it
+// answers a question about the platform rather than about the guild, so the one
+// grader on Health is now the only one.
+
+/** A job whose last run was `agoMs` in the past, or `null` for "never ran". */
+function job(type: string, agoMs: number | null): JobHealth {
+  return {
+    type,
+    lastRunAt: agoMs === null ? null : new Date(Date.now() - agoMs).toISOString(),
+    lastStatus: agoMs === null ? null : "COMPLETED",
+    durationMs: agoMs === null ? null : 10,
+    error: null,
+    failuresLastDay: 0,
+  };
+}
+
+const HOUR = 3_600_000;
 
 test("a job well inside its cadence is not flagged stale", async () => {
-  // profile-snapshot tolerates 3h; the stub reports a success one hour ago.
-  const r = await svc().loadOverview(session(), "g1");
-  const snapshot = r.data?.freshness.find((f) => f.job === "profile-snapshot");
-  assert.equal(snapshot?.stale, false);
+  // profile-snapshot tolerates 3h; the stub reports a run one hour ago.
+  const r = await svc({
+    roles: admin(),
+    reads: reads({ async listJobHealth() { return [job("profile-snapshot", HOUR)]; } }),
+  }).loadHealth(session(), "g1");
+  assert.equal(r.data?.jobs[0]?.stale, false);
 });
 
 test("a job past its threshold is flagged stale", async () => {
-  // bazaar-refresh tolerates 6 minutes; an hour-old success is well past that.
-  const r = await svc().loadOverview(session(), "g1");
-  const bazaar = r.data?.freshness.find((f) => f.job === "bazaar-refresh");
-  assert.equal(bazaar?.stale, true);
+  // bazaar-refresh tolerates 6 minutes; an hour-old run is well past that.
+  const r = await svc({
+    roles: admin(),
+    reads: reads({ async listJobHealth() { return [job("bazaar-refresh", HOUR)]; } }),
+  }).loadHealth(session(), "g1");
+  assert.equal(r.data?.jobs[0]?.stale, true);
 });
 
-test("a job that has never succeeded is stale, not silently fresh", async () => {
-  const never = reads({
-    async jobFreshness(jobs) {
-      return jobs.map((job) => ({
-        job, lastSuccessAt: null, lastRunAt: null, lastStatus: null, durationMs: null, error: null,
-      }));
-    },
-  });
-  const r = await svc({ reads: never }).loadOverview(session(), "g1");
-  assert.ok(r.data?.freshness.every((f) => f.stale));
+test("a job that has never run is stale, not silently fresh", async () => {
+  const r = await svc({
+    roles: admin(),
+    reads: reads({ async listJobHealth() { return [job("profile-snapshot", null)]; } }),
+  }).loadHealth(session(), "g1");
+  assert.equal(r.data?.jobs[0]?.stale, true);
 });
 
 // ── the remaining pages ──
@@ -273,15 +280,6 @@ test("analytics clamps an absurd range instead of trusting the query string", as
   assert.ok(seen !== null);
   const days = (Date.now() - (seen as unknown as Date).getTime()) / 86_400_000;
   assert.ok(days <= 366, `range was ${days} days`);
-});
-
-test("recruitment surfaces the guild's thresholds alongside the queue", async () => {
-  const r = await svc({
-    config: configService({ applicationsOpen: false, minWeight: 4000, minNetworth: 1e9 }),
-  }).loadRecruitment(session(), "g1");
-  assert.equal(r.access.allowed, true);
-  assert.equal(r.data?.recruitmentOpen, false);
-  assert.equal(r.data?.minWeight, 4000);
 });
 
 test("settings shows the screening policy in force, not an empty form", async () => {
@@ -418,8 +416,8 @@ test("a heartbeat store that throws leaves the job table intact", async () => {
   assert.ok(r.data?.services.every((s) => s.status === "DOWN"));
 });
 
-test("an ADMIN reaches mapping and gets every channel slot, present or not", async () => {
-  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadMapping(session(), "g1");
+test("settings carries every channel slot, present or not", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadSettings(session(), "g1");
   assert.equal(r.access.allowed, true);
   // The whole registry, including the slots with no legacy column behind them:
   // a slot missing from this map is a slot with no control on the page.
@@ -431,11 +429,11 @@ test("a bound slot comes back from the canonical map, not from a legacy column",
   const r = await svc({
     roles: roles({ "111": "ADMIN" }),
     config: configService({ channels: { lfg: "123456789012345678" } }),
-  }).loadMapping(session(), "g1");
+  }).loadSettings(session(), "g1");
   assert.equal(r.data?.channels["lfg"], "123456789012345678");
 });
 
-// ── xp ──
+// ── xp, now a section of settings ──
 
 /** Only the two sources the guild has actually configured. */
 const xpService = (): XpService =>
@@ -450,31 +448,25 @@ const xpService = (): XpService =>
     },
   }) as unknown as XpService;
 
-test("the XP page lists every source, with unconfigured ones off rather than guessed", async () => {
+test("the XP section lists every source, with unconfigured ones off rather than guessed", async () => {
   // A source with no row is disabled, and the page has to say so: inventing a
   // default weight would show an admin a number nobody chose and no job reads.
-  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: xpService() }).loadXp(session(), "g1");
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: xpService() }).loadSettings(session(), "g1");
 
   assert.equal(r.access.allowed, true);
-  assert.equal(r.data?.installed, true);
-  assert.deepEqual(r.data?.sources.map((s) => s.source), [...XP_SOURCE_ORDER]);
-  assert.equal(r.data?.sources.find((s) => s.source === "GEXP")?.weight, 0.01);
-  const tenure = r.data?.sources.find((s) => s.source === "TENURE");
+  assert.equal(r.data?.xp.installed, true);
+  assert.deepEqual(r.data?.xp.sources.map((s) => s.source), [...XP_SOURCE_ORDER]);
+  assert.equal(r.data?.xp.sources.find((s) => s.source === "GEXP")?.weight, 0.01);
+  const tenure = r.data?.xp.sources.find((s) => s.source === "TENURE");
   assert.equal(tenure?.enabled, false);
   assert.equal(tenure?.weight, 0);
 });
 
-test("with XP unwired the page says so instead of showing seven dead controls", async () => {
-  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadXp(session(), "g1");
+test("with XP unwired the section says so instead of showing seven dead controls", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadSettings(session(), "g1");
   assert.equal(r.access.allowed, true);
-  assert.equal(r.data?.installed, false);
-  assert.deepEqual(r.data?.sources, []);
-});
-
-test("an officer cannot open the XP page at all", async () => {
-  const r = await svc({ xp: xpService() }).loadXp(session(), "g1");
-  assert.equal(r.access.allowed, false);
-  assert.equal(r.data, null);
+  assert.equal(r.data?.xp.installed, false);
+  assert.deepEqual(r.data?.xp.sources, []);
 });
 
 // ── milestones ──
@@ -568,10 +560,26 @@ test("with tickets unwired the page says so rather than showing an empty menu", 
   assert.equal(r.data?.panel, null);
 });
 
-test("an officer cannot open the tickets page", async () => {
+test("a non-admin gets the queue but not the menu behind it", async () => {
+  // The page is Moderator-tier because closing a ticket is: shutting the people
+  // who answer tickets out of the queue was the old behaviour and it was wrong.
+  // Configuring which types are offered is still Admin, so the same load says
+  // allowed but not configurable, and returns no menu to render.
   const r = await svc({ tickets: ticketService() }).loadTickets(session(), "g1");
-  assert.equal(r.access.allowed, false);
-  assert.equal(r.data, null);
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.canConfigure, false);
+  assert.deepEqual(r.data?.types, []);
+  assert.equal(r.data?.panel, null);
+  assert.equal(r.data?.installed, true, "the reader is told ticketing exists, just not theirs to configure");
+});
+
+test("an admin gets the queue and the menu", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), tickets: ticketService() }).loadTickets(
+    session(),
+    "g1",
+  );
+  assert.equal(r.data?.canConfigure, true);
+  assert.ok((r.data?.types.length ?? 0) > 0);
 });
 
 // ── the chat filter ──

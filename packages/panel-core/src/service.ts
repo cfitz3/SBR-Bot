@@ -6,7 +6,7 @@
  * Reads only. Writes go through the same domain services the bots use (the panel
  * "commands, it doesn't bypass"), so nothing here mutates.
  */
-import { CONFIG_CHANNEL_SLOTS } from "@sbr/shared-types";
+import { CONFIG_CHANNEL_SLOTS, rankOfRole } from "@sbr/shared-types";
 import {
   parseEscalationPolicy,
   punishmentState,
@@ -45,12 +45,10 @@ import { authorize, type AccessDecision, type PanelSession, type RoleResolver } 
 import { shapeAnalytics, type MetricChart } from "./series.js";
 import type {
   CommandUsageStat,
-  Freshness,
   GuildCard,
   HeartbeatReader,
   JobHealth,
   LinkedMember,
-  PanelApplication,
   PanelEvent,
   PanelReads,
   PanelTicket,
@@ -81,13 +79,8 @@ export const STALE_AFTER_MS: Readonly<Record<string, number>> = {
   "xp-aggregate": 9 * 60 * 60_000,
 };
 
-/** The jobs whose freshness the Overview strip summarises. */
-const OVERVIEW_JOBS = ["bazaar-refresh", "ah-sweep", "profile-snapshot", "guild-roster-sync"] as const;
-
-export interface FreshnessVM extends Freshness {
-  readonly stale: boolean;
-  readonly ageMs: number | null;
-}
+/** Ticket statuses that are still someone's problem. */
+const OPEN_TICKET_STATUSES: ReadonlySet<string> = new Set(["OPEN", "PENDING"]);
 
 export interface OverviewVM {
   readonly memberCount: number;
@@ -100,11 +93,9 @@ export interface OverviewVM {
   readonly openTicketCount: number;
   readonly openInfractionCount: number;
   readonly activeActionCount: number;
-  readonly pendingApplicationCount: number;
   readonly upcomingEventCount: number;
   readonly bridgeSuspended: boolean;
   readonly lastSnapshotAt: string | null;
-  readonly freshness: readonly FreshnessVM[];
 }
 
 /**
@@ -157,14 +148,6 @@ export interface AnalyticsVM {
   readonly topCommands: readonly CommandUsageStat[];
 }
 
-export interface RecruitmentVM {
-  readonly applications: readonly PanelApplication[];
-  readonly tickets: readonly PanelTicket[];
-  readonly recruitmentOpen: boolean;
-  readonly minWeight: number | null;
-  readonly minNetworth: number | null;
-}
-
 /** One person's response to one event, with the name resolved for display. */
 export interface EventRsvp {
   readonly discordId: string;
@@ -195,6 +178,16 @@ export interface MembersVM {
   readonly pendingCount: number;
 }
 
+/**
+ * Everything the Settings page can change, in one read.
+ *
+ * It carries what used to be three pages — Settings, Mapping and XP — because
+ * the split between them was never one an admin could predict: "which channel
+ * does the bridge use" and "is the bridge suspended" are the same question asked
+ * twice, and finding them on different tabs cost more than the shorter pages
+ * saved. One VM also means one access decision and one round trip for what is
+ * one page's worth of configuration.
+ */
 export interface SettingsVM {
   readonly config: GuildRuntimeConfig | null;
   /**
@@ -212,6 +205,25 @@ export interface SettingsVM {
    * vanished between the access check and this read.
    */
   readonly guild: GuildCard | null;
+  /**
+   * Every channel slot in the registry, an unbound one present as null rather
+   * than missing, so the page renders a control for it instead of silently
+   * omitting the slot nobody has bound yet.
+   */
+  readonly channels: Readonly<Record<string, string | null>>;
+  readonly roleMappings: Readonly<Record<string, string>>;
+  readonly features: Readonly<Record<string, boolean>>;
+  readonly xp: XpSettingsVM;
+}
+
+export interface XpSettingsVM {
+  /** False when the deployment has no XP service at all — not "all sources off". */
+  readonly installed: boolean;
+  /**
+   * One row per source, always all of them. An unconfigured source is rendered
+   * as disabled with zero weight, which is exactly what the engine does with it.
+   */
+  readonly sources: readonly XpSourcePolicyDTO[];
 }
 
 /**
@@ -229,16 +241,6 @@ export const XP_SOURCE_ORDER: readonly XpSource[] = [
   "MILESTONE",
   "MANUAL",
 ];
-
-export interface XpVM {
-  /** False when the deployment has no XP service at all — not "all sources off". */
-  readonly installed: boolean;
-  /**
-   * One row per source, always all of them. An unconfigured source is rendered
-   * as disabled with zero weight, which is exactly what the engine does with it.
-   */
-  readonly sources: readonly XpSourcePolicyDTO[];
-}
 
 export interface MilestonesVM {
   /** False when no definition service is wired; the page then says so. */
@@ -264,12 +266,22 @@ export interface TicketsVM {
   readonly types: readonly TicketTypeDTO[];
   /** Panel content, filled in with defaults when it has never been configured. */
   readonly panel: TicketPanelConfigDTO | null;
-}
-
-export interface MappingVM {
-  readonly roleMappings: Readonly<Record<string, string>>;
-  readonly channels: Readonly<Record<string, string | null>>;
-  readonly features: Readonly<Record<string, boolean>>;
+  /**
+   * Tickets still waiting on a human, newest first.
+   *
+   * Read even when no ticket-config service is wired: the queue comes from the
+   * guild's own rows, and a deployment that stopped offering new ticket types
+   * still has the open ones somebody has to answer.
+   */
+  readonly open: readonly PanelTicket[];
+  /**
+   * Whether this reader may edit the menu, as opposed to work the queue.
+   *
+   * Decided here because the tier table lives here: the client has no copy of it
+   * and should not grow one. False hides the configuration cards; the mutations
+   * behind them refuse independently, so this is presentation, not the gate.
+   */
+  readonly canConfigure: boolean;
 }
 
 /**
@@ -333,18 +345,6 @@ export interface PanelServiceDeps {
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
   readonly logger: Logger;
-}
-
-/** Age of a job's last success, and whether that exceeds its stale threshold. */
-function gradeFreshness(row: Freshness, now: number): FreshnessVM {
-  if (row.lastSuccessAt === null) {
-    // Never succeeded is stale by definition — a job that has not run once is
-    // exactly the case a freshness badge exists to surface.
-    return { ...row, ageMs: null, stale: true };
-  }
-  const ageMs = now - Date.parse(row.lastSuccessAt);
-  const threshold = STALE_AFTER_MS[row.job] ?? 60 * 60_000;
-  return { ...row, ageMs, stale: ageMs > threshold };
 }
 
 /**
@@ -413,19 +413,16 @@ export class PanelService {
     const access = await authorize(session, guildId, "overview", this.d.roles);
     if (!access.allowed) return this.denied(access, "overview", guildId);
 
-    const [counts, freshness, lastSnapshotAt, config] = await Promise.all([
+    const [counts, lastSnapshotAt, config] = await Promise.all([
       this.d.reads.overviewCounts(guildId),
-      this.d.reads.jobFreshness(OVERVIEW_JOBS),
       this.d.reads.lastSnapshotAt(guildId),
       this.d.config.get(guildId),
     ]);
 
-    const now = Date.now();
     const data: OverviewVM = {
       ...counts,
       bridgeSuspended: config.ok ? (config.value?.bridgeSuspended ?? false) : false,
       lastSnapshotAt,
-      freshness: freshness.map((f) => gradeFreshness(f, now)),
     };
     return { access, data };
   }
@@ -506,34 +503,6 @@ export class PanelService {
         rollups,
         charts,
         topCommands,
-      },
-    };
-  }
-
-  // ─────────────────────────── recruitment + tickets ───────────────────────────
-
-  async loadRecruitment(
-    session: PanelSession | null,
-    guildId: string,
-  ): Promise<PageResult<RecruitmentVM>> {
-    const access = await authorize(session, guildId, "recruitment", this.d.roles);
-    if (!access.allowed) return this.denied(access, "recruitment", guildId);
-
-    const [applications, tickets, config] = await Promise.all([
-      this.d.reads.listApplications(guildId),
-      this.d.reads.listTickets(guildId),
-      this.d.config.get(guildId),
-    ]);
-
-    const cfg = config.ok ? config.value : null;
-    return {
-      access,
-      data: {
-        applications,
-        tickets,
-        recruitmentOpen: cfg?.applicationsOpen ?? false,
-        minWeight: cfg?.minWeight ?? null,
-        minNetworth: cfg?.minNetworth ?? null,
       },
     };
   }
@@ -625,80 +594,52 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const [config, policy, cards] = await Promise.all([
+    const xp = this.d.xp;
+    const [config, policy, cards, xpPolicy] = await Promise.all([
       this.d.config.get(guildId),
       this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
       this.d.reads.listGuildCards([guildId]),
+      xp === undefined ? Promise.resolve(null) : xp.policy(guildId),
     ]);
+
+    const cfg = config.ok ? config.value : null;
     return {
       access,
       data: {
-        config: config.ok ? config.value : null,
+        config: cfg,
         guild: cards[0] ?? null,
         // Read through the same tolerant parser the bridge bot uses, so the
         // page shows what screening will actually do with the stored value
         // rather than a prettier version of what is in the row.
         screening: serializePolicy(parsePolicy(policy)),
-      },
-    };
-  }
-
-  /**
-   * The XP configuration page: every source, whether it pays, and by how much.
-   *
-   * Deliberately no member standings, no leaderboard and no activity counters.
-   * The panel is admin-only and XP is member-facing (WEB_PANEL.md §3), so what
-   * belongs here is the rules — reading a member's standing is `/standing`,
-   * theirs to run.
-   */
-  async loadXp(session: PanelSession | null, guildId: string): Promise<PageResult<XpVM>> {
-    const access = await authorize(session, guildId, "xp", this.d.roles);
-    if (!access.allowed) return this.denied(access, "xp", guildId);
-
-    const xp = this.d.xp;
-    if (xp === undefined) return { access, data: { installed: false, sources: [] } };
-
-    const policy = await xp.policy(guildId);
-    return {
-      access,
-      data: {
-        installed: true,
-        // Filled out to the full list here rather than in the client: what an
-        // unconfigured source does is the engine's rule, and the page should
-        // show that rule rather than a second guess at it.
-        sources: XP_SOURCE_ORDER.map(
-          (source) =>
-            policy[source] ?? {
-              source,
-              enabled: false,
-              weight: 0,
-              dailyCap: null,
-              cooldownSec: 0,
-              minLength: 0,
-            },
-        ),
-      },
-    };
-  }
-
-  async loadMapping(session: PanelSession | null, guildId: string): Promise<PageResult<MappingVM>> {
-    const access = await authorize(session, guildId, "mapping", this.d.roles);
-    if (!access.allowed) return this.denied(access, "mapping", guildId);
-
-    const config = await this.d.config.get(guildId);
-    const cfg = config.ok ? config.value : null;
-    return {
-      access,
-      data: {
-        roleMappings: cfg?.roleMappings ?? {},
         // Built from the slot registry over the canonical `channels` map, not
         // from the five legacy columns: every slot appears, and an unbound one
-        // appears as null rather than being missing, so the page renders a
-        // control for it instead of silently omitting it.
+        // appears as null rather than being missing.
         channels: Object.fromEntries(
           CONFIG_CHANNEL_SLOTS.map((slot) => [slot, cfg?.channels[slot] ?? null] as const),
         ),
+        roleMappings: cfg?.roleMappings ?? {},
         features: cfg?.features ?? {},
+        xp:
+          xpPolicy === null
+            ? { installed: false, sources: [] }
+            : {
+                installed: true,
+                // Filled out to the full list here rather than in the client:
+                // what an unconfigured source does is the engine's rule, and the
+                // page should show that rule rather than a second guess at it.
+                sources: XP_SOURCE_ORDER.map(
+                  (source) =>
+                    xpPolicy[source] ?? {
+                      source,
+                      enabled: false,
+                      weight: 0,
+                      dailyCap: null,
+                      cooldownSec: 0,
+                      minLength: 0,
+                    },
+                ),
+              },
       },
     };
   }
@@ -735,10 +676,19 @@ export class PanelService {
     if (!access.allowed) return this.denied(access, "tickets", guildId);
 
     const tickets = this.d.tickets;
-    if (tickets === undefined) return { access, data: { installed: false, types: [], panel: null } };
+    // The queue is read first and unconditionally: it comes from the guild's own
+    // rows, not from the config service, so "ticketing isn't installed" must not
+    // hide tickets that are already open and waiting on someone.
+    const all = await this.d.reads.listTickets(guildId);
+    const open = all.filter((ticket) => OPEN_TICKET_STATUSES.has(ticket.status));
+    const canConfigure = rankOfRole(access.role) >= rankOfRole("ADMIN");
+
+    if (tickets === undefined || !canConfigure) {
+      return { access, data: { installed: tickets !== undefined, types: [], panel: null, open, canConfigure } };
+    }
 
     const [types, panel] = await Promise.all([tickets.listTypes(guildId), tickets.getPanel(guildId)]);
-    return { access, data: { installed: true, types, panel } };
+    return { access, data: { installed: true, types, panel, open, canConfigure } };
   }
 
   /**

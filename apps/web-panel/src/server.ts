@@ -378,8 +378,6 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           }
           return sendPage(res, result);
         }
-        case "recruitment":
-          return sendPage(res, await app.panel.loadRecruitment(session, guildId));
         case "events":
           return sendPage(
             res,
@@ -389,10 +387,6 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(res, await app.panel.loadMembers(session, guildId));
         case "settings":
           return sendPage(res, await app.panel.loadSettings(session, guildId));
-        case "mapping":
-          return sendPage(res, await app.panel.loadMapping(session, guildId));
-        case "xp":
-          return sendPage(res, await app.panel.loadXp(session, guildId));
         case "milestones":
           return sendPage(res, await app.panel.loadMilestones(session, guildId));
         case "tickets":

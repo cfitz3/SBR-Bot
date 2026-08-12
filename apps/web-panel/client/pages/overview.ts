@@ -1,26 +1,19 @@
 /**
- * Guild overview (WEB_PANEL.md §3.3).
+ * Guild overview.
  *
  * Ordered by what a staffer does with it: what's waiting on a human first, then
- * membership, then whether the data underneath is fresh enough to trust. A
- * dashboard that leads with headline counts buries the queue that needed
- * clearing this morning.
+ * membership, then what the platform has been doing. A dashboard that leads with
+ * headline counts buries the queue that needed clearing this morning.
+ *
+ * Job freshness used to sit at the bottom. It moved out entirely — it answers a
+ * question about the platform, not about the guild, and the Health page already
+ * answers it in more detail than a three-row strip could.
  */
-import type { FreshnessVM, OverviewVM } from "@sbr/panel-core";
+import type { OverviewVM } from "@sbr/panel-core";
 import { loadPage } from "../api.js";
-import {
-  badge,
-  card,
-  deniedState,
-  emptyState,
-  errorState,
-  pageTitle,
-  spinner,
-  statTile,
-  table,
-} from "../components.js";
+import { card, deniedState, emptyState, errorState, pageTitle, spinner, statTile } from "../components.js";
 import { h, replace } from "../dom.js";
-import { count, describeSpan, humanizeJob, ratio, relativeTime } from "../format.js";
+import { count, ratio, relativeTime } from "../format.js";
 
 export async function renderOverview(host: HTMLElement, guildId: string): Promise<void> {
   replace(host, spinner("Loading overview…"));
@@ -41,7 +34,7 @@ export async function renderOverview(host: HTMLElement, guildId: string): Promis
       vm.bridgeSuspended ? bridgeBanner() : null,
       card("Waiting on a human", queueTiles(vm)),
       card("Membership", membershipTiles(vm)),
-      card("Data freshness", freshnessBody(vm)),
+      card("Activity log", logBody()),
     ),
   );
 }
@@ -64,7 +57,6 @@ function queueTiles(vm: OverviewVM): HTMLElement {
     "div",
     { class: "tiles" },
     statTile("Open tickets", count(vm.openTicketCount)),
-    statTile("Pending applications", count(vm.pendingApplicationCount)),
     statTile("Open infractions", count(vm.openInfractionCount)),
     statTile("Active punishments", count(vm.activeActionCount)),
     statTile("Upcoming events", count(vm.upcomingEventCount)),
@@ -84,25 +76,17 @@ function membershipTiles(vm: OverviewVM): HTMLElement {
   );
 }
 
-function freshnessBody(vm: OverviewVM): HTMLElement {
-  if (vm.freshness.length === 0) return emptyState("No job history recorded yet.");
-  return table(
-    ["Job", "Last success", "Status"],
-    vm.freshness.map((row) => [humanizeJob(row.job), freshnessAge(row), freshnessBadge(row)]),
-  );
-}
-
-function freshnessAge(row: FreshnessVM): string {
-  if (row.ageMs === null) return "never";
-  return `${describeSpan(row.ageMs)} ago`;
-}
-
 /**
- * `stale` is graded server-side against per-job thresholds (PanelService's
- * STALE_AFTER_MS), so the badge only reports the decision rather than making it
- * — the browser's clock never gets a vote.
+ * Placeholder for the activity log.
+ *
+ * Deliberately a stub: the feed is meant to be a merged, guild-scoped stream of
+ * what the platform did — joins and leaves, moderation actions, config changes,
+ * ticket movement — and no read exists for that yet. Those events are recorded
+ * across several tables with no common shape or cursor, so the feed needs a
+ * server-side read designed for it rather than a client that fans out and
+ * interleaves by hand. The card is here so the layout it lands in is settled,
+ * and so the gap is visible rather than merely absent.
  */
-function freshnessBadge(row: FreshnessVM): HTMLElement {
-  if (row.lastSuccessAt === null) return badge("never run", "bad");
-  return row.stale ? badge("stale", "warn") : badge("fresh", "ok");
+function logBody(): HTMLElement {
+  return emptyState("The activity feed isn't wired up yet. It will show recent platform events for this guild.");
 }

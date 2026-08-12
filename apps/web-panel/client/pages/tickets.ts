@@ -1,9 +1,11 @@
 /**
- * Tickets — what a member may open, and the panel that advertises it.
+ * Tickets — the queue of open ones, then what a member may open and the panel
+ * that advertises it.
  *
- * Configuration only, like Milestones and for the same reason: the tickets
- * themselves, and whatever a member wrote in one, stay in the bot where the
- * people in them are. What this page owns is the menu.
+ * The queue leads because it is the part with a clock on it: a ticket nobody
+ * answered is a member waiting, while a ticket type nobody edited is fine. What
+ * a member *wrote* in one still stays in the bot where the people in it are;
+ * what this page offers is closing it, and the menu behind it.
  *
  * The five built-in types are shown alongside a guild's own rows because they
  * are already in force — listing only stored rows would show an empty page for
@@ -11,13 +13,14 @@
  * row that shadows it, which is why every control saves the whole type rather
  * than a patch.
  */
-import type { TicketsVM } from "@sbr/panel-core";
+import type { PanelTicket, TicketsVM } from "@sbr/panel-core";
 import type { TicketTypeDTO } from "@sbr/shared-types";
 import { TicketCategory } from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
-import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";
+import { actionButton, fieldGroup, reasonBox, selectField, statusSlot, textField, toggleField } from "../forms.js";
 import { h, replace } from "../dom.js";
+import { relativeTime } from "../format.js";
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
 const KEY_SHAPE = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
@@ -38,28 +41,39 @@ export async function renderTickets(host: HTMLElement, guildId: string): Promise
     return replace(host, errorState(result.message, () => void renderTickets(host, guildId)));
   }
 
-  const { installed, types, panel } = result.data;
+  const { installed, types, panel, open, canConfigure } = result.data;
+  const reload = (): void => void renderTickets(host, guildId);
+  const queue = card("Open tickets", queueBody(guildId, open, reload));
+
+  // The queue is the part everyone who reaches this page can act on. The menu
+  // below it needs Admin, and a deployment without the ticket service has no
+  // menu at all — either way the queue still renders, because those tickets are
+  // open regardless of who is reading and what is configured.
+  if (!canConfigure) {
+    return replace(host, h("div", {}, pageTitle("Tickets", `${open.length} open`), queue));
+  }
   if (!installed || panel === null) {
     return replace(
       host,
       h(
         "div",
         {},
-        pageTitle("Tickets", "Not enabled"),
+        pageTitle("Tickets", `${open.length} open`),
+        queue,
         emptyState("Ticketing isn't switched on for this deployment, so there is nothing to configure."),
       ),
     );
   }
 
-  const reload = (): void => void renderTickets(host, guildId);
-  const open = types.filter((t) => t.enabled).length;
+  const offered = types.filter((t) => t.enabled).length;
 
   replace(
     host,
     h(
       "div",
       {},
-      pageTitle("Tickets", `${open} of ${types.length} on offer`),
+      pageTitle("Tickets", `${open.length} open · ${offered} of ${types.length} types on offer`),
+      queue,
       h(
         "p",
         { class: "page-note" },
@@ -69,6 +83,54 @@ export async function renderTickets(host: HTMLElement, guildId: string): Promise
       card("Panel", panelForm(guildId, panel)),
       card("Add a ticket type", createForm(guildId, reload)),
       ...types.map((type) => typeCard(guildId, type, reload)),
+    ),
+  );
+}
+
+function queueBody(guildId: string, tickets: readonly PanelTicket[], reload: () => void): HTMLElement {
+  if (tickets.length === 0) return emptyState("No open tickets.");
+  return h("div", { class: "queue" }, ...tickets.map((ticket) => queueRow(guildId, ticket, reload)));
+}
+
+/**
+ * One open ticket, with its own reason box and status line so a refused close
+ * says which ticket it was about.
+ */
+function queueRow(guildId: string, ticket: PanelTicket, reload: () => void): HTMLElement {
+  const status = statusSlot();
+  const reason = reasonBox("Closing note (optional)", 2);
+
+  return h(
+    "article",
+    { class: "queue-item" },
+    h(
+      "header",
+      { class: "queue-head" },
+      h("strong", {}, ticket.subject ?? `${ticket.category} ticket`),
+      badge(ticket.category.toLowerCase(), "neutral"),
+      badge(ticket.status.toLowerCase(), ticket.status === "OPEN" ? "warn" : "neutral"),
+      h("span", { class: "muted" }, `opened ${relativeTime(ticket.createdAt)}`),
+    ),
+    h(
+      "p",
+      { class: "muted" },
+      "by ",
+      h("code", {}, ticket.openerDiscordId),
+      ticket.assigneeDiscordId ? " · assigned to " : " · unassigned",
+      ticket.assigneeDiscordId ? h("code", {}, ticket.assigneeDiscordId) : null,
+    ),
+    h("div", { class: "field-row" }, reason),
+    h(
+      "div",
+      { class: "field-row" },
+      actionButton({
+        label: "Close ticket",
+        confirm: "Confirm close",
+        status,
+        run: () => postAction(guildId, "ticket.close", { ticketId: ticket.id, reason: reason.value.trim() }),
+        onDone: reload,
+      }),
+      status.el,
     ),
   );
 }

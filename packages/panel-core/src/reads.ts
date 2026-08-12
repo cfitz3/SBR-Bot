@@ -22,19 +22,9 @@ export interface OverviewCounts {
   readonly openTicketCount: number;
   readonly openInfractionCount: number;
   readonly activeActionCount: number;
-  readonly pendingApplicationCount: number;
   readonly upcomingEventCount: number;
   readonly recentJoinCount: number;
   readonly recentLeaveCount: number;
-}
-
-export interface Freshness {
-  readonly job: string;
-  readonly lastSuccessAt: string | null;
-  readonly lastRunAt: string | null;
-  readonly lastStatus: string | null;
-  readonly durationMs: number | null;
-  readonly error: string | null;
 }
 
 export interface LinkedMember {
@@ -87,16 +77,6 @@ export interface PanelTicket {
   readonly createdAt: string;
 }
 
-export interface PanelApplication {
-  readonly id: string;
-  readonly applicantDiscordId: string;
-  readonly status: string;
-  readonly reviewerDiscordId: string | null;
-  readonly submittedAt: string | null;
-  readonly decidedAt: string | null;
-  readonly answers: unknown;
-}
-
 export interface JobHealth {
   readonly type: string;
   readonly lastRunAt: string | null;
@@ -131,7 +111,6 @@ export type RollupPeriod = "HOURLY" | "DAILY" | "WEEKLY" | "MONTHLY";
 export interface PanelReads {
   listGuildCards(guildIds: readonly string[]): Promise<readonly GuildCard[]>;
   overviewCounts(guildId: string, recentWindowDays?: number): Promise<OverviewCounts>;
-  jobFreshness(jobs: readonly string[]): Promise<readonly Freshness[]>;
   lastSnapshotAt(guildId: string): Promise<string | null>;
   listLinkedMembers(guildId: string, limit?: number): Promise<readonly LinkedMember[]>;
   listRollups(input: {
@@ -142,7 +121,6 @@ export interface PanelReads {
   }): Promise<readonly RollupPoint[]>;
   topCommands(guildId: string, since: Date, limit?: number): Promise<readonly CommandUsageStat[]>;
   listEvents(guildId: string, limit?: number): Promise<readonly PanelEvent[]>;
-  listApplications(guildId: string, limit?: number): Promise<readonly PanelApplication[]>;
   listTickets(guildId: string, limit?: number): Promise<readonly PanelTicket[]>;
   listJobHealth(): Promise<readonly JobHealth[]>;
 }

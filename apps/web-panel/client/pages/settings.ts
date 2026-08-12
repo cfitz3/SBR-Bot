@@ -1,14 +1,15 @@
 /**
- * Settings (WEB_PANEL.md §3.10) — the guild's own switches: bridge relay,
- * recruitment, and the read-only facts that identify the guild.
+ * Settings — everything an admin configures, on one page.
  *
- * Channel slots, role mappings and feature flags live on the Mapping page
- * instead. The split is by *what a change does*, not by which table it lands in:
- * this page changes how the platform behaves, Mapping changes where it points.
+ * It absorbed the old Mapping and XP pages. The split between them was by which
+ * table a change landed in, which is not a distinction anyone browsing the panel
+ * can predict: "is the bridge suspended" and "which channel does the bridge use"
+ * are the same question asked twice, and they were two tabs apart. Sections here
+ * are ordered by how often they are touched, not by which service owns them.
  */
 import type { SettingsVM } from "@sbr/panel-core";
 import type { ScreeningPolicyView } from "@sbr/screening";
-import { loadPage, postAction } from "../api.js";
+import { loadPage, postAction, type WriteResult } from "../api.js";
 import { card, deniedState, errorState, pageTitle, spinner } from "../components.js";
 import {
   fieldGroup,
@@ -16,11 +17,31 @@ import {
   textField,
   toggleField,
   validateCoins,
+  validateSnowflake,
   validateThreshold,
   validateWhole,
 } from "../forms.js";
 import { h, replace } from "../dom.js";
-import { count } from "../format.js";
+import { CHANNEL_SLOT_COPY } from "./channel-slots.js";
+import { xpSection } from "./settings-xp.js";
+
+/**
+ * Every platform role, including MEMBER and OWNER.
+ *
+ * The low and high ends are the ones people forget: an unmapped MEMBER role
+ * means verification grants nothing visible, and an unmapped OWNER is why a
+ * server owner can find themselves unable to use owner commands.
+ */
+const ROLES: readonly (readonly [string, string])[] = [
+  ["MEMBER", "Verified member"],
+  ["MODERATOR", "Moderator"],
+  ["OFFICER", "Officer"],
+  ["ADMIN", "Admin"],
+  ["OWNER", "Owner"],
+];
+
+/** Mirrors the mutation layer's `FEATURE_NAME`; see forms.ts on why both exist. */
+const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
 
 export async function renderSettings(host: HTMLElement, guildId: string): Promise<void> {
   replace(host, spinner("Loading settings…"));
@@ -44,14 +65,6 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
     );
   }
 
-  /**
-   * `setRecruitment` takes the open flag on every call, so a threshold save has
-   * to send the current one. Held here and updated only after a write lands, so
-   * a refused toggle can't leave the next threshold save carrying a value the
-   * server rejected.
-   */
-  let recruitmentOpen = config.applicationsOpen;
-
   const bridge = fieldGroup(
     toggleField({
       label: "Suspend the Discord ↔ in-game bridge",
@@ -61,37 +74,59 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
     }),
   );
 
-  const recruitment = fieldGroup(
-    toggleField({
-      label: "Applications open",
-      checked: config.applicationsOpen,
-      hint: "Closed hides the apply flow and turns away new applications.",
-      save: async (next) => {
-        // Thresholds omitted, not nulled: RecruitmentSettings treats absent as
-        // "leave the bar alone", and sending null here would wipe a guild's
-        // entry requirements every time someone opened applications.
-        const written = await postAction(guildId, "config.recruitment", { open: next });
-        if (written.kind === "ok") recruitmentOpen = next;
+  const channels = fieldGroup(
+    ...CHANNEL_SLOT_COPY.map(({ slot, label, hint }) =>
+      textField({
+        label,
+        hint,
+        value: result.data.channels[slot] ?? "",
+        placeholder: "not set",
+        validate: validateSnowflake("channel"),
+        save: (raw) => postAction(guildId, "config.channel", { slot, channelId: raw }),
+        clear: () => postAction(guildId, "config.channel", { slot, channelId: null }),
+      }),
+    ),
+  );
+
+  const roles = fieldGroup(
+    ...ROLES.map(([role, label]) =>
+      textField({
+        label,
+        hint: `Discord role granted to ${label.toLowerCase()}s, and read back when deciding what they may do.`,
+        value: result.data.roleMappings[role] ?? "",
+        placeholder: "not set",
+        validate: validateSnowflake("role"),
+        save: (raw) => postAction(guildId, "config.role-mapping", { role, discordRoleId: raw }),
+        clear: () => postAction(guildId, "config.role-mapping", { role, discordRoleId: null }),
+      }),
+    ),
+  );
+
+  const flagNames = Object.keys(result.data.features).sort((a, b) => a.localeCompare(b));
+  const features = fieldGroup(
+    ...flagNames.map((feature) =>
+      toggleField({
+        label: feature,
+        checked: result.data.features[feature] === true,
+        save: (enabled) => postAction(guildId, "config.feature", { feature, enabled }),
+      }),
+    ),
+    textField({
+      label: "Add a flag",
+      value: "",
+      hint: "Lowercase letters, digits and dashes. Created enabled; toggle it off above afterwards.",
+      placeholder: "events",
+      validate: (raw) =>
+        FEATURE_NAME.test(raw) ? null : "Use 2–40 lowercase letters, digits or dashes, starting with a letter.",
+      save: async (feature): Promise<WriteResult> => {
+        const written = await postAction(guildId, "config.feature", { feature, enabled: true });
+        // Re-read rather than splice a row in: the new flag has to come back
+        // from the server for the page to be showing stored state, and a
+        // locally-appended toggle would survive even if the write silently
+        // landed on a different guild's config.
+        if (written.kind === "ok") void renderSettings(host, guildId);
         return written;
       },
-    }),
-    textField({
-      label: "Minimum Senither weight",
-      value: config.minWeight === null ? "" : String(config.minWeight),
-      hint: "Blank means no weight requirement.",
-      placeholder: "no requirement",
-      validate: validateThreshold,
-      save: (raw) =>
-        postAction(guildId, "config.recruitment", { open: recruitmentOpen, minWeight: parseThreshold(raw) }),
-    }),
-    textField({
-      label: "Minimum networth",
-      value: config.minNetworth === null ? "" : String(config.minNetworth),
-      hint: "In coins, blank for no requirement.",
-      placeholder: "no requirement",
-      validate: validateThreshold,
-      save: (raw) =>
-        postAction(guildId, "config.recruitment", { open: recruitmentOpen, minNetworth: parseThreshold(raw) }),
     }),
   );
 
@@ -211,16 +246,24 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
     }),
   );
 
+  // The unset-slot count leads because it is the single most common explanation
+  // for "the bot isn't doing anything": almost every silent no-op traces back to
+  // a channel nobody bound.
+  const unset = CHANNEL_SLOT_COPY.filter(({ slot }) => !result.data.channels[slot]).length;
+
   replace(
     host,
     h(
       "div",
       {},
-      pageTitle("Settings", `${count(Object.keys(config.features).length)} feature flag(s) — edit those on Mapping`),
-      card("Bridge", bridge),
-      card("Recruitment", recruitment),
-      card("Join screening", screening),
+      pageTitle("Settings", unset === 0 ? "All channel slots assigned" : `${unset} channel slot(s) not set`),
       card("Guild", identity),
+      card("Bridge", bridge),
+      card("Channels", channels),
+      card("Roles", roles),
+      card("Feature flags", features),
+      card("Join screening", screening),
+      ...xpSection(guildId, result.data.xp),
     ),
   );
 }

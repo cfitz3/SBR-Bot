@@ -26,21 +26,23 @@ export interface PanelSession {
 export type PanelPage =
   | "overview"
   | "moderation"
-  | "recruitment"
   | "analytics"
   | "settings"
   | "events"
   | "members"
-  | "mapping"
-  | "xp"
   | "milestones"
   | "tickets"
   | "wordlist"
   | "health";
 
 /**
- * Minimum platform role per page (WEB_PANEL.md §2). Staff read, Officers decide
- * on people and events, Admins hold configuration and operations.
+ * Minimum platform role per page (WEB_PANEL.md §2). Staff read and work the
+ * queues, Admins hold configuration and operations.
+ *
+ * No page sits at OFFICER any more. The one that did was Recruitment, and the
+ * screening it existed to drive is automatic now; the tier still exists in the
+ * role ladder and still gates individual mutations, it just isn't what any whole
+ * page turns on.
  *
  * `health` sits at ADMIN because the page carries operational actions (requeue,
  * force-sync). The doc allows a read-only subset for Staff; that would be a
@@ -53,21 +55,21 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   analytics: "MODERATOR",
   events: "MODERATOR",
   members: "MODERATOR",
-  recruitment: "OFFICER",
+  // One page for everything an admin configures: the bridge, the channel and
+  // role bindings, feature flags, XP weights, join screening and the Hypixel
+  // link. Weights and caps decide what every member's standing is worth, which
+  // is configuration in the strict sense and belongs behind the same gate.
   settings: "ADMIN",
-  mapping: "ADMIN",
-  // Weights and caps decide what every member's standing is worth, and the
-  // manual adjustment on the same page writes to the ledger by hand. Both are
-  // configuration in the strict sense, so the page sits with the other config.
-  xp: "ADMIN",
   // What the guild recognises, and what it pays for reaching it. Configuration
   // in the same sense the XP weights are — the achievements themselves stay in
   // the bots, where the members who earned them can see them.
   milestones: "ADMIN",
-  // The ticket menu and the panel that advertises it. Configuration: it decides
-  // what a member may open and which staff get pulled in, and the tickets
-  // themselves stay in the bot where the people in them are.
-  tickets: "ADMIN",
+  // Moderator, because the page leads with the queue of open tickets and
+  // closing one is a Moderator action (`ticket.close`). The configuration on the
+  // same page — the menu and the panel that advertises it — is Admin, and the
+  // view model says so per-load rather than the whole page sitting at the higher
+  // tier and shutting the people who answer tickets out of the queue.
+  tickets: "MODERATOR",
   // The chat filter and the escalation ladder. Both decide what happens to a
   // member automatically, with nobody in the loop at the moment it happens,
   // which is exactly the kind of thing that belongs behind the config tier.
