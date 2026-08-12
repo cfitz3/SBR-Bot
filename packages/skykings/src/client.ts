@@ -45,6 +45,17 @@ export const FLAGGED_TTL_MS = 5 * 60_000;
 /** Tracked-player snapshots move slowly; SkyKings refreshes them on its own clock. */
 export const PLAYER_TTL_MS = 15 * 60_000;
 
+/**
+ * How long a route that answered 404 is treated as absent before we try again.
+ *
+ * A missing endpoint is not a transient failure: it answers 404 to every caller,
+ * with or without a key, until somebody redeploys it. Retrying per join request
+ * buys nothing and costs a round trip inside the screening path, so the route is
+ * parked for a few minutes and the verdict is produced without going out. Short
+ * enough that the endpoint coming back is noticed on its own.
+ */
+export const ROUTE_GONE_TTL_MS = 5 * 60_000;
+
 export interface SkykingsClientOptions {
   /** Absent or blank disables the client: every call answers NOT_CONFIGURED. */
   readonly apiKey: string | undefined;
@@ -73,6 +84,12 @@ export class SkykingsClient {
    * this, each one is its own round trip.
    */
   private readonly inflight = new Map<string, Promise<unknown>>();
+  /**
+   * Routes that answered 404, by path, with the moment we may ask again.
+   * Per-instance rather than in the shared cache: it is a fact about what this
+   * process has just seen, and a wrong entry costs at most one extra request.
+   */
+  private readonly goneUntil = new Map<string, number>();
 
   constructor(opts: SkykingsClientOptions) {
     const key = opts.apiKey?.trim();
@@ -103,6 +120,14 @@ export class SkykingsClient {
 
   /**
    * `GET /user/lookup?uuid=` — is this Minecraft account on the scammer list?
+   *
+   * **Known upstream outage (verified 2026-08-12):** this route answers
+   * `{"error":"Endpoint not found"}` with a 404 for every caller — key or none,
+   * GET or POST — while `/health`, `/user/info` and `/leaderboard/*` answer
+   * normally on the same key. The path, the `Authorization` header and the
+   * response reader here all match the published docs; there is nothing to fix
+   * on this side, so the verdict is `UNKNOWN` with `ENDPOINT_MISSING` until
+   * SkyKings deploys it again. See BRIDGE_BOT.md §6A.3.
    */
   async checkUuid(uuid: string): Promise<ScammerCheck> {
     return this.check(`uuid=${encodeURIComponent(normalizeUuid(uuid))}`, `sk:scam:u:${normalizeUuid(uuid)}`);
@@ -253,6 +278,15 @@ export class SkykingsClient {
   ): Promise<{ status: "OK"; data: unknown } | { status: "UNKNOWN"; cause: SkykingsUnknownCause; detail?: string }> {
     if (this.apiKey === null) return { status: "UNKNOWN", cause: "NOT_CONFIGURED" };
 
+    const route = path.split("?")[0] ?? path;
+    const parkedUntil = this.goneUntil.get(route);
+    if (parkedUntil !== undefined) {
+      if (Date.now() < parkedUntil) {
+        return { status: "UNKNOWN", cause: "ENDPOINT_MISSING", detail: `${route} answered 404` };
+      }
+      this.goneUntil.delete(route);
+    }
+
     let res;
     try {
       res = await this.http.get(`${this.baseUrl}${path}`, { Authorization: this.apiKey, Accept: "application/json" });
@@ -265,6 +299,21 @@ export class SkykingsClient {
     }
 
     if (res.status === 404 && opts.notFoundIsNull === true) return { status: "OK", data: null };
+    // A 404 on a route whose misses are *not* expressed as 404s — the scammer
+    // lookup answers 200 for both verdicts — is the route itself being absent.
+    // Reading it as "no listing" would clear everybody the day it happens, so it
+    // stays UNKNOWN, and the path is parked so the next applicant is not charged
+    // another doomed round trip.
+    if (res.status === 404) {
+      if (!this.goneUntil.has(route)) {
+        this.log.error("skykings endpoint answered 404 — the route is not deployed", {
+          route,
+          note: "scammer verdicts will report UNKNOWN until it returns",
+        });
+      }
+      this.goneUntil.set(route, Date.now() + ROUTE_GONE_TTL_MS);
+      return { status: "UNKNOWN", cause: "ENDPOINT_MISSING", detail: `${route} answered 404` };
+    }
     if (res.status === 401 || res.status === 403) {
       this.log.error("skykings rejected the api key", { status: res.status });
       return { status: "UNKNOWN", cause: "UNAUTHORIZED" };

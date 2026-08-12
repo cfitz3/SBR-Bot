@@ -16,6 +16,15 @@ export type SkykingsUnknownCause =
   | "UNAUTHORIZED"
   /** Upstream said no, briefly. Retrying later is reasonable. */
   | "RATE_LIMITED"
+  /**
+   * The route answered 404 — not "no record", but "no such endpoint".
+   *
+   * Its own cause because it is the one failure nobody on our side can fix by
+   * waiting or by rotating a key: the documented path is not deployed. Kept
+   * distinct from UNAVAILABLE so the report says so rather than reading as a
+   * blip, and so the client can stop firing doomed requests for a while.
+   */
+  | "ENDPOINT_MISSING"
   /** Down, timed out, or answered something unreadable. */
   | "UNAVAILABLE";
 

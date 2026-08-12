@@ -25,6 +25,7 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 | F9 | **Milestone/achievement announcements** | Auto-detected progression milestones announced to Discord (and optionally guild chat). |
 | F10 | **Reminders & news** | Skyblock news, mayor/firesale/bingo notifications, and event reminders pushed to subscribers/channels. |
 | F11 | **Anti-spam / flood control** | Per-user + global rate limiting, dedup, mute-aware relay. |
+| F11b | **Automod** | One panel-configured policy enforced on Discord *and* guild chat (§6C). |
 | F12 | **Bridge health & degradation** | Detects in-game disconnects, reconnects with backoff, and switches to a documented degraded mode. |
 | F13 | **Live guild roster** | `/online` reads `/g online` through the in-game session and reports who's on, grouped by guild rank. |
 | F14 | **Join screening & auto-accept** | Every `/g join` request is screened against the scammer list, the applicant's stats and this guild's own history, recorded, reported to staff, and — if the guild opts in — accepted automatically. |
@@ -77,6 +78,7 @@ inbound msg → 1 identify (map author to member/IGN)
             → 2 permission check (BridgePermission: may relay?)
             → 3 mute/suspend check (bridge suspended? author muted?)
             → 4 content filter (wordlist: BLOCK/FLAG/REPLACE/SHADOW_MUTE)
+            → 4b automod (the guild's own rules — see §6C)
             → 5 anti-spam/flood (rate + dedup)
             → 6 format (display name, mentions, emojis, truncation)
             → 7 deliver (Discord webhook  or  in-game /gc)
@@ -272,7 +274,137 @@ a behaviour switch. Without it the scammer check returns `UNKNOWN` and, by
 default, every request holds for a human. The key travels in the `Authorization`
 header and never in a query string, because query strings end up in proxy logs.
 
+**Known upstream outage — the scammer lookup is 404ing (verified 2026-08-12).**
+`GET /user/lookup`, the only endpoint that answers the scammer question, replies
+`{"error":"Endpoint not found"}` with a 404 to every caller: with our key and
+without one, GET and POST, at every path variant the docs and the obvious guesses
+suggest. `/health`, `/user/info` and `/leaderboard/*` answer normally on the same
+key at the same moment, so this is not our key, our header, our base URL or our
+uuid formatting — the documented route is simply not deployed. Nothing here can
+fix it; SkyKings has to bring it back.
+
+What the platform does meanwhile, all of it already the designed behaviour:
+
+- The verdict is `UNKNOWN` with the cause **`ENDPOINT_MISSING`** — its own cause,
+  so a report reads "the endpoint is gone" rather than implying a blip that will
+  clear itself. It is never `CLEAR`; §6A.2's first rule holds.
+- With `reviewOnScammerUnknown` on (the default) every applicant holds for a
+  human, which is the correct posture while the list is unreachable.
+- The client **parks a route that 404s for five minutes** (`ROUTE_GONE_TTL_MS`)
+  and answers from that, so an outage of this shape costs one request rather than
+  one per applicant inside the screening path. Parking is per route: the tracker
+  reads on `/leaderboard/user` keep working throughout.
+
 ---
+
+## 6B. Moderation Commands (the enforcement bus)
+
+The bridge account is the only process on the platform that can type in the
+Hypixel guild, so it is also the only one that can carry a punishment there. It
+does not decide anything: the moderation service resolves the mapping (see
+WEB_PANEL.md's "In-game punishment sync") and publishes a finished command line
+on `chan:mod:{guildId}`; the bridge subscribes and types it.
+
+**The guild is checked before anything is typed.** One Redis backs every guild
+on the platform, and this account has officer permissions in exactly one of
+them. A command whose `guildId` is not this bridge's resolved guild is refused
+and logged — including when the guild is still unresolved, which is the same
+posture the relay already takes when the server is not registered.
+
+**Commands are paced, and the queue forgets.** `CommandQueue` sends one line at
+a time with at least 1.2 s between them, holds at most 50, and abandons anything
+that has waited more than 10 minutes for a session:
+
+- *Pacing* protects the account from Hypixel's per-account command limit. This
+  is the same risk that puts `/g online` behind a 20 s cache, except the caller
+  here is a panel operator who could issue a hundred bans in a loop.
+- *Overflow drops the newest.* A full queue is a backlog of the punishments
+  staff issued first; dropping those to make room for later ones would silently
+  reorder enforcement. The drop is logged rather than inferred.
+- *Ageing* is why a session outage does not become a surprise. Without it the
+  queue would hold a mute overnight and deliver it at breakfast, against a
+  punishment that expired hours earlier.
+
+An unlinked member cannot be matched to an IGN, so nothing is published for
+them; they are punished on Discord and nowhere else, and the audit row says so.
+
+### The reverse direction is best-effort, and labelled
+
+`mod-notice.ts` parses Hypixel's own guild-chat announcements — kicks, mutes,
+unmutes — and records them as `ModerationAction` rows with
+`sourceContext: INGAME`, so an action taken in-game appears in the same history
+as one taken from the panel.
+
+This is deliberately incomplete, and the panel says so rather than implying
+parity:
+
+- Hypixel emits a line for some moderation events and not others.
+- The wording is not versioned and can change without notice.
+- A line is only seen while the bridge is connected; anything done during a
+  disconnect is not seen at all.
+
+Rows written this way are recorded as **inactive**: an in-game mute is not
+enforced by us and we cannot lift it, so marking it live would make the expiry
+sweeper believe it owned something it cannot touch. Where Hypixel names nobody,
+the actor is the `ingame` sentinel rather than a guessed snowflake, and the IGNs
+of both parties are preserved in the reason.
+
+Recording goes straight to the repository, not through `ModerationService`: the
+service *issues* punishments, and issuing one here would relay it back into the
+game the notice came from — a kick echoing into a second kick.
+
+---
+
+## 6C. Automod (F11b)
+
+Automod is one policy, configured once in the panel (`GuildSetting["moderation.automod"]`),
+enforced on **both** surfaces the guild actually talks on. The point of it living
+here rather than in a Discord-only bot is that a guild's rules do not stop at the
+Discord server boundary: a link-advertiser is an advertiser in guild chat too.
+
+### The two enforcement points
+
+| Surface | Where | Sees |
+|---|---|---|
+| `DISCORD` | `Events.MessageCreate` in `transport.ts`, before the relay branch | **every** message in the Discord server, not just the bridge channel |
+| `GUILD_CHAT` | pipeline stage 4b, via the `AutomodGate` port | every line coming out of the game |
+
+The relay gate judges **only** `GAME_TO_DISCORD`. A Discord-authored message
+already passed the `MessageCreate` hook on its way in; judging it again here
+would double-count its spam window and could punish it twice for one sentence.
+
+Guild-chat lines are judged on the **unfiltered** text. By stage 4b a `REPLACE`
+wordlist rule has already starred the message out, and an automod rule reading
+the stars would be reading our own edit rather than what was said.
+
+### The split, and why
+
+`packages/moderation/src/automod.ts` is **pure**: policy in, decision out, no
+I/O. `automod-runner.ts` is the impure half that reads the policy, the wordlist
+and the Redis counters and then calls the enforcement. That line exists so the
+panel's "Test a message" box can run the *real* evaluator against operator text
+rather than an approximation — a test harness that drifted from production would
+manufacture confidence rather than provide it.
+
+### It issues nothing itself
+
+A `WARN` or `MUTE` verdict is handed to `ModerationServiceImpl.applyAction`, the
+same entry point a moderator's `/warn` uses. Escalation, the audit trail and the
+§6B in-game sync therefore all apply, and automod needs to know about none of
+them. `FLAG` records the match and takes no action; `deleteMessage` is a separate
+flag rather than an action type, so "delete and say nothing" and "warn but leave
+it up" are both expressible.
+
+### It fails open, everywhere
+
+If the policy will not parse, the counter store is unreachable or the evaluation
+throws, the message is **delivered** and the failure is logged. Redis being down
+must not turn into a guild muting itself. For the same reason an unreadable
+counter counts as zero, never as a match.
+
+A member with no linked Discord account cannot be punished by the guild-chat
+side — there is no account to act on — so the runner logs the refusal and stops
+rather than inventing a target.
 
 ## 7. Example Message Flows
 

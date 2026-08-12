@@ -127,10 +127,42 @@ test("a fetcher that throws is caught rather than escaping into the caller", asy
 });
 
 test("a 404 on the scammer list is a failure, not an absent listing", async () => {
-  // /user/lookup answers 200 for both verdicts; a 404 means the route moved,
+  // /user/lookup answers 200 for both verdicts; a 404 means the route is gone,
   // and reading that as "no record" would clear everyone the day it happens.
+  // This is not hypothetical — the route has been 404ing upstream since at
+  // least 2026-08-12 while the rest of the API answers on the same key.
   const { fetch } = http(() => ({ status: 404, headers: {}, json: null }));
-  assert.equal((await client(fetch).checkUuid(UUID)).status, "UNKNOWN");
+  const verdict = await client(fetch).checkUuid(UUID);
+  assert.equal(verdict.status, "UNKNOWN");
+  assert.equal(verdict.status === "UNKNOWN" ? verdict.cause : null, "ENDPOINT_MISSING");
+});
+
+test("a missing route is asked once, not once per applicant", async () => {
+  // The expensive shape of this outage is a doomed round trip inside every join
+  // screening. Two different players, two different identifiers, one request.
+  const { fetch, calls } = http(() => ({ status: 404, headers: {}, json: null }));
+  const c = client(fetch);
+  assert.equal((await c.checkUuid(UUID)).status, "UNKNOWN");
+  assert.equal((await c.checkUuid("00000000-0000-0000-0000-000000000001")).status, "UNKNOWN");
+  const parked = await c.checkDiscordId("358670711109320705");
+  assert.equal(parked.status === "UNKNOWN" ? parked.cause : null, "ENDPOINT_MISSING");
+  assert.equal(calls.length, 1);
+});
+
+test("parking one route does not silence the others", async () => {
+  // /user/lookup being absent says nothing about /leaderboard/user, and a
+  // breaker that spanned the client would take the working half down with it.
+  const { fetch, calls } = http((url) =>
+    url.includes("/user/lookup")
+      ? { status: 404, headers: {}, json: null }
+      : okBody({ success: true, data: { uuid: normalizeUuid(UUID), username: "Jacktheguy" } }),
+  );
+  const c = client(fetch);
+  await c.checkUuid(UUID);
+  const res = await c.getPlayer(UUID);
+  assert.equal(res.status, "OK");
+  assert.equal(res.status === "OK" ? res.data?.username : null, "Jacktheguy");
+  assert.equal(calls.length, 2);
 });
 
 // ── caching and single-flight ──
