@@ -27,19 +27,9 @@ export interface OverviewCountsRow {
   readonly openTicketCount: number;
   readonly openInfractionCount: number;
   readonly activeActionCount: number;
-  readonly pendingApplicationCount: number;
   readonly upcomingEventCount: number;
   readonly recentJoinCount: number;
   readonly recentLeaveCount: number;
-}
-
-export interface FreshnessRow {
-  readonly job: string;
-  readonly lastSuccessAt: string | null;
-  readonly lastRunAt: string | null;
-  readonly lastStatus: string | null;
-  readonly durationMs: number | null;
-  readonly error: string | null;
 }
 
 export interface LinkedMemberRow {
@@ -91,16 +81,6 @@ export interface TicketRow {
   readonly status: string;
   readonly subject: string | null;
   readonly createdAt: string;
-}
-
-export interface ApplicationRow {
-  readonly id: string;
-  readonly applicantDiscordId: string;
-  readonly status: string;
-  readonly reviewerDiscordId: string | null;
-  readonly submittedAt: string | null;
-  readonly decidedAt: string | null;
-  readonly answers: unknown;
 }
 
 export interface JobHealthRow {
@@ -158,7 +138,6 @@ export const panelRepository = {
       openTicketCount,
       openInfractionCount,
       activeActionCount,
-      pendingApplicationCount,
       upcomingEventCount,
       recentJoinCount,
       recentLeaveCount,
@@ -174,7 +153,6 @@ export const panelRepository = {
       prisma.ticket.count({ where: { guildId, status: { in: ["OPEN", "PENDING"] } } }),
       prisma.infraction.count({ where: { guildId, status: "OPEN" } }),
       prisma.moderationAction.count({ where: { guildId, active: true } }),
-      prisma.application.count({ where: { guildId, status: { in: ["SUBMITTED", "UNDER_REVIEW"] } } }),
       prisma.event.count({ where: { guildId, status: { in: ["SCHEDULED", "LIVE"] }, startsAt: { gte: now } } }),
       prisma.guildMember.count({ where: { guildId, joinedAt: { gte: since } } }),
       prisma.guildMember.count({ where: { guildId, leftAt: { gte: since } } }),
@@ -188,45 +166,10 @@ export const panelRepository = {
       openTicketCount,
       openInfractionCount,
       activeActionCount,
-      pendingApplicationCount,
       upcomingEventCount,
       recentJoinCount,
       recentLeaveCount,
     };
-  },
-
-  /**
-   * Last successful run per job, for the "is our data current?" strip on the
-   * Overview and the Health page. Reports the last *success* separately from the
-   * last *run*: a job failing every minute still has a recent run, and showing
-   * that as freshness would hide the outage it is meant to reveal.
-   */
-  async jobFreshness(jobs: readonly string[]): Promise<readonly FreshnessRow[]> {
-    const rows = await Promise.all(
-      jobs.map(async (job) => {
-        const [lastSuccess, lastRun] = await Promise.all([
-          prisma.workerJobLog.findFirst({
-            where: { type: job, status: "COMPLETED" },
-            orderBy: { createdAt: "desc" },
-            select: { finishedAt: true },
-          }),
-          prisma.workerJobLog.findFirst({
-            where: { type: job },
-            orderBy: { createdAt: "desc" },
-            select: { finishedAt: true, status: true, durationMs: true, error: true },
-          }),
-        ]);
-        return {
-          job,
-          lastSuccessAt: iso(lastSuccess?.finishedAt),
-          lastRunAt: iso(lastRun?.finishedAt),
-          lastStatus: lastRun?.status ?? null,
-          durationMs: lastRun?.durationMs ?? null,
-          error: lastRun?.error ?? null,
-        };
-      }),
-    );
-    return rows;
   },
 
   /** Newest snapshot capture across the guild's linked accounts. */
@@ -387,35 +330,6 @@ export const panelRepository = {
         declined: tally("NOT_GOING"),
       };
     });
-  },
-
-  // ─────────────────────────── recruitment ───────────────────────────
-
-  async listApplications(guildId: string, limit = 100): Promise<readonly ApplicationRow[]> {
-    const rows = await prisma.application.findMany({
-      where: { guildId },
-      take: limit,
-      // Undecided first, then newest — the queue's working order.
-      orderBy: [{ decidedAt: "asc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        applicantDiscordId: true,
-        status: true,
-        reviewerDiscordId: true,
-        submittedAt: true,
-        decidedAt: true,
-        answers: true,
-      },
-    });
-    return rows.map((r) => ({
-      id: r.id,
-      applicantDiscordId: r.applicantDiscordId,
-      status: r.status,
-      reviewerDiscordId: r.reviewerDiscordId,
-      submittedAt: iso(r.submittedAt),
-      decidedAt: iso(r.decidedAt),
-      answers: r.answers,
-    }));
   },
 
   async listTickets(guildId: string, limit = 100): Promise<readonly TicketRow[]> {

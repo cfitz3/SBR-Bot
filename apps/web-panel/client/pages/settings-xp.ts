@@ -1,19 +1,23 @@
 /**
- * XP (WEB_PANEL.md §3.12) — what activity is worth, and the limits that stop
- * one member farming it.
+ * The XP section of the Settings page: what activity is worth, and the limits
+ * that stop one member farming it.
  *
- * Admin-only, and deliberately configuration only: there is no leaderboard and
- * no member standing here. Those are member-facing, and the panel is not a
- * member-facing surface — `/standing` and `/leaderboard` are where a member
- * sees where they are. What this page owns is the rules everyone is scored by,
- * plus the one write that bypasses them: a hand-entered adjustment.
+ * Deliberately configuration only — there is no leaderboard and no member
+ * standing here. Those are member-facing, and the panel is not a member-facing
+ * surface: `/standing` and `/leaderboard` are where a member sees where they
+ * are. What this section owns is the rules everyone is scored by, plus the one
+ * write that bypasses them: a hand-entered adjustment.
+ *
+ * Kept in its own module rather than inlined into `settings.ts` because it is
+ * the one section with real logic of its own — eight source forms and a ledger
+ * write — and folding it in would bury the rest of the page under it.
  */
-import type { XpVM } from "@sbr/panel-core";
+import type { XpSettingsVM } from "@sbr/panel-core";
 import type { XpSourcePolicyDTO } from "@sbr/shared-types";
-import { loadPage, postAction, type WriteResult } from "../api.js";
-import { card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
+import { postAction, type WriteResult } from "../api.js";
+import { card, emptyState } from "../components.js";
 import { actionButton, fieldGroup, isSnowflake, reasonBox, statusSlot, textField, toggleField } from "../forms.js";
-import { h, replace } from "../dom.js";
+import { h } from "../dom.js";
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
 const MAX_WEIGHT = 1_000;
@@ -55,45 +59,36 @@ function validateNumber(raw: string, max: number, whole: boolean): string | null
   return null;
 }
 
-export async function renderXp(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading XP settings…"));
-
-  const result = await loadPage<XpVM>(`/api/guilds/${encodeURIComponent(guildId)}/xp`);
-  if (result.kind === "denied") return replace(host, deniedState(result.reason));
-  if (result.kind === "error") {
-    return replace(host, errorState(result.message, () => void renderXp(host, guildId)));
-  }
-
-  const { installed, sources } = result.data;
-  if (!installed) {
-    return replace(
-      host,
-      h(
-        "div",
-        {},
-        pageTitle("XP", "Not enabled"),
+/**
+ * The whole XP section, as cards ready to drop into the Settings page.
+ *
+ * Returns a list rather than one wrapping card because each source is its own
+ * card: eight sources in a single card would be one scroll with no landmarks,
+ * and the source is the unit an admin actually thinks in.
+ */
+export function xpSection(guildId: string, vm: XpSettingsVM): readonly HTMLElement[] {
+  if (!vm.installed) {
+    return [
+      card(
+        "XP",
         emptyState("Guild XP isn't switched on for this deployment, so there is nothing to configure here."),
       ),
-    );
+    ];
   }
 
-  const cards = sources.map((policy) => sourceCard(guildId, policy));
-
-  replace(
-    host,
-    h(
-      "div",
-      {},
-      pageTitle("XP", `${sources.filter((s) => s.enabled).length} of ${sources.length} sources counting`),
+  return [
+    card(
+      "XP",
       h(
         "p",
-        { class: "page-note" },
-        "Changes apply from the next totalling pass onwards. Days already scored keep the numbers they were scored under.",
+        { class: "field-hint" },
+        `${vm.sources.filter((s) => s.enabled).length} of ${vm.sources.length} sources counting. ` +
+          "Changes apply from the next totalling pass onwards; days already scored keep the numbers they were scored under.",
       ),
-      ...cards,
-      card("Adjust a member", adjustForm(guildId)),
     ),
-  );
+    ...vm.sources.map((policy) => sourceCard(guildId, policy)),
+    card("Adjust a member's XP", adjustForm(guildId)),
+  ];
 }
 
 /**
@@ -118,7 +113,7 @@ function sourceCard(guildId: string, policy: XpSourcePolicyDTO): HTMLElement {
   const messageSource = policy.source === "DISCORD_MESSAGE" || policy.source === "GUILD_CHAT_MESSAGE";
 
   return card(
-    label,
+    `XP — ${label}`,
     fieldGroup(
       toggleField({
         label: "Counts towards XP",

@@ -11,14 +11,11 @@ import { h, replace } from "./dom.js";
 import { renderAnalytics } from "./pages/analytics.js";
 import { renderEvents } from "./pages/events.js";
 import { renderHealth } from "./pages/health.js";
-import { renderMapping } from "./pages/mapping.js";
 import { renderMembers } from "./pages/members.js";
 import { renderModeration } from "./pages/moderation.js";
 import { renderOverview } from "./pages/overview.js";
-import { renderRecruitment } from "./pages/recruitment.js";
 import { renderSelector } from "./pages/selector.js";
 import { renderSettings } from "./pages/settings.js";
-import { renderXp } from "./pages/xp.js";
 import { renderMilestones } from "./pages/milestones.js";
 import { renderTickets } from "./pages/tickets.js";
 import { renderWordlist } from "./pages/wordlist.js";
@@ -36,13 +33,10 @@ const GUILD_PAGES = [
   { id: "overview", label: "Overview", render: renderOverview },
   { id: "analytics", label: "Analytics", render: renderAnalytics },
   { id: "health", label: "Health", render: renderHealth },
-  { id: "recruitment", label: "Recruitment", render: renderRecruitment },
   { id: "events", label: "Events", render: renderEvents },
   { id: "moderation", label: "Moderation", render: renderModeration },
   { id: "members", label: "Members", render: renderMembers },
   { id: "settings", label: "Settings", render: renderSettings },
-  { id: "mapping", label: "Mapping", render: renderMapping },
-  { id: "xp", label: "XP", render: renderXp },
   { id: "milestones", label: "Milestones", render: renderMilestones },
   { id: "tickets", label: "Tickets", render: renderTickets },
   { id: "wordlist", label: "Filter", render: renderWordlist },
