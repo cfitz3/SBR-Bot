@@ -5,7 +5,7 @@
  */
 import type { SelectorVM } from "@sbr/panel-core";
 import { loadPage } from "../api.js";
-import { badge, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
+import { badge, deniedState, emptyState, errorState, pageTitle, person, spinner } from "../components.js";
 import { h, replace } from "../dom.js";
 import { count } from "../format.js";
 
@@ -41,8 +41,9 @@ function guildCard(guild: SelectorVM["guilds"][number]): HTMLElement {
   return h(
     "a",
     { class: "guild-card", href: `#/g/${encodeURIComponent(guild.id)}/overview` },
-    h("span", { class: "guild-name" }, guild.name),
-    h("span", { class: "guild-meta" }, `${count(guild.memberCount)} members`),
+    // Same initials mark the sidebar's guild switcher uses, so the card you
+    // clicked and the guild you land in are recognisably the same thing.
+    person(guild.name, `${count(guild.memberCount)} members`),
     // Whether a Hypixel guild is attached decides how much of the panel has data
     // in it, so it belongs on the card rather than three clicks in.
     guild.hypixelGuildId ? badge("Hypixel linked", "ok") : badge("No Hypixel guild", "warn"),

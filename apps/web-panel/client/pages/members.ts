@@ -19,6 +19,7 @@ import {
   emptyState,
   errorState,
   pageTitle,
+  person,
   spinner,
   statTile,
   type BadgeTone,
@@ -162,12 +163,7 @@ function memberRow(guildId: string, member: LinkedMember, rerender: () => void):
   return h(
     "tr",
     {},
-    h(
-      "td",
-      {},
-      h("div", { class: "job-cell" }, member.username ?? "unknown"),
-      h("code", { class: "muted" }, member.discordId),
-    ),
+    h("td", {}, person(member.username ?? "unknown", h("code", {}, member.discordId))),
     h(
       "td",
       {},

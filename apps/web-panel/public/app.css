@@ -1,55 +1,90 @@
 /*
- * Panel styles. One stylesheet, system fonts, no build step — the panel is an
- * operations tool read on a laptop between other tasks, so it optimises for
- * scanning density over decoration.
+ * Panel styles — the Nocturne design language.
  *
- * Both colour schemes are defined because staff open this at all hours and the
- * OS preference is the only signal we have.
+ * One stylesheet, no build step, no external origin: the server sends a CSP with
+ * no 'unsafe-inline' and no third-party hosts, so webfonts and CDN icon sets are
+ * off the table. Inter is named first and used when the operator happens to have
+ * it installed; otherwise the system stack carries the same measurements.
+ *
+ * Dark only. The previous stylesheet tracked the OS light/dark preference, but
+ * Nocturne is a single dark palette — a light variant would be a second design,
+ * not a second theme, so `color-scheme` pins dark and form controls follow.
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --border: #e2e5ea;
-  --text: #16181d;
-  --muted: #6b7280;
-  --accent: #4b5bd7;
-  --accent-text: #ffffff;
+  /* ── Nocturne tokens ─────────────────────────────────────────────────── */
 
-  --ok-bg: #e7f6ec;
-  --ok-text: #1a7f3c;
-  --warn-bg: #fdf1dc;
-  --warn-text: #8a5a08;
-  --bad-bg: #fdeaea;
-  --bad-text: #a52222;
-  --neutral-bg: #eef0f4;
-  --neutral-text: #4b5563;
+  --color-bg: #161826;
+  --color-surface: #232532;
+  --color-text: #e9e9ed;
+  --color-accent: #9184d9;
+  --color-accent-2: #a7a1db;
+  --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
 
-  --radius: 10px;
-  --gap: 16px;
-}
+  --color-neutral-100: #f3f5fe;
+  --color-neutral-200: #e4e7f5;
+  --color-neutral-300: #cfd3e5;
+  --color-neutral-400: #b2b6ca;
+  --color-neutral-500: #9397ab;
+  --color-neutral-600: #75798c;
+  --color-neutral-700: #595d6c;
+  --color-neutral-800: #3f424d;
+  --color-neutral-900: #292b31;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1115;
-    --surface: #171a21;
-    --border: #262b35;
-    --text: #e8eaee;
-    --muted: #98a0ae;
-    --accent: #7b88f0;
-    --accent-text: #0f1115;
+  --color-accent-100: #f5f4ff;
+  --color-accent-200: #e7e5fe;
+  --color-accent-300: #d2cefd;
+  --color-accent-400: #b5abfc;
+  --color-accent-500: #968ae0;
+  --color-accent-600: #796cbf;
+  --color-accent-700: #5d5294;
+  --color-accent-800: #423a6a;
+  --color-accent-900: #2b2741;
 
-    --ok-bg: #12301f;
-    --ok-text: #6ede9a;
-    --warn-bg: #33270e;
-    --warn-text: #f0c46a;
-    --bad-bg: #351718;
-    --bad-text: #f08a8a;
-    --neutral-bg: #232833;
-    --neutral-text: #aab2c0;
-  }
+  --space-1: 2.8px;
+  --space-2: 5.6px;
+  --space-3: 8.4px;
+  --space-4: 11.2px;
+  --space-5: 16.8px;
+  --space-6: 22.4px;
+  --space-7: 33.6px;
+  --space-8: 44.8px;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 0 0 1px var(--color-neutral-800);
+  --shadow-md: 0 0 0 1px var(--color-neutral-700), 0 6px 18px rgb(0 0 0 / 55%);
+  --shadow-lg: 0 0 0 1px var(--color-neutral-500), 0 16px 40px rgb(0 0 0 / 65%);
+
+  /*
+   * Status hues. The design's own tone map paints "warn" in the accent, which
+   * reads fine on a mock with one warning on screen but collapses on Health and
+   * Events, where warn and accent sit in the same table and have to mean
+   * different things. Warn gets its own amber for that reason; ok/bad are the
+   * design's values unchanged.
+   */
+  --tone-ok: #6fcf97;
+  --tone-warn: #e0b061;
+  --tone-bad: #e2726b;
+  --tone-neutral: var(--color-neutral-500);
+
+  --muted: var(--color-neutral-500);
+
+  --font-sans: Inter, "Inter var", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* A rule that fades out over its last 48px at each end, per the design. */
+  --rule: linear-gradient(
+    to right,
+    transparent,
+    var(--color-divider) 48px,
+    var(--color-divider) calc(100% - 48px),
+    transparent
+  );
 }
 
 * {
@@ -58,9 +93,14 @@
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: 15px/1.55 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  /* Sidebar beside content; the sidebar is the only sticky element. */
+  display: flex;
+  align-items: flex-start;
+  min-height: 100vh;
 }
 
 a {
@@ -68,172 +108,387 @@ a {
   text-decoration: none;
 }
 
-/* ── shell ─────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
 
-.shell-head {
-  display: flex;
-  align-items: center;
-  gap: var(--gap);
-  padding: 12px 20px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+/* ── shell: sidebar ────────────────────────────────────────────────────── */
+
+.shell-side {
+  flex: none;
+  width: 272px;
   position: sticky;
   top: 0;
-  z-index: 10;
-  flex-wrap: wrap;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6) var(--space-5);
+  /* Translucent surface over the ground, per the design. */
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+  backdrop-filter: blur(18px);
+  border-right: 1px solid var(--color-divider);
+  overflow-y: auto;
 }
 
 .brand {
-  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-weight: 600;
+  font-size: 14.5px;
   letter-spacing: -0.01em;
 }
 
-.nav {
-  flex: 1;
-  min-width: 0;
+.brand-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 34%, transparent);
+  color: var(--color-accent-300);
+  font-size: 14px;
+  font-weight: 650;
 }
 
-.nav-inner {
+.brand:hover {
+  color: var(--color-accent-300);
+}
+
+/* Guild switcher: the card at the top of the sidebar naming the active guild. */
+.guild-switch {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-neutral-900) 60%, transparent);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 120ms ease;
 }
 
-.nav-title {
+a.guild-switch:hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent);
+}
+
+.guild-switch-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+  color: var(--color-accent-200);
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.guild-switch-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.guild-switch-name {
+  font-size: 13.5px;
   font-weight: 600;
+  /* Guild names run long and the sidebar is fixed-width. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guild-switch-role {
+  font-size: 11.5px;
   color: var(--muted);
+}
+
+.guild-switch-caret {
+  margin-left: auto;
+  flex: none;
+  color: var(--color-neutral-600);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nav-group-label {
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600);
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+  color: var(--color-neutral-400);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.nav-link:hover {
+  background: color-mix(in srgb, var(--color-neutral-100) 6%, transparent);
+  color: var(--color-text);
+}
+
+.nav-link-active {
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
+  color: var(--color-text);
+  font-weight: 550;
+}
+
+/* Icons carry no intrinsic size; the class decides it. `.icon` is the default
+   for icons in the page body, `.nav-icon` the slightly larger sidebar one. */
+.icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.nav-icon {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  color: var(--color-neutral-600);
+}
+
+.nav-link:hover .nav-icon {
+  color: var(--color-neutral-400);
+}
+
+.nav-link-active .nav-icon {
+  color: var(--color-accent);
+}
+
+.side-foot {
+  margin-top: auto;
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-divider);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .nav-back,
 .signout {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: 13px;
   color: var(--muted);
-  font-size: 14px;
 }
 
 .nav-back:hover,
-.signout:hover,
-.brand:hover {
-  color: var(--accent);
+.signout:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-neutral-100) 6%, transparent);
 }
 
-.nav-tabs {
-  display: flex;
-  gap: 4px;
-}
-
-.tab {
-  padding: 5px 12px;
-  border-radius: 999px;
-  font-size: 14px;
+.nav-title {
+  font-size: 13.5px;
+  font-weight: 600;
   color: var(--muted);
 }
 
-.tab:hover {
-  background: var(--neutral-bg);
-  color: var(--text);
+/* Below the sidebar's width the layout stacks and the nav becomes a wrapped
+   row of links, which keeps every page reachable on a phone. */
+@media (max-width: 900px) {
+  body {
+    display: block;
+  }
+
+  .shell-side {
+    width: auto;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-4);
+    border-right: none;
+    border-bottom: 1px solid var(--color-divider);
+  }
+
+  .nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+  }
+
+  .nav-group {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .nav-group-label {
+    padding: 0 var(--space-2) 0 0;
+  }
+
+  .side-foot {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    flex-direction: row;
+  }
 }
 
-.tab-active {
-  background: var(--accent);
-  color: var(--accent-text);
-}
+/* ── shell: main ───────────────────────────────────────────────────────── */
 
 .view {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 24px 20px 64px;
+  flex: 1;
+  min-width: 0;
+  padding: 52px 60px 96px;
+}
+
+.view > * {
+  max-width: 1100px;
+}
+
+@media (max-width: 900px) {
+  .view {
+    padding: var(--space-7) var(--space-5) 72px;
+  }
 }
 
 /* ── page furniture ────────────────────────────────────────────────────── */
 
 .page-head {
-  margin-bottom: 20px;
+  margin-bottom: var(--space-7);
 }
 
 .page-head h2 {
   margin: 0;
-  font-size: 22px;
-  letter-spacing: -0.015em;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .muted {
   color: var(--muted);
-  margin: 4px 0 0;
+  margin: var(--space-2) 0 0;
   font-size: 14px;
 }
 
+.page-note {
+  margin: 0 0 var(--space-5);
+  font-size: 13px;
+  color: var(--muted);
+  max-width: 76ch;
+}
+
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: var(--gap);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 30px;
+  margin-bottom: var(--space-6);
 }
 
 .card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
 }
 
+/* The kicker: small, uppercase, wide-tracked — the design's section heading. */
 .card-head h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--color-neutral-400);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.1em;
 }
 
 .banner {
-  border-radius: var(--radius);
-  padding: 12px 16px;
-  margin-bottom: var(--gap);
-  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-5);
+  font-size: 14px;
 }
 
 .banner-warn {
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  border-color: currentColor;
+  background: color-mix(in srgb, var(--tone-warn) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-warn) 34%, transparent);
+  color: var(--tone-warn);
+}
+
+.hr {
+  height: 1px;
+  border: 0;
+  margin: var(--space-6) 0;
+  background: var(--rule);
 }
 
 /* ── tiles ─────────────────────────────────────────────────────────────── */
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-5);
 }
 
 .tile {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 12px;
-  background: var(--bg);
-  border-radius: 8px;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-neutral-900) 55%, transparent);
+  box-shadow: var(--shadow-sm);
 }
 
 .tile-label {
-  font-size: 12px;
-  color: var(--muted);
+  font-size: 11px;
+  color: var(--color-neutral-600);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.09em;
 }
 
 .tile-value {
-  font-size: 20px;
-  font-weight: 650;
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   /* Tabular figures so a column of counts lines up on the decimal. */
   font-variant-numeric: tabular-nums;
 }
 
 .tile-note {
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--muted);
 }
 
@@ -241,66 +496,127 @@ a {
 
 .guild-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: var(--space-5);
 }
 
 .guild-card {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 6px;
-  padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  transition: border-color 0.12s ease, transform 0.12s ease;
+  gap: var(--space-2);
+  padding: var(--space-6);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 120ms ease, transform 120ms ease;
 }
 
 .guild-card:hover {
-  border-color: var(--accent);
+  box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
 
-.guild-name {
+/* The card's identity block is the shared `.person` mark, so a guild reads the
+   same here as it does in the sidebar switcher. */
+.guild-card .person-name {
   font-size: 16px;
-  font-weight: 620;
-}
-
-.guild-meta {
-  font-size: 13px;
-  color: var(--muted);
+  letter-spacing: -0.01em;
 }
 
 /* ── badges ────────────────────────────────────────────────────────────── */
 
+/* Pill with a leading dot: the dot carries the tone, so the pill itself stays
+   quiet enough to sit inside a dense table row. */
 .badge {
-  display: inline-block;
-  padding: 2px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 9px 2px 8px;
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 550;
   white-space: nowrap;
+  background: color-mix(in srgb, var(--color-neutral-100) 7%, transparent);
+  box-shadow: inset 0 0 0 1px var(--color-divider);
+  color: var(--color-neutral-300);
+}
+
+.badge-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 .badge-ok {
-  background: var(--ok-bg);
-  color: var(--ok-text);
+  color: var(--tone-ok);
+  background: color-mix(in srgb, var(--tone-ok) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-ok) 30%, transparent);
 }
 
 .badge-warn {
-  background: var(--warn-bg);
-  color: var(--warn-text);
+  color: var(--tone-warn);
+  background: color-mix(in srgb, var(--tone-warn) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-warn) 30%, transparent);
 }
 
 .badge-bad {
-  background: var(--bad-bg);
-  color: var(--bad-text);
+  color: var(--tone-bad);
+  background: color-mix(in srgb, var(--tone-bad) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-bad) 30%, transparent);
 }
 
 .badge-neutral {
-  background: var(--neutral-bg);
-  color: var(--neutral-text);
+  color: var(--color-neutral-400);
+}
+
+/* Circular initial avatar, used where a row is about a person. */
+.avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  color: var(--color-accent-200);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.person {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.person-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.person-name {
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.person-note {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* Snowflakes and uuids arrive as <code>; inherit the note's size so the second
+   line doesn't outgrow the name above it. */
+.person-note code {
+  font-size: inherit;
+  color: inherit;
 }
 
 /* ── tables ────────────────────────────────────────────────────────────── */
@@ -317,132 +633,212 @@ a {
 
 .table th {
   text-align: left;
-  font-size: 12px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.09em;
+  color: var(--color-neutral-600);
+  padding: 0 var(--space-4) var(--space-3);
   white-space: nowrap;
 }
 
-.table td {
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
+/* Row rules are painted on the row rather than the cell so a single gradient
+   spans the full width and fades at the table's edges, not at every column
+   boundary. */
+.table thead tr,
+.table tbody tr {
+  background-image: var(--rule);
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: bottom left;
 }
 
-.table tr:last-child td {
-  border-bottom: none;
+.table tbody tr:last-child {
+  background-image: none;
+}
+
+.table td {
+  padding: var(--space-4);
+  vertical-align: top;
 }
 
 .job-cell {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
 }
 
 .job-error {
   font-size: 12px;
-  color: var(--bad-text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--tone-bad);
+  font-family: var(--font-mono);
   /* Stack traces and driver errors are long; let them wrap rather than
      stretching the table past the viewport. */
   overflow-wrap: anywhere;
   max-width: 44ch;
 }
 
+.job-detail {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 /* ── states ────────────────────────────────────────────────────────────── */
 
 .state {
-  padding: 28px 16px;
+  padding: var(--space-8) var(--space-5);
   text-align: center;
   color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 
 .state-error {
-  color: var(--bad-text);
-  border-color: var(--bad-text);
+  color: var(--tone-bad);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-bad) 40%, transparent);
 }
 
 .state-denied p {
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-4);
 }
 
+/* ── buttons ───────────────────────────────────────────────────────────── */
+
+/* Nocturne buttons are outlined rather than filled, including the primary — the
+   accent reads as the emphasis on its own against this ground. */
 .button {
-  display: inline-block;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-neutral-700);
+  background: transparent;
+  color: var(--color-neutral-300);
   font: inherit;
-  font-size: 14px;
+  font-size: 13.5px;
   cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.button:hover {
+  border-color: var(--color-neutral-500);
+  color: var(--color-text);
 }
 
 .button-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-text);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent-300);
+  font-weight: 550;
+}
+
+.button-primary:hover {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-accent-200);
+}
+
+.button-danger {
+  border-color: color-mix(in srgb, var(--tone-bad) 50%, transparent);
+  color: var(--tone-bad);
+}
+
+.button-danger:hover {
+  border-color: var(--tone-bad);
+  color: var(--tone-bad);
+}
+
+/* Armed destructive button: filled, so a second click is clearly a commitment. */
+.button-armed {
+  background: color-mix(in srgb, var(--tone-bad) 18%, transparent);
+  border-color: var(--tone-bad);
+  color: var(--tone-bad);
   font-weight: 600;
 }
 
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.9em;
+.button:disabled {
+  /* Disabled means "nothing to save" far more often than "you may not"; keep it
+     legible rather than ghosted so the row doesn't read as broken. */
+  opacity: 0.45;
+  cursor: default;
 }
 
-/* ── analytics controls & export ───────────────────────────────────────── */
+.button:disabled:hover {
+  border-color: var(--color-neutral-700);
+  color: var(--color-neutral-300);
+  background: transparent;
+}
+
+/* ── controls, analytics range pickers & export ────────────────────────── */
 
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--gap);
+  gap: var(--space-5);
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-5);
 }
 
 .control-label {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--space-3);
+  font-size: 12.5px;
   color: var(--muted);
 }
 
 .control {
   font: inherit;
-  font-size: 14px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 10px;
+  font-size: 13.5px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-neutral-900) 70%, transparent);
+  border: 1px solid var(--color-neutral-800);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  transition: border-color 120ms ease;
+}
+
+.control:hover {
+  border-color: var(--color-neutral-700);
+}
+
+.control:focus {
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+.control::placeholder {
+  color: var(--color-neutral-600);
 }
 
 .export-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: var(--gap);
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
 }
 
+/* Ghost link: the design's quietest affordance, a bordered pill with no fill. */
 .export-link {
-  font-size: 13px;
-  color: var(--accent);
-  border-bottom: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-neutral-800);
+  font-size: 12.5px;
+  color: var(--color-neutral-400);
+  transition: border-color 120ms ease, color 120ms ease;
 }
 
 .export-link:hover {
-  border-bottom-color: var(--accent);
+  border-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
+  color: var(--color-accent-300);
 }
 
 .note {
-  margin: 8px 0 0;
+  margin: var(--space-3) 0 0;
   font-size: 12px;
   color: var(--muted);
 }
@@ -460,14 +856,14 @@ code {
 }
 
 .grid {
-  stroke: var(--border);
+  stroke: var(--color-divider);
   stroke-width: 1;
 }
 
 .axis {
-  fill: var(--muted);
+  fill: var(--color-neutral-600);
   font-size: 11px;
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 .axis-y {
@@ -481,23 +877,27 @@ code {
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 18px;
+  gap: var(--space-2) var(--space-6);
   list-style: none;
-  margin: 12px 0 0;
+  margin: var(--space-5) 0 0;
   padding: 0;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 
 .legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
+}
+
+.legend-label {
+  color: var(--color-neutral-300);
 }
 
 .swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
   /* Background colour is assigned per series from the chart palette. */
   flex: none;
 }
@@ -512,7 +912,7 @@ code {
 .bars {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-4);
 }
 
 .bar-row {
@@ -520,32 +920,34 @@ code {
   /* Label, bar, count — the note wraps underneath the bar on its own row. */
   grid-template-columns: minmax(6ch, 14ch) 1fr auto;
   align-items: center;
-  gap: 4px 12px;
+  gap: var(--space-1) var(--space-5);
 }
 
 .bar-label {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--color-neutral-300);
   overflow-wrap: anywhere;
 }
 
 .bar-track {
-  background: var(--neutral-bg);
-  border-radius: 4px;
-  height: 12px;
+  background: color-mix(in srgb, var(--color-neutral-100) 7%, transparent);
+  border-radius: 999px;
+  height: 8px;
   overflow: hidden;
 }
 
 .bar-fill {
   display: block;
   height: 100%;
-  background: var(--accent);
-  border-radius: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--color-accent-600), var(--color-accent));
 }
 
 .bar-value {
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: 12.5px;
+  color: var(--color-neutral-300);
 }
 
 .bar-note {
@@ -559,18 +961,19 @@ code {
 .fields {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--space-6);
 }
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .field-label {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .field-label-inline {
@@ -584,7 +987,7 @@ code {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
 }
 
 .control-text {
@@ -612,18 +1015,48 @@ code {
 }
 
 .field-status-saved {
-  color: var(--ok-text);
+  color: var(--tone-ok);
 }
 
 .field-status-error {
-  color: var(--bad-text);
+  color: var(--tone-bad);
 }
 
-.button:disabled {
-  /* Disabled means "nothing to save" far more often than "you may not"; keep it
-     legible rather than ghosted so the row doesn't read as broken. */
-  opacity: 0.5;
-  cursor: default;
+.field-inline {
+  gap: var(--space-1);
+}
+
+.field-inline .field-row {
+  margin: 0;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.control-select {
+  padding: var(--space-3) var(--space-4);
+}
+
+.control-short {
+  flex: 0 0 14ch;
+  max-width: 14ch;
+}
+
+.control-area {
+  flex: 1 1 100%;
+  min-height: 68px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-neutral-900) 70%, transparent);
+  border: 1px solid var(--color-neutral-800);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
 }
 
 /* ── switch ────────────────────────────────────────────────────────────── */
@@ -651,9 +1084,9 @@ code {
   height: 22px;
   padding: 2px;
   border-radius: 999px;
-  background: var(--neutral-bg);
-  border: 1px solid var(--border);
-  transition: background 120ms ease;
+  background: color-mix(in srgb, var(--color-neutral-100) 8%, transparent);
+  border: 1px solid var(--color-neutral-800);
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .switch-thumb {
@@ -661,109 +1094,53 @@ code {
   width: 16px;
   height: 16px;
   border-radius: 999px;
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
-  transition: transform 120ms ease;
+  background: var(--color-neutral-400);
+  transition: transform 120ms ease, background 120ms ease;
 }
 
 .switch-input:checked + .switch-track {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  border-color: var(--color-accent);
 }
 
 .switch-input:checked + .switch-track .switch-thumb {
   transform: translateX(18px);
+  background: var(--color-accent-100);
 }
 
 .switch-input:focus-visible + .switch-track {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
 .switch-input:disabled + .switch-track {
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
-.job-detail {
-  font-size: 12px;
-  color: var(--muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  overflow-wrap: anywhere;
-}
-
-/* ── action pages: queues, row controls, destructive buttons ───────────── */
-
-.control-select {
-  padding: 6px 10px;
-}
-
-.control-short {
-  flex: 0 0 14ch;
-  max-width: 14ch;
-}
-
-.control-area {
-  flex: 1 1 100%;
-  min-height: 60px;
-  resize: vertical;
-  font: inherit;
-  font-size: 14px;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-
-.button-danger {
-  border-color: var(--bad-text);
-  color: var(--bad-text);
-}
-
-/* Armed destructive button: filled, so a second click is clearly a commitment. */
-.button-armed {
-  background: var(--bad-bg);
-  border-color: var(--bad-text);
-  color: var(--bad-text);
-  font-weight: 600;
-}
-
-.field-inline {
-  gap: 4px;
-}
-
-.field-inline .field-row {
-  margin: 0;
-}
-
-.row-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
+/* ── queues ────────────────────────────────────────────────────────────── */
 
 /* One card, many independently resolvable items. */
 .queue {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-5);
 }
 
 .queue-item {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  background: color-mix(in srgb, var(--color-neutral-900) 45%, transparent);
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-4);
 }
 
 .queue-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-3);
   font-size: 14px;
 }
 
@@ -771,7 +1148,7 @@ code {
   margin: 0;
   display: grid;
   grid-template-columns: minmax(120px, 22ch) 1fr;
-  gap: 4px 12px;
+  gap: var(--space-1) var(--space-5);
   font-size: 14px;
 }
 
@@ -795,7 +1172,7 @@ code {
   }
 
   .answers dd {
-    margin-bottom: 6px;
+    margin-bottom: var(--space-2);
   }
 }
 
@@ -803,15 +1180,15 @@ code {
 .roster {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 16px;
+  gap: var(--space-6);
 }
 
 .roster-col h4 {
-  margin: 0 0 6px;
-  font-size: 13px;
-  letter-spacing: 0.02em;
+  margin: 0 0 var(--space-3);
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--color-neutral-600);
 }
 
 .roster-list {
@@ -820,7 +1197,7 @@ code {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: 14px;
 }
 
