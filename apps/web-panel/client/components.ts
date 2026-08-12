@@ -7,7 +7,8 @@
  */
 import type { DenyReason } from "@sbr/panel-core";
 import { denialMessage } from "./api.js";
-import { h } from "./dom.js";
+import { h, type Child } from "./dom.js";
+import { initials } from "./icons.js";
 
 export function pageTitle(title: string, subtitle?: string): HTMLElement {
   return h("div", { class: "page-head" }, h("h2", {}, title), subtitle ? h("p", { class: "muted" }, subtitle) : null);
@@ -25,8 +26,31 @@ export function statTile(label: string, value: string, note?: string | null): HT
 
 export type BadgeTone = "ok" | "warn" | "bad" | "neutral";
 
+/**
+ * A pill with a leading dot. The dot carries the tone so the pill can stay quiet
+ * enough to sit in a dense table row, and so the state survives being read by
+ * someone who can't separate the three hues.
+ */
 export function badge(text: string, tone: BadgeTone = "neutral"): HTMLElement {
-  return h("span", { class: `badge badge-${tone}` }, text);
+  return h("span", { class: `badge badge-${tone}` }, h("span", { class: "badge-dot", "aria-hidden": "true" }), text);
+}
+
+/**
+ * A row that is about a person: circular initials beside the name, with an
+ * optional second line for the id, rank, or whatever identifies them further.
+ */
+export function person(name: string, note?: Child): HTMLElement {
+  return h(
+    "div",
+    { class: "person" },
+    h("span", { class: "avatar", "aria-hidden": "true" }, initials(name)),
+    h(
+      "div",
+      { class: "person-text" },
+      h("span", { class: "person-name" }, name),
+      note ? h("span", { class: "person-note" }, note) : null,
+    ),
+  );
 }
 
 export function card(title: string, body: HTMLElement, action?: HTMLElement | null): HTMLElement {

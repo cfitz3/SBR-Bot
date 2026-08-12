@@ -19,15 +19,23 @@ const H = 220;
 const PAD = { top: 12, right: 12, bottom: 26, left: 46 };
 
 /**
- * Series colours. Fixed hues rather than theme variables because a line's
- * identity has to survive a theme switch, and because the legend swatch and the
- * line must agree exactly.
+ * Series colours. Literal hues rather than custom properties because the legend
+ * swatch and the line have to agree exactly, and an SVG `stroke` reading a token
+ * that a future stylesheet renames fails silently — as a black line. The first
+ * is the Nocturne accent; the rest are the status hues plus two neighbours,
+ * chosen for separation against this ground rather than for a colour wheel.
  */
-const COLORS = ["#4b5bd7", "#1a9e6a", "#d1770b", "#b8397f", "#0e8fa8", "#8a6ad1"] as const;
+const COLORS = ["#9184d9", "#6fcf97", "#e0b061", "#e2726b", "#6fb3d1", "#c48ad9"] as const;
 
 function color(i: number): string {
   return COLORS[i % COLORS.length] ?? COLORS[0];
 }
+
+/**
+ * Gradient ids have to be unique per document: two charts on one page sharing an
+ * id means the second one's fill silently resolves to the first one's.
+ */
+let gradientSeq = 0;
 
 /** A y-axis top that lands on a round number, so the gridline labels read well. */
 function niceMax(peak: number): number {
@@ -100,6 +108,38 @@ export function lineChart(chart: MetricChart, period: string): HTMLElement {
     });
   });
 
+  /*
+   * The design fills the area under the line with a fade to nothing. That only
+   * works for a single series — two overlapping washes read as a third colour
+   * that means nothing — so a multi-series chart stays as bare lines.
+   */
+  const gradientId = `chart-fade-${(gradientSeq += 1)}`;
+  const only = chart.series.length === 1 ? chart.series[0] : null;
+  const area =
+    only && buckets.length > 1
+      ? [
+          s(
+            "defs",
+            {},
+            s(
+              "linearGradient",
+              { id: gradientId, x1: "0", y1: "0", x2: "0", y2: "1" },
+              s("stop", { offset: "0", "stop-color": color(0), "stop-opacity": "0.34" }),
+              s("stop", { offset: "1", "stop-color": color(0), "stop-opacity": "0" }),
+            ),
+          ),
+          s("polygon", {
+            points: [
+              `${x(0).toFixed(1)},${(PAD.top + plotH).toFixed(1)}`,
+              ...only.points.map((value, idx) => `${x(idx).toFixed(1)},${y(value).toFixed(1)}`),
+              `${x(buckets.length - 1).toFixed(1)},${(PAD.top + plotH).toFixed(1)}`,
+            ].join(" "),
+            fill: `url(#${gradientId})`,
+            stroke: "none",
+          }),
+        ]
+      : [];
+
   // Screen readers get the summary; the drawing itself is decoration over data
   // that is also in the legend and the CSV.
   const label = `${chart.label}: ${count(chart.total)} total across ${buckets.length} buckets`;
@@ -119,6 +159,7 @@ export function lineChart(chart: MetricChart, period: string): HTMLElement {
       s("title", {}, label),
       ...gridlines,
       ...ticks,
+      ...area,
       ...lines,
     ),
     legend(chart),

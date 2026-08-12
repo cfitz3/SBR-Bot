@@ -1,35 +1,65 @@
 <!doctype html>
 <!--
   Panel shell. Deliberately inert: no inline script, no inline style, no external
-  origin. Everything below `#view` is built by app/main.js through the DOM API,
-  which is what lets the server send a CSP with no 'unsafe-inline'.
+  origin. Everything below `#view` and `#nav` is built by app/main.js through the
+  DOM API, which is what lets the server send a CSP with no 'unsafe-inline'.
+
+  The sidebar's frame is static because it never changes: the brand and the sign
+  out link are the same on every route, so only the guild switcher and the page
+  list are worth re-rendering.
 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#161826" />
     <title>SBR Panel</title>
     <link rel="stylesheet" href="/app.css" />
     <link rel="icon" href="data:," />
     <script type="module" src="/app/main.js"></script>
   </head>
   <body>
-    <header class="shell-head">
-      <a class="brand" href="#/">SBR Guild Platform</a>
+    <aside class="shell-side">
+      <a class="brand" href="#/">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        SBR Guild Platform
+      </a>
+
       <div id="nav" class="nav"></div>
-      <a class="signout" href="/logout">Sign out</a>
-    </header>
+
+      <div class="side-foot">
+        <a class="signout" href="/logout">
+          <!-- Inline SVG rather than an icon font: the CSP allows no off-origin
+               font, and this one link renders before main.js has parsed. -->
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M9.5 20H5V4h4.5" />
+            <path d="M15 16l4-4-4-4" />
+            <path d="M19 12H9.5" />
+          </svg>
+          Sign out
+        </a>
+      </div>
+    </aside>
 
     <main id="view" class="view">
+      <noscript>
+        <p class="state state-error">
+          The control panel needs JavaScript. The underlying data is also available as JSON under
+          <code>/api/guilds</code>.
+        </p>
+      </noscript>
       <div class="state state-loading">Loading…</div>
     </main>
-
-    <noscript>
-      <p class="state state-error">
-        The control panel needs JavaScript. The underlying data is also available as JSON under
-        <code>/api/guilds</code>.
-      </p>
-    </noscript>
   </body>
 </html>

@@ -18,6 +18,7 @@ import { barChart, lineChart, type BarRow } from "../chart.js";
 import { card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
 import { h, replace } from "../dom.js";
 import { count, describeSpan, duration } from "../format.js";
+import { icon } from "../icons.js";
 
 const PERIODS: readonly RollupPeriod[] = ["HOURLY", "DAILY", "WEEKLY", "MONTHLY"];
 
@@ -68,10 +69,16 @@ export async function renderAnalytics(host: HTMLElement, guildId: string): Promi
       h(
         "div",
         { class: "export-row" },
-        h("a", { class: "export-link", href: `${base}?${query()}&format=csv`, download: true }, "Export rollups (CSV)"),
+        h(
+          "a",
+          { class: "export-link", href: `${base}?${query()}&format=csv`, download: true },
+          icon("download"),
+          "Export rollups (CSV)",
+        ),
         h(
           "a",
           { class: "export-link", href: `${base}?${query()}&format=csv&table=commands`, download: true },
+          icon("download"),
           "Export command stats (CSV)",
         ),
       ),

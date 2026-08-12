@@ -5,9 +5,11 @@
  * routing would mean every deep link had to be rewritten server-side, which is a
  * second place for the route list to drift out of sync with this one.
  */
-import type { SelectorVM } from "@sbr/panel-core";
+import type { GuildCard, SelectorVM } from "@sbr/panel-core";
 import { loadPage } from "./api.js";
-import { h, replace } from "./dom.js";
+import { frag, h, replace } from "./dom.js";
+import { count } from "./format.js";
+import { icon, initials, type IconName } from "./icons.js";
 import { renderAnalytics } from "./pages/analytics.js";
 import { renderEvents } from "./pages/events.js";
 import { renderHealth } from "./pages/health.js";
@@ -26,21 +28,34 @@ interface GuildRoute {
 }
 
 /**
- * Tab order runs from watching to acting: what's happening, then the queues
+ * Page order runs from watching to acting: what's happening, then the queues
  * that need a person, then the settings that change how the platform behaves.
+ * The three groups are the headings the sidebar prints above each run.
  */
-const GUILD_PAGES = [
-  { id: "overview", label: "Overview", render: renderOverview },
-  { id: "analytics", label: "Analytics", render: renderAnalytics },
-  { id: "health", label: "Health", render: renderHealth },
-  { id: "events", label: "Events", render: renderEvents },
-  { id: "moderation", label: "Moderation", render: renderModeration },
-  { id: "members", label: "Members", render: renderMembers },
-  { id: "settings", label: "Settings", render: renderSettings },
-  { id: "milestones", label: "Milestones", render: renderMilestones },
-  { id: "tickets", label: "Tickets", render: renderTickets },
-  { id: "wordlist", label: "Filter", render: renderWordlist },
-] as const;
+type NavGroup = "Monitor" | "Queues" | "Configure";
+
+interface GuildPage {
+  readonly id: string;
+  readonly label: string;
+  readonly group: NavGroup;
+  readonly icon: IconName;
+  readonly render: (host: HTMLElement, guildId: string) => Promise<void> | void;
+}
+
+const GUILD_PAGES: readonly GuildPage[] = [
+  { id: "overview", label: "Overview", group: "Monitor", icon: "overview", render: renderOverview },
+  { id: "analytics", label: "Analytics", group: "Monitor", icon: "analytics", render: renderAnalytics },
+  { id: "health", label: "Health", group: "Monitor", icon: "health", render: renderHealth },
+  { id: "events", label: "Events", group: "Monitor", icon: "events", render: renderEvents },
+  { id: "moderation", label: "Moderation", group: "Queues", icon: "moderation", render: renderModeration },
+  { id: "members", label: "Members", group: "Queues", icon: "members", render: renderMembers },
+  { id: "tickets", label: "Tickets", group: "Queues", icon: "tickets", render: renderTickets },
+  { id: "settings", label: "Settings", group: "Configure", icon: "settings", render: renderSettings },
+  { id: "milestones", label: "Milestones", group: "Configure", icon: "milestones", render: renderMilestones },
+  { id: "wordlist", label: "Filter", group: "Configure", icon: "wordlist", render: renderWordlist },
+];
+
+const NAV_GROUPS: readonly NavGroup[] = ["Monitor", "Queues", "Configure"];
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("nav");
@@ -48,8 +63,8 @@ if (!viewEl || !navEl) throw new Error("panel shell is missing its mount points"
 const view: HTMLElement = viewEl;
 const nav: HTMLElement = navEl;
 
-/** Guild names come from the selector; cached so tab switches don't refetch. */
-let guildNames: ReadonlyMap<string, string> | null = null;
+/** Guild cards come from the selector; cached so page switches don't refetch. */
+let guildCards: ReadonlyMap<string, GuildCard> | null = null;
 
 function parseRoute(hash: string): GuildRoute | null {
   const match = /^#\/g\/([^/]+)\/([a-z-]+)$/.exec(hash);
@@ -57,43 +72,77 @@ function parseRoute(hash: string): GuildRoute | null {
   return { guildId: decodeURIComponent(match[1]!), page: match[2]! };
 }
 
-async function guildName(guildId: string): Promise<string | null> {
-  if (!guildNames) {
+async function guildCard(guildId: string): Promise<GuildCard | null> {
+  if (!guildCards) {
     const result = await loadPage<SelectorVM>("/api/guilds");
     if (result.kind !== "ok") return null;
-    guildNames = new Map(result.data.guilds.map((g) => [g.id, g.name]));
+    guildCards = new Map(result.data.guilds.map((g) => [g.id, g]));
   }
-  return guildNames.get(guildId) ?? null;
+  return guildCards.get(guildId) ?? null;
 }
 
-function renderNav(route: GuildRoute | null, name: string | null): void {
+/**
+ * The guild switcher: which guild you are looking at, and the way back to the
+ * list. It is a link rather than a dropdown because the guild list is already a
+ * page — a second copy of it in a menu is a second thing to keep in sync.
+ */
+function guildSwitch(name: string, note: string | null): HTMLElement {
+  return h(
+    "a",
+    { class: "guild-switch", href: "#/", title: "Switch guild" },
+    h("span", { class: "guild-switch-avatar", "aria-hidden": "true" }, initials(name)),
+    h(
+      "span",
+      { class: "guild-switch-text" },
+      h("span", { class: "guild-switch-name" }, name),
+      note ? h("span", { class: "guild-switch-role" }, note) : null,
+    ),
+    icon("caret", "nav-icon guild-switch-caret"),
+  );
+}
+
+function navLink(route: GuildRoute, page: GuildPage): HTMLElement {
+  const active = page.id === route.page;
+  return h(
+    "a",
+    {
+      class: active ? "nav-link nav-link-active" : "nav-link",
+      href: `#/g/${encodeURIComponent(route.guildId)}/${page.id}`,
+      "aria-current": active ? "page" : false,
+    },
+    icon(page.icon, "nav-icon"),
+    page.label,
+  );
+}
+
+function renderNav(route: GuildRoute | null, card: GuildCard | null): void {
   if (!route) {
-    replace(nav, h("span", { class: "nav-title" }, "SBR Panel"));
+    replace(nav, h("span", { class: "nav-title" }, "Your guilds"));
     return;
   }
+  // A missing card means the selector call failed or the id isn't one of yours;
+  // the page itself will say so, so the switcher just drops the member count
+  // rather than inventing a number.
+  const name = card?.name ?? "Guild";
+  const note = card === null ? null : card.memberCount === 1 ? "1 member" : `${count(card.memberCount)} members`;
   replace(
     nav,
-    h(
-      "div",
-      { class: "nav-inner" },
-      h("a", { class: "nav-back", href: "#/", title: "Back to guild list" }, "← Guilds"),
-      h("span", { class: "nav-title" }, name ?? "Guild"),
+    frag([
+      guildSwitch(name, note),
       h(
         "nav",
-        { class: "nav-tabs", "aria-label": "Guild pages" },
-        ...GUILD_PAGES.map((page) =>
+        { class: "nav", "aria-label": "Guild pages" },
+        ...NAV_GROUPS.map((group) =>
           h(
-            "a",
-            {
-              class: page.id === route.page ? "tab tab-active" : "tab",
-              href: `#/g/${encodeURIComponent(route.guildId)}/${page.id}`,
-              "aria-current": page.id === route.page ? "page" : false,
-            },
-            page.label,
+            "div",
+            { class: "nav-group" },
+            h("span", { class: "nav-group-label" }, group),
+            ...GUILD_PAGES.filter((page) => page.group === group).map((page) => navLink(route, page)),
           ),
         ),
       ),
-    ),
+      h("a", { class: "nav-back", href: "#/" }, icon("back", "nav-icon"), "All guilds"),
+    ]),
   );
 }
 
@@ -115,9 +164,9 @@ async function render(): Promise<void> {
     return;
   }
 
-  const name = await guildName(route.guildId);
-  renderNav(route, name);
-  document.title = name ? `${name} — ${page.label}` : `SBR Panel — ${page.label}`;
+  const card = await guildCard(route.guildId);
+  renderNav(route, card);
+  document.title = card ? `${card.name} — ${page.label}` : `SBR Panel — ${page.label}`;
   await page.render(view, route.guildId);
 }
 
