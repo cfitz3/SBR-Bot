@@ -478,7 +478,26 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
         const result = await scanGuild(guild.id, {
           async fetchRoster() {
             const remote = await ctx.hypixel.getGuild(hypixelGuildId, "id");
-            return remote.ok ? remote.value.data.members : null;
+            if (remote.ok) return remote.value.data.members;
+            // Named rather than collapsed to null: these three failures are
+            // three different jobs — reissue the key, fix the configured guild
+            // id, wait — and recording them all as "roster fetch failed" is why
+            // a scan can fail every six hours without anyone learning anything.
+            switch (remote.error.state) {
+              case "API_DISABLED":
+                return {
+                  failed:
+                    "Hypixel rejected the API key (403) — issue a new one at developer.hypixel.net and set HYPIXEL_API_KEY",
+                };
+              case "MISSING_PROFILE":
+                return {
+                  failed: `Hypixel has no guild with id "${hypixelGuildId}" — check the guild's hypixelGuildId`,
+                };
+              case "RATE_LIMITED":
+                return { failed: "rate limited by Hypixel — the next scan will retry" };
+              default:
+                return { failed: `roster fetch failed (${remote.error.state})` };
+            }
           },
           listCached: (id) => guildScanRepository.listCache(id),
           async resolveNames(uuids) {
@@ -497,7 +516,11 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           recordScan: (id, result, error) => guildScanRepository.recordScan(id, result, error),
         });
         if (result.skipped) {
-          ctx.log.warn("guild scan incomplete", { guildId: guild.id, reason: result.skipped });
+          ctx.log.warn("guild scan incomplete", {
+            guildId: guild.id,
+            skipped: result.skipped,
+            reason: result.reason ?? null,
+          });
           continue;
         }
         ctx.log.info("guild scanned", {

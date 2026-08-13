@@ -5,11 +5,12 @@
  * output and migration state, then prints the exact command to fix whatever is
  * wrong. Exits non-zero if anything blocking is broken, so CI can use it too.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import { connect } from "node:net";
 import { join } from "node:path";
 import {
-  APPS, NPM, ROOT, c, has, isConfigured, readEnv, run, say,
+  APPS, NPM, ROOT, c, has, isConfigured, parseEnv, readEnv, run, say,
 } from "./lib.mjs";
 
 const problems = [];
@@ -30,6 +31,28 @@ function reachable(host, port, timeout = 1500) {
     socket.once("connect", () => done(true));
     socket.once("timeout", () => done(false));
     socket.once("error", () => done(false));
+  });
+}
+
+/**
+ * Status code of a GET, or `null` if the host could not be reached.
+ *
+ * `node:https` rather than `fetch` deliberately: fetch's connection pool
+ * outlives the call, and this script ends in `process.exit`, which on Windows
+ * aborts the process outright if it races a socket the pool is still closing.
+ * A request we own can be destroyed the moment the headers arrive — and the
+ * body is never read, so a credential's response never enters memory.
+ */
+function httpStatus(url, headers, timeout = 5000) {
+  return new Promise((resolve) => {
+    const req = httpsRequest(url, { headers, timeout }, (res) => {
+      res.resume();
+      resolve(res.statusCode ?? null);
+      req.destroy();
+    });
+    req.once("timeout", () => (req.destroy(), resolve(null)));
+    req.once("error", () => resolve(null));
+    req.end();
   });
 }
 
@@ -79,6 +102,7 @@ const OPTIONAL = [
   ["DISCORD_OAUTH_CLIENT_SECRET", "web panel login"],
   ["SESSION_SECRET", "web panel sessions"],
   ["MC_USERNAME", "in-game Mineflayer bridge"],
+  ["INTERNAL_API_TOKEN", "the panel's Discord directory"],
 ];
 
 for (const key of REQUIRED) {
@@ -91,6 +115,39 @@ for (const key of REQUIRED) {
 for (const [key, why] of OPTIONAL) {
   if (isConfigured(env.get(key))) line(PASS(), key, "set");
   else line(SKIP(), key, `unset — disables ${why}`);
+}
+
+// Unset, this one disables three separate things and looks like three separate
+// bugs: the panel's pickers fall back to raw-ID fields, Moderation's member
+// lookup says "directory unavailable", and `discord-member-sync` skips every
+// run so the Members page shows the in-game side only.
+if (!isConfigured(env.get("INTERNAL_API_TOKEN"))) {
+  say(`    ${c.gray("→ raw-ID fields, \"directory unavailable\", and no Discord member scan.")}`);
+  say(`    ${c.gray("  `npm run setup` generates one; the Server Members intent is still a manual step.")}`);
+}
+
+// A key set twice in one file is not a harmless duplicate. dotenv keeps the
+// *last* occurrence, so an operator who edits the copy they can see and leaves a
+// later copy below it is running on a value they did not choose — and nothing
+// anywhere reports it. Only divergent values are worth an operator's attention;
+// three identical copies of the same URL are noise.
+if (envExists) {
+  const seen = new Map();
+  for (const raw of readFileSync(join(ROOT, ".env"), "utf8").split(/\r?\n/)) {
+    const parsed = parseEnv(raw);
+    for (const [key, value] of parsed) {
+      if (!seen.has(key)) seen.set(key, []);
+      seen.get(key).push(value);
+    }
+  }
+  const divergent = [...seen].filter(([, vs]) => vs.length > 1 && new Set(vs).size > 1);
+  const repeated = [...seen].filter(([, vs]) => vs.length > 1);
+  if (divergent.length > 0) {
+    line(FAIL(), "duplicate keys", `${divergent.map(([k]) => k).join(", ")} set more than once, with different values`);
+    note("Delete the earlier copies in .env — dotenv keeps the last one, which may not be the line you edited");
+  } else if (repeated.length > 0) {
+    line(SKIP(), "duplicate keys", `${repeated.length} key(s) repeated, all agreeing`);
+  } else line(PASS(), "duplicate keys", "none");
 }
 
 // Being *set* is not the same as being safe to run on. These two are the ones
@@ -117,6 +174,30 @@ if (isConfigured(redirect)) {
     line(FAIL(), "oauth redirect", "plaintext http on a non-local host");
     note("Serve the panel over https: the session cookie cannot be marked Secure otherwise");
   }
+}
+
+// ── live credentials ────────────────────────────────────────────────────────
+
+// The one credential whose *validity* is worth a network call. A rejected
+// Hypixel key does not fail loudly anywhere: the guild scan just records
+// "roster fetch failed" every six hours, the roster silently stops moving, and
+// the panel keeps serving the last good cache. Asking Hypixel directly is the
+// only way to tell an expired key from an unreachable one.
+//
+// The key travels in the `API-Key` header and is never printed — not the value,
+// not a prefix. The only thing this reports is what Hypixel said about it.
+const hypixelKey = env.get("HYPIXEL_API_KEY");
+if (isConfigured(hypixelKey)) {
+  heading("Live credentials");
+  const status = await httpStatus("https://api.hypixel.net/v2/key", { "API-Key": hypixelKey.trim() });
+  if (status === null) line(SKIP(), "hypixel api key", "could not reach api.hypixel.net — offline?");
+  else if (status >= 200 && status < 300) line(PASS(), "hypixel api key", "accepted");
+  else if (status === 403 || status === 401) {
+    line(FAIL(), "hypixel api key", `rejected (${status}) — the guild scan cannot read the roster`);
+    note("Issue a new key at https://developer.hypixel.net and set HYPIXEL_API_KEY in .env");
+  } else if (status === 429) {
+    line(SKIP(), "hypixel api key", "rate limited — could not check, try again in a minute");
+  } else line(SKIP(), "hypixel api key", `unexpected status ${status}`);
 }
 
 // ── datastores ──────────────────────────────────────────────────────────────

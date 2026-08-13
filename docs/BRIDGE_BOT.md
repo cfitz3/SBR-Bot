@@ -118,10 +118,13 @@ match therefore costs one answer in Discord rather than reintroducing the
 duplicate, which is the cheaper of the two failures by a wide margin.
 
 ### 3.3 Role-gated speaking
-- Default: any **linked, non-muted** member with `RELAY_MESSAGE` may talk across the bridge.
+- Default: any **non-muted** member of the server with `RELAY_MESSAGE` may talk across the bridge. Linking is not a prerequisite for speaking; it is what makes a punishment follow someone between the two surfaces.
 - `RUN_COMMAND`, `MENTION`, `BYPASS_FILTER`, `BYPASS_COOLDOWN` are separate capabilities granted per Discord role / guild rank via `BridgePermission`.
-- Unlinked users' Discord messages in the bridge channel are **not relayed** (optional gentle nudge to `/link`); their messages stay in Discord only.
+- **The two directions are asked different questions**, because their authors are different kinds of thing:
+  - *Discord → game*: the author is a snowflake, so the stored permission stack answers directly. If it says no, a **gateway-confirmed** server member gets a second reading against the role floor using the roles the gateway can see right now. This is what stops the gate closing on the entire server — owner included — during the window before `discord-member-sync` has written its first `GuildMember` row. A deny row survives that second reading; an absent scan does not get to act like one.
+  - *Game → Discord*: the author is an IGN, which is not a snowflake and resolves to no member, no grants and no role. An **unlinked** player is therefore relayed on Hypixel's authority — guild chat is itself the credential, since Hypixel already decided who may write in it. A **linked** player is resolved to their Discord id first, so their platform permissions (and any deny) follow them into guild chat.
 - With no `BridgePermission` rows written, capabilities fall back to a **`GuildMember.role` floor** so an unconfigured guild is still usable — `RELAY_MESSAGE`/`RUN_COMMAND` from `MEMBER` up, `MENTION` from `MODERATOR`, `BYPASS_COOLDOWN` from `OFFICER`, `BYPASS_FILTER`/`ADMIN` from `ADMIN`. A row still wins over the floor, and a deny row wins over everything (see `DOMAIN_MODEL.md` → BridgePermission).
+- The gate lives in `BridgeGuardImpl.canRelay` (`apps/bridge-bot/src/adapters.ts`) and has its own test file. It has been wrong twice in opposite directions — once open to everyone, once closed to everyone — and both failures were silent, so its database reads are injected rather than imported.
 
 ### 3.4 Announcements, reminders & news (F9–F10)
 - **Milestones (F9):** the `profile-snapshot` worker detects crossings (skill/cata/slayer/networth thresholds) and publishes an event; the bot announces to the configured channel (`🎉 Steve just hit Catacombs 45!`) and optionally to guild chat. Deduped via `Milestone.announced`.
@@ -431,7 +434,9 @@ rather than inventing a target.
 ### 7.1 Discord → in-game relay (happy path)
 ```
 Discord #guild-bridge:  Aria: gg everyone, cata 40!
-  → identify: Aria → linked IGN "AriaMC", role Member (RELAY_MESSAGE ✓)
+  → identify: Aria → member of the server, role Member (RELAY_MESSAGE ✓)
+       (stored stack first; if it has no row yet, the gateway's own view of her
+        membership and roles answers instead — see §3.3)
   → not suspended, not muted ✓
   → wordlist: clean ✓
   → anti-spam: under rate ✓

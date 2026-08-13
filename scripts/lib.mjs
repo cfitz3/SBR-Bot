@@ -165,14 +165,29 @@ export function scaffoldEnv(envPath = join(ROOT, ".env"), examplePath = join(ROO
 
   let text = readFileSync(envPath, "utf8");
   let generatedSecret = false;
+  const generated = [];
 
-  if (!isConfigured(parseEnv(text).get("SESSION_SECRET"))) {
-    const secret = randomBytes(32).toString("hex");
-    text = /^SESSION_SECRET=.*$/m.test(text)
-      ? text.replace(/^SESSION_SECRET=.*$/m, `SESSION_SECRET=${secret}`)
-      : `${text.trimEnd()}\nSESSION_SECRET=${secret}\n`;
-    generatedSecret = true;
-  }
+  /**
+   * Fill in a secret the operator has no reason to choose themselves.
+   *
+   * Both of these are shared secrets with no external counterpart to match — a
+   * session signing key and a loopback bearer token — so the only thing asking
+   * a human for one achieves is a weak value, or (as happened with
+   * INTERNAL_API_TOKEN) an empty one that quietly disables a whole feature.
+   */
+  const fill = (key) => {
+    if (isConfigured(parseEnv(text).get(key))) return false;
+    const value = randomBytes(32).toString("hex");
+    const line = new RegExp(`^${key}=.*$`, "m");
+    text = line.test(text)
+      ? text.replace(line, `${key}=${value}`)
+      : `${text.trimEnd()}\n${key}=${value}\n`;
+    generated.push(key);
+    return true;
+  };
+
+  generatedSecret = fill("SESSION_SECRET");
+  fill("INTERNAL_API_TOKEN");
 
   const example = parseEnv(readFileSync(examplePath, "utf8"));
   const present = parseEnv(text);
@@ -182,8 +197,8 @@ export function scaffoldEnv(envPath = join(ROOT, ".env"), examplePath = join(ROO
     text = `${text.trimEnd()}\n\n# Added by \`npm run setup\` from .env.example\n${block}\n`;
   }
 
-  if (created || generatedSecret || addedKeys.length > 0) writeEnvFile(envPath, text);
-  return { created, generatedSecret, addedKeys };
+  if (created || generated.length > 0 || addedKeys.length > 0) writeEnvFile(envPath, text);
+  return { created, generatedSecret, generated, addedKeys };
 }
 
 /**

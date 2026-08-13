@@ -131,10 +131,32 @@ test("a too-short message is not counted", async () => {
   assert.deepEqual(fakes.bumps, []);
 });
 
-test("an unconfigured guild counts nothing", async () => {
-  // The safe direction for a system people will try to farm.
+test("an unconfigured guild still counts the message, and still earns nothing", async () => {
+  // These counters are the Analytics page's "messages", not only XP's input.
+  // Refusing to count them until someone opts into XP made every fresh install
+  // read as a server where nobody had ever spoken.
+  //
+  // The farming defence is unaffected because it lives at the award end: an
+  // unconfigured source is disabled and weightless, so the counter this writes
+  // is worth zero XP ("an unconfigured source earns nothing even when the
+  // counter moved", policy.test.ts).
   const { svc, fakes } = makeService({ policy: [] });
+  assert.equal(await svc.recordMessage("g1", "u1", "DISCORD_MESSAGE", "a real message"), true);
+  assert.deepEqual(fakes.bumps, [{ discordId: "u1", day: "2026-08-09", field: "discordMessages", by: 1 }]);
+  assert.deepEqual(fakes.recorded, [], "counting is not awarding");
+});
+
+test("an explicitly disabled source is not counted", async () => {
+  // A guild that turned the source off made a decision; unconfigured is the
+  // absence of one, and only the absence defaults to counting.
+  const { svc, fakes } = makeService({ policy: [rule("DISCORD_MESSAGE", { enabled: false })] });
   assert.equal(await svc.recordMessage("g1", "u1", "DISCORD_MESSAGE", "a real message"), false);
+  assert.deepEqual(fakes.bumps, []);
+});
+
+test("an empty message is never counted, configured or not", async () => {
+  const { svc, fakes } = makeService({ policy: [] });
+  assert.equal(await svc.recordMessage("g1", "u1", "DISCORD_MESSAGE", "   "), false);
   assert.deepEqual(fakes.bumps, []);
 });
 

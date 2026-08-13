@@ -15,7 +15,7 @@ function guard(s: GuardState = {}): BridgeGuard {
   return {
     async isSuspended() { return s.suspended ?? false; },
     async isMuted(_g, id) { return s.muted?.has(id) ?? false; },
-    async canRelay(_g, id) { return !(s.cannotRelay?.has(id) ?? false); },
+    async canRelay(msg) { return !(s.cannotRelay?.has(msg.authorId) ?? false); },
   };
 }
 function wordlist(verdict: FilterVerdict = { action: "ALLOW" }): WordlistFilter {

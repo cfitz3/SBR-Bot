@@ -1047,6 +1047,13 @@ async function relayDiscordToGame(
     authorId: msg.author.id,
     authorName: msg.member?.displayName ?? msg.author.username,
     content: msg.content,
+    // What the gateway sees right now, so the guard can tell "this person is
+    // not a member" from "the member scan has not run yet". `msg.member` is
+    // present for any message sent in a server the bot is in.
+    live: {
+      isGuildMember: msg.member !== null,
+      roleIds: msg.member?.roles.cache.map((role) => role.id) ?? [],
+    },
   });
   if (decision.action === "DELIVER") send(decision.formatted);
 }

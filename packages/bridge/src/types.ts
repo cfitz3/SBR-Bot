@@ -14,6 +14,25 @@ export interface InboundMessage {
   /** Guild rank for GAME_TO_DISCORD, if known. */
   readonly authorRank?: string | null;
   readonly content: string;
+  /**
+   * What the gateway knows about a Discord author *right now*.
+   *
+   * Supplied by the transport, which is holding the live member object anyway.
+   * The permission stack's usual source of these facts is the `GuildMember`
+   * table, which only the `discord-member-sync` job writes — so until that job
+   * has run, the database's answer to "is this person in the server" is no, for
+   * everybody, including the owner. That is a scan gap, not a permission
+   * decision, and reading it as one silently closes the relay on a fresh
+   * install. These facts let the guard tell the two apart.
+   */
+  readonly live?: LiveAuthorFacts;
+}
+
+/** Gateway-observed facts about a Discord author. */
+export interface LiveAuthorFacts {
+  /** The gateway currently sees this author as a member of the server. */
+  readonly isGuildMember: boolean;
+  readonly roleIds: readonly string[];
 }
 
 export type DropReason =
@@ -35,8 +54,15 @@ export type RelayDecision =
 export interface BridgeGuard {
   isSuspended(guildId: string): Promise<boolean>;
   isMuted(guildId: string, authorId: string): Promise<boolean>;
-  /** RELAY_MESSAGE capability. */
-  canRelay(guildId: string, authorId: string): Promise<boolean>;
+  /**
+   * RELAY_MESSAGE capability.
+   *
+   * Takes the whole message rather than an id because the answer depends on the
+   * direction: a Discord author is a snowflake the permission stack can resolve
+   * directly, while an in-game author is an IGN, which is not an identity this
+   * platform has capabilities for until it is linked.
+   */
+  canRelay(msg: InboundMessage): Promise<boolean>;
 }
 
 export type FilterVerdict =

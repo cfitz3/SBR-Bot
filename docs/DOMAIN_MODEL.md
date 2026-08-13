@@ -694,6 +694,18 @@ would need a running per-day total on the hot path, and a cooldown enforced at
 aggregation would be unenforceable, since by then the counter has already
 forgotten *when* the messages arrived.
 
+**Counting does not depend on the XP policy.** A guild that has configured no
+XP sources — which is every fresh install — still accrues counters: an
+unconfigured source counts any non-empty message, spaced by a fixed 5s
+(`UNCONFIGURED_COOLDOWN_SEC` in `packages/xp/src/service.ts`), and only a source
+the guild has *explicitly disabled* stops counting. This is not a hole in the
+anti-farming design, because the defence lives at the award end (`awardsFor`):
+an unconfigured source is still worth zero XP, so the counters move and standing
+does not. Gating the counters on the policy instead is what left the Analytics
+page showing zero messages, zero engagement and zero relay traffic on every
+install nobody had configured XP for — a silent zero where the real answer was
+"plenty", which the panel is not allowed to show.
+
 Counters are the input, never the record: they are safe to lose a day of
 (standing simply does not move), whereas losing `XpEvent` rows would silently
 rewrite everyone's history.

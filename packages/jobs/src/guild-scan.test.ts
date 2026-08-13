@@ -84,6 +84,24 @@ test("a fetch that throws is treated as a failed fetch, not a crash", async () =
   const result = await scanGuild("g1", d);
   assert.equal(result.skipped, "fetch-failed");
   assert.deepEqual(rec.removed, []);
+  // The thrown message is kept rather than flattened: "socket hang up" and
+  // "invalid API key" are different jobs for different people.
+  assert.equal(result.reason, "socket hang up");
+  assert.equal(rec.scans[0]?.error, "socket hang up");
+});
+
+test("a fetch that names its failure records that reason", async () => {
+  const { deps: d, rec } = deps({
+    cached: [{ uuid: "a", ign: "Ann" }],
+    async fetchRoster() { return { failed: "Hypixel rejected the API key (403)" }; },
+  });
+
+  const result = await scanGuild("g1", d);
+  assert.equal(result.skipped, "fetch-failed");
+  assert.equal(result.reason, "Hypixel rejected the API key (403)");
+  assert.equal(rec.scans[0]?.error, "Hypixel rejected the API key (403)");
+  assert.deepEqual(rec.upserts, []);
+  assert.deepEqual(rec.removed, []);
 });
 
 test("nobody is removed when the roster is unchanged", async () => {

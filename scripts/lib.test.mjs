@@ -98,8 +98,28 @@ test("keys added to the template since install are appended", () => {
   assert.equal(parseEnv(f.read()).get("OLD"), "1", "the existing key should be untouched");
 });
 
+test("a missing INTERNAL_API_TOKEN is generated, not left empty", () => {
+  // An empty token silently disables the panel's whole Discord directory —
+  // pickers, member lookup and the member scan — so setup fills it in rather
+  // than asking a human for a shared secret with no counterpart to match.
+  const f = fixture("INTERNAL_API_TOKEN=\n", "INTERNAL_API_TOKEN=\n");
+  const result = scaffoldEnv(f.envPath, f.examplePath);
+
+  assert.ok(result.generated.includes("INTERNAL_API_TOKEN"));
+  const token = parseEnv(f.read()).get("INTERNAL_API_TOKEN");
+  assert.ok(token.length >= 32, `token was only ${token.length} chars`);
+});
+
+test("an existing INTERNAL_API_TOKEN survives a re-run", () => {
+  const mine = "d".repeat(64);
+  const f = fixture("INTERNAL_API_TOKEN=\n", `INTERNAL_API_TOKEN=${mine}\n`);
+  scaffoldEnv(f.envPath, f.examplePath);
+  assert.equal(parseEnv(f.read()).get("INTERNAL_API_TOKEN"), mine);
+});
+
 test("a no-op re-run does not rewrite the file at all", () => {
-  const f = fixture("A=1\nSESSION_SECRET=x\n", `A=1\nSESSION_SECRET=${"c".repeat(64)}\n`);
+  const settled = `A=1\nSESSION_SECRET=${"c".repeat(64)}\nINTERNAL_API_TOKEN=${"d".repeat(64)}\n`;
+  const f = fixture("A=1\nSESSION_SECRET=x\nINTERNAL_API_TOKEN=\n", settled);
   const before = statSync(f.envPath).mtimeMs;
   const result = scaffoldEnv(f.envPath, f.examplePath);
 

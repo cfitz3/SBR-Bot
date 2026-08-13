@@ -58,11 +58,29 @@ export interface GuildScanResult {
   readonly gexpRows: number;
   /** Set when the scan did nothing; the caller logs it and moves to the next guild. */
   readonly skipped?: "no-hypixel-guild" | "fetch-failed";
+  /**
+   * Why the fetch failed, in the operator's terms. Present only alongside
+   * `skipped: "fetch-failed"`.
+   *
+   * A rejected API key, a guild id that matches nothing, and a rate limit are
+   * three different jobs for three different people, and every one of them used
+   * to be recorded as the same "roster fetch failed" — which is a scan that
+   * fails constantly and tells nobody why.
+   */
+  readonly reason?: string;
+}
+
+/** A fetch that failed, carrying the reason instead of discarding it. */
+export interface RosterFetchFailure {
+  readonly failed: string;
 }
 
 export interface GuildScanDeps {
-  /** The live roster, or null when Hypixel could not be read. Never a partial list. */
-  fetchRoster(guildId: string): Promise<readonly ScannedMember[] | null>;
+  /**
+   * The live roster, never a partial list. `{ failed }` when Hypixel could not
+   * be read and the caller knows why; bare `null` when it does not.
+   */
+  fetchRoster(guildId: string): Promise<readonly ScannedMember[] | RosterFetchFailure | null>;
   /** Everything currently cached for the guild, however stale. */
   listCached(guildId: string): Promise<readonly CachedMemberRow[]>;
   /**
@@ -86,6 +104,10 @@ export interface GuildScanDeps {
 
 const DEFAULT_NAME_BATCH = 20;
 
+const isFailure = (
+  value: readonly ScannedMember[] | RosterFetchFailure,
+): value is RosterFetchFailure => !Array.isArray(value);
+
 /**
  * Scan one guild. Returns what changed; never throws for an upstream failure,
  * because one unreachable guild must not abort the others in the same run.
@@ -93,12 +115,28 @@ const DEFAULT_NAME_BATCH = 20;
 export async function scanGuild(guildId: string, deps: GuildScanDeps): Promise<GuildScanResult> {
   const now = (deps.now ?? (() => new Date()))();
 
-  const roster = await deps.fetchRoster(guildId).catch(() => null);
-  if (roster === null) {
-    const result: GuildScanResult = { memberCount: 0, joined: [], left: [], gexpRows: 0, skipped: "fetch-failed" };
-    await deps.recordScan(guildId, result, "roster fetch failed");
+  const fetched = await deps
+    .fetchRoster(guildId)
+    .catch((error: unknown): RosterFetchFailure => ({
+      failed: error instanceof Error ? error.message : "roster fetch threw",
+    }));
+
+  // `Array.isArray` does not narrow a `readonly T[]` union member (it asserts
+  // the mutable `any[]`), so the failure shape is the thing tested for.
+  if (fetched === null || isFailure(fetched)) {
+    const reason = fetched === null ? "roster fetch failed" : fetched.failed;
+    const result: GuildScanResult = {
+      memberCount: 0,
+      joined: [],
+      left: [],
+      gexpRows: 0,
+      skipped: "fetch-failed",
+      reason,
+    };
+    await deps.recordScan(guildId, result, reason);
     return result;
   }
+  const roster: readonly ScannedMember[] = fetched;
 
   const cached = await deps.listCached(guildId);
   const cachedByUuid = new Map(cached.map((row) => [row.uuid, row]));

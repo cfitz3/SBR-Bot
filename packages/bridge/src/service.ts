@@ -55,7 +55,7 @@ export class BridgeService {
     if (msg.content.trim().length === 0) return drop("EMPTY");
 
     // 2. permission
-    if (!(await this.guard.canRelay(msg.guildId, msg.authorId))) return drop("NO_PERMISSION");
+    if (!(await this.guard.canRelay(msg))) return drop("NO_PERMISSION");
 
     // 3. suspend / mute
     if (await this.guard.isSuspended(msg.guildId)) return drop("BRIDGE_SUSPENDED");

@@ -2,19 +2,57 @@
  * Concrete bridge-relay adapters (BridgeGuard / WordlistFilter / FloodControl)
  * over Redis + Prisma. `guildId` is the internal Guild.id.
  */
-import type { BridgeGuard, FilterVerdict, FloodControl, WordlistFilter } from "@sbr/bridge";
+import type { BridgeGuard, FilterVerdict, FloodControl, InboundMessage, WordlistFilter } from "@sbr/bridge";
 import type { IdentityService, WordlistRuleDTO } from "@sbr/shared-types";
-import { guildConfigRepository, wordlistRepository } from "@sbr/db";
+import { rankOfRole } from "@sbr/shared-types";
+import { guildConfigRepository, identityRepository, rolePolicyReader, wordlistRepository } from "@sbr/db";
 import { evaluateText } from "@sbr/moderation";
-import { COOLDOWN_SETTING_KEY, parseCooldowns } from "@sbr/guild-config";
+import {
+  COOLDOWN_SETTING_KEY,
+  capabilityFloor,
+  parseCooldowns,
+  parseRoleBindings,
+  parseRolePolicy,
+  resolveMemberRole,
+  type RoleBindings,
+  type RolePolicy,
+} from "@sbr/guild-config";
 import type { RedisContext } from "@sbr/redis";
 
 const FLOOD_LIMIT = 6;
 const FLOOD_WINDOW_S = 10;
 const DEDUP_WINDOW_S = 8;
 
+/**
+ * The database reads `canRelay` needs, as functions.
+ *
+ * Injected with production defaults rather than imported at the call site so the
+ * gate is unit-testable without a database. It is the piece of this app that
+ * decides whether anybody may speak at all, and it has already been wrong twice.
+ */
+export interface BridgeGuardReads {
+  discordIdForIgn(ign: string): Promise<string | null>;
+  grants(guildId: string, discordId: string): Promise<readonly { capability: string; allow: boolean }[]>;
+  roleBindings(guildId: string): Promise<RoleBindings>;
+  rolePolicy(guildId: string): Promise<RolePolicy>;
+}
+
+const defaultReads: BridgeGuardReads = {
+  discordIdForIgn: (ign) => identityRepository.findDiscordIdByIgn(ign),
+  grants: (guildId, discordId) => identityRepository.getCapabilityGrants(guildId, discordId),
+  async roleBindings(guildId) {
+    const config = await guildConfigRepository.get(guildId);
+    return parseRoleBindings(config?.roleMappings ?? null);
+  },
+  rolePolicy: (guildId) => rolePolicyReader.read(guildId),
+};
+
 export class BridgeGuardImpl implements BridgeGuard {
-  constructor(private readonly ctx: RedisContext, private readonly identity: IdentityService) {}
+  constructor(
+    private readonly ctx: RedisContext,
+    private readonly identity: IdentityService,
+    private readonly reads: BridgeGuardReads = defaultReads,
+  ) {}
 
   async isSuspended(guildId: string): Promise<boolean> {
     // Fast path: Redis suspension flag; fall back to the persisted config.
@@ -29,7 +67,7 @@ export class BridgeGuardImpl implements BridgeGuard {
   }
 
   /**
-   * Whether this author's message may cross into guild chat.
+   * Whether this author's message may cross the bridge.
    *
    * This used to end `|| true`, which made the whole check decorative: the
    * capability was resolved and then discarded, so a deny row, a demotion and a
@@ -37,13 +75,62 @@ export class BridgeGuardImpl implements BridgeGuard {
    *
    * It is still an *open* gate by default, which is the intended posture — the
    * `RELAY_MESSAGE` floor is MEMBER, so anyone recorded as a member of the guild
-   * may speak (BRIDGE_BOT.md §3.3). What changed is that the three cases which
-   * were always supposed to fail now do: an explicit deny row, a member the
-   * guild has demoted below its configured floor, and somebody with no
-   * membership at all.
+   * may speak (BRIDGE_BOT.md §3.3). What it must never be is a gate that closes
+   * because a *scan* has not happened, which is what the two branches below are
+   * about. Both directions were failing that way:
+   *
+   * - **In-game authors are not Discord ids.** `hasCapability` was being asked
+   *   about an IGN, which resolves to no member, no grants and no role — so
+   *   every unlinked player in guild chat was answered "not permitted" by a
+   *   lookup that never had a chance of finding them. Guild chat is itself the
+   *   credential there: Hypixel already decided who may write in it.
+   * - **Discord authors are only members once `discord-member-sync` says so.**
+   *   Until that job runs the `GuildMember` table is empty, so the same lookup
+   *   answers "non-member" for the entire server, owner included. The gateway
+   *   is holding the truth at that moment, and `live` carries it.
    */
-  async canRelay(guildId: string, authorId: string): Promise<boolean> {
-    return this.identity.hasCapability(guildId, authorId, "RELAY_MESSAGE");
+  async canRelay(msg: InboundMessage): Promise<boolean> {
+    const { guildId, authorId } = msg;
+
+    if (msg.direction === "GAME_TO_DISCORD") {
+      // Linked players keep their platform permissions — a deny row silences
+      // someone in both places, which is the point of linking. An unlinked
+      // player has no platform identity to check, and their presence in guild
+      // chat is the only credential the relay needs.
+      const discordId = await this.reads.discordIdForIgn(authorId).catch(() => null);
+      if (discordId === null) return true;
+      return this.identity.hasCapability(guildId, discordId, "RELAY_MESSAGE");
+    }
+
+    if (await this.identity.hasCapability(guildId, authorId, "RELAY_MESSAGE")) return true;
+
+    // The stored answer was no. Only a gateway-confirmed member gets a second
+    // reading, and only when nothing has explicitly denied them: a "no" that
+    // came from a deny row is a decision, and must survive.
+    const live = msg.live;
+    if (live === undefined || !live.isGuildMember) return false;
+
+    const grants = await this.reads.grants(guildId, authorId).catch(() => []);
+    if (grants.some((g) => !g.allow && (g.capability === "RELAY_MESSAGE" || g.capability === "ADMIN"))) {
+      return false;
+    }
+
+    const [bindings, policy] = await Promise.all([
+      this.reads.roleBindings(guildId).catch(() => parseRoleBindings(null)),
+      this.reads.rolePolicy(guildId).catch(() => parseRolePolicy(undefined)),
+    ]);
+    const role = resolveMemberRole(
+      {
+        present: true,
+        assigned: null,
+        override: null,
+        discordRoleIds: live.roleIds,
+        guildRank: null,
+      },
+      bindings,
+      policy,
+    );
+    return role !== null && rankOfRole(role) >= rankOfRole(capabilityFloor(policy, "RELAY_MESSAGE"));
   }
 }
 

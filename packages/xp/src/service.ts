@@ -29,6 +29,16 @@ export interface XpServiceDeps {
   readonly now?: () => Date;
 }
 
+/**
+ * Anti-spam spacing applied to a source the guild has never configured.
+ *
+ * Not zero: with no policy to state one, a counter that took every keystroke
+ * would let one person's flood dominate the Analytics page. Not the suggested
+ * policy's 30s either — that number is an XP-farming defence, and this is a
+ * measurement, so it errs towards recording what happened.
+ */
+const UNCONFIGURED_COOLDOWN_SEC = 5;
+
 /** What one aggregation run did, for the job log. */
 export interface AggregateSummary {
   readonly day: string;
@@ -57,6 +67,19 @@ export class XpService {
   /**
    * Count a message, if it counts. Returns whether it did, which is only useful
    * for tests and diagnostics — no caller is expected to branch on it.
+   *
+   * **A source nobody has configured still counts.** These counters are not only
+   * XP's input; they are what the Analytics page means by "messages", and
+   * gating them on the XP policy meant every guild that had not opted into XP —
+   * which is every fresh install — read as a server where nobody had ever
+   * spoken. That is exactly the silent zero the panel is not allowed to show.
+   *
+   * The XP invariant is untouched, because it lives at the *award* end: an
+   * unconfigured source is disabled and weightless, so `awardsFor` turns these
+   * counters into nothing. What a configured source says about `minLength` and
+   * `cooldownSec` is still obeyed to the letter — a guild that decided a
+   * one-character message is not a message keeps that decision, and keeps it in
+   * the counter XP is derived from.
    */
   async recordMessage(
     guildId: string,
@@ -65,8 +88,10 @@ export class XpService {
     text: string,
   ): Promise<boolean> {
     try {
-      const rule = policyFor(await this.policy(guildId), source);
-      const { counts, cooldownSec } = countsAsMessage(text, rule);
+      const configured = (await this.policy(guildId))[source];
+      const { counts, cooldownSec } = configured === undefined
+        ? { counts: text.trim().length > 0, cooldownSec: UNCONFIGURED_COOLDOWN_SEC }
+        : countsAsMessage(text, configured);
       if (!counts) return false;
       if (!(await this.passesCooldown(guildId, discordId, source, cooldownSec))) return false;
 
@@ -82,9 +107,11 @@ export class XpService {
   /** Count a command invocation. Same contract as `recordMessage`. */
   async recordCommand(guildId: string, discordId: string): Promise<boolean> {
     try {
-      const rule = policyFor(await this.policy(guildId), "COMMAND_USAGE");
-      if (!rule.enabled) return false;
-      if (!(await this.passesCooldown(guildId, discordId, "COMMAND_USAGE", rule.cooldownSec))) return false;
+      const configured = (await this.policy(guildId))["COMMAND_USAGE"];
+      // Unconfigured counts (see `recordMessage`); explicitly disabled does not.
+      if (configured !== undefined && !configured.enabled) return false;
+      const cooldownSec = configured?.cooldownSec ?? UNCONFIGURED_COOLDOWN_SEC;
+      if (!(await this.passesCooldown(guildId, discordId, "COMMAND_USAGE", cooldownSec))) return false;
       await this.activity.bump(guildId, discordId, this.today(), "commandsUsed", 1);
       return true;
     } catch (error) {
