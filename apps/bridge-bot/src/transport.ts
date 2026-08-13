@@ -30,6 +30,8 @@ import { startMilestoneAnnouncer } from "./milestones.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
 import { acceptCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
+import { CommandQueue } from "./command-queue.js";
+import { isPunitiveNotice, parseModNotice, type ModNotice } from "./mod-notice.js";
 import { chatLine, staffReport } from "@sbr/screening";
 
 export interface GuildChatLine {
@@ -211,6 +213,12 @@ export interface BridgeHandles {
    * would report the bridge healthy for as long as the process survived it.
    */
   status(): BridgeStatus;
+  /**
+   * Queue a moderation command for this bridge's guild. Returns false when the
+   * guild does not match or the backlog is full — never throws, because the
+   * caller is a Redis subscriber with nobody to report to.
+   */
+  sendGameCommand(guildId: string, command: string): boolean;
   destroy(): Promise<void>;
 }
 
@@ -238,6 +246,19 @@ const ROSTER_TIMEOUT_MS = 4_000;
  * window shares one answer.
  */
 const ROSTER_CACHE_MS = 20_000;
+
+/**
+ * Pacing for moderation commands arriving on the bus. The same per-account
+ * command limit that motivates `ROSTER_CACHE_MS` applies here, except the
+ * caller is a panel operator who could issue a hundred bans in a loop.
+ *
+ * Backlog is deliberately small: a queue longer than this is not a burst, it is
+ * a mistake, and refusing loudly beats silently typing it out over an hour.
+ */
+const GAME_COMMAND_SPACING_MS = 1_200;
+const GAME_COMMAND_BACKLOG = 50;
+/** Ten minutes. Beyond that a mute is arriving against a punishment that may already have expired. */
+const GAME_COMMAND_MAX_AGE_MS = 10 * 60_000;
 
 /** How long to let Minecraft flush its disconnect before abandoning the wait. */
 const MC_QUIT_TIMEOUT_MS = 5_000;
@@ -427,6 +448,74 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   }
 
   /**
+   * Moderation commands arriving from the bus, paced.
+   *
+   * `deliver` reports false while the session is down; the queue then holds the
+   * line and retries rather than dropping a punishment on the floor. Everything
+   * about the spacing and the backlog lives in `CommandQueue` — see its header
+   * for why the newest is dropped on overflow rather than the oldest.
+   */
+  const gameCommands = new CommandQueue(
+    (command) => {
+      const bot = session.bot;
+      if (bot === null || !spawned) return false;
+      bot.chat(command);
+      return true;
+    },
+    { spacingMs: GAME_COMMAND_SPACING_MS, maxBacklog: GAME_COMMAND_BACKLOG, maxAgeMs: GAME_COMMAND_MAX_AGE_MS },
+  );
+
+  /**
+   * Accept a moderation command for this guild.
+   *
+   * The guild check is not a formality: one Redis instance backs every guild on
+   * the platform, and this account has officer permissions in exactly one of
+   * them. A command published for someone else's guild must not be typed here.
+   */
+  function sendGameCommand(guildId: string, command: string): boolean {
+    // Strict, including when the guild is unresolved: an unregistered bridge
+    // already relays nothing, and "we don't know whose guild this is" is not a
+    // reason to type a kick. Same posture as the relay's own inactive state.
+    if (internalGuildId === null || guildId !== internalGuildId) {
+      app.log.warn("moderation command ignored: not this bridge's guild", { guildId, bridgeGuildId: internalGuildId });
+      return false;
+    }
+    const accepted = gameCommands.push(command);
+    if (!accepted) {
+      app.log.warn("moderation command dropped: bridge command backlog full", { guildId, ...gameCommands.stats() });
+    }
+    return accepted;
+  }
+
+  /**
+   * Persist an in-game moderation notice against this bridge's guild.
+   *
+   * Silently skipped when the guild is unresolved, exactly as the relay is: an
+   * unregistered server has no history to write into.
+   */
+  async function recordNotice(notice: ModNotice): Promise<void> {
+    const guildId = await resolveInternalGuild();
+    if (guildId === null) return;
+    if (!isPunitiveNotice(notice)) return;
+    await app.recordInGameAction(guildId, {
+      type: notice.kind as "KICK" | "MUTE" | "UNMUTE",
+      targetIgn: notice.target,
+      actorIgn: notice.actor,
+      durationSeconds: notice.durationSeconds,
+    });
+  }
+
+  app.setGameCommandSink((guildId, command) => {
+    // Resolve first: until the guild id is known every command would be typed
+    // unconditionally, which is the one failure mode the check above exists for.
+    void resolveInternalGuild()
+      .then(() => sendGameCommand(guildId, command))
+      .catch((error: unknown) => {
+        app.log.error("moderation command failed", { guildId, error: String(error) });
+      });
+  });
+
+  /**
    * Was this guild-chat line said by the bridge account itself?
    *
    * `bot.username` rather than the configured `MC_USERNAME`: with Microsoft
@@ -554,6 +643,15 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
         return;
       }
 
+      // Hypixel's own moderation notices. Also server messages, so they are
+      // read before the chat parse and never reach the relay — a kick notice
+      // belongs in the audit log, not repeated into the Discord channel.
+      const notice = parseModNotice(str);
+      if (notice !== null && isPunitiveNotice(notice)) {
+        relay("ingame-moderation", () => recordNotice(notice));
+        return;
+      }
+
       const parsed = parseGuildChat(str);
       if (!parsed) return;
 
@@ -645,6 +743,37 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // in the server is Discord activity, and only the *relay* cares which
       // channel it was in.
       if (guildId) await app.creditDiscordMessage(guildId, msg.author.id, msg.content);
+    });
+
+    // Automod, ahead of the relay branch and outside it: a rule an admin wrote
+    // to stop invite spam should stop it in every channel, not only in the one
+    // wired to guild chat. Deleting the message is this handler's job because
+    // it is the only place holding the Discord message object; issuing any
+    // punishment is the runner's, through the same service `/warn` uses.
+    relay("automod:discord", async () => {
+      const guildId = await resolveInternalGuild();
+      if (!guildId) return;
+      const outcome = await app.automod.run({
+        guildId,
+        surface: "DISCORD",
+        text: msg.content,
+        // Everyone actually pinged, deduplicated by Discord itself — an @here
+        // that reaches two hundred people is one mention, and counting the raw
+        // `<@…>` tokens would say otherwise.
+        mentionCount: msg.mentions.users.size + msg.mentions.roles.size,
+        subject: {
+          key: msg.author.id,
+          discordId: msg.author.id,
+          roleIds: msg.member?.roles.cache.map((role) => role.id) ?? [],
+          capabilities: [],
+        },
+      });
+      if (!outcome.blocked) return;
+      // Best-effort: the member may have deleted it first, or the bot may not
+      // hold Manage Messages here. Either way the match is already recorded.
+      await msg.delete().catch((error: unknown) => {
+        app.log.warn("automod could not delete a message", { messageId: msg.id, error: String(error) });
+      });
     });
 
     relay("discord→game", async () => {
@@ -817,10 +946,14 @@ ${staffReport(screening)}`,
         mcConfigured: opts.mc !== null,
       };
     },
+    sendGameCommand,
     async destroy() {
       // Stop reconnecting before closing anything, so the `end` this triggers
       // isn't answered with a fresh login.
       announcer.stop();
+      // Detach first: the bus keeps delivering until the process exits, and a
+      // sink pointing at a queue whose session is closing would just age out.
+      app.setGameCommandSink(null);
       stopping = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

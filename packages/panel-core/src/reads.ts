@@ -27,6 +27,74 @@ export interface OverviewCounts {
   readonly recentLeaveCount: number;
 }
 
+/**
+ * Membership as two rosters, never one blended number.
+ *
+ * The Discord server and the in-game guild are different populations with
+ * different join events, and averaging them produces a figure that describes
+ * neither. Joins and leaves are therefore reported per side, and each side
+ * carries the clock of the scan that produced it: a count with no `scannedAt`
+ * cannot be told apart from a count that is three days stale.
+ */
+export interface MembershipStats {
+  readonly discordMemberCount: number;
+  readonly guildMemberCount: number;
+  readonly linkedCount: number;
+  /** `GuildMember.joinedAt` / `.leftAt` inside the window. */
+  readonly discordJoins: number;
+  readonly discordLeaves: number;
+  /** Summed `GuildScan.joined` / `.left` deltas inside the window. */
+  readonly gameJoins: number;
+  readonly gameLeaves: number;
+  readonly windowDays: number;
+  readonly scannedAt: { readonly discord: string | null; readonly hypixel: string | null };
+}
+
+/** Which table an activity entry came from — the client renders an icon per kind. */
+export type ActivityKind = "MODERATION" | "SCREENING" | "MILESTONE" | "EVENT" | "ROSTER";
+
+/**
+ * One line in the merged activity feed.
+ *
+ * Already rendered to a sentence by the read, because the five sources have no
+ * common shape and a client that formatted each kind itself would be five
+ * formatters drifting from the five that already exist elsewhere.
+ */
+export interface ActivityEntry {
+  readonly kind: ActivityKind;
+  readonly at: string;
+  readonly title: string;
+  readonly detail: string | null;
+  readonly tone: "info" | "good" | "warn" | "bad";
+}
+
+/**
+ * One join attempt as screening recorded it.
+ *
+ * `scammer` stays three-valued all the way to the browser (listed / clear /
+ * could not find out). Collapsing the null into false is how an outage becomes
+ * an all-clear, which is the one mistake this whole record exists to prevent.
+ */
+export interface JoinAttempt {
+  readonly id: string;
+  readonly uuid: string;
+  readonly ign: string;
+  readonly discordId: string | null;
+  readonly requestedAt: string;
+  readonly verdict: string;
+  readonly outcome: string;
+  readonly riskScore: number;
+  readonly reasons: readonly string[];
+  readonly scammer: boolean | null;
+  readonly scammerReason: string | null;
+  /** The stat block at the moment of the request. Null means unreadable, not zero. */
+  readonly networth: number | null;
+  readonly skillAverage: number | null;
+  readonly catacombsLevel: number | null;
+  readonly senitherWeight: number | null;
+  readonly skyblockLevel: number | null;
+}
+
 export interface LinkedMember {
   readonly discordId: string;
   readonly username: string | null;
@@ -37,6 +105,51 @@ export interface LinkedMember {
   readonly ign: string | null;
   readonly uuid: string | null;
   readonly verification: "VERIFIED" | "PENDING" | "UNLINKED";
+}
+
+/**
+ * One person in the member directory, from either side or both.
+ *
+ * A row exists if Discord knows them, if the in-game guild knows them, or if
+ * both do — so `discordId` and `uuid` are independently nullable and at least
+ * one is always set. That is the whole point: the old read could only describe
+ * people who had a Discord membership row, which made "who is in the guild but
+ * not in the server" unanswerable.
+ */
+export interface DirectoryMemberRow {
+  readonly discordId: string | null;
+  readonly username: string | null;
+  readonly nickname: string | null;
+  readonly uuid: string | null;
+  readonly ign: string | null;
+  readonly guildRank: string | null;
+  /** True when a VERIFIED link joins the two sides of this row. */
+  readonly linked: boolean;
+  /** Platform role, or null for an in-game-only row that has no membership. */
+  readonly role: string | null;
+  /** ACTIVE / LEFT on the Discord side; null for in-game-only rows. */
+  readonly status: string | null;
+  readonly weeklyGexp: number | null;
+  readonly lastSeenAt: string | null;
+}
+
+export type DirectorySide = "all" | "discord" | "game" | "unlinked";
+
+export interface DirectoryQuery {
+  /** Matches username, nickname, IGN **and** id — the "not just ID" requirement. */
+  readonly q: string;
+  readonly side: DirectorySide;
+  readonly limit: number;
+}
+
+export interface DirectoryPage {
+  readonly rows: readonly DirectoryMemberRow[];
+  /** Totals for the guild, unaffected by `q` — they describe the roster, not the search. */
+  readonly discordCount: number;
+  readonly guildCount: number;
+  readonly linkedCount: number;
+  /** True when more rows matched than `limit` returned. */
+  readonly truncated: boolean;
 }
 
 export interface RollupPoint {
@@ -51,6 +164,50 @@ export interface CommandUsageStat {
   readonly count: number;
   readonly successCount: number;
   readonly avgLatencyMs: number | null;
+}
+
+/**
+ * Message volume over a window, split by where it was said.
+ *
+ * Two numbers, never one. Discord messages are counted for every message in the
+ * server; guild-chat lines are counted as the relay carries them. They describe
+ * different populations on different surfaces, and a single "messages" figure
+ * would be the same mistake the Overview's two rosters exist to avoid.
+ */
+export interface MessageTotals {
+  readonly discordMessages: number;
+  readonly guildChatMessages: number;
+  readonly commandsUsed: number;
+  /** People with at least one counted message in the window, either side. */
+  readonly activeMembers: number;
+  readonly days: number;
+}
+
+/**
+ * One member's activity across both surfaces.
+ *
+ * `gexp` is null rather than 0 when the member has no linked Minecraft account:
+ * "did not earn any" and "we have no way to know" are different answers, and
+ * the panel's rule is never to print a zero where the truth is unknown.
+ */
+export interface ActiveMember {
+  readonly discordId: string | null;
+  readonly username: string | null;
+  readonly uuid: string | null;
+  readonly ign: string | null;
+  readonly discordMessages: number;
+  readonly guildChatMessages: number;
+  readonly commandsUsed: number;
+  readonly presenceSamples: number;
+  readonly gexp: number | null;
+  /** Days inside the window with GEXP above zero — the in-game playtime proxy. */
+  readonly activeDays: number | null;
+}
+
+/** One day of a series. `day` is a date, not a timestamp: `YYYY-MM-DD`. */
+export interface DailyPoint {
+  readonly day: string;
+  readonly value: number;
 }
 
 export interface PanelEvent {
@@ -108,11 +265,72 @@ export interface HeartbeatReader {
 
 export type RollupPeriod = "HOURLY" | "DAILY" | "WEEKLY" | "MONTHLY";
 
+export type PermSubjectKind = "DISCORD_ROLE" | "DISCORD_USER" | "GUILD_RANK";
+
+/** One stored exception to the guild's capability floors. */
+export interface PermissionException {
+  readonly id: string;
+  readonly subjectType: PermSubjectKind;
+  readonly subjectId: string;
+  readonly capability: string;
+  readonly allow: boolean;
+  readonly createdAt: string;
+}
+
+/**
+ * Port: the `BridgePermission` rows behind the Permissions page's exceptions.
+ *
+ * Its own port rather than four more methods on `PanelReads` because it is the
+ * only read the panel does that is also a write — the page lists, adds and
+ * removes the same rows, and splitting that across two interfaces would put the
+ * halves of one screen in two places.
+ */
+export interface PermissionExceptionStore {
+  list(guildId: string): Promise<readonly PermissionException[]>;
+  set(
+    guildId: string,
+    subjectType: PermSubjectKind,
+    subjectId: string,
+    capability: string,
+    allow: boolean,
+  ): Promise<void>;
+  remove(guildId: string, id: string): Promise<boolean>;
+}
+
+/** One staff command, as the Permissions page needs to describe it. */
+export interface CommandCatalogEntry {
+  readonly name: string;
+  readonly description: string;
+  /** The floor the handler itself declares — what an unconfigured guild gets. */
+  readonly minRole: string;
+}
+
+/**
+ * Port: the staff command table.
+ *
+ * Passed in rather than imported so panel-core keeps no dependency on the
+ * dispatcher package. Absent means the page renders every other section and says
+ * the command list is unavailable, which is the honest state for a panel
+ * deployed without the bot's command layer.
+ */
+export interface CommandCatalog {
+  list(): readonly CommandCatalogEntry[];
+}
+
 export interface PanelReads {
   listGuildCards(guildIds: readonly string[]): Promise<readonly GuildCard[]>;
   overviewCounts(guildId: string, recentWindowDays?: number): Promise<OverviewCounts>;
+  /** Both rosters and their movement over the window, each with its own clock. */
+  membershipStats(guildId: string, windowDays?: number): Promise<MembershipStats>;
+  /** The merged feed, newest first. Bounded per source, then interleaved. */
+  listActivity(guildId: string, limit?: number): Promise<readonly ActivityEntry[]>;
+  /** Recent `GuildJoinScreening` rows, newest first. */
+  listJoinAttempts(guildId: string, limit?: number): Promise<readonly JoinAttempt[]>;
   lastSnapshotAt(guildId: string): Promise<string | null>;
   listLinkedMembers(guildId: string, limit?: number): Promise<readonly LinkedMember[]>;
+  listDirectory(guildId: string, query: DirectoryQuery): Promise<DirectoryPage>;
+  /** When each side of the directory was last written, for the staleness line. */
+  directoryScannedAt(guildId: string): Promise<{ discord: string | null; hypixel: string | null }>;
   listRollups(input: {
     guildId: string;
     period: RollupPeriod;
@@ -120,6 +338,21 @@ export interface PanelReads {
     metrics?: readonly string[];
   }): Promise<readonly RollupPoint[]>;
   topCommands(guildId: string, since: Date, limit?: number): Promise<readonly CommandUsageStat[]>;
+  /** Summed `ActivityDaily` over the window. */
+  messageTotals(guildId: string, since: Date): Promise<MessageTotals>;
+  /**
+   * The most active members across **both** surfaces, in one table.
+   *
+   * One read rather than a Discord list beside an in-game list, because the
+   * question is "who is carrying this guild" and the two lists answer half of
+   * it each. Ranked by total counted messages plus GEXP-active days, so someone
+   * who only plays and someone who only talks can both appear.
+   */
+  topActiveMembers(guildId: string, since: Date, limit?: number): Promise<readonly ActiveMember[]>;
+  /** Guild-wide GEXP per day, for the trend chart. */
+  gexpSeries(guildId: string, days: number): Promise<readonly DailyPoint[]>;
+  /** One member's row, for the individual view. Null when they have no rows. */
+  memberActivity(guildId: string, discordId: string, since: Date): Promise<ActiveMember | null>;
   listEvents(guildId: string, limit?: number): Promise<readonly PanelEvent[]>;
   listTickets(guildId: string, limit?: number): Promise<readonly PanelTicket[]>;
   listJobHealth(): Promise<readonly JobHealth[]>;

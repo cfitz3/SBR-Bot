@@ -17,6 +17,7 @@ import {
   type Result,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
+import type { ModerationMetrics } from "./metrics.js";
 import {
   countWarnsInWindow,
   escalationReason,
@@ -26,12 +27,16 @@ import {
 } from "./escalation.js";
 import { inForce } from "./expiry.js";
 import { isPunitive, needsBotPermission, rankOf } from "./rank.js";
+import { parseRelaySync, resolveGameCommand } from "./relay-sync.js";
 import type {
   BotCapabilities,
   EnforcementMirror,
   EscalationPolicySource,
+  GameCommandBus,
+  IgnResolver,
   ModerationRepository,
   RankResolver,
+  RelaySyncSource,
 } from "./ports.js";
 
 export interface ModerationServiceDeps {
@@ -46,6 +51,16 @@ export interface ModerationServiceDeps {
    * chose.
    */
   readonly escalation?: EscalationPolicySource;
+  /**
+   * Omit either of these to turn relay sync off. A deployment with no bridge has
+   * nowhere to send a guild command, and a deployment that cannot resolve an IGN
+   * would be sending it about nobody.
+   */
+  readonly gameCommands?: GameCommandBus;
+  readonly igns?: IgnResolver;
+  readonly relaySync?: RelaySyncSource;
+  /** Optional: absent means actions are applied but not counted. */
+  readonly metrics?: ModerationMetrics;
   readonly logger: Logger;
   /** Injectable clock for deterministic expiry in tests. */
   readonly now?: () => Date;
@@ -57,6 +72,10 @@ export class ModerationServiceImpl implements ModerationService {
   private readonly enforcement: EnforcementMirror;
   private readonly botCaps: BotCapabilities;
   private readonly escalationSource: EscalationPolicySource | null;
+  private readonly gameCommands: GameCommandBus | null;
+  private readonly igns: IgnResolver | null;
+  private readonly relaySyncSource: RelaySyncSource | null;
+  private readonly metrics: ModerationMetrics | null;
   private readonly log: Logger;
   private readonly now: () => Date;
 
@@ -66,6 +85,10 @@ export class ModerationServiceImpl implements ModerationService {
     this.enforcement = deps.enforcement;
     this.botCaps = deps.botCaps;
     this.escalationSource = deps.escalation ?? null;
+    this.gameCommands = deps.gameCommands ?? null;
+    this.igns = deps.igns ?? null;
+    this.relaySyncSource = deps.relaySync ?? null;
+    this.metrics = deps.metrics ?? null;
     this.log = deps.logger.child({ service: "moderation" });
     this.now = deps.now ?? (() => new Date());
   }
@@ -78,6 +101,10 @@ export class ModerationServiceImpl implements ModerationService {
 
   async listInfractions(guildId: string, discordId: string): Promise<Result<readonly InfractionDTO[]>> {
     return ok(await this.repo.listInfractions(guildId, discordId));
+  }
+
+  async listRecentInfractions(guildId: string, limit = 50): Promise<Result<readonly InfractionDTO[]>> {
+    return ok(await this.repo.listRecentInfractions(guildId, limit));
   }
 
   async listActions(query: AuditQuery): Promise<Result<readonly ModerationActionDTO[]>> {
@@ -124,7 +151,11 @@ export class ModerationServiceImpl implements ModerationService {
         this.ranks.getRole(input.guildId, input.actorDiscordId),
         this.ranks.getRole(input.guildId, input.targetDiscordId),
       ]);
-      if (rankOf(targetRole) >= rankOf(actorRole)) {
+      // An actor with no membership has no standing to act at all, so they are
+      // treated as outranked by everyone. A *target* with no membership is the
+      // weakest possible standing rather than an error: someone who has left the
+      // server is exactly who a ban is for.
+      if (actorRole === null || rankOf(targetRole ?? "MEMBER") >= rankOf(actorRole)) {
         return this.reject(input, { kind: "TARGET_OUTRANKS_ACTOR" });
       }
     }
@@ -158,7 +189,13 @@ export class ModerationServiceImpl implements ModerationService {
       active: isActiveState(input.type),
     });
 
+    // Counted here rather than at `createAction`, so the count means "a
+    // punishment took effect" and not "a row was written" — the two differ
+    // whenever enforcement is the thing that failed.
+    this.metrics?.actionApplied(action.guildId, action.type);
+
     await this.enforcement.apply(action);
+    await this.relayToGame(action);
     // Escalation runs after the warning is recorded, never before: the count it
     // reads must include the warning that prompted it, and a warning that
     // failed to store is not one anybody should be punished for.
@@ -172,6 +209,61 @@ export class ModerationServiceImpl implements ModerationService {
       expiresAt: action.expiresAt,
     });
     return ok(action);
+  }
+
+  /**
+   * Carry a Discord action into guild chat, if the guild's mapping says to.
+   *
+   * Failures are logged and swallowed, for the same reason escalation failures
+   * are: the punishment has already been recorded and mirrored, the staffer has
+   * been told it worked, and an offline bridge must not retroactively undo a
+   * mute that is in force everywhere else. What it must not do is fail silently
+   * — every skipped send says why.
+   */
+  private async relayToGame(action: ModerationActionDTO): Promise<void> {
+    if (this.gameCommands === null || this.igns === null) return;
+    if (action.targetDiscordId === null) return;
+
+    try {
+      const policy = parseRelaySync(
+        this.relaySyncSource === null ? null : await this.relaySyncSource.readRelaySync(action.guildId),
+      );
+      if (!policy.enabled) return;
+
+      const ign = await this.igns.ignFor(action.guildId, action.targetDiscordId);
+      const command = resolveGameCommand(policy, {
+        type: action.type,
+        ign,
+        durationSeconds: action.durationSeconds,
+      });
+      if (command === null) {
+        // Worth a line only when a mapping existed and the target was the
+        // reason it could not fire — "this action maps to nothing" is the
+        // configured answer, not an incident.
+        if (ign === null) {
+          this.log.debug("relay sync skipped: target has no linked account", {
+            guildId: action.guildId,
+            type: action.type,
+            target: action.targetDiscordId,
+          });
+        }
+        return;
+      }
+
+      await this.gameCommands.send(action.guildId, command);
+      this.log.info("relay sync sent", {
+        guildId: action.guildId,
+        type: action.type,
+        target: action.targetDiscordId,
+        command,
+      });
+    } catch (error) {
+      this.log.warn("relay sync failed", {
+        guildId: action.guildId,
+        type: action.type,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

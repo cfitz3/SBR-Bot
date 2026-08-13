@@ -30,6 +30,7 @@ export type {
   HandlerDeps,
   LfgBoard,
   CooldownGate,
+  CooldownPolicySource,
   CapabilityChecker,
   UsageSink,
 } from "./types.js";

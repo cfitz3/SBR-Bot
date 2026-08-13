@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { createKeyFactory } from "@sbr/redis";
+import { RUNNABLE_JOBS, createKeyFactory } from "@sbr/redis";
 
 import { buildJobDefinitions } from "./jobs.js";
 import { SCHEDULE, reconcileSchedule, repeatSignature } from "./schedule.js";
@@ -166,4 +166,29 @@ test("cron and interval cadences do not collide in the signature", () => {
   // A pattern of "5000" and an interval of 5000ms must not compare equal, or a
   // cron job would silently satisfy an interval entry and never be reconciled.
   assert.notEqual(repeatSignature("j", { pattern: "5000" }), repeatSignature("j", { every: 5000 }));
+});
+
+/**
+ * The panel offers a "Run now" button for every name on this list, and the
+ * worker looks the name up in `SCHEDULE` to pick its lane. A name on the list
+ * that nothing here defines would render a button that logs a warning and does
+ * nothing — the drift is invisible from either side, so it is asserted here.
+ */
+test("every manually-runnable job is one this fleet schedules", () => {
+  const scheduled = new Set(SCHEDULE.map((e) => e.name));
+  for (const name of RUNNABLE_JOBS) {
+    assert.ok(scheduled.has(name), `runnable "${name}" is not in SCHEDULE`);
+  }
+});
+
+/**
+ * The two exclusions are deliberate: `heartbeat` and `analytics-ingest` run on
+ * a seconds-scale timer and are continuous plumbing, so starting one by hand
+ * means nothing. Anything else added to SCHEDULE should get a button, and this
+ * catches the case where it silently does not.
+ */
+test("only the continuous plumbing is left off the runnable list", () => {
+  const runnable = new Set(RUNNABLE_JOBS);
+  const missing = SCHEDULE.map((e) => e.name).filter((n) => !runnable.has(n));
+  assert.deepEqual(missing.sort(), ["analytics-ingest", "heartbeat"]);
 });

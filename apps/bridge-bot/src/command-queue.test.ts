@@ -1,0 +1,90 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { CommandQueue } from "./command-queue.js";
+
+/**
+ * A fake clock that advances only when the queue sleeps. Real timers would make
+ * every assertion below a race, and pacing is the whole point of the class.
+ */
+function fakeClock() {
+  let t = 0;
+  return {
+    now: () => t,
+    sleep: async (ms: number) => {
+      t += ms;
+      // Yield so the drain loop's own awaits interleave the way they would with
+      // real timers.
+      await Promise.resolve();
+    },
+  };
+}
+
+function queue(deliver: (c: string) => boolean, over: Partial<{ spacingMs: number; maxBacklog: number; maxAgeMs: number }> = {}) {
+  const clock = fakeClock();
+  const q = new CommandQueue(deliver, {
+    spacingMs: 1_200,
+    maxBacklog: 20,
+    maxAgeMs: 120_000,
+    sleep: clock.sleep,
+    now: clock.now,
+    ...over,
+  });
+  return { q, clock };
+}
+
+test("commands are delivered in order, one at a time", async () => {
+  const sent: string[] = [];
+  const { q } = queue((c) => (sent.push(c), true));
+  q.push("/g mute A 1h");
+  q.push("/g kick B");
+  await q.idle();
+  assert.deepEqual(sent, ["/g mute A 1h", "/g kick B"]);
+});
+
+test("sends are spaced by at least the configured gap", async () => {
+  const at: number[] = [];
+  const { q, clock } = queue(() => (at.push(clock.now()), true));
+  q.push("a");
+  q.push("b");
+  q.push("c");
+  await q.idle();
+  assert.equal(at.length, 3);
+  assert.ok((at[1] ?? 0) - (at[0] ?? 0) >= 1_200, "second send too soon");
+  assert.ok((at[2] ?? 0) - (at[1] ?? 0) >= 1_200, "third send too soon");
+});
+
+test("a full backlog refuses the newest rather than reordering enforcement", async () => {
+  // Never delivers, so nothing leaves the queue and the backlog fills.
+  const { q } = queue(() => false, { maxBacklog: 2 });
+  assert.equal(q.push("first"), true);
+  assert.equal(q.push("second"), true);
+  assert.equal(q.push("third"), false);
+  assert.equal(q.stats().dropped, 1);
+  assert.equal(q.stats().queued, 2);
+});
+
+test("a command held past its age limit is abandoned, not delivered late", async () => {
+  const sent: string[] = [];
+  let up = false;
+  const { q } = queue((c) => (up ? (sent.push(c), true) : false), { maxAgeMs: 5_000 });
+  q.push("/g mute A 10m");
+  // The queue retries at the spacing interval, and the fake clock advances with
+  // each retry, so the entry ages out before the session returns.
+  await q.idle();
+  up = true;
+  assert.deepEqual(sent, []);
+  assert.equal(q.stats().expired, 1);
+});
+
+test("a command queued while the session is down is delivered once it returns", async () => {
+  const sent: string[] = [];
+  let up = false;
+  const { q } = queue((c) => (up ? (sent.push(c), true) : false), { maxAgeMs: 600_000 });
+  q.push("/g unmute A");
+  // Let it fail a couple of times, then bring the session back.
+  await Promise.resolve();
+  up = true;
+  await q.idle();
+  assert.deepEqual(sent, ["/g unmute A"]);
+  assert.equal(q.stats().sent, 1);
+});

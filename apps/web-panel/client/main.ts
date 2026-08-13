@@ -16,11 +16,11 @@ import { renderHealth } from "./pages/health.js";
 import { renderMembers } from "./pages/members.js";
 import { renderModeration } from "./pages/moderation.js";
 import { renderOverview } from "./pages/overview.js";
+import { renderPermissions } from "./pages/permissions.js";
 import { renderSelector } from "./pages/selector.js";
 import { renderSettings } from "./pages/settings.js";
 import { renderMilestones } from "./pages/milestones.js";
 import { renderTickets } from "./pages/tickets.js";
-import { renderWordlist } from "./pages/wordlist.js";
 
 interface GuildRoute {
   readonly guildId: string;
@@ -52,7 +52,10 @@ const GUILD_PAGES: readonly GuildPage[] = [
   { id: "tickets", label: "Tickets", group: "Queues", icon: "tickets", render: renderTickets },
   { id: "settings", label: "Settings", group: "Configure", icon: "settings", render: renderSettings },
   { id: "milestones", label: "Milestones", group: "Configure", icon: "milestones", render: renderMilestones },
-  { id: "wordlist", label: "Filter", group: "Configure", icon: "wordlist", render: renderWordlist },
+  { id: "permissions", label: "Permissions", group: "Configure", icon: "permissions", render: renderPermissions },
+  // The filter has no entry of its own: it is a section of Moderation, next to
+  // the automod rules that read the same wordlist. A stale `#/…/wordlist` link
+  // falls through to the guild's front page like any other unknown id.
 ];
 
 const NAV_GROUPS: readonly NavGroup[] = ["Monitor", "Queues", "Configure"];

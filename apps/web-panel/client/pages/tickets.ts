@@ -18,7 +18,17 @@ import type { TicketTypeDTO } from "@sbr/shared-types";
 import { TicketCategory } from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
-import { actionButton, fieldGroup, reasonBox, selectField, statusSlot, textField, toggleField } from "../forms.js";
+import {
+  actionButton,
+  channelPicker,
+  fieldGroup,
+  multiPickerField,
+  reasonBox,
+  selectField,
+  statusSlot,
+  textField,
+  toggleField,
+} from "../forms.js";
 import { h, replace } from "../dom.js";
 import { relativeTime } from "../format.js";
 
@@ -202,19 +212,26 @@ function typeCard(guildId: string, type: TicketTypeDTO, reload: () => void): HTM
           validate: (raw) => (raw.length > PROMPT_MAX ? `Keep it under ${PROMPT_MAX} characters.` : null),
           save: (raw) => write({ prompt: raw.trim() === "" ? null : raw.trim() }),
         }),
-        textField({
+        channelPicker({
           label: "Category channel",
-          hint: "Channel id new tickets of this type open under. Blank uses the server default.",
+          hint: "Category new tickets of this type open under. Clear it to use the server default.",
+          guildId,
           value: type.parentChannelId ?? "",
-          validate: validateOptionalSnowflake,
-          save: (raw) => write({ parentChannelId: raw.trim() === "" ? null : raw.trim() }),
+          placeholder: "server default",
+          save: (raw) => write({ parentChannelId: raw }),
+          clear: () => write({ parentChannelId: null }),
         }),
-        textField({
+        multiPickerField({
           label: "Staff roles",
-          hint: "Role ids pulled in, comma separated. Blank means the server-wide staff role only.",
-          value: type.staffRoleIds.join(", "),
-          validate: validateRoleList,
-          save: (raw) => write({ staffRoleIds: parseRoleList(raw) }),
+          hint: "Roles pulled into tickets of this type. None means the server-wide staff role only.",
+          guildId,
+          kind: "role",
+          values: type.staffRoleIds,
+          placeholder: "add a role",
+          save: async (ids) =>
+            ids.length > MAX_STAFF_ROLES
+              ? { kind: "error", message: `Up to ${MAX_STAFF_ROLES} roles.` }
+              : write({ staffRoleIds: [...ids] }),
         }),
         textField({
           label: "Menu position",
@@ -268,12 +285,14 @@ function panelForm(guildId: string, panel: NonNullable<TicketsVM["panel"]>): HTM
         : `Posted in ${panel.channelId ?? "a channel"}. Changing the channel posts a fresh panel there.`,
     ),
     fieldGroup(
-      textField({
+      channelPicker({
         label: "Channel",
-        hint: "Channel id the panel is posted in. Blank leaves it unposted.",
+        hint: "Where the panel is posted. Clearing it leaves the panel unposted.",
+        guildId,
         value: panel.channelId ?? "",
-        validate: validateOptionalSnowflake,
-        save: (raw) => write({ channelId: raw.trim() === "" ? null : raw.trim() }),
+        placeholder: "not posted",
+        save: (raw) => write({ channelId: raw }),
+        clear: () => write({ channelId: null }),
       }),
       textField({
         label: "Title",
@@ -372,22 +391,6 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
     h("div", { class: "field-row" }, button),
     status.el,
   );
-}
-
-function validateOptionalSnowflake(raw: string): string | null {
-  const text = raw.trim();
-  if (text === "") return null;
-  return SNOWFLAKE.test(text) ? null : "Enter a Discord id (17–20 digits), or leave it blank.";
-}
-
-function parseRoleList(raw: string): readonly string[] {
-  return [...new Set(raw.split(",").map((part) => part.trim()).filter((part) => part !== ""))];
-}
-
-function validateRoleList(raw: string): string | null {
-  const parts = parseRoleList(raw);
-  if (parts.length > MAX_STAFF_ROLES) return `Up to ${MAX_STAFF_ROLES} roles.`;
-  return parts.every((part) => SNOWFLAKE.test(part)) ? null : "Role ids are 17–20 digits, comma separated.";
 }
 
 function validatePosition(raw: string): string | null {

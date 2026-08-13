@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  compactNumber,
   count,
   countdown,
   describeSpan,
@@ -111,4 +112,16 @@ test("the year ceiling matches the one the mutation layer enforces", () => {
   assert.equal(parseDurationSeconds("365d"), 31_536_000);
   assert.equal(parseDurationSeconds("366d"), "invalid");
   assert.equal(parseDurationSeconds("53w"), "invalid");
+});
+
+test("big Skyblock figures read at a glance, and a missing one stays missing", () => {
+  assert.equal(compactNumber(1_240_000_000), "1.2b");
+  assert.equal(compactNumber(12_400_000_000), "12b");
+  assert.equal(compactNumber(340_000_000), "340m");
+  assert.equal(compactNumber(8_500), "8.5k");
+  assert.equal(compactNumber(999), "999");
+  assert.equal(compactNumber(-2_000_000), "-2.0m");
+  // A dash rather than a zero: unreadable and empty are different answers.
+  assert.equal(compactNumber(null), "—");
+  assert.equal(compactNumber(Number.NaN), "—");
 });

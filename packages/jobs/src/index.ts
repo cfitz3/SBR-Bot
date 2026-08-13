@@ -14,6 +14,7 @@ export {
   defineConfigInvalidationJob,
   defineEndedAuctionJob,
   defineEventTransitionJob,
+  defineDiscordMemberSyncJob,
   defineGuildScanJob,
   defineInactivityScanJob,
   defineMilestoneDetectJob,
@@ -86,6 +87,13 @@ export {
   type MemberCacheWrite,
   type ScannedMember,
 } from "./guild-scan.js";
+export {
+  syncDiscordMembers,
+  type DiscordMemberRow,
+  type DiscordMemberWrite,
+  type DiscordSyncPorts,
+  type DiscordSyncResult,
+} from "./discord-sync.js";
 export {
   diffRoster,
   findInactive,

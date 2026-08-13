@@ -274,14 +274,34 @@ a behaviour switch. Without it the scammer check returns `UNKNOWN` and, by
 default, every request holds for a human. The key travels in the `Authorization`
 header and never in a query string, because query strings end up in proxy logs.
 
-**Known upstream outage — the scammer lookup is 404ing (verified 2026-08-12).**
+**The scammer lookup route is not deployed upstream (re-verified 2026-08-13).**
 `GET /user/lookup`, the only endpoint that answers the scammer question, replies
-`{"error":"Endpoint not found"}` with a 404 to every caller: with our key and
-without one, GET and POST, at every path variant the docs and the obvious guesses
-suggest. `/health`, `/user/info` and `/leaderboard/*` answer normally on the same
-key at the same moment, so this is not our key, our header, our base URL or our
-uuid formatting — the documented route is simply not deployed. Nothing here can
-fix it; SkyKings has to bring it back.
+`{"error":"Endpoint not found"}` with a 404 to every caller — including for the
+sample identifiers in SkyKings' own documentation, so it is not our uuid
+formatting.
+
+The decisive evidence is the **anonymous** request. SkyKings mounts its API-key
+middleware per route, which makes an unauthenticated call a probe of the router
+itself:
+
+| Request | Answer | What it proves |
+|---|---|---|
+| `/user/info`, no key | `401 API key required` | The route exists; auth ran and refused. |
+| `/user/lookup`, no key | `404 Endpoint not found` | The router found nothing to run auth for. |
+| `/user/lookup`, our key | `404 Endpoint not found` | Same 404, reached the same way. |
+
+A route that was never mounted cannot be reached by any credential, scope, header
+form, method or path variant we send, so there is no request we could make that
+would work. `/health`, `/user/info` and `/leaderboard/*` all answer normally on
+the same key at the same moment — the API is up, this one route is absent.
+SkyKings has to bring it back; support is a Discord ticket, linked from
+<https://skykings.net/api>.
+
+**`npm run skykings:probe`** re-runs exactly this test set and prints the verdict.
+It exits 0 the day the lookup answers, so it works as a cron canary rather than
+something somebody has to remember to check. When it goes green, delete this
+section and the matching note in `packages/skykings/src/client.ts` — no code
+changes, the reader and the cache TTLs are already correct.
 
 What the platform does meanwhile, all of it already the designed behaviour:
 

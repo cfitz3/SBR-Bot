@@ -5,6 +5,30 @@
 export { ModerationServiceImpl, type ModerationServiceDeps } from "./service.js";
 export { rankOf, isPunitive, needsBotPermission } from "./rank.js";
 export {
+  counterRequestsFor,
+  evaluateAutomod,
+  parseAutomod,
+  parseRule as parseAutomodRule,
+  parseTrigger as parseAutomodTrigger,
+  ALLOW_DECISION as AUTOMOD_ALLOW,
+  AUTOMOD_ACTION_TYPES,
+  AUTOMOD_SETTING_KEY,
+  AUTOMOD_TRIGGER_KINDS,
+  DEFAULT_AUTOMOD,
+  type AutomodAction,
+  type AutomodActionType,
+  type AutomodContext,
+  type AutomodCounterRequest,
+  type AutomodCounters,
+  type AutomodDecision,
+  type AutomodExemption,
+  type AutomodMatch,
+  type AutomodPolicy,
+  type AutomodRule,
+  type AutomodTrigger,
+  type AutomodTriggerKind,
+} from "./automod.js";
+export {
   countWarnsInWindow,
   describeRung,
   escalationReason,
@@ -29,6 +53,32 @@ export {
   punishmentState,
   type PunishmentState,
 } from "./expiry.js";
+export {
+  DEFAULT_RELAY_SYNC,
+  formatGameDuration,
+  parseRelaySync,
+  resolveGameCommand,
+  resolveRows as resolveRelaySyncRows,
+  MAX_GAME_MUTE_SECONDS,
+  RELAY_DISCORD_ACTIONS,
+  RELAY_GAME_ACTIONS,
+  RELAY_SYNC_SETTING_KEY,
+  type RelayCommandInput,
+  type RelayDiscordAction,
+  type RelayDurationMode,
+  type RelayGameAction,
+  type RelaySyncPolicy,
+  type RelaySyncRow,
+} from "./relay-sync.js";
+export {
+  AutomodRunner,
+  AUTOMOD_ACTOR,
+  type AutomodEnforcer,
+  type AutomodInput,
+  type AutomodOutcome,
+  type AutomodRunnerDeps,
+  type AutomodSubject,
+} from "./automod-runner.js";
 export { memberRecordSource, type MemberRecordSourceDeps } from "./record.js";
 export { SafetyServiceImpl, type SafetyServiceDeps } from "./safety.js";
 export {
@@ -40,13 +90,19 @@ export {
   type WordlistServiceDeps,
 } from "./wordlist.js";
 export type {
+  AutomodCounterStore,
+  AutomodPolicySource,
   ModerationRepository,
   RankResolver,
   EnforcementMirror,
   EscalationPolicySource,
+  GameCommandBus,
+  IgnResolver,
+  RelaySyncSource,
   BotCapabilities,
   NewActionRecord,
   NewWordlistRecord,
   SafetyStateStore,
   WordlistRepository,
 } from "./ports.js";
+export type { ModerationMetrics } from "./metrics.js";

@@ -35,14 +35,14 @@ One Node process (`apps/web-panel/src/server.ts`, zero-dependency `node:http`) s
 
 The chrome is a 272px sticky sidebar rather than a top tab strip: eleven pages do not fit across a laptop's width without wrapping, and the sidebar has room to group them under **Monitor**, **Queues** and **Configure** — watching, then the queues that need a person, then the settings that change how the platform behaves. Below 900px the whole thing stacks and the nav becomes a wrapped row, so every page stays reachable on a phone. The design's own light variant is not implemented and is not planned; a light Nocturne would be a second design, not a second theme.
 
-**Built so far:** Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4), Milestones (§3.13), Tickets (§3.14) and Filter (§3.15) — each with the writes its section describes, over the pipeline below.
+**Built so far:** Guild Selector (§3.2), Overview (§3.3), Analytics (§3.5), Health (§3.11), Events (§3.8), Moderation (§3.6), Members (§3.10), Settings (§3.4), Milestones (§3.13) and Tickets (§3.14) — each with the writes its section describes, over the pipeline below. The Filter (§3.15) is no longer a page of its own: it is a section of Moderation.
 
 **Eleven pages, not fourteen.** Three of the pages this document originally specified are gone as pages, and the sections that describe them (§3.7, §3.9, §3.12) are kept as the record of why rather than deleted, so the numbering the source files cite stays put:
 
 - **Mapping (§3.9) and XP (§3.12) folded into Settings (§3.4).** The split between them was never one an admin could predict — "which channel does the bridge use" and "is the bridge suspended" are the same question asked twice, and finding them on different tabs cost more than the shorter pages saved. One page is also one access decision and one round trip for what is one page's worth of configuration.
 - **Recruitment (§3.7) is gone entirely.** Join screening (§3.4) decides admission automatically, so there is no queue of applications for a human to work; the ticket queue that shared the page moved onto Tickets (§3.14), which is where the people in those tickets already are.
 
-Partial within the built pages, and deliberate: the Settings page takes role and channel ids by hand rather than through a live Discord picker, which needs the bot to enumerate; Health reports process liveness and job freshness but not queue depths or the Hypixel budget; the operational actions of §3.11 (requeue, force sync) are not wired; the Overview's activity feed (§3.3) is a stub card with no read behind it; and Events schedules and cancels but does not announce, edit or mark attendance — see §3.8 for why.
+Partial within the built pages, and deliberate: Health reports process liveness and job freshness but not queue depths or the Hypixel budget; the remaining operational actions of §3.11 (requeue a specific failed job, restart the bridge session) are not wired; and Events schedules and cancels but does not announce, edit or mark attendance — see §3.8 for why. Snowflake fields now resolve through the bot's live directory (§3.4), and the Overview's activity feed is a real read (§3.3); both were stubs and no longer are.
 
 **The editing unit is a field, not a form.** Each control saves itself and carries its own status line, because every domain service underneath takes one value (`setChannel`, `setFeature`, `setBridgeSuspended`) and a page-wide submit would report "saved" for a write that applied four of its five parts. The two exceptions submit as a unit because their parts are not separately storable: the moderation action form (§3.6), where a type without a reason is a row the audit log should never hold, and the event scheduler (§3.8), where a title without a start time is not an event. Controls that write on change (toggles, the role dropdown) snap back when the server refuses, so a widget never displays a value that was never stored.
 
@@ -70,7 +70,7 @@ Writes live in `PanelMutations` (`panel-core/src/mutations.ts`), a sibling of `P
 - **Rate limit** is per user and per mutation on `cd:web:{mutation}:{discordId}` — a guard against a stuck key or a double-clicked toggle, not a quota.
 - **Audit.** Every authorized attempt is captured as `CommandUsage(surface=WEB_PANEL)`, failures included, so a burst of refused writes is visible. Config changes additionally go through a `ConfigAuditSink`; they are *not* written as `ModerationAction`s, whose `type` enum describes actions taken on a person. Today the sink emits a typed analytics event; the port is what makes a durable `ConfigAudit` table a wiring change later.
 
-Available now: `config.channel`, `config.setting`, `config.screening`, `config.role-mapping`, `config.feature`, `config.recruitment`, `config.hypixel`, `xp.source`, `xp.adjust`, `milestone.upsert`, `milestone.remove`, `ticket.type.upsert`, `ticket.type.remove`, `ticket.panel.save`, `wordlist.upsert`, `wordlist.delete`, `moderation.defaults`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.cancel`, `member.role`, `member.unlink`.
+Available now: `config.channel`, `config.setting`, `config.screening`, `config.role-mapping`, `config.feature`, `config.recruitment`, `config.hypixel`, `xp.source`, `xp.adjust`, `milestone.upsert`, `milestone.remove`, `ticket.type.upsert`, `ticket.type.remove`, `ticket.panel.save`, `wordlist.upsert`, `wordlist.delete`, `moderation.defaults`, `moderation.relay-sync`, `automod.test`, `automod.rule.upsert`, `automod.rule.remove`, `automod.enable`, `config.cooldowns`, `roles.binding`, `roles.rank`, `roles.capability`, `roles.command`, `roles.exception`, `roles.exception.remove`, `health.run-job`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.cancel`, `member.role`, `member.unlink`.
 
 `config.recruitment` and `application.decide` are the two with **no control on any page**, and stay because the JSON API is independently usable (§0) and because removing a mutation is a contract break where removing a tab is not. Nothing in the UI calls them since Recruitment went away (§3.7).
 
@@ -90,6 +90,17 @@ Four deliberate departures from the sections below:
 - **OWNER is not assignable** from the panel at all, and is absent from the dropdown. Handing over ownership stays a deliberate act elsewhere.
 - **`ROLE_CHANGE` and `GUILD_EXPEL` are not panel actions.** They describe events the platform records when they happen; exposing them as a write would let staff hand-feed the audit log entries about events that never occurred.
 - **Force re-verify (§3.10) is not implemented.** `IdentityService.linkByIgn` requires the actor to be the person linking, so there is no service call for "re-read someone else's Hypixel social" — adding one is domain work, not panel wiring.
+
+### ID pickers
+
+Almost every config field used to be a Discord snowflake the operator copied out of Discord by hand. They are now searchable dropdowns over the admin bot's gateway cache, reached through its loopback internal API (see `ADMIN_BOT.md` §7b for the routes, the token, and the **Server Members privileged intent** that member listing requires).
+
+- **Three reads**, `directory-channels` / `directory-roles` / `directory-members`, on the ordinary guild-scoped read path and gated at **MODERATOR** — not Admin, because Moderator-tier pages use pickers too (a moderation target, a ticket assignee), and they disclose nothing a member cannot already see in Discord.
+- **`INTERNAL_API_URL` + `INTERNAL_API_TOKEN`** configure the client. Responses are cached in Redis under `dir:{guildId}:{resource}:{q}` for 60s; **failures are never cached**, so a picker recovers by itself when the bot comes back.
+- **No bot means degraded, not broken.** With the token unset, the bot down, or the token mismatched, every picker reports itself unavailable and falls back to the raw-snowflake text field with a Save button — exactly the control it replaced.
+- **Three controls, one combobox.** `pickerField` (and its `channelPicker`/`rolePicker`/`memberPicker` variants) saves on selection, following the page's law that a field saves itself. `idChooser` is the same combobox as a *value*, for the two places a selection is not itself a write — the moderation lookup box and the composite action form. `multiPickerField` is the set version, chips over one search box, used for ticket staff roles. All three share `combobox()` so keyboard navigation and degradation cannot drift apart.
+- **Typing an id still works** everywhere, deliberately: it is the only route when the directory is down, and the fastest one for someone who already has the id on their clipboard.
+- **CSP holds.** The dropdown is positioned entirely from `app.css`; an inline `style=` would be silently dropped by `default-src 'self'`, so the class-name/stylesheet pairing is the only mechanism available and is the one used.
 
 ### CSV export
 
@@ -122,7 +133,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 | `MEMBER` (non-staff) | *No panel access* (redirect to a member landing / their own linked info only) | — |
 | `MODERATOR` (Staff) | Overview, Analytics (read), Moderation/Infractions, Members, Tickets (the open queue), Events (read) | Issue/read infractions, close tickets, mark attendance |
 | `OFFICER` | + Events (full), Bridge control | Create/cancel events, bridge suspend/unsuspend, unlink a member |
-| `ADMIN` / `OWNER` | + Settings (config, channel/role mapping, feature flags, screening, XP), Health, Milestones, Ticket config, Filter | All configuration, role/channel mapping, feature toggles, screening policy, XP policy and adjustments, milestone definitions, ticket types, chat-filter rules and the escalation ladder |
+| `ADMIN` / `OWNER` | + Settings (config, channel mapping, feature flags, screening, XP), Permissions, Health, Milestones, Ticket config, Filter | All configuration, role/channel mapping, capability and command floors, per-subject exceptions, feature toggles, screening policy, XP policy and adjustments, milestone definitions, ticket types, chat-filter rules and the escalation ladder |
 
 **No page sits at OFFICER any more.** The one that did was Recruitment, and the screening it existed to drive is automatic now (§3.4). The tier still exists in the role ladder and still gates individual mutations — bridge suspend, event create/cancel, member unlink — it just isn't what any whole page turns on. Tickets went the other way: the page leads with the open queue, which is Moderator work (`ticket.close`), and the configuration on the same page stays Admin per-load rather than the whole page sitting at the higher tier and shutting out the people who answer tickets.
 
@@ -155,7 +166,11 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
   - Open items: open tickets, open infractions, active punishments, upcoming events.
 - Ordered by what a staffer does with it — what is waiting on a human first, then membership — because a dashboard that leads with headline counts buries the queue that needed clearing this morning.
 - **Job freshness is not here.** It moved to Health (§3.11) entirely: it answers a question about the platform rather than about the guild, and Health answers it in more detail than a three-row strip could.
-- **The activity feed is a stub card.** It is meant to be a merged, guild-scoped stream of what the platform did — joins and leaves, moderation actions, config changes, ticket movement — and those events are recorded across several tables with no common shape or cursor, so it needs a server-side read designed for it rather than a client that fans out and interleaves by hand. The empty card is there so the layout it lands in is settled and the gap is visible rather than merely absent.
+- **Three tabs below the queue** — *Membership · Activity log · Join attempts*. All three arrive in the one overview response, so switching tabs is a change of what is shown, not another round trip.
+- **Membership is two rosters, never one.** The Discord server and the in-game guild are different populations; blending them produces a number that describes neither. Joins and leaves are reported per side and per window, and each side displays the clock of the scan that produced it — a roster is only as true as its last scan, and `never` is a real answer meaning the job has not run yet.
+  - The in-game side's movement is summed from `GuildScan.joined`/`.left`, **not** derived from `GuildMemberCache`: the cache mirrors *now* and has no memory of somebody who joined and left inside the window.
+- **The activity log is a real read** (`PanelReads.listActivity`): five bounded queries — moderation actions, join screenings, milestones, event status changes, roster scans — interleaved by timestamp in JS, not unioned in SQL. The sources have different shapes, ownership and indexes, and a database-side union needs a common projection every future source has to be bent into. Each entry arrives already worded, because five client-side formatters would be five copies drifting from the five that exist elsewhere. Config changes are deliberately absent — they belong to the audit trail, which records who changed what rather than what the platform did on its own.
+- **Join attempts** render `GuildJoinScreening` rows with the stat block as it stood at the moment of the request. The scam check keeps **three** states — *clear* / *listed* / *not checked* — because collapsing the null into "clear" is exactly how an outage reads as an all-clear. A dash in the stat line means the player's API was unreadable, never that the value is zero.
 - Everything else is a summarized read; deep-dive links route to the specialized pages.
 - **Access:** Staff+ (read).
 
@@ -177,14 +192,36 @@ Everything arrives in **one read** (`SettingsVM`) and therefore one access decis
 - **Access:** Admin+.
 
 ### 3.5 Analytics & Reports
-- **Bridge metrics:** messages relayed (each direction), relay latency, dropped/reconnect events, suspension history.
-- **Command usage:** top commands, per-surface split (bridge/admin/web/in-game), success rate, latency percentiles, active users, trend over range.
-- **Progression/engagement (optional):** milestones earned, event attendance rates.
-- Date-range + surface filters; export (CSV). Data comes from `packages/analytics` (aggregated from `CommandUsage`, bridge health events, moderation events) — **read-only**, no live Hypixel calls.
+
+Six fixed cards, plus one chart per rollup series that actually has events in the window.
+
+| Card | Source | What it answers |
+| --- | --- | --- |
+| **Messages** | `ActivityDaily`, summed | Discord lines and guild-chat lines, **never their sum**, each with a per-day rate. |
+| **Engagement** | `ActivityDaily` | How many people said anything, and how much the average one said. |
+| **Playtime** | `ActivityDaily.presenceSamples`, `GuildGexpDaily` | Two estimates, labelled as such — see below. |
+| **Guild experience** | `GuildGexpDaily`, summed per day | The GEXP trend, drawn through the same `lineChart` the rollups use. |
+| **Top members** | `ActivityDaily` ⋈ `GuildGexpDaily` | One table spanning both surfaces, so somebody who only plays and somebody who only talks both rank. |
+| **Top commands** | `CommandUsage` | Usage, success rate and latency per command. |
+
+The fixed cards read the daily counters directly, so they populate on a guild that has never had a rollup run. The rollup charts are additive: `bridge.relay`, `mod.action` and `filter.hit` are emitted from `BridgeService.processInbound`, `ModerationServiceImpl.applyAction`, `AutomodRunner.run` and the relay's wordlist filter, through synchronous `void`-returning metrics ports — telemetry can never delay a chat message or fail a punishment.
+
+**Playtime is an estimate and says so.** Neither surface measures time. The Discord figure is `presenceSamples × 360 minutes` (the `guild-scan` cadence, `PRESENCE_SAMPLE_INTERVAL_MINUTES`); the in-game figure counts days with any GEXP earned. **Nothing currently calls `XpService.recordPresence`**, so the sample count is zero and the card reads "Not sampled" rather than rendering a plausible-looking nothing — wiring the guild scan to call it is what turns that constant into a real number.
+
+**Unknown is never zero.** A member with no verified link has no uuid, so their GEXP and active-day counts are `null` and render as an em dash. Printing `0` would claim they earned none, which is a different and unfounded statement.
+
+Date-range + bucket-size filters; export (CSV) for the rollups and for command stats. Read-only — no live Hypixel calls.
 - **Access:** Staff+ (read).
 
 ### 3.6 Moderation / Infractions View
-- Searchable/filterable list of `Infraction` + `ModerationAction` (by member, actor, type, severity, date, active/expired).
+
+**Four sections on one page, not four pages.** The page carries a tab strip — *History · Automod · Filter · Cooldowns* — rather than sub-routes, because everything that acts on a member without a person in the loop belongs next to the history of what it did. The Filter section is the former §3.15 page folded in whole (`pages/wordlist.ts` now exports `filterCards` and renders nothing of its own); the automod rules read the same wordlist, and two places to configure one list is the friction this overhaul exists to remove.
+
+- **Tiers are per load, not per page.** The page stays gated at `MODERATOR`; the view model carries `canConfigure` (Admin+), and a Moderator gets History alone with the tab strip hidden entirely rather than three tabs that refuse on click. Raising the page to Admin would have taken the infraction history away from the people who use it most.
+- **The `wordlist` read route stays on the JSON API** even though the nav entry is gone. Removing a route is a contract break for anything driving the API directly; the panel simply reaches that data through the moderation view model, which already carries it.
+- **A new rule defaults to flag-only with no deletion** — it records what it *would* have caught while the operator is still finding out whether it catches the right things. The "Test a message" box runs the real evaluator against sample text with stubbed counters: nothing is written, and the tested message itself is never recorded (the audit line holds its length and the rule ids, not its text).
+- **Trigger-kind switching rebuilds only the parameter fields**, in place, rather than re-reading the page — a re-read would collapse the row being edited. `state.editing` likewise survives the reload a save triggers.
+- Searchable/filterable list of `Infraction` + `ModerationAction` (by member, actor, type, severity, date, active/expired). The lookup box searches **name, IGN or id** through the Phase-2 directory read, so staff who know a member by their username do not have to go and fetch a snowflake first.
 - Per-member drill-down: full case history, notes, active mutes/bans with expiry.
 - An **In force now** card lists only what is currently being enforced (`ModerationService.listInForce`). It answers a different question from the history table below it: "is this person already muted" is what decides whether to escalate, and reading it off a history means checking every row's expiry by eye. With no target it is the guild-wide list of live mutes and bans.
 - Each history row carries a resolved state — **in force / expired / lifted**, and nothing at all for a warn or kick, which had no duration to run out. The state is computed on the server (`ModerationActionVM.state`, from `@sbr/moderation`'s `punishmentState`) rather than read off the `active` flag: the expiry sweep clears that flag, so a flag-only reading would credit a staffer with every unmute the clock performed.
@@ -224,17 +261,25 @@ The `Application` model, `config.recruitment` and `application.decide` all still
 Not a tab of its own. The behaviour below is unchanged and is what the Channels, Roles and Feature flags cards do; only the address moved.
 
 - **Feature flags:** per-guild toggles from `GuildConfig.features` (e.g. in-game commands, LFG, networth, antiraid). Toggling invalidates cache + pub/sub to bots.
-- **Role mapping:** map platform roles (`MODERATOR`/`OFFICER`/`ADMIN`) → Discord role IDs, and set the verified-member role. Uses a live Discord role picker (needs bot present to enumerate roles).
+- **Role mapping:** *moved to the Permissions page (§3.16)*, and widened there from one Discord role per level to a set. The card is gone from Settings; `config.role-mapping` stays on the API for the same reason every superseded mutation does.
 - **Channel mapping:** assign functional channels → Discord channel IDs, validated against the guild's channels. Every slot in `CONFIG_CHANNEL_SLOTS` gets a control: the five originals (bridge, staff, log, applications, events) plus LFG, tickets, milestones, leaderboard and modlog. The page reads them from `GuildRuntimeConfig.channels`, the canonical binding map — which is why a slot nothing has ever written still shows up as "not set" instead of vanishing. (It read that map over five mirrored `*ChannelId` columns until Phase 11 backfilled and dropped them; the page never had to change.)
 - **View/edit raw role IDs & channel IDs** with validation and a "resolve name" preview; invalid/stale IDs flagged.
 - **Bot-gated:** picker requires `INSTALLED`; degrades to manual-ID entry with validation warnings if the bot can't enumerate.
 - **Access:** Admin+.
 
-### 3.10 Linked Members & Verification
+### 3.10 Members — the unified directory
 *(its own tab, reachable from Overview)*
-- List `GuildMember`s with linked `MinecraftAccount`(s), verification status (`VERIFIED`/`PENDING`/`UNLINKED`), primary IGN, guild rank, last seen.
-- Filter by verification state; spot unlinked/unverified members.
-- Actions (Officer+): force re-verify (re-read Hypixel social), unlink, adjust member role/status.
+
+The page lists **both rosters merged**, not only the people who have linked. Its previous shape could describe a person only if they had a platform membership row, which made the two questions staff actually ask — *who is in the guild but not in the server*, and *who is in the server but not in the guild* — unanswerable from the panel.
+
+- **Read:** `PanelReads.listDirectory(guildId, {q, side, limit})`. The Discord side (`GuildMember`→`DiscordUser`, written by `discord-member-sync` every 2 h) and the in-game side (`GuildMemberCache`, written by `guild-scan` every 6 h) are loaded whole and merged in JS through `LinkedAccount`→`MinecraftAccount`. It is a full outer join with no shared key — the two sides meet only through the link table, and the rows that matter most are exactly the ones where that join fails — so it is not expressible as one Prisma query. Both sides are guild-sized, which is why loading them whole is cheaper than the query that would avoid it.
+- **Linked means a `VERIFIED` link.** An unverified one is a link *attempt*; treating it as a match would put somebody else's stats on the row.
+- **Tabs:** *All / Discord only / In-game only / Unlinked*. "Discord only" and "in-game only" mean *absent from the other side*, not *present on this one* — otherwise a linked member would appear under both and neither tab would answer the question it is named after. An unrecognised `side` in the URL falls back to the unfiltered list rather than erroring.
+- **Search is server-side** and matches username, nickname, IGN, guild rank, Discord id **and** uuid. It cannot be done in the browser any more: half the fields it matches on belong to rows the browser would otherwise never receive. The input is debounced so a keystroke is not a query.
+- **Counts describe the roster, not the search** — `discordCount`, `guildCount`, `linkedCount` are computed before filtering, so the tabs do not each report a different guild size. Linked is shown as a percentage *and* a fraction: the percentage says how healthy linking is, the fraction says how many people are left to chase.
+- **Each roster shows its own scan clock.** A roster is only as true as its last scan, and a page that displays stale numbers without saying so is the one that gets acted on. Never scanned reads as "Never scanned", not as zero.
+- **There is no "awaiting verification".** Nothing in `packages/identity` ever writes `LinkStatus.PENDING`: verification either succeeds and the link is VERIFIED, or it does not and there is no link. The old tile therefore counted a state that could not occur, while inviting staff to wait for something that was never going to arrive. Linked is a yes or a no.
+- **Actions (Officer+):** platform role and unlink, both only on rows that have a Discord side — an in-game-only row has no membership to hold a role and no link to detach. It is still listed, because finding it is the point of the tab.
 - **Access:** Staff+ (view); Officer+ (edit).
 
 ### 3.11 Health / Status Panel (Bots & Workers)
@@ -242,7 +287,12 @@ Not a tab of its own. The behaviour below is unchanged and is what the Channels,
 - **Workers:** queue depths, active/failed/**stale jobs**, last run + duration per job type (bazaar/ah-sweep/pricing/snapshots/roster/global), from `WorkerJobLog` + live BullMQ state.
 - **Sync freshness:** last successful bazaar/AH sweep, per-guild roster sync, snapshot coverage — with `STALE` thresholds and alerts.
 - **Data layer:** Hypixel rate-limit budget remaining, API error/`API_DISABLED` counts, cache hit rates.
-- Operational actions (Admin+): retry/requeue a failed job, force a sync, restart bridge session (where safe).
+- **Run now (Admin+).** Each job row carries a button that starts that job out of cadence — the "force a sync" of the original spec, generalised: there is no separate force-sync control because every sync *is* a job, and a button per row needs no list of which ones count.
+  - **The panel does not enqueue.** It publishes `{jobName, guildId, actorDiscordId}` on `chan:jobs` and the worker process adds it to BullMQ, so exactly one process writes the queue and the panel carries no BullMQ dependency. The consequence is that success means **requested**, not **ran**, and the button says so: the last-run column is the only thing that can confirm the work happened, and the page re-reads a few seconds later to show it.
+  - **The allow-list lives in `@sbr/redis` beside the bus** (`RUNNABLE_JOBS`), which both the panel and the workers already depend on. `HealthVM` carries `runnable` per row rather than the client holding its own copy — a client-side list is exactly the drift the allow-list exists to prevent. `heartbeat` and `analytics-ingest` are excluded: they run on a seconds-scale timer, so starting one by hand means nothing. A worker test asserts every runnable name is in `SCHEDULE`.
+  - **A second cooldown, keyed per job and per guild** (`MANUAL_JOB_COOLDOWN_MS`, 60s) sits on top of the standard per-user mutation gate. Not per actor, deliberately: two admins each inside their own two-second window is exactly how a snapshot pass gets run four times in a minute.
+  - A deployment with no worker bus wired reports `SERVICE_ERROR` and renders no buttons at all, rather than a disabled control the reader has no way to enable.
+- Remaining operational actions (retry a specific failed job, restart the bridge session) are still unwired.
 - **Access:** Admin+ (Staff may get a read-only subset).
 
 ### 3.12 Guild XP — *now the XP section of Settings (§3.4)*
@@ -273,7 +323,9 @@ Not a tab of its own. The behaviour below is unchanged; it renders from `Setting
 - **The panel** holds its channel, title and description. Where it was last posted is recorded server-side, not typed here — moving it to another channel is a re-post, and changing the channel clears the stored message id so a later edit doesn't update a message in a channel the admin moved away from.
 - **Access:** Moderator+ for the page and the queue, because closing a ticket is Moderator work. **Admin+ for the configuration below it** — a type names the staff roles it pulls in and the category channel it opens under, which is role and channel configuration. The view model carries that decision per load (`canConfigure`) rather than the whole page sitting at the higher tier, which would shut the people who answer tickets out of the queue.
 
-### 3.15 Filter
+### 3.15 Filter — *now a section of §3.6, not a page*
+
+**There is no Filter nav entry.** The content below is unchanged and still renders — `pages/wordlist.ts` exports `filterCards`, which the Moderation page draws as its Filter tab — but it no longer has a route of its own, because the automod rules next to it read this same wordlist. A stale `#/…/wordlist` link falls through to the guild's front page like any other unknown page id. The `wordlist` **read route** on the JSON API is deliberately kept (§0): dropping it would break anything driving the API directly.
 
 - **Two things that act on members with nobody in the loop.** The chat filter's rules fire at relay time, and the escalation ladder mutes or bans off a warning count. Both are configuration rather than a record of what somebody did, which is what separates this page from Moderation next door.
 - **The rules are shown in full, patterns included** — that is the point of the page. It is not what sets the tier: `/wordlist` in the admin bot already lists the same patterns to Staff, and a filter nobody who moderates can read is a filter nobody can maintain.
@@ -283,7 +335,54 @@ Not a tab of its own. The behaviour below is unchanged; it renders from `Setting
 - **The note a `/wordlist-add` carried is left alone.** It is not on `WordlistRuleDTO`, so this page has never seen it — an omitted `note` means "leave it", and only an explicit `null` clears it. The alternative would have every panel edit quietly delete what a staffer typed in Discord.
 - **The ladder is displayed as it is in force**, built-ins included (ADMIN_BOT.md §5.1). There is nothing stored until the first save, so a row-by-row editor would have to pretend otherwise; saving writes the ladder exactly as shown, which turns the built-ins on display into that guild's own. A mute rung with no duration is refused here rather than dropped on the way back in — `parseEscalationPolicy` would discard it silently, leaving an admin with a step that never fires.
 - **Rules and ladder are independent.** Escalation runs off the moderation service, which every deployment has, so a deployment without the chat filter still gets the ladder editor.
+- **In-game punishment sync** sits below the ladder as a third card. One row per Discord action (`WARN`, `MUTE`, `UNMUTE`, `KICK`, `BAN`, `UNBAN`), each naming the guild command it should type — and the choice is a closed list (`none`, `g mute`, `g unmute`, `g kick`), never free text, because the field ends up as characters typed by an account holding guild-officer permissions. Duration is either the Discord action's own (`same`) or a fixed length; a fixed `g mute` with no length is refused rather than stored as a mute that never fires. See BRIDGE_BOT.md §6B for what happens to the command after it leaves here.
+- **The card states its two limits rather than hiding them.** A member with no linked account cannot be punished in-game, because the bridge has no name to type; and the reverse direction — in-game staff actions appearing in this history — is best-effort, since Hypixel does not print a line for every event and prints none at all while the bridge is disconnected.
+- **`moderation.relay-sync` is Admin+**, one tier above the actions it mirrors. Issuing a mute is Moderator work; deciding that every mute also removes somebody from the guild is configuration.
 - **Access:** Admin+, and deliberately one tier above the bot's own `/wordlist-add` and `/wordlist-remove`, which are Officer. The asymmetry is the ladder: an officer adding one rule is a bounded act with an audit line behind it, while this page hands over the rungs that mute and ban on a count, and that is guild configuration in the same sense as ticket types and role mapping. An officer who needs to add a rule mid-incident still has the command.
+
+### 3.16 Permissions — who is staff, and what staff means
+
+Its own page under **Configure**, not a Settings card: it edits four independent
+dimensions plus an exception table, and a guild's whole permission model is the
+one piece of configuration that has to be readable in a single sitting.
+
+- **Levels.** Each platform role (`MEMBER` … `OWNER`) takes a *set* of Discord
+  role ids, through the multi-picker. A set rather than one id because guilds
+  reach the same authority by more than one route — `@Officer` and `@Staff Lead`
+  are both officers — and expressing that with one slot per level meant either a
+  second nav-level concept or a lie. The whole set is posted per save; an
+  add-and-remove protocol would leave a half-applied binding behind if the
+  second call failed.
+- **In-game ranks.** Hypixel guild ranks map to levels, so promoting somebody in
+  game promotes them here on the next roster scan. Rank names are guild-authored
+  free text, so they are stored trimmed and lower-cased and matched that way.
+- **Bridge capabilities.** One floor per `BridgeCapability`, shown beside the
+  platform default. Only floors that *differ* from the default are stored — a
+  guild that saves a rank mapping must not thereby freeze today's capability
+  defaults into its own document, or a later platform change would skip every
+  guild that had ever opened the page.
+- **Command access.** One row per command in the admin bot's registry, read
+  through a structural port that the composition root fills from
+  `buildAdminRegistry()` — panel-core does not import the command package. The
+  page shows the handler's own floor and whether this guild has overridden it;
+  clearing an override stores *nothing* rather than pinning today's default, for
+  the same reason as above.
+- **Exceptions.** Per-subject grants and denies (`BridgePermission`), for a
+  Discord user, a Discord role or an in-game rank. `allow: false` is not the
+  same as no row: a deny beats every grant and every floor, so it is asked for
+  explicitly rather than arrived at by clearing something. Resolution order is
+  **deny → grant → role floor** (§4.1 of ONBOARDING.md).
+- **Two absences are told apart.** `commandsAvailable` and
+  `exceptionsAvailable` distinguish "this deployment has no such store" from
+  "nothing is configured" — the page says which, and never renders an empty list
+  for the first.
+- **Six mutations, not one.** The page edits four stores and one of them has a
+  delete; batching them behind one action name would make a failed rank mapping
+  look like a failed capability floor.
+- **Access:** Admin+ for every one of them, including the read. At any lower
+  tier `roles.binding` alone would let an officer bind their own Discord role to
+  ADMIN and reach the whole panel, and `roles.exception` would let them grant
+  themselves a capability directly.
 
 ---
 
@@ -293,16 +392,17 @@ Not a tab of its own. The behaviour below is unchanged; it renders from `Setting
 |------|-----------|-----------|
 | Login/Logout | `identity` (Discord OAuth), Redis session | Redis session |
 | Guild Selector | Discord guilds + DB `Guild`, bot presence | Session (active guild) |
-| Overview | DB summaries + `analytics` | — |
+| Overview | DB summaries + `analytics`; `GuildMember`/`GuildMemberCache`/`GuildScan` (membership), `ModerationAction`+`GuildJoinScreening`+`Milestone`+`Event`+`GuildScan` (activity), `GuildJoinScreening` (join attempts) | — |
 | Settings | `config` (DB+cache) + live Discord roles/channels (bot) + `xp` (`XpSourceConfig`) + `GuildSetting['screening.policy']` | `config` → DB + cache invalidation + pub/sub; `xp` → `XpSourceConfig`, `XpEvent` (adjustments) + audit |
 | Analytics | `analytics` (aggregated `CommandUsage`, bridge/mod events) | — (CSV export) |
-| Moderation | DB (`Infraction`,`ModerationAction`) + Redis enforcement | `moderation` → DB + Redis + analytics |
+| Moderation | DB (`Infraction`,`ModerationAction`) + Redis enforcement + `wordlist` + `GuildSetting['moderation.automod'\|'moderation.escalation'\|'moderation.relay-sync'\|'config.cooldowns']` | `moderation` → DB + Redis + analytics; `WordlistEntry`, `GuildSetting` + audit |
 | Events | DB (`Event`,`EventRSVP`) | DB + Discord (announce) + workers (reminders) |
-| Linked Members | DB (`GuildMember`,`LinkedAccount`) + `hypixel` | DB + Redis (re-verify) |
+| Members | DB (`GuildMember`+`DiscordUser` from `discord-member-sync`, `GuildMemberCache` from `guild-scan`, joined via `LinkedAccount`) | DB (role, unlink) |
 | Health | `WorkerJobLog` + live BullMQ + bot heartbeats + `rl:hypixel` | Requeue/force-sync (workers) |
 | Milestones | `milestones` (`MilestoneDefinition` layered over built-in defaults) | `MilestoneDefinition` + audit |
 | Tickets | DB (`Ticket`, open queue) + `tickets` (`TicketTypeConfig` layered over built-in defaults, `TicketPanelConfig`) | `ticket.close`; `TicketTypeConfig`, `TicketPanelConfig` + audit |
-| Filter | `wordlist` (`WordlistEntry`) + `GuildSetting['moderation.escalation']` layered over the built-in ladder | `WordlistEntry`, `GuildSetting` + audit |
+| Filter | `wordlist` (`WordlistEntry`) + `GuildSetting['moderation.escalation']` and `['moderation.relay-sync']` layered over built-in defaults | `WordlistEntry`, `GuildSetting` + audit |
+| Permissions | `GuildConfig.roleMappings` (level → Discord role ids), `GuildSetting['roles.policy']` (rank map, capability floors, command overrides) layered over platform defaults, `BridgePermission` (exceptions), admin-bot command registry (metadata only) | `GuildConfig.roleMappings`, `GuildSetting['roles.policy']`, `BridgePermission` + audit |
 
 ---
 

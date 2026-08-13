@@ -14,7 +14,15 @@ export interface GuildConfigRow {
   readonly features: Readonly<Record<string, boolean>>;
   readonly minWeight: number | null;
   readonly minNetworth: number | null;
-  readonly roleMappings: Readonly<Record<string, string>>;
+  /**
+   * Platform level → the Discord role(s) that confer it.
+   *
+   * The value widened from one id to a list when the panel gained a Permissions
+   * page: a guild routinely has several roles that should all count as staff,
+   * and the old single-id shape forced them to pick one. Both shapes are stored
+   * and both are read (`parseRoleBindings`), so nothing had to be migrated.
+   */
+  readonly roleMappings: Readonly<Record<string, string | readonly string[]>>;
 }
 
 /**
@@ -35,6 +43,12 @@ export interface GuildConfigRepository {
   setFeature(guildId: string, feature: string, enabled: boolean): Promise<void>;
   /** Bind or clear one platform role's Discord role id, leaving the rest alone. */
   setRoleMapping(guildId: string, role: string, discordRoleId: string | null): Promise<void>;
+  /**
+   * Replace the whole set of Discord roles bound to one platform level. An empty
+   * list clears the binding — the panel edits a set, so it has to be able to
+   * remove the last member of one.
+   */
+  setRoleBinding(guildId: string, role: string, discordRoleIds: readonly string[]): Promise<void>;
   /**
    * Bind or clear one channel slot. Null deletes the binding rather than storing
    * an empty string, so "unset" and "set to nothing" cannot diverge.

@@ -13,10 +13,21 @@ export {
 
 // Typed repositories — the only sanctioned data-access surface for domain packages.
 export { identityRepository } from "./repositories/identity.js";
+export {
+  bridgePermissionRepository,
+  type BridgePermissionRow,
+  type PermSubjectKind,
+} from "./repositories/bridge-permissions.js";
 export { moderationRepository } from "./repositories/moderation.js";
 export { communityRepository } from "./repositories/community.js";
 export { progressionRepository } from "./repositories/progression.js";
-export { rankResolver, guildRepository, workerJobLogSink, type WorkerJobLogEntry } from "./repositories/misc.js";
+export {
+  rankResolver,
+  rolePolicyReader,
+  guildRepository,
+  workerJobLogSink,
+  type WorkerJobLogEntry,
+} from "./repositories/misc.js";
 export {
   analyticsJobRepository,
   eventJobRepository,
@@ -37,6 +48,7 @@ export {
   type JobHealthRow,
 } from "./repositories/panel.js";
 export { guildScanRepository, type CachedGuildMemberRow } from "./repositories/guild-scan.js";
+export { discordSyncRepository } from "./repositories/discord-sync.js";
 export {
   screeningRepository,
   screeningHistorySource,

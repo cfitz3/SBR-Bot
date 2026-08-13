@@ -25,6 +25,7 @@ function repo(): { repo: ModerationRepository; created: NewActionRecord[] } {
         return { ...input, id: "act-1", createdAt: "t" } as ModerationActionDTO;
       },
       async listInfractions() { return []; },
+      async listRecentInfractions() { return []; },
       async listActions() { return []; },
       async deactivateExpired() { return 0; },
     },

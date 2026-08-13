@@ -1,29 +1,54 @@
 /**
  * Filter — the chat filter's rules, and the ladder that answers repeat warnings.
  *
- * Two things share this page because they are the two pieces of moderation that
- * act on a member with nobody in the loop: a rule blocks or shadow-mutes at
- * relay time, and a rung mutes or bans off a warning count. The Moderation page
- * next door is the opposite — a record of what people did on purpose.
+ * These are the two pieces of moderation that act on a member with nobody in
+ * the loop: a rule blocks or shadow-mutes at relay time, and a rung mutes or
+ * bans off a warning count.
  *
- * The patterns themselves are shown, which is the point of the page and also
- * why it is Admin-tier: the list is, by construction, a collection of the slurs
- * and scam URLs the guild is filtering.
+ * They are no longer a page of their own. `filterCards` is all this module
+ * exports, and the Moderation page renders it as its Filter section — one place
+ * to configure everything automatic, next to the automod rules that read this
+ * same wordlist. The `wordlist` page id stays on the JSON API (WEB_PANEL.md §0)
+ * because removing a route is a contract break for anything driving the API
+ * directly; the panel simply reaches the data through the moderation view model
+ * instead, which carries it already.
+ *
+ * The patterns themselves are shown, which is the point and also why every
+ * control here is Admin-tier: the list is, by construction, a collection of the
+ * slurs and scam URLs the guild is filtering.
  */
 import type { WordlistVM } from "@sbr/panel-core";
 import type { WordlistRuleDTO } from "@sbr/shared-types";
 import { WordAction, WordMatchType } from "./enums.js";
-import { loadPage, postAction, type WriteResult } from "../api.js";
-import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
+import { postAction, type WriteResult } from "../api.js";
+import { badge, card, emptyState } from "../components.js";
 import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";
 import { describeSpan } from "../format.js";
-import { h, replace } from "../dom.js";
+import { h } from "../dom.js";
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
 const PATTERN_MAX = 200;
 const SEVERITY_MAX = 10;
 const MAX_RUNGS = 10;
 const WINDOW_MAX = 365;
+
+/** Mirrors `MAX_GAME_MUTE_SECONDS` in @sbr/moderation; the client cannot import it. */
+const MAX_GAME_MUTE_SECONDS = 30 * 24 * 60 * 60;
+
+const GAME_ACTION_OPTIONS = [
+  ["none", "nothing"],
+  ["g mute", "mute in the guild"],
+  ["g unmute", "unmute in the guild"],
+  ["g kick", "kick from the guild"],
+] as const;
+
+/** What each mapping actually does, in the guild's terms. */
+const GAME_ACTION_HINT: Readonly<Record<string, string>> = {
+  none: "Nothing happens in the Hypixel guild.",
+  "g mute": "The member is muted in guild chat.",
+  "g unmute": "The member's guild-chat mute is lifted.",
+  "g kick": "The member is removed from the Hypixel guild.",
+};
 
 const MATCH_OPTIONS = Object.keys(WordMatchType).map((v) => [v, v.toLowerCase()] as const);
 const ACTION_OPTIONS = Object.keys(WordAction).map((v) => [v, v.toLowerCase().replace(/_/g, " ")] as const);
@@ -36,47 +61,40 @@ const ACTION_HINT: Readonly<Record<string, string>> = {
   SHADOW_MUTE: "Not relayed, and the sender is not told.",
 };
 
-export async function renderWordlist(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading filter…"));
-
-  const result = await loadPage<WordlistVM>(`/api/guilds/${encodeURIComponent(guildId)}/wordlist`);
-  if (result.kind === "denied") return replace(host, deniedState(result.reason));
-  if (result.kind === "error") {
-    return replace(host, errorState(result.message, () => void renderWordlist(host, guildId)));
-  }
-
-  const { installed, rules, escalation } = result.data;
-  const reload = (): void => void renderWordlist(host, guildId);
-  const live = rules.filter((r) => r.enabled).length;
-
-  replace(
-    host,
+/**
+ * The filter, as cards, for whichever surface is drawing it.
+ *
+ * Returned rather than rendered so the Moderation page can put these under its
+ * own section heading without this module knowing anything about tabs. `reload`
+ * is the caller's re-read: every control here writes the whole object it edits,
+ * so the list on screen has to come back from the server rather than be patched
+ * in place.
+ */
+export function filterCards(guildId: string, vm: WordlistVM, reload: () => void): readonly HTMLElement[] {
+  const { installed, rules, escalation, relaySync } = vm;
+  return [
     h(
-      "div",
-      {},
-      pageTitle("Filter", installed ? `${live} of ${rules.length} rules live` : "Not enabled"),
-      h(
-        "p",
-        { class: "page-note" },
-        "Rules run on every message the bridge relays, in severity order — the harshest verdict among the " +
-          "matches is the one applied. Test a phrase against the live set with /filter-test before saving it.",
-      ),
-      card("Repeat warnings", escalationForm(guildId, escalation, reload)),
-      ...(installed
-        ? [
-            card("Add a rule", createForm(guildId, reload)),
-            ...(rules.length === 0
-              ? [card("Rules", emptyState("Nothing is being filtered in this guild."))]
-              : rules.map((rule) => ruleCard(guildId, rule, reload))),
-          ]
-        : [
-            card(
-              "Rules",
-              emptyState("The chat filter isn't switched on for this deployment, so there are no rules to edit."),
-            ),
-          ]),
+      "p",
+      { class: "page-note" },
+      "Rules run on every message the bridge relays, in severity order — the harshest verdict among the " +
+        "matches is the one applied. Test a phrase against the live set with /filter-test before saving it.",
     ),
-  );
+    card("Repeat warnings", escalationForm(guildId, escalation, reload)),
+    card("In-game punishment sync", relaySyncForm(guildId, relaySync, reload)),
+    ...(installed
+      ? [
+          card("Add a rule", createForm(guildId, reload)),
+          ...(rules.length === 0
+            ? [card("Rules", emptyState("Nothing is being filtered in this guild."))]
+            : rules.map((rule) => ruleCard(guildId, rule, reload))),
+        ]
+      : [
+          card(
+            "Rules",
+            emptyState("The chat filter isn't switched on for this deployment, so there are no rules to edit."),
+          ),
+        ]),
+  ];
 }
 
 /**
@@ -381,6 +399,127 @@ function escalationForm(guildId: string, policy: WordlistVM["escalation"], reloa
       },
     }),
     h("div", { class: "field-row" }, addRung),
+    status.el,
+  );
+}
+
+/**
+ * What a Discord punishment does in guild chat.
+ *
+ * One row per Discord action, each a `selectField` over a closed list. The list
+ * is closed on the server too — a free-text command box here would be a
+ * configurable way to demote the guild, since the bridge account holds officer
+ * permissions.
+ *
+ * Saved whole, like the ladder above and for the same reason: what the page
+ * shows is what gets stored, so pressing save on a list of built-in defaults
+ * makes them the guild's own rather than leaving a half-stored mixture.
+ */
+function relaySyncForm(guildId: string, policy: WordlistVM["relaySync"], reload: () => void): HTMLElement {
+  const rows = policy.rows.map((r) => ({ ...r }));
+  let enabled = policy.enabled;
+
+  const save = (): Promise<WriteResult> =>
+    postAction(guildId, "moderation.relay-sync", {
+      enabled,
+      rows: rows.map((r) => ({
+        discordAction: r.discordAction,
+        gameAction: r.gameAction,
+        durationMode: r.durationMode,
+        fixedSeconds: r.fixedSeconds,
+        enabled: r.enabled,
+      })),
+    });
+
+  const status = statusSlot();
+
+  const rowFields = rows.map((row) =>
+    fieldGroup(
+      toggleField({
+        label: `On ${row.discordAction.toLowerCase()}`,
+        hint: GAME_ACTION_HINT[row.gameAction] ?? "",
+        checked: row.enabled,
+        save: (next) => {
+          row.enabled = next;
+          return save();
+        },
+      }),
+      selectField({
+        label: "In guild chat",
+        value: row.gameAction,
+        options: GAME_ACTION_OPTIONS.map(([v, l]) => [v, l] as const),
+        save: (next) => {
+          row.gameAction = next as typeof row.gameAction;
+          return save();
+        },
+      }),
+      // Only a mute has a length to argue about; a kick happens once.
+      ...(row.gameAction === "g mute"
+        ? [
+            selectField({
+              label: "For how long",
+              value: row.durationMode,
+              options: [
+                ["same", "the same as the Discord punishment"],
+                ["fixed", "a fixed length"],
+              ],
+              save: (next) => {
+                row.durationMode = next as typeof row.durationMode;
+                return save();
+              },
+            }),
+            ...(row.durationMode === "fixed"
+              ? [
+                  textField({
+                    label: "Length",
+                    hint: "Seconds. Hypixel caps a guild mute at 30 days.",
+                    value: row.fixedSeconds === null ? "" : String(row.fixedSeconds),
+                    validate: (raw) => {
+                      const value = Number(raw.trim());
+                      return Number.isInteger(value) && value >= 1 && value <= MAX_GAME_MUTE_SECONDS
+                        ? null
+                        : `Enter a whole number of seconds between 1 and ${MAX_GAME_MUTE_SECONDS}.`;
+                    },
+                    save: (raw) => {
+                      row.fixedSeconds = Number(raw.trim());
+                      return save();
+                    },
+                  }),
+                ]
+              : []),
+          ]
+        : []),
+    ),
+  );
+
+  return h(
+    "div",
+    {},
+    h(
+      "p",
+      { class: "field-hint" },
+      "A punishment issued here can be carried into the Hypixel guild by the bridge account. Only members with a " +
+        "linked account can be matched to an IGN — an unlinked member is punished on Discord and nowhere else, " +
+        "which the audit log records.",
+    ),
+    fieldGroup(
+      toggleField({
+        label: "Carry punishments into guild chat",
+        hint: "Off leaves every row below stored but inert.",
+        checked: policy.enabled,
+        save: (next) => {
+          enabled = next;
+          return save();
+        },
+      }),
+    ),
+    ...rowFields,
+    h(
+      "p",
+      { class: "field-hint" },
+      "The other direction is best-effort: Hypixel announces some in-game moderation in guild chat and not all of " +
+        "it, so actions taken in-game appear in the history when the bridge saw them announced.",
+    ),
     status.el,
   );
 }

@@ -323,7 +323,23 @@ model GuildMember {
   guildId       String
   discordUserId String
   guildRank     String?
+  /// Per-server display name, which is what staff actually see in Discord and
+  /// therefore what they search by. Distinct from DiscordUser.globalName, which
+  /// is the same everywhere; null means they have not set one here.
+  nickname      String?
+  /// The Discord roles this member holds, mirrored by `discord-member-sync`.
+  /// Stored rather than read from the gateway because `hasCapability` runs on
+  /// every relayed message, and a role check that needed a bot round trip would
+  /// put the gateway in the relay's hot path.
+  roleIds       String[]     @default([])
+  /// The manual assignment `/set-role type:member` writes. Combined with the
+  /// Discord-role and guild-rank mappings by taking the highest — see
+  /// `resolveMemberRole` in @sbr/guild-config.
   role          MemberRole   @default(MEMBER)
+  /// An explicit level that wins outright, and the only way *down*: every other
+  /// source combines by taking the max, so without this a demotion could be
+  /// outvoted by a Discord role the member still holds.
+  roleOverride  MemberRole?
   status        MemberStatus @default(ACTIVE)
   joinedAt      DateTime?
   leftAt        DateTime?
@@ -337,6 +353,7 @@ model GuildMember {
   @@unique([guildId, discordUserId])
   @@index([guildId, status])
   @@index([guildId, role])
+  @@index([guildId, nickname])
 }
 
 model SelectedSkyblockProfile {
@@ -656,6 +673,10 @@ model ModerationAction {
   durationSeconds          Int?
   expiresAt                DateTime?
   active                   Boolean       @default(true)
+  // Which surface the action was issued on. INGAME rows come from parsing
+  // Hypixel's own guild-chat notices, so they carry no actor snowflake and are
+  // best-effort by nature — the panel labels them rather than mixing them in.
+  sourceContext            SourceContext @default(DISCORD)
   createdAt                DateTime      @default(now())
 
   guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)

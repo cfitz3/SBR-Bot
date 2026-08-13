@@ -3,11 +3,13 @@
  * IdentityService can consume it without importing Prisma (ARCHITECTURE.md: only
  * @sbr/db touches Prisma).
  */
+import { normalizeRank } from "@sbr/guild-config";
 import type {
   BridgeCapability,
   IdentityRepository,
   LinkedIdentityDTO,
 } from "@sbr/shared-types";
+import type { PermSubjectType } from "@prisma/client";
 import { prisma } from "../client.js";
 
 type LinkWithAccount = {
@@ -126,16 +128,27 @@ export const identityRepository: IdentityRepository = {
   async getCapabilityGrants(guildId, discordId) {
     // guildId is the internal Guild.id (composition resolves the Discord snowflake).
     //
-    // Only DISCORD_USER rows are read here. DISCORD_ROLE and GUILD_RANK subjects
-    // need the caller's Discord roles or in-game rank, neither of which reaches
-    // this layer — until the panel can write those rows there is nothing to
-    // resolve, and the service's role floors cover the cases that matter.
+    // All three subject types resolve here. The member row carries the Discord
+    // roles (mirrored by `discord-member-sync`) and the in-game rank, so the
+    // role- and rank-scoped rows the panel writes can be matched without a
+    // gateway call — which matters because this runs on every relayed message.
+    const member = await prisma.guildMember.findFirst({
+      where: { guildId, discordUser: { discordId } },
+      select: { roleIds: true, guildRank: true },
+    });
+
+    const subjects: { subjectType: PermSubjectType; subjectId: string }[] = [
+      { subjectType: "DISCORD_USER", subjectId: discordId },
+      ...(member?.roleIds ?? []).map((id) => ({ subjectType: "DISCORD_ROLE" as const, subjectId: id })),
+    ];
+    // Rank rows are stored under the normalised name because Hypixel rank names
+    // are guild-authored free text and staff re-case them.
+    if (member?.guildRank) {
+      subjects.push({ subjectType: "GUILD_RANK", subjectId: normalizeRank(member.guildRank) });
+    }
+
     const perms = await prisma.bridgePermission.findMany({
-      where: {
-        guildId,
-        subjectType: "DISCORD_USER",
-        subjectId: discordId,
-      },
+      where: { guildId, OR: subjects },
       select: { capability: true, allow: true },
     });
     return perms.map((p) => ({ capability: p.capability as BridgeCapability, allow: p.allow }));

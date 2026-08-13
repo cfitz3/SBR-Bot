@@ -153,7 +153,8 @@ export interface CapabilityGrant {
  * satisfies it as-is.
  */
 export interface MemberRoleReader {
-  getRole(guildId: string, discordId: string): Promise<MemberRole>;
+  /** Null when the person is not a member of this guild — not MEMBER. */
+  getRole(guildId: string, discordId: string): Promise<MemberRole | null>;
 }
 
 /** Hypixel-backed stats & progression (packages/progression). */
@@ -378,6 +379,15 @@ export interface ModerationService {
   ): Promise<Result<InfractionDTO>>;
   applyAction(input: ApplyActionInput): Promise<Result<ModerationActionDTO, ModerationError>>;
   listInfractions(guildId: string, discordId: string): Promise<Result<readonly InfractionDTO[]>>;
+  /**
+   * The guild's most recent infractions, whoever they are against.
+   *
+   * A separate method rather than an empty `discordId`, because "everyone" and
+   * "a member whose id I failed to resolve" would otherwise be the same call
+   * with very different answers — one of which quietly shows staff another
+   * member's history.
+   */
+  listRecentInfractions(guildId: string, limit?: number): Promise<Result<readonly InfractionDTO[]>>;
   /** `/audit` — the moderation log, filtered and newest-first. */
   listActions(query: AuditQuery): Promise<Result<readonly ModerationActionDTO[]>>;
   /**
@@ -450,6 +460,12 @@ export interface GuildConfigService {
   setSetting(guildId: string, key: string, value: unknown): Promise<Result<void>>;
   /** `/set-role type:mapping` — bind a platform role to a Discord role id. */
   setRoleMapping(guildId: string, role: MemberRole, discordRoleId: string | null): Promise<Result<void>>;
+  /**
+   * Replace the whole set of Discord roles that confer one level. The set form
+   * of `setRoleMapping`, which the panel's Permissions page writes; the single
+   * form stays for `/set-role type:mapping`.
+   */
+  setRoleBinding(guildId: string, role: MemberRole, discordRoleIds: readonly string[]): Promise<Result<void>>;
   /**
    * Bind the Hypixel guild this platform guild tracks, or null to unlink. Until
    * this is set, roster sync and guild scan have nothing to sync and skip.
@@ -536,8 +552,12 @@ export interface GuildRuntimeConfig {
   /** Recruitment bar; null means the guild sets no requirement on that axis. */
   readonly minWeight: number | null;
   readonly minNetworth: number | null;
-  /** Platform role → Discord role id, as `/set-role type:mapping` records it. */
-  readonly roleMappings: Readonly<Record<string, string>>;
+  /**
+   * Platform role → the Discord role(s) that confer it: one id as
+   * `/set-role type:mapping` records it, a list as the panel's Permissions page
+   * does. Read it through `parseRoleBindings` rather than by hand.
+   */
+  readonly roleMappings: Readonly<Record<string, string | readonly string[]>>;
 }
 
 /**

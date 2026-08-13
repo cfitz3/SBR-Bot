@@ -1,0 +1,451 @@
+/**
+ * The admin bot's internal control API.
+ *
+ * The panel has no gateway connection, so it cannot know what a Discord server's
+ * channels, roles or members are called — which is why every configuration field
+ * used to be a snowflake pasted in by hand. This process is the only one holding
+ * a gateway cache, so it answers those questions here, and it is also the only
+ * one that can make a panel-issued ban actually reach Discord.
+ *
+ * Security posture: bound to loopback, bearer-token authenticated, and the token
+ * is compared in constant time. There is no session, no CSRF and no cookie —
+ * this is a machine-to-machine socket that must never be exposed publicly. The
+ * API answers "list every member of this server", so treat the token as a
+ * credential of the same weight as the bot token itself.
+ */
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
+import {
+  ChannelType,
+  DiscordAPIError,
+  GuildScheduledEventEntityType,
+  GuildScheduledEventPrivacyLevel,
+  type Client,
+  type Guild,
+} from "discord.js";
+import type { Logger } from "@sbr/observability";
+
+/** Loopback only. A LAN bind would hand the member list to the whole subnet. */
+const BIND_HOST = "127.0.0.1";
+
+/** Bodies here are tiny (an enforce request); anything larger is a mistake. */
+const MAX_BODY_BYTES = 16 * 1024;
+
+/**
+ * Member fetches are the expensive call — a large server is thousands of rows
+ * over the REST API. Every keystroke in a picker would otherwise re-fetch it, so
+ * the roster is held briefly in process. The panel caches on top of this; the
+ * two together mean a typing operator costs zero Discord calls.
+ */
+const MEMBER_CACHE_MS = 60_000;
+
+/** Guard rail on picker responses, so one request can't serialise 100k members. */
+const MAX_ROWS = 200;
+
+export interface InternalApiDeps {
+  /** Live gateway client. Supplied only once ready — see `startInternalApi`. */
+  readonly client: Client;
+  /** Platform guild id → Discord snowflake, so callers never map ids themselves. */
+  readonly toDiscordGuildId: (internalGuildId: string) => Promise<string | null>;
+  readonly token: string;
+  readonly port: number;
+  readonly logger: Logger;
+}
+
+interface ChannelRow {
+  readonly id: string;
+  readonly name: string;
+  readonly type: "text" | "voice" | "forum" | "announcement" | "stage" | "category" | "other";
+  readonly parentName: string | null;
+}
+
+interface RoleRow {
+  readonly id: string;
+  readonly name: string;
+  readonly color: number;
+  readonly position: number;
+  readonly managed: boolean;
+}
+
+interface MemberRow {
+  readonly id: string;
+  readonly username: string;
+  readonly globalName: string | null;
+  readonly nick: string | null;
+  readonly avatarHash: string | null;
+  readonly roleIds: readonly string[];
+  readonly joinedAt: string | null;
+  readonly bot: boolean;
+}
+
+interface CachedRoster {
+  readonly rows: readonly MemberRow[];
+  readonly at: number;
+}
+
+/** Discord's numeric channel types, reduced to the handful a picker cares about. */
+function channelKind(type: ChannelType): ChannelRow["type"] {
+  switch (type) {
+    case ChannelType.GuildText:
+      return "text";
+    case ChannelType.GuildVoice:
+      return "voice";
+    case ChannelType.GuildForum:
+      return "forum";
+    case ChannelType.GuildAnnouncement:
+      return "announcement";
+    case ChannelType.GuildStageVoice:
+      return "stage";
+    case ChannelType.GuildCategory:
+      return "category";
+    default:
+      return "other";
+  }
+}
+
+/**
+ * Constant-time bearer check. A plain `===` on a secret leaks its prefix through
+ * timing; the length check before it is safe because length is not the secret.
+ */
+function tokenMatches(expected: string, provided: string | undefined): boolean {
+  if (provided === undefined) return false;
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(provided, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+function bearer(req: IncomingMessage): string | undefined {
+  const header = req.headers.authorization;
+  if (typeof header !== "string" || !header.startsWith("Bearer ")) return undefined;
+  return header.slice("Bearer ".length).trim();
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(payload),
+    "cache-control": "no-store",
+  });
+  res.end(payload);
+}
+
+/** Size-checked while streaming: content-length is a claim, not a guarantee. */
+async function readBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) throw new Error("body too large");
+    chunks.push(buf);
+  }
+  if (total === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+}
+
+function str(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+/**
+ * Substring match across every name a human might type: the picker's whole point
+ * is that you type "general" rather than remembering 1103928…
+ */
+function matches(query: string, ...fields: readonly (string | null)[]): boolean {
+  if (query === "") return true;
+  const needle = query.toLowerCase();
+  return fields.some((f) => f !== null && f.toLowerCase().includes(needle));
+}
+
+export class InternalApi {
+  private readonly d: InternalApiDeps;
+  private readonly log: Logger;
+  private server: Server | null = null;
+  private readonly rosters = new Map<string, CachedRoster>();
+
+  constructor(deps: InternalApiDeps) {
+    this.d = deps;
+    this.log = deps.logger.child({ service: "internal-api" });
+  }
+
+  async start(): Promise<void> {
+    const server = createServer((req, res) => {
+      this.handle(req, res).catch((error: unknown) => {
+        this.log.error("internal api request failed", { error: String(error) });
+        if (!res.headersSent) sendJson(res, 500, { error: "INTERNAL" });
+      });
+    });
+    // Same slowloris guards the panel uses; this socket is loopback but the
+    // process is long-lived and a stuck request would hold a handle forever.
+    server.headersTimeout = 15_000;
+    server.requestTimeout = 30_000;
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(this.d.port, BIND_HOST, () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
+    });
+    this.server = server;
+    this.log.info("internal api listening", { host: BIND_HOST, port: this.d.port });
+  }
+
+  async stop(): Promise<void> {
+    const server = this.server;
+    if (!server) return;
+    this.server = null;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+
+  private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!tokenMatches(this.d.token, bearer(req))) {
+      sendJson(res, 401, { error: "UNAUTHORIZED" });
+      return;
+    }
+
+    const url = new URL(req.url ?? "/", `http://${BIND_HOST}`);
+    const match = /^\/internal\/g\/([^/]+)\/([a-z-]+)$/.exec(url.pathname);
+    if (!match) {
+      sendJson(res, 404, { error: "NOT_FOUND" });
+      return;
+    }
+    const [, rawGuildId, resource] = match;
+    const guild = await this.guild(decodeURIComponent(rawGuildId ?? ""));
+    if (!guild) {
+      sendJson(res, 404, { error: "GUILD_NOT_FOUND" });
+      return;
+    }
+
+    const method = req.method ?? "GET";
+    if (method === "GET") {
+      switch (resource) {
+        case "channels":
+          sendJson(res, 200, { channels: this.channels(guild, url.searchParams.get("q") ?? "") });
+          return;
+        case "roles":
+          sendJson(res, 200, { roles: this.roles(guild, url.searchParams.get("q") ?? "") });
+          return;
+        case "members":
+          sendJson(res, 200, {
+            members: await this.members(
+              guild,
+              url.searchParams.get("q") ?? "",
+              url.searchParams.get("all") === "1",
+            ),
+          });
+          return;
+        default:
+          sendJson(res, 404, { error: "NOT_FOUND" });
+          return;
+      }
+    }
+
+    if (method === "POST") {
+      const body = await readBody(req);
+      switch (resource) {
+        case "enforce":
+          sendJson(res, 200, await this.enforce(guild, body));
+          return;
+        case "scheduled-event":
+          sendJson(res, 200, await this.scheduledEvent(guild, body));
+          return;
+        default:
+          sendJson(res, 404, { error: "NOT_FOUND" });
+          return;
+      }
+    }
+
+    sendJson(res, 405, { error: "METHOD_NOT_ALLOWED" });
+  }
+
+  /**
+   * Callers pass the platform's own guild id, the same one the panel session
+   * carries, so nothing outside this file has to know the Discord mapping.
+   */
+  private async guild(internalGuildId: string): Promise<Guild | null> {
+    if (internalGuildId === "") return null;
+    const discordGuildId = await this.d.toDiscordGuildId(internalGuildId);
+    if (!discordGuildId) return null;
+    try {
+      return await this.d.client.guilds.fetch(discordGuildId);
+    } catch {
+      return null;
+    }
+  }
+
+  private channels(guild: Guild, query: string): readonly ChannelRow[] {
+    const rows: ChannelRow[] = [];
+    for (const channel of guild.channels.cache.values()) {
+      if (!channel) continue;
+      const parentName = "parent" in channel ? (channel.parent?.name ?? null) : null;
+      if (!matches(query, channel.name, parentName)) continue;
+      rows.push({ id: channel.id, name: channel.name, type: channelKind(channel.type), parentName });
+    }
+    // Grouped by category then name, so the list reads like the Discord sidebar
+    // rather than like an id-ordered dump.
+    rows.sort((a, b) => (a.parentName ?? "").localeCompare(b.parentName ?? "") || a.name.localeCompare(b.name));
+    return rows.slice(0, MAX_ROWS);
+  }
+
+  private roles(guild: Guild, query: string): readonly RoleRow[] {
+    const rows: RoleRow[] = [];
+    for (const role of guild.roles.cache.values()) {
+      if (role.id === guild.id) continue; // @everyone is never a useful pick
+      if (!matches(query, role.name)) continue;
+      rows.push({
+        id: role.id,
+        name: role.name,
+        color: role.color,
+        position: role.position,
+        managed: role.managed,
+      });
+    }
+    // Highest first: the role someone is looking for is nearly always near the top.
+    rows.sort((a, b) => b.position - a.position);
+    return rows.slice(0, MAX_ROWS);
+  }
+
+  /**
+   * `all` lifts the row cap, for the `discord-member-sync` job only.
+   *
+   * A picker showing 200 of 3,000 members is a truncated list someone types past;
+   * a *sync* seeing 200 of 3,000 would record the other 2,800 as having left the
+   * server. The two callers want genuinely different things, so the dangerous one
+   * has to ask for it by name rather than inherit it by default.
+   */
+  private async members(guild: Guild, query: string, all = false): Promise<readonly MemberRow[]> {
+    const roster = await this.roster(guild);
+    const filtered = roster.filter((m) => matches(query, m.username, m.globalName, m.nick, m.id));
+    return all ? filtered : filtered.slice(0, MAX_ROWS);
+  }
+
+  /**
+   * The whole roster, cached briefly. `members.fetch()` needs the Server Members
+   * privileged intent; without it Discord returns only the bot itself, which
+   * presents as an almost-empty picker rather than an error — hence the warning.
+   */
+  private async roster(guild: Guild): Promise<readonly MemberRow[]> {
+    const cached = this.rosters.get(guild.id);
+    if (cached && Date.now() - cached.at < MEMBER_CACHE_MS) return cached.rows;
+
+    const fetched = await guild.members.fetch();
+    const rows: MemberRow[] = [...fetched.values()].map((m) => ({
+      id: m.id,
+      username: m.user.username,
+      globalName: m.user.globalName,
+      nick: m.nickname,
+      avatarHash: m.user.avatar,
+      roleIds: [...m.roles.cache.keys()],
+      joinedAt: m.joinedAt?.toISOString() ?? null,
+      bot: m.user.bot,
+    }));
+    rows.sort((a, b) => (a.nick ?? a.globalName ?? a.username).localeCompare(b.nick ?? b.globalName ?? b.username));
+
+    if (rows.length <= 1 && guild.memberCount > 1) {
+      this.log.warn("member fetch returned almost nothing — is the Server Members intent enabled?", {
+        guildId: guild.id,
+        fetched: rows.length,
+        memberCount: guild.memberCount,
+      });
+    }
+    this.rosters.set(guild.id, { rows, at: Date.now() });
+    return rows;
+  }
+
+  /**
+   * Panel-issued Discord enforcement. The panel records the action and mirrors
+   * it for the relay itself; this is the half that actually removes someone.
+   */
+  private async enforce(guild: Guild, body: unknown): Promise<{ ok: boolean; error?: string }> {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const type = str(b["type"]);
+    const userId = str(b["userId"]);
+    const reason = str(b["reason"]) ?? "No reason given";
+    const seconds = typeof b["durationSeconds"] === "number" ? b["durationSeconds"] : null;
+    if (userId === null) return { ok: false, error: "INVALID_USER" };
+
+    try {
+      switch (type) {
+        case "KICK":
+          await guild.members.kick(userId, reason);
+          return { ok: true };
+        case "BAN":
+          await guild.members.ban(userId, { reason });
+          return { ok: true };
+        case "UNBAN":
+          await guild.bans.remove(userId, reason);
+          return { ok: true };
+        case "TIMEOUT": {
+          // Discord caps communication timeouts at 28 days; a longer mute is a
+          // ban's job, so clamp rather than fail the whole action.
+          const ms = Math.min((seconds ?? 0) * 1000, 28 * 24 * 60 * 60 * 1000);
+          if (ms <= 0) return { ok: false, error: "INVALID_DURATION" };
+          const member = await guild.members.fetch(userId);
+          await member.timeout(ms, reason);
+          return { ok: true };
+        }
+        case "UNTIMEOUT": {
+          const member = await guild.members.fetch(userId);
+          await member.timeout(null, reason);
+          return { ok: true };
+        }
+        default:
+          return { ok: false, error: "UNKNOWN_TYPE" };
+      }
+    } catch (error) {
+      if (error instanceof DiscordAPIError) {
+        // 10007 unknown member and 10026 unknown ban both mean "already in the
+        // state you asked for", which is a success from the caller's point of view.
+        if (error.code === 10007 || error.code === 10026) return { ok: true };
+        if (error.code === 50013 || error.code === 50001) return { ok: false, error: "MISSING_PERMISSION" };
+        return { ok: false, error: error.message };
+      }
+      return { ok: false, error: error instanceof Error ? error.message : "FAILED" };
+    }
+  }
+
+  /**
+   * Mirrors a platform event onto Discord's own scheduled-events surface, so it
+   * shows up in the server's event list and Discord handles the reminders.
+   */
+  private async scheduledEvent(guild: Guild, body: unknown): Promise<{ ok: boolean; id?: string; error?: string }> {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const name = str(b["name"]);
+    const startsAt = str(b["startsAt"]);
+    const endsAt = str(b["endsAt"]);
+    const description = str(b["description"]);
+    if (name === null || startsAt === null) return { ok: false, error: "INVALID_INPUT" };
+
+    try {
+      const created = await guild.scheduledEvents.create({
+        name,
+        scheduledStartTime: startsAt,
+        // EXTERNAL is the only entity type that doesn't require a voice channel,
+        // and a Skyblock competition happens outside Discord by definition.
+        ...(endsAt === null ? {} : { scheduledEndTime: endsAt }),
+        privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
+        entityType: GuildScheduledEventEntityType.External,
+        entityMetadata: { location: "Hypixel Skyblock" },
+        ...(description === null ? {} : { description }),
+      });
+      return { ok: true, id: created.id };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "FAILED" };
+    }
+  }
+}
+
+/**
+ * Build and start the API, or explain why it stayed down. Returns null when no
+ * token is configured — the panel treats that as "no directory available" and
+ * falls back to raw-ID fields, which is the pre-picker behaviour.
+ */
+export async function startInternalApi(deps: InternalApiDeps): Promise<InternalApi | null> {
+  if (deps.token === "") return null;
+  const api = new InternalApi(deps);
+  await api.start();
+  return api;
+}

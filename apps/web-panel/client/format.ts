@@ -46,6 +46,30 @@ export function duration(ms: number | null | undefined): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
+/**
+ * Big Skyblock figures at a glance — "1.2b", "340m", "8.5k".
+ *
+ * Networth runs to eleven digits, and a thousands-separated string of those is
+ * something staff have to count digits on to read. Three significant figures is
+ * as much precision as a screening decision ever uses; the exact number is on
+ * the record for anyone who needs it.
+ */
+export function compactNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  const sign = value < 0 ? "-" : "";
+  const n = Math.abs(value);
+  if (n < 1000) return `${sign}${Math.round(n)}`;
+  for (const [size, suffix] of [[1e9, "b"], [1e6, "m"], [1e3, "k"]] as const) {
+    if (n >= size) {
+      const scaled = n / size;
+      // One decimal below ten, none above: "9.4b" and "340m" are both three
+      // characters of information, which is the point.
+      return `${sign}${scaled < 10 ? scaled.toFixed(1) : Math.round(scaled)}${suffix}`;
+    }
+  }
+  return `${sign}${Math.round(n)}`;
+}
+
 /** "12 of 40 (30%)" — the shape most of the Overview's ratios take. */
 export function ratio(part: number, whole: number): string {
   if (whole <= 0) return count(part);

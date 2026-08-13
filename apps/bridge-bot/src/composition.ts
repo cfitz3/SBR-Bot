@@ -22,6 +22,8 @@ import {
   moderationRepository,
   progressionRepository,
   rankResolver,
+  rolePolicyReader,
+  wordlistRepository,
   screeningHistorySource,
   screeningPolicySource,
   screeningRepository,
@@ -36,8 +38,20 @@ import { CommunityServiceImpl } from "@sbr/community";
 import { PermServiceImpl } from "@sbr/perms";
 import { XpService } from "@sbr/xp";
 import { LeaderboardService } from "@sbr/leaderboards";
-import { GuildConfigServiceImpl } from "@sbr/guild-config";
-import { ESCALATION_SETTING_KEY, memberRecordSource } from "@sbr/moderation";
+import {
+  GuildConfigServiceImpl,
+  COOLDOWN_SETTING_KEY,
+  parseCooldowns,
+  resolveCommandCooldownMs,
+} from "@sbr/guild-config";
+import {
+  AutomodRunner,
+  AUTOMOD_SETTING_KEY,
+  ESCALATION_SETTING_KEY,
+  memberRecordSource,
+  ModerationServiceImpl,
+  RELAY_SYNC_SETTING_KEY,
+} from "@sbr/moderation";
 import {
   ItemCatalog,
   MarketServiceImpl,
@@ -47,7 +61,7 @@ import {
   type NetworthEngine,
 } from "@sbr/pricing";
 import { ProgressionServiceImpl, type ProfileProvider, type SkyblockProfileData } from "@sbr/progression";
-import { AnalyticsServiceImpl } from "@sbr/analytics";
+import { AnalyticsServiceImpl, createDomainMetrics } from "@sbr/analytics";
 import {
   CommandDispatcher,
   InGameDispatcher,
@@ -91,6 +105,15 @@ export interface BridgeApp {
   readonly inGame: InGameDispatcher;
   /** The relay pipeline used by the Discord/in-game transport adapters. */
   readonly bridge: BridgeService;
+  /**
+   * Automod, for the Discord side.
+   *
+   * The relay carries its own gate for guild chat; this is the same runner
+   * exposed so the transport can judge every message in the server, not only
+   * the ones headed for the bridge channel. One instance, one policy, two
+   * choke-points.
+   */
+  readonly automod: AutomodRunner;
   /**
    * Join-request screening. Held by the app rather than the transport because
    * the Mineflayer session is rebuilt on every reconnect and the screening
@@ -136,7 +159,40 @@ export interface BridgeApp {
   setStatusSource(source: (() => BridgeStatusDetails) | null): void;
   /** Hand the composition the Discord-backed LFG board once the client exists. */
   setLfgBoard(board: LfgBoard | null): void;
+  /**
+   * Hand the composition somewhere to put moderation commands arriving on the
+   * bus.
+   *
+   * Late-bound like the roster, and for the same reason: the paced queue that
+   * actually types these lives in the transport, which is built from the app.
+   * The subscription itself is held here so Redis stays out of the transport
+   * and so an unset sink is a no-op rather than a lost connection — commands
+   * published before the bridge is up are dropped deliberately, since a
+   * punishment that waits for a boot is one nobody is expecting any more.
+   */
+  setGameCommandSink(sink: ((guildId: string, command: string) => void) | null): void;
+  /**
+   * Record a moderation action that happened in-game, as parsed from Hypixel's
+   * own guild-chat notices.
+   *
+   * Deliberately writes the audit row directly rather than going through
+   * `ModerationServiceImpl`: the service *issues* punishments, and issuing one
+   * here would relay it straight back into the game the notice came from — a
+   * kick echoing into a second kick. This is a record of something that has
+   * already happened, so it is recorded and nothing more.
+   */
+  recordInGameAction(guildId: string, notice: InGameModAction): Promise<void>;
   shutdown(): Promise<void>;
+}
+
+/** An action Hypixel announced in guild chat, ready to be recorded. */
+export interface InGameModAction {
+  readonly type: "KICK" | "MUTE" | "UNMUTE";
+  /** The target's IGN. Linked or not — an unlinked member is still moderated. */
+  readonly targetIgn: string;
+  /** The staff member's IGN, when the notice named one. */
+  readonly actorIgn: string | null;
+  readonly durationSeconds: number | null;
 }
 
 /** Whatever the transport can say about itself; forwarded verbatim to Redis. */
@@ -159,7 +215,16 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
 
-  const identity = new IdentityServiceImpl({ repo: identityRepository, social: hypixel, roles: rankResolver, logger: log });
+  // `floors` matters most here: this is the process that asks `hasCapability`
+  // for every relayed message, so it is where a guild's configured floors have
+  // to be in force rather than the defaults.
+  const identity = new IdentityServiceImpl({
+    repo: identityRepository,
+    social: hypixel,
+    roles: rankResolver,
+    floors: rolePolicyReader,
+    logger: log,
+  });
 
   // Real networth via skyhelper-networth (museum omitted here ⇒ honest estimate).
   const engine: NetworthEngine = {
@@ -275,6 +340,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   });
 
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
+  const metrics = createDomainMetrics({ analytics, surface: "BRIDGE_BOT", logger: log });
   // XP counts activity; it never awards inline. The cooldown gate is the same
   // Redis one the dispatcher uses, under its own `xp:` key space, so an XP
   // cooldown can never eat a command cooldown or vice versa.
@@ -329,7 +395,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // instance rather than building a second one is the point: a quote the bot
   // says and a message a member relays are held to one set of rules, warmed by
   // one cache, and cannot drift apart on a stale copy.
-  const wordlistFilter = new WordlistFilterImpl();
+  const wordlistFilter = new WordlistFilterImpl(undefined, metrics);
   const screen: TextScreen = {
     async isClean(guildId, text) {
       const verdict = await wordlistFilter.check(guildId, text);
@@ -357,9 +423,20 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   };
 
+  // One source shared by both dispatchers: a guild that shortened `/lfg` means
+  // it in guild chat too, and two objects reading the same key would only be a
+  // way for the two surfaces to disagree.
+  const cooldownPolicy = {
+    async resolveMs(guildId: string, command: string, specMs: number): Promise<number> {
+      const policy = parseCooldowns(await guildConfigRepository.getSetting(guildId, COOLDOWN_SETTING_KEY));
+      return resolveCommandCooldownMs(policy, command, specMs);
+    },
+  };
+
   const dispatcher = new CommandDispatcher({
     registry: buildBridgeRegistry(),
     cooldowns: adapters.cooldowns,
+    cooldownPolicy,
     capabilities,
     handlerDeps,
     logger: log,
@@ -375,6 +452,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     dispatcher: new CommandDispatcher({
       registry: dispatcher.commands,
       cooldowns: adapters.cooldowns,
+      cooldownPolicy,
       capabilities: { async can() { return true; } },
       handlerDeps,
       logger: log,
@@ -385,16 +463,98 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     logger: log,
   });
 
+  // Automod needs somewhere to send what it decides, and the answer has to be
+  // the same service the admin bot uses — otherwise an automod mute would skip
+  // escalation, the audit trail and the in-game relay sync, and a member would
+  // have two histories depending on who muted them. Built here rather than
+  // passed in because bridge-bot is the only process that sees guild chat.
+  const moderation = new ModerationServiceImpl({
+    repo: moderationRepository,
+    ranks: rankResolver,
+    enforcement: adapters.enforcement,
+    botCaps: { async canPerform() { return true; } },
+    metrics,
+    escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
+    gameCommands: {
+      send: (guildId, command) =>
+        adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() }),
+    },
+    igns: {
+      async ignFor(_guildId, discordId) {
+        const link = await identityRepository.findPrimaryLinkByDiscordId(discordId).catch(() => null);
+        return link?.ign ?? null;
+      },
+    },
+    relaySync: { readRelaySync: (guildId) => guildConfigRepository.getSetting(guildId, RELAY_SYNC_SETTING_KEY) },
+    logger: log,
+  });
+
+  const automod = new AutomodRunner({
+    policy: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, AUTOMOD_SETTING_KEY) },
+    counters: adapters.automodCounters,
+    wordlist: wordlistRepository,
+    moderation,
+    metrics,
+    logger: log,
+  });
+
   const bridge = new BridgeService({
     guard: new BridgeGuardImpl(redis, identity),
     wordlist: wordlistFilter,
     flood: new FloodControlImpl(redis),
+    metrics,
+    // The guild-chat side.
+    //
+    // Only `GAME_TO_DISCORD` is judged here. A Discord message has already
+    // passed the server-wide hook in the transport by the time it reaches the
+    // relay, and running it twice would double its spam counters and could
+    // punish it twice for one line.
+    //
+    // An in-game author is an IGN, so the punishable identity has to be looked
+    // up. An unlinked member still has their message stopped and their match
+    // logged; what the platform cannot do is punish an account it has no id
+    // for, and the runner says so rather than silently doing nothing.
+    automod: {
+      async check(msg) {
+        if (msg.direction !== "GAME_TO_DISCORD") return { blocked: false };
+        const discordId = await identityRepository.findDiscordIdByIgn(msg.authorId).catch(() => null);
+        // One capability, checked once. `BYPASS_FILTER` is the guild-chat
+        // equivalent of a staff role — resolving all six for every relayed line
+        // would put half a dozen lookups on the hot path to answer a question
+        // most policies never ask.
+        const bypass =
+          discordId !== null && (await identity.hasCapability(msg.guildId, discordId, "BYPASS_FILTER").catch(() => false));
+        return automod.run({
+          guildId: msg.guildId,
+          surface: "GUILD_CHAT",
+          text: msg.content,
+          // Guild chat has no structured mentions, so the count is zero rather
+          // than a number guessed out of the text.
+          mentionCount: 0,
+          subject: {
+            key: msg.authorId,
+            discordId,
+            roleIds: [],
+            capabilities: bypass ? ["BYPASS_FILTER"] : [],
+          },
+        });
+      },
+    },
     logger: log,
   });
 
   const unsubscribe = await adapters.configBus.subscribe((guildId) => {
     guildConfig.invalidate(guildId);
     log.debug("guild config invalidated by broadcast", { guildId });
+  });
+
+  let gameCommandSink: ((guildId: string, command: string) => void) | null = null;
+  const unsubscribeMod = await adapters.modBus.subscribe((message) => {
+    if (gameCommandSink === null) {
+      log.warn("moderation command dropped: bridge not connected", { guildId: message.guildId });
+      return;
+    }
+    gameCommandSink(message.guildId, message.command);
   });
 
   let liveStatus: (() => BridgeStatusDetails) | null = null;
@@ -412,6 +572,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     milestones: milestoneAnnouncementRepository,
     inGame,
     bridge,
+    automod,
     screening,
     resolveGuild: guildRepository.resolveInternalId,
     async creditDiscordMessage(guildId, discordId, text) {
@@ -431,13 +592,64 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     setLfgBoard(board) {
       liveBoard = board;
     },
+    setGameCommandSink(sink) {
+      gameCommandSink = sink;
+    },
+    async recordInGameAction(guildId, notice) {
+      // Best-effort on both ends: the target may not be linked, and the actor is
+      // an in-game name that need not correspond to a Discord account at all.
+      // Neither absence is a reason to drop the record — an unlinked member's
+      // kick is still the guild's history.
+      const targetDiscordId = await identityRepository.findDiscordIdByIgn(notice.targetIgn).catch(() => null);
+      const actorDiscordId = notice.actorIgn === null
+        ? null
+        : await identityRepository.findDiscordIdByIgn(notice.actorIgn).catch(() => null);
+
+      await moderationRepository.createAction({
+        guildId,
+        infractionId: null,
+        type: notice.type,
+        // The column is non-null, and there is no snowflake to put in it when
+        // the action was taken by someone with no linked account. The IGN is
+        // preserved in the reason, which is where the page reads it from.
+        actorDiscordId: actorDiscordId ?? INGAME_ACTOR,
+        targetDiscordId,
+        targetMinecraftUuid: null,
+        reason: notice.actorIgn === null
+          ? `In-game ${notice.type.toLowerCase()} of ${notice.targetIgn}`
+          : `In-game ${notice.type.toLowerCase()} of ${notice.targetIgn} by ${notice.actorIgn}`,
+        durationSeconds: notice.durationSeconds,
+        expiresAt: notice.durationSeconds === null
+          ? null
+          : new Date(Date.now() + notice.durationSeconds * 1_000).toISOString(),
+        surfaces: ["GUILD_CHAT"],
+        // An in-game mute is not enforced by us and we cannot lift it, so it is
+        // recorded as history rather than as a live punishment the platform
+        // holds. Marking it active would make the expiry sweeper think it owned
+        // something it cannot touch.
+        active: false,
+        sourceContext: "INGAME",
+      });
+      log.info("recorded in-game moderation action", { guildId, type: notice.type, target: notice.targetIgn });
+    },
     async shutdown() {
       stopHeartbeat();
       await unsubscribe().catch(() => undefined);
+      await unsubscribeMod().catch(() => undefined);
       await Promise.allSettled([closeRedis(), disconnectDb()]);
     },
   };
 }
+
+/**
+ * Stand-in actor for an in-game action Hypixel did not attribute, or whose
+ * staff member has no linked Discord account.
+ *
+ * A sentinel rather than an empty string so the value is obviously not a
+ * snowflake if it ever reaches a mention — an empty actor would render as a
+ * broken ping, and a real-looking id would name the wrong person.
+ */
+const INGAME_ACTOR = "ingame";
 
 /** Per-boot identity in the heartbeat keyspace; see the panel's copy for why. */
 const INSTANCE_ID = randomUUID().slice(0, 8);

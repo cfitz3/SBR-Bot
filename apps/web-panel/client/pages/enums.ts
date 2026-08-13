@@ -48,6 +48,21 @@ export const TicketCategory = {
 } as const;
 export type TicketCategory = (typeof TicketCategory)[keyof typeof TicketCategory];
 
+/**
+ * What a member is allowed to do through the bridge. The panel offers this list
+ * as an automod exemption: it is the guild-chat side's staff check, where there
+ * are no Discord roles to exempt.
+ */
+export const BridgeCapability = {
+  RELAY_MESSAGE: "RELAY_MESSAGE",
+  RUN_COMMAND: "RUN_COMMAND",
+  MENTION: "MENTION",
+  BYPASS_FILTER: "BYPASS_FILTER",
+  BYPASS_COOLDOWN: "BYPASS_COOLDOWN",
+  ADMIN: "ADMIN",
+} as const;
+export type BridgeCapability = (typeof BridgeCapability)[keyof typeof BridgeCapability];
+
 /** How a wordlist rule's pattern is matched against a message. */
 export const WordMatchType = {
   EXACT: "EXACT",

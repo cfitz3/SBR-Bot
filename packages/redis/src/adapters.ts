@@ -71,6 +71,73 @@ export class RedisTallyStore {
   }
 }
 
+/** What the automod evaluator needs read before it can judge a windowed rule. */
+export interface AutomodCounterRequest {
+  readonly ruleId: string;
+  readonly kind: "spam" | "repeat";
+  readonly windowSeconds: number;
+}
+
+/**
+ * The windowed side of automod: how many messages, and how many repeats.
+ *
+ * Counting is a bump-and-read rather than a read: the message being judged is
+ * part of its own window, so "the fifth message in ten seconds" has to see
+ * itself to be the fifth. The expiry is set from the current bump, which makes
+ * the window sliding-ish — good enough for flood detection, and far cheaper
+ * than a sorted set of timestamps per author per rule.
+ *
+ * A Redis failure returns zero for that rule rather than throwing. Automod
+ * mutes people; the failure mode when the counter store is unreachable must be
+ * "nothing fires", not "everything does" and not "the relay stops".
+ */
+export class RedisAutomodCounters {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async read(
+    guildId: string,
+    author: string,
+    text: string,
+    requests: readonly AutomodCounterRequest[],
+  ): Promise<Readonly<Record<string, number>>> {
+    if (requests.length === 0) return {};
+    const hash = hashText(text);
+    const out: Record<string, number> = {};
+    await Promise.all(
+      requests.map(async (request) => {
+        const key =
+          request.kind === "spam"
+            ? this.ctx.keys.automodSpam(guildId, request.ruleId, author)
+            : this.ctx.keys.automodRepeat(guildId, request.ruleId, author, hash);
+        try {
+          const total = await this.ctx.client.incr(key);
+          await this.ctx.client.expire(key, Math.max(1, Math.ceil(request.windowSeconds)));
+          out[request.ruleId] = total;
+        } catch {
+          out[request.ruleId] = 0;
+        }
+      }),
+    );
+    return out;
+  }
+}
+
+/**
+ * A short, stable fingerprint of a message, used only to key the repeat
+ * counter. Whitespace and case are normalised so "STOP" and "stop  " are the
+ * same line; the point is to catch somebody repeating themselves, and a counter
+ * defeated by a trailing space would catch nobody.
+ */
+function hashText(text: string): string {
+  const normalised = text.trim().toLowerCase().replace(/\s+/g, " ");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < normalised.length; i += 1) {
+    h ^= normalised.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
 /** HypixelCache — soft-expiry envelope so stale-if-error can still serve. */
 export class RedisHypixelCache {
   constructor(private readonly ctx: RedisContext) {}
@@ -246,6 +313,210 @@ export class RedisConfigBus {
       await sub.pUnsubscribe(pattern).catch(() => undefined);
       await sub.quit().catch(() => undefined);
     };
+  }
+}
+
+/** One instruction on the moderation bus. */
+export interface ModBusMessage {
+  readonly guildId: string;
+  readonly kind: "GAME_COMMAND";
+  /** The literal line to type in game, e.g. `/g mute Notch 1h`. */
+  readonly command: string;
+  /** Ties the publish, the drain and the audit row together in the logs. */
+  readonly correlationId: string;
+}
+
+/**
+ * The moderation bus: how a decision made in one process reaches the process
+ * that can act on it.
+ *
+ * Only `apps/bridge-bot` holds the Minecraft socket, so a `/warn` issued from
+ * the panel or the admin bot has no way to reach guild chat directly. This is
+ * that way. It mirrors `RedisConfigBus` exactly — publish on the shared client,
+ * pattern-subscribe on a duplicate — because the two have identical delivery
+ * needs and a second, subtly different implementation of the same thing is how
+ * one of them ends up with a bug the other does not.
+ *
+ * Delivery is fire-and-forget. Redis pub/sub drops messages published while no
+ * subscriber is connected, which is the right trade here: a guild command that
+ * arrives an hour late, after the mute has expired, is worse than one that never
+ * arrives. The Discord side of the punishment is already durable in Postgres.
+ */
+export class RedisModBus {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async publish(message: ModBusMessage): Promise<void> {
+    await this.ctx.client.publish(this.ctx.keys.chanMod(message.guildId), JSON.stringify(message));
+  }
+
+  /** Pattern-subscribed for the same reason the config bus is: guilds are discovered as the process runs. */
+  async subscribe(onMessage: (message: ModBusMessage) => void): Promise<() => Promise<void>> {
+    const sub = this.ctx.client.duplicate();
+    sub.on("error", () => {
+      // node-redis reconnects on its own; an unhandled 'error' would take the
+      // bridge down over a blip on a channel it only listens to.
+    });
+    await sub.connect();
+
+    const pattern = this.ctx.keys.chanMod("*");
+    await sub.pSubscribe(pattern, (raw: string) => {
+      const parsed = parseModBusMessage(raw);
+      if (parsed !== null) onMessage(parsed);
+    });
+
+    return async () => {
+      await sub.pUnsubscribe(pattern).catch(() => undefined);
+      await sub.quit().catch(() => undefined);
+    };
+  }
+}
+
+/**
+ * Validated rather than cast. This payload becomes a command typed by an account
+ * with guild-officer permissions, so "it parsed as JSON" is not a good enough
+ * reason to run it — every field is checked, and anything else is dropped.
+ */
+export function parseModBusMessage(raw: string): ModBusMessage | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    const { guildId, kind, command, correlationId } = record;
+    if (kind !== "GAME_COMMAND") return null;
+    if (typeof guildId !== "string" || guildId.length === 0) return null;
+    if (typeof command !== "string" || command.length === 0) return null;
+    return {
+      guildId,
+      kind,
+      command,
+      correlationId: typeof correlationId === "string" ? correlationId : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The jobs an operator may start by hand from the panel's Health page.
+ *
+ * An allow-list rather than "any name that has a definition", because the name
+ * arrives from a browser: an open-ended trigger would let an admin queue a job
+ * that only exists in a future deploy, or spell one wrong and get silence.
+ *
+ * It lives beside the bus rather than beside the job definitions because it *is*
+ * the bus's vocabulary — the one thing both ends must agree on — and because
+ * `@sbr/jobs` is a dependency the panel process has no other reason to carry.
+ * `apps/workers`' schedule test asserts every name here is really scheduled, so
+ * the list cannot drift away from the jobs it claims to name.
+ *
+ * Two families are deliberately absent. `heartbeat` and `analytics-ingest` are
+ * continuous plumbing on a seconds-long cadence — running one by hand does
+ * nothing an operator could observe. The rest are here because there is a real
+ * reason to want one *now*: a roster that is wrong, prices that went stale
+ * during an outage, a milestone somebody is waiting on.
+ */
+export const RUNNABLE_JOBS: readonly string[] = [
+  "guild-scan",
+  "guild-roster-sync",
+  "discord-member-sync",
+  "profile-snapshot",
+  "milestone-detect",
+  "xp-aggregate",
+  "analytics-rollup",
+  "bazaar-refresh",
+  "ah-sweep",
+  "ah-ended-ingest",
+  "resources-refresh",
+  "inactivity-scan",
+  "event-transition",
+  "reminder-dispatch",
+  "punishment-expiry",
+  "config-cache-invalidation",
+];
+
+export function isRunnableJob(name: string): boolean {
+  return RUNNABLE_JOBS.includes(name);
+}
+
+/** One manual run request, panel → workers. */
+export interface JobTriggerMessage {
+  /** A member of `RUNNABLE_JOBS`; checked again on the receiving end. */
+  readonly jobName: string;
+  /** Which guild the operator was looking at. Context for the log, not a filter. */
+  readonly guildId: string;
+  /** Who asked, so an unexpected run has a name attached to it. */
+  readonly actorDiscordId: string;
+  readonly at: string;
+}
+
+/**
+ * The job-trigger bus: how "run it now" reaches the process holding the queue.
+ *
+ * BullMQ's `Queue` opens its own Redis connections and owns the queue's keys, so
+ * a panel that enqueued directly would be a second writer to a structure
+ * `apps/workers` reconciles on every boot. Publishing a request instead keeps
+ * exactly one process in charge of the queue, and keeps `bullmq` out of the
+ * panel's dependency tree.
+ *
+ * Fire-and-forget, like the moderation bus: pub/sub drops a message published
+ * while the workers are down, which is the honest outcome — the panel reports
+ * that the run was requested, and the Health page's next-run column is what says
+ * whether it happened. A queued-up backlog of "run now" from an outage is not
+ * something anybody asked for.
+ */
+export class RedisJobTriggerBus {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async publish(message: JobTriggerMessage): Promise<void> {
+    await this.ctx.client.publish(this.ctx.keys.chanJobs(), JSON.stringify(message));
+  }
+
+  /** Plain subscribe, not a pattern: there is one channel, and it is not per guild. */
+  async subscribe(onMessage: (message: JobTriggerMessage) => void): Promise<() => Promise<void>> {
+    const sub = this.ctx.client.duplicate();
+    sub.on("error", () => {
+      // node-redis reconnects on its own; an unhandled 'error' would take the
+      // worker fleet down over a blip on a convenience channel.
+    });
+    await sub.connect();
+
+    const channel = this.ctx.keys.chanJobs();
+    await sub.subscribe(channel, (raw: string) => {
+      const parsed = parseJobTriggerMessage(raw);
+      if (parsed !== null) onMessage(parsed);
+    });
+
+    return async () => {
+      await sub.unsubscribe(channel).catch(() => undefined);
+      await sub.quit().catch(() => undefined);
+    };
+  }
+}
+
+/**
+ * Validated, and the job name checked against the allow-list a second time.
+ *
+ * The panel checks before publishing; this checks before queueing. Both, because
+ * anything that can reach Redis can publish here, and the receiving end is the
+ * one holding the queue — a name it accepted on trust would be work the fleet
+ * runs because a message said so.
+ */
+export function parseJobTriggerMessage(raw: string): JobTriggerMessage | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    const { jobName, guildId, actorDiscordId, at } = record;
+    if (typeof jobName !== "string" || !isRunnableJob(jobName)) return null;
+    if (typeof guildId !== "string" || guildId.length === 0) return null;
+    return {
+      jobName,
+      guildId,
+      actorDiscordId: typeof actorDiscordId === "string" ? actorDiscordId : "",
+      at: typeof at === "string" ? at : new Date().toISOString(),
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -528,7 +799,10 @@ export function createRedisAdapters(ctx: RedisContext) {
     enforcement: new RedisEnforcementMirror(ctx),
     priceSource: new RedisPriceSource(ctx),
     configBus: new RedisConfigBus(ctx),
+    modBus: new RedisModBus(ctx),
+    jobTriggers: new RedisJobTriggerBus(ctx),
     heartbeat: new RedisHeartbeat(ctx),
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),
+    automodCounters: new RedisAutomodCounters(ctx),
   };
 }

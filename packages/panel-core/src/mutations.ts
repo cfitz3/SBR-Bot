@@ -8,6 +8,7 @@
  * database, so this file holds no SQL and no enforcement logic of its own.
  */
 import {
+  BridgeCapability,
   CONFIG_CHANNEL_SLOTS,
   isConfigChannelSlot,
   isMilestoneMetric,
@@ -18,6 +19,7 @@ import {
 } from "@sbr/shared-types";
 import type {
   AnalyticsService,
+  ModerationSurface,
   CommunityService,
   ConfigChannelSlot,
   EventType,
@@ -44,10 +46,42 @@ import type {
   WordlistService,
   WordMatchType,
 } from "@sbr/shared-types";
-import { ESCALATION_SETTING_KEY, type EscalationAction } from "@sbr/moderation";
+import {
+  AUTOMOD_ACTION_TYPES,
+  AUTOMOD_SETTING_KEY,
+  AUTOMOD_TRIGGER_KINDS,
+  ESCALATION_SETTING_KEY,
+  evaluateAutomod,
+  MAX_GAME_MUTE_SECONDS,
+  parseAutomod,
+  RELAY_DISCORD_ACTIONS,
+  RELAY_GAME_ACTIONS,
+  RELAY_SYNC_SETTING_KEY,
+  type AutomodActionType,
+  type AutomodRule,
+  type AutomodTrigger,
+  type AutomodTriggerKind,
+  type EscalationAction,
+  type RelayDiscordAction,
+  type RelayGameAction,
+  type RelaySyncRow,
+} from "@sbr/moderation";
 import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
+import {
+  CAPABILITIES,
+  COOLDOWN_SETTING_KEY,
+  DEFAULT_CAPABILITY_FLOOR,
+  MAX_COOLDOWN_SECONDS,
+  ROLES,
+  ROLE_POLICY_SETTING_KEY,
+  normalizeRank,
+  parseRolePolicy,
+  validateRolePolicy,
+  type RolePolicy,
+} from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
+import type { PermissionExceptionStore, PermSubjectKind } from "./reads.js";
 import { XP_SOURCE_ORDER } from "./service.js";
 
 /** Every write the panel can perform, and the platform role it requires. */
@@ -112,6 +146,64 @@ export const MUTATION_TIERS = {
   "wordlist.upsert": "ADMIN",
   "wordlist.delete": "ADMIN",
   "moderation.defaults": "ADMIN",
+  /**
+   * The Discord→in-game punishment mapping. Admin because a row here turns a
+   * Discord action into a command typed by an account holding guild-officer
+   * permissions — the blast radius is the game guild, not just the server.
+   */
+  "moderation.relay-sync": "ADMIN",
+  /**
+   * Trying a message against the automod policy. Moderator rather than Admin,
+   * and deliberately one tier below the rules themselves: it writes nothing and
+   * punishes nobody, and the person who most needs to know why a rule fired is
+   * the moderator holding the report, not the admin who wrote it.
+   */
+  "automod.test": "MODERATOR",
+  /**
+   * The automod policy itself. Admin for the same reason the wordlist is: a
+   * rule deletes messages and mutes members with nobody in the loop, on both
+   * the Discord server and the game guild's chat.
+   */
+  "automod.rule.upsert": "ADMIN",
+  "automod.rule.remove": "ADMIN",
+  /**
+   * The master switch. Its own mutation rather than a field of the rule write
+   * so that switching the whole thing off is one click that cannot fail
+   * halfway, which is what an operator wants at the moment they want it.
+   */
+  "automod.enable": "ADMIN",
+  /**
+   * How often a member may speak or run a command before the gate holds them.
+   * Admin because the same numbers bound the XP earned from talking: a lower
+   * tier here would be an indirect way to change what standing costs.
+   */
+  "config.cooldowns": "ADMIN",
+  /**
+   * The permission model itself: which Discord roles and in-game ranks confer
+   * which level, what each level may do on the bridge, what each level may run,
+   * and the per-person exceptions.
+   *
+   * Admin, and it could not be anything else — every other tier on this table is
+   * enforced by comparing against a level these four writes define. At Officer
+   * tier, `roles.binding` alone would let an officer bind their own Discord role
+   * to ADMIN and reach the whole panel; `roles.exception` would let them grant
+   * themselves the ADMIN capability outright. This is the one place where the
+   * gate and the thing being gated are the same object.
+   */
+  "roles.binding": "ADMIN",
+  "roles.rank": "ADMIN",
+  "roles.capability": "ADMIN",
+  "roles.command": "ADMIN",
+  "roles.exception": "ADMIN",
+  "roles.exception.remove": "ADMIN",
+  /**
+   * Starting a scheduled worker by hand. Admin because the cheap-sounding ones
+   * are not: a snapshot pass walks every tracked member through the Hypixel
+   * budget, and an AH sweep is hundreds of upstream calls. The button exists for
+   * the moment a roster is visibly wrong, not for idle refreshing — hence the
+   * per-job cooldown on top of this tier.
+   */
+  "health.run-job": "ADMIN",
   /** Bridge control is an Officer power in WEB_PANEL.md §2, not an Admin one. */
   "bridge.suspend": "OFFICER",
   /**
@@ -232,6 +324,23 @@ export interface HypixelGuildLookup {
   ): Promise<HypixelResult<{ readonly id: string; readonly name: string | null }>>;
 }
 
+/**
+ * "Run this job now", and the set of jobs that may be asked for.
+ *
+ * Structural, like the other ports here, so panel-core neither imports the job
+ * package nor learns what a queue is: the wiring supplies something that can
+ * publish a request, and the allow-list travels with it because the two are one
+ * fact — what this deployment's workers will actually accept.
+ */
+export interface JobTrigger {
+  readonly runnable: readonly string[];
+  trigger(request: {
+    readonly jobName: string;
+    readonly guildId: string;
+    readonly actorDiscordId: string;
+  }): Promise<void>;
+}
+
 export interface PanelMutationsDeps {
   readonly roles: RoleResolver;
   readonly config: GuildConfigService;
@@ -255,6 +364,16 @@ export interface PanelMutationsDeps {
    * linking one refuses rather than writing an id nothing ever checked.
    */
   readonly hypixel?: HypixelGuildLookup;
+  /**
+   * Optional like the rest: a deployment running the panel without workers
+   * refuses the run rather than reporting a queue that nothing is draining.
+   */
+  readonly jobs?: JobTrigger;
+  /**
+   * Optional like the rest: without it the levels, floors and command table are
+   * still editable and only per-person exceptions refuse.
+   */
+  readonly permissionExceptions?: PermissionExceptionStore;
   readonly limiter: MutationLimiter;
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
@@ -267,6 +386,20 @@ export interface PanelMutationsDeps {
 /** Redis keyspace for panel write limits (REDIS_KEYSPACE.md §1, `cd:web:*`). */
 function limiterKey(discordId: string, mutation: MutationName): string {
   return `cd:web:${mutation}:${discordId}`;
+}
+
+/**
+ * How long a hand-started job is barred from being started again.
+ *
+ * Long enough that a double-click, an impatient second admin and a refreshed tab
+ * all collapse into one run; short enough that somebody watching a roster fix
+ * itself is not locked out for the rest of the afternoon.
+ */
+export const MANUAL_JOB_COOLDOWN_MS = 60_000;
+
+/** Per job, per guild — not per person. See `runJob` for why. */
+function manualJobKey(guildId: string, jobName: string): string {
+  return `cd:web:job:${guildId}:${jobName}`;
 }
 
 const MEMBER_ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "ADMIN", "OWNER"];
@@ -1257,6 +1390,630 @@ export class PanelMutations {
     });
   }
 
+  /**
+   * Save the Discord→in-game punishment mapping.
+   *
+   * Stored as overrides layered over the shipped defaults, exactly like the
+   * escalation ladder: a guild that only switched WARN off still picks up a row
+   * added by a later release, and a guild that never opened this page behaves
+   * the way the defaults describe.
+   *
+   * The game action is validated against a closed list rather than accepted as
+   * text. A free-form command line would be a configurable way to demote the
+   * whole guild, and this endpoint is reachable by anyone the server owner has
+   * made an admin.
+   */
+  async setRelaySync(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "moderation.relay-sync", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const enabled = body["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+
+      const rawRows = body["rows"];
+      if (!Array.isArray(rawRows) || rawRows.length > RELAY_DISCORD_ACTIONS.length) {
+        return invalid(`rows must be a list of up to ${RELAY_DISCORD_ACTIONS.length} mappings`);
+      }
+
+      const rows: RelaySyncRow[] = [];
+      const seen = new Set<string>();
+      for (const raw of rawRows) {
+        if (typeof raw !== "object" || raw === null) return invalid("each row must be an object");
+        const row = raw as Record<string, unknown>;
+
+        const discordAction = row["discordAction"];
+        if (typeof discordAction !== "string" || !RELAY_DISCORD_ACTIONS.includes(discordAction as RelayDiscordAction)) {
+          return invalid(`discordAction must be one of ${RELAY_DISCORD_ACTIONS.join(", ")}`);
+        }
+        // Two rows for one action is an unanswerable mapping: whichever the
+        // parser reached last would win, which is not what the page showed.
+        if (seen.has(discordAction)) return invalid(`${discordAction} is mapped twice`);
+        seen.add(discordAction);
+
+        const gameAction = row["gameAction"];
+        if (typeof gameAction !== "string" || !RELAY_GAME_ACTIONS.includes(gameAction as RelayGameAction)) {
+          return invalid(`gameAction must be one of ${RELAY_GAME_ACTIONS.join(", ")}`);
+        }
+
+        const durationMode = row["durationMode"];
+        if (durationMode !== "same" && durationMode !== "fixed") {
+          return invalid("durationMode must be 'same' or 'fixed'");
+        }
+
+        const rawFixed = row["fixedSeconds"] ?? null;
+        if (rawFixed !== null && (!isCount(rawFixed, MAX_GAME_MUTE_SECONDS) || rawFixed < 1)) {
+          return invalid(`fixedSeconds must be a whole number of seconds from 1 to ${MAX_GAME_MUTE_SECONDS}, or null`);
+        }
+        const fixedSeconds = rawFixed as number | null;
+        // Refused rather than silently dropped, for the ladder's reason: the
+        // mapping would parse back with no duration and simply never fire.
+        if (durationMode === "fixed" && gameAction === "g mute" && fixedSeconds === null) {
+          return invalid("a fixed-duration mute needs a duration");
+        }
+
+        const rowEnabled = row["enabled"];
+        if (typeof rowEnabled !== "boolean") return invalid("each row's enabled must be a boolean");
+
+        rows.push({
+          discordAction: discordAction as RelayDiscordAction,
+          gameAction: gameAction as RelayGameAction,
+          durationMode,
+          fixedSeconds,
+          enabled: rowEnabled,
+        });
+      }
+
+      const policy = { enabled, rows };
+      const result = await this.d.config.setSetting(guildId, RELAY_SYNC_SETTING_KEY, policy);
+      return { result, change: { enabled, rows: rows.map((r) => ({ ...r })) } };
+    });
+  }
+
+  /**
+   * Run a message past the automod policy and report what would have happened.
+   *
+   * The whole point of this endpoint is that it runs *the* evaluator, not a
+   * description of it: the same `evaluateAutomod` the relay and the Discord
+   * handler call, against the guild's stored policy and its real wordlist. A
+   * test box that approximated the engine would be worse than none, because it
+   * would build confidence in rules nobody had actually tried.
+   *
+   * Nothing is written and nobody is punished. Windowed triggers — spam and
+   * repeat — read from operator-supplied counts instead of Redis, so an
+   * operator can ask "what happens on the fifth message in ten seconds" without
+   * sending five messages, and so testing cannot move the real counters that
+   * decide whether a member gets muted.
+   *
+   * The audit row records the outcome and never the text. Somebody testing a
+   * slur rule has to paste the slur, and writing it into the audit trail would
+   * make this feature the thing that put it there permanently.
+   */
+  async testAutomod(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "automod.test", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const text = body["text"];
+      if (typeof text !== "string" || text.trim().length === 0) return invalid("text is required");
+      if (text.length > MAX_AUTOMOD_TEST_LENGTH) {
+        return invalid(`text must be ${MAX_AUTOMOD_TEST_LENGTH} characters or fewer`);
+      }
+
+      const surface = body["surface"];
+      if (surface !== "DISCORD" && surface !== "GUILD_CHAT") {
+        return invalid("surface must be DISCORD or GUILD_CHAT");
+      }
+
+      const rawMentions = body["mentionCount"] ?? 0;
+      if (!isCount(rawMentions, MAX_AUTOMOD_TEST_MENTIONS)) {
+        return invalid(`mentionCount must be a whole number from 0 to ${MAX_AUTOMOD_TEST_MENTIONS}`);
+      }
+
+      // Counter stubs, keyed by rule id exactly as the real store keys them.
+      const counters: Record<string, number> = {};
+      const rawCounters = body["counters"] ?? {};
+      if (typeof rawCounters !== "object" || rawCounters === null || Array.isArray(rawCounters)) {
+        return invalid("counters must be an object of ruleId → count");
+      }
+      for (const [ruleId, value] of Object.entries(rawCounters as Record<string, unknown>)) {
+        if (!isCount(value, MAX_AUTOMOD_TEST_COUNTER)) {
+          return invalid(`counters.${ruleId} must be a whole number from 0 to ${MAX_AUTOMOD_TEST_COUNTER}`);
+        }
+        counters[ruleId] = value as number;
+      }
+
+      const policy = parseAutomod(await this.d.config.getSetting(guildId, AUTOMOD_SETTING_KEY));
+      // The wordlist is optional in the same way it is for the Filter page: a
+      // deployment without it still has every other trigger, and a `wordlist`
+      // rule simply matches nothing rather than refusing the test.
+      const listed = this.d.wordlist ? await this.d.wordlist.list(guildId) : null;
+      const wordlist = listed !== null && listed.ok ? listed.value : [];
+
+      const decision = evaluateAutomod(policy, {
+        text,
+        surface,
+        // Exemptions are not simulated. An operator testing a rule wants to know
+        // whether the rule matches; asking them to also model their own roles
+        // would make the answer depend on a form field rather than on the rule.
+        authorRoleIds: [],
+        authorCapabilities: [],
+        mentionCount: rawMentions as number,
+        counters,
+        wordlist,
+      });
+
+      const note =
+        decision.action === "ALLOW"
+          ? policy.enabled
+            ? "No rule matched — this message would be delivered."
+            : "No rule matched. Automod is switched off, so nothing would fire in any case."
+          : `${describeAutomodAction(decision.action, decision.durationSeconds)}${
+              decision.deleteMessage ? ", message deleted" : ""
+            } — ${decision.matched.map((m) => `${m.ruleName} (${m.detail})`).join("; ")}${
+              policy.enabled ? "" : ". Automod is switched off, so this would not actually fire."
+            }`;
+
+      return {
+        result: { ok: true },
+        change: {
+          surface,
+          textLength: text.length,
+          action: decision.action,
+          deleted: decision.deleteMessage,
+          rules: decision.matched.map((m) => m.ruleId),
+        },
+        note,
+      };
+    });
+  }
+
+  /**
+   * Add or replace one automod rule.
+   *
+   * A rule at a time, not a policy at a time. Two admins on the page at once
+   * editing different rules is ordinary; making the unit of the write the whole
+   * policy would mean the second save silently reverted the first's rule to
+   * whatever their browser last loaded.
+   *
+   * Validation here is strict where `parseAutomod` is lenient, and the two are
+   * doing different jobs: the parser is reading a row that is already stored and
+   * must not throw away a whole policy over one bad field, while this is the
+   * gate that decides what gets stored in the first place. A rule that would
+   * parse back into something other than what the operator typed is refused.
+   */
+  async upsertAutomodRule(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "automod.rule.upsert", async () => {
+      const parsed = readAutomodRule(input);
+      if ("error" in parsed) return invalid(parsed.error);
+      const rule = parsed.rule;
+
+      const policy = parseAutomod(await this.d.config.getSetting(guildId, AUTOMOD_SETTING_KEY));
+      const rules = policy.rules.slice();
+      const at = rules.findIndex((r) => r.id === rule.id);
+      const replacing = at >= 0;
+      if (replacing) rules[at] = rule;
+      else {
+        if (rules.length >= MAX_AUTOMOD_RULES) {
+          return invalid(`a guild may hold at most ${MAX_AUTOMOD_RULES} automod rules`);
+        }
+        rules.push(rule);
+      }
+
+      const result = await this.d.config.setSetting(guildId, AUTOMOD_SETTING_KEY, {
+        enabled: policy.enabled,
+        rules,
+      });
+      return {
+        result,
+        change: { id: rule.id, name: rule.name, trigger: rule.trigger.kind, action: rule.action.type, replacing },
+        note: replacing ? `Updated “${rule.name}”.` : `Added “${rule.name}”.`,
+      };
+    });
+  }
+
+  /** Delete one rule by id. A rule that was not there is reported, not invented. */
+  async removeAutomodRule(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "automod.rule.remove", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const id = (input as Record<string, unknown>)["id"];
+      if (typeof id !== "string" || id.trim().length === 0) return invalid("id is required");
+
+      const policy = parseAutomod(await this.d.config.getSetting(guildId, AUTOMOD_SETTING_KEY));
+      const rules = policy.rules.filter((r) => r.id !== id);
+      if (rules.length === policy.rules.length) {
+        return { result: { ok: true }, change: { id, removed: false }, note: "That rule is already gone." };
+      }
+
+      const result = await this.d.config.setSetting(guildId, AUTOMOD_SETTING_KEY, {
+        enabled: policy.enabled,
+        rules,
+      });
+      return { result, change: { id, removed: true }, note: "Rule removed." };
+    });
+  }
+
+  /**
+   * The master switch, on its own so that switching automod off is one click
+   * that cannot half-succeed — which is the state an operator wants it in at
+   * exactly the moment something is firing that should not be.
+   */
+  async setAutomodEnabled(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "automod.enable", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const enabled = (input as Record<string, unknown>)["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+
+      const policy = parseAutomod(await this.d.config.getSetting(guildId, AUTOMOD_SETTING_KEY));
+      const result = await this.d.config.setSetting(guildId, AUTOMOD_SETTING_KEY, {
+        enabled,
+        rules: policy.rules,
+      });
+      return {
+        result,
+        change: { enabled, rules: policy.rules.length },
+        note: enabled
+          ? `Automod is on — ${policy.rules.filter((r) => r.enabled).length} rule(s) active.`
+          : "Automod is off. Your rules are kept.",
+      };
+    });
+  }
+
+  /**
+   * How long a member waits between commands, and between relayed messages.
+   *
+   * The relay figure is a comfort setting layered *on top of* flood control,
+   * never a replacement for it: the hard per-user window that protects the
+   * bridge account from Hypixel's own limit is not reachable from here, by
+   * design, because a guild that set it to zero would be rate-limiting the bot
+   * rather than themselves.
+   */
+  async setCooldowns(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "config.cooldowns", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const rawDefault = body["commandDefaultSeconds"] ?? null;
+      if (rawDefault !== null && !isCount(rawDefault, MAX_COOLDOWN_SECONDS)) {
+        return invalid(
+          `commandDefaultSeconds must be a whole number from 0 to ${MAX_COOLDOWN_SECONDS}, or null to leave each command on its own`,
+        );
+      }
+
+      const rawRelay = body["relaySeconds"] ?? 0;
+      if (!isCount(rawRelay, MAX_COOLDOWN_SECONDS)) {
+        return invalid(`relaySeconds must be a whole number from 0 to ${MAX_COOLDOWN_SECONDS}`);
+      }
+
+      const rawPer = body["perCommand"] ?? {};
+      if (typeof rawPer !== "object" || rawPer === null || Array.isArray(rawPer)) {
+        return invalid("perCommand must be an object of command → seconds");
+      }
+      const entries = Object.entries(rawPer as Record<string, unknown>);
+      if (entries.length > MAX_COOLDOWN_OVERRIDES) {
+        return invalid(`perCommand may hold at most ${MAX_COOLDOWN_OVERRIDES} overrides`);
+      }
+      const perCommand: Record<string, number> = {};
+      for (const [command, value] of entries) {
+        if (!COMMAND_NAME_RE.test(command)) return invalid(`“${command}” is not a command name`);
+        if (!isCount(value, MAX_COOLDOWN_SECONDS)) {
+          return invalid(`perCommand.${command} must be a whole number from 0 to ${MAX_COOLDOWN_SECONDS}`);
+        }
+        perCommand[command] = value as number;
+      }
+
+      const policy = {
+        commandDefaultSeconds: rawDefault as number | null,
+        perCommand,
+        relaySeconds: rawRelay as number,
+      };
+      const result = await this.d.config.setSetting(guildId, COOLDOWN_SETTING_KEY, policy);
+      return { result, change: { ...policy, perCommand: { ...perCommand } } };
+    });
+  }
+
+  // ──────────────────────── permissions ─────────────────────────
+
+  /**
+   * Replace the Discord roles bound to one platform level.
+   *
+   * A whole set per call rather than add/remove pairs: the page edits a
+   * multi-select, and an add-and-remove protocol would leave a half-applied
+   * binding on the floor if the second call failed.
+   */
+  async setRoleBinding(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.binding", async () => {
+      const body = asObject(input);
+      if (body === null) return invalid("body must be an object");
+
+      const role = body["role"];
+      if (!isMemberRole(role)) return invalid(`role must be one of ${ROLES.join(", ")}`);
+
+      const raw = body["discordRoleIds"] ?? [];
+      if (!Array.isArray(raw)) return invalid("discordRoleIds must be a list of Discord role ids");
+      if (raw.length > MAX_ROLE_BINDINGS) {
+        return invalid(`a level can be bound to at most ${MAX_ROLE_BINDINGS} Discord roles`);
+      }
+      const ids: string[] = [];
+      for (const id of raw) {
+        if (typeof id !== "string" || !SNOWFLAKE.test(id)) return invalid("discordRoleIds must all be Discord role ids");
+        if (!ids.includes(id)) ids.push(id);
+      }
+
+      const result = await this.d.config.setRoleBinding(guildId, role, ids);
+      return { result, change: { role, discordRoleIds: [...ids] } };
+    });
+  }
+
+  /**
+   * Map an in-game guild rank to a level, or clear the mapping.
+   *
+   * Read-modify-write of the one policy document, like every other write on this
+   * page. The alternative — a column per dimension — would make "what is this
+   * guild's permission model" four reads that can disagree with each other.
+   */
+  async setRankMapping(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.rank", async () => {
+      const body = asObject(input);
+      if (body === null) return invalid("body must be an object");
+
+      const rawRank = body["rank"];
+      if (typeof rawRank !== "string") return invalid("rank must be the in-game rank's name");
+      const rank = normalizeRank(rawRank);
+      if (rank.length === 0 || rank.length > MAX_RANK_NAME) {
+        return invalid(`a rank name must be 1–${MAX_RANK_NAME} characters`);
+      }
+
+      // null clears; anything else has to be a level.
+      const role = body["role"] ?? null;
+      if (role !== null && !isMemberRole(role)) return invalid(`role must be one of ${ROLES.join(", ")}, or null`);
+
+      return this.writePolicy(guildId, { rank, role }, (policy) => {
+        const guildRanks = { ...policy.guildRanks };
+        if (role === null) delete guildRanks[rank];
+        else guildRanks[rank] = role;
+        if (Object.keys(guildRanks).length > MAX_RANK_MAPPINGS) {
+          return `a guild can map at most ${MAX_RANK_MAPPINGS} in-game ranks`;
+        }
+        return { ...policy, guildRanks };
+      });
+    });
+  }
+
+  /** Set the lowest level that holds one bridge capability. */
+  async setCapabilityFloor(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.capability", async () => {
+      const body = asObject(input);
+      if (body === null) return invalid("body must be an object");
+
+      const capability = body["capability"];
+      if (typeof capability !== "string" || !(CAPABILITIES as readonly string[]).includes(capability)) {
+        return invalid(`capability must be one of ${CAPABILITIES.join(", ")}`);
+      }
+      const role = body["role"];
+      if (!isMemberRole(role)) return invalid(`role must be one of ${ROLES.join(", ")}`);
+
+      return this.writePolicy(guildId, { capability, role }, (policy) => ({
+        ...policy,
+        capabilities: { ...policy.capabilities, [capability as BridgeCapability]: role },
+      }));
+    });
+  }
+
+  /**
+   * Override the level a named command needs, or clear the override.
+   *
+   * Clearing stores nothing rather than storing the handler's current default:
+   * a command whose compiled-in floor is later raised must not stay lowered by a
+   * policy written against the old one.
+   */
+  async setCommandFloor(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.command", async () => {
+      const body = asObject(input);
+      if (body === null) return invalid("body must be an object");
+
+      const rawCommand = body["command"];
+      if (typeof rawCommand !== "string") return invalid("command must be a command name");
+      // Normalized before it is checked, not after: a name is stored in one
+      // shape, so `/Warn` and `warn` have to be the same override rather than
+      // one override and one rejection.
+      const command = rawCommand.trim().toLowerCase().replace(/^\//, "");
+      if (!COMMAND_NAME_RE.test(command)) return invalid("command must be a command name");
+
+      const role = body["role"] ?? null;
+      if (role !== null && !isMemberRole(role)) return invalid(`role must be one of ${ROLES.join(", ")}, or null`);
+
+      return this.writePolicy(guildId, { command, role }, (policy) => {
+        const commands = { ...policy.commands };
+        if (role === null) delete commands[command];
+        else commands[command] = role;
+        if (Object.keys(commands).length > MAX_COMMAND_OVERRIDES) {
+          return `a guild can override at most ${MAX_COMMAND_OVERRIDES} commands`;
+        }
+        return { ...policy, commands };
+      });
+    });
+  }
+
+  /**
+   * Grant or deny one capability to one subject, overriding the level's floor.
+   *
+   * `allow: false` is not the same as deleting the row and the API keeps them
+   * apart, because the resolver does: a deny beats every grant and every floor,
+   * so it is the strongest statement available here and has to be asked for
+   * explicitly rather than arrived at by clearing something.
+   */
+  async setPermissionException(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.exception", async () => {
+      const body = asObject(input);
+      if (body === null) return invalid("body must be an object");
+
+      const subjectType = body["subjectType"];
+      if (!isSubjectKind(subjectType)) {
+        return invalid("subjectType must be DISCORD_ROLE, DISCORD_USER or GUILD_RANK");
+      }
+      const rawSubject = body["subjectId"];
+      if (typeof rawSubject !== "string") return invalid("subjectId is required");
+      const subjectId = rawSubject.trim();
+      if (subjectType === "GUILD_RANK") {
+        if (subjectId.length === 0 || subjectId.length > MAX_RANK_NAME) {
+          return invalid(`a rank name must be 1–${MAX_RANK_NAME} characters`);
+        }
+      } else if (!SNOWFLAKE.test(subjectId)) {
+        return invalid("subjectId must be a Discord id for role and user subjects");
+      }
+
+      const capability = body["capability"];
+      if (typeof capability !== "string" || !(CAPABILITIES as readonly string[]).includes(capability)) {
+        return invalid(`capability must be one of ${CAPABILITIES.join(", ")}`);
+      }
+      const allow = body["allow"];
+      if (typeof allow !== "boolean") return invalid("allow must be true (grant) or false (deny)");
+
+      const store = this.d.permissionExceptions;
+      if (!store) return unavailable("Per-person exceptions aren't available in this deployment");
+
+      await store.set(guildId, subjectType, subjectId, capability, allow);
+      return { result: { ok: true }, change: { subjectType, subjectId, capability, allow } };
+    });
+  }
+
+  /** Drop one exception, restoring whatever the subject's level says. */
+  async removePermissionException(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.exception.remove", async () => {
+      const body = asObject(input);
+      if (body === null) return invalid("body must be an object");
+      const id = body["id"];
+      if (typeof id !== "string" || id.length === 0) return invalid("id is required");
+
+      const store = this.d.permissionExceptions;
+      if (!store) return unavailable("Per-person exceptions aren't available in this deployment");
+
+      // A gone row is reported rather than passed off as a deletion: the id came
+      // from a page that may be minutes stale, and "removed" about something
+      // another admin already removed is a small lie with a confusing sequel.
+      if (!(await store.remove(guildId, id))) return invalid("that exception no longer exists");
+      return { result: { ok: true }, change: { id } };
+    });
+  }
+
+  /**
+   * Read the stored policy, apply one edit, validate the whole result, write it.
+   *
+   * The validation is of the *result*, not the patch, and it is the strict
+   * validator rather than the tolerant reader — so a document that a previous
+   * release wrote and this one would silently drop fields from is refused here
+   * instead of being quietly rewritten into something smaller.
+   */
+  private async writePolicy(
+    guildId: string,
+    change: Record<string, unknown>,
+    edit: (policy: RolePolicy) => RolePolicy | string,
+  ): Promise<Step> {
+    const current = parseRolePolicy(await this.d.config.getSetting<unknown>(guildId, ROLE_POLICY_SETTING_KEY));
+    const next = edit(current);
+    if (typeof next === "string") return invalid(next);
+
+    const complaint = validateRolePolicy(next);
+    if (complaint !== null) return invalid(complaint);
+
+    // The reader hands back a policy with every default filled in, so writing
+    // `next` verbatim would freeze today's defaults into the guild's document
+    // the first time anyone maps a rank — and a later change to the platform
+    // floor would then silently skip every guild that had ever saved anything.
+    // Only the floors that actually differ are stored, for the same reason a
+    // cleared command override stores nothing.
+    const capabilities: Record<string, MemberRole> = {};
+    for (const [capability, role] of Object.entries(next.capabilities)) {
+      if (DEFAULT_CAPABILITY_FLOOR[capability as BridgeCapability] !== role) capabilities[capability] = role;
+    }
+
+    const result = await this.d.config.setSetting(guildId, ROLE_POLICY_SETTING_KEY, { ...next, capabilities });
+    return { result, change };
+  }
+
+  // ─────────────────────────── health ───────────────────────────
+
+  /**
+   * Start a scheduled worker by hand.
+   *
+   * Nothing is written here and nothing is awaited: the request is published and
+   * the worker fleet queues it. That is why the success note says *requested*
+   * rather than *ran* — the Health page's last-run column is what turns a
+   * request into a fact, and a button that claimed more than it knows would be
+   * the first thing an operator stopped believing.
+   */
+  async runJob(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "health.run-job", async (actorDiscordId) => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const jobName = (input as Record<string, unknown>)["jobName"];
+      if (typeof jobName !== "string" || jobName.length === 0) return invalid("jobName is required");
+
+      const jobs = this.d.jobs;
+      if (!jobs) {
+        return { error: { kind: "SERVICE_ERROR", detail: "this deployment has no worker fleet to ask" } };
+      }
+      if (!jobs.runnable.includes(jobName)) {
+        // Named rather than generic: the panel offers the button, so a name it
+        // will not accept means the two halves disagree, and the operator is the
+        // one who has to notice.
+        return invalid(`“${jobName}” is not a job that can be started by hand`);
+      }
+
+      // A second gate, per job and per guild rather than per person: the point
+      // is to bound how often the work happens, and two admins each inside their
+      // own two-second window is exactly how a snapshot pass gets run four times
+      // in a minute. Deliberately not scoped to the actor for that reason.
+      const gate = await this.d.limiter.consume(manualJobKey(guildId, jobName), MANUAL_JOB_COOLDOWN_MS);
+      if (!gate.allowed) {
+        return {
+          error: {
+            kind: "RATE_LIMITED" as const,
+            detail: `${jobName} was started very recently — give it a minute to finish`,
+            ...(gate.retryAfterMs === undefined ? {} : { retryAfterMs: gate.retryAfterMs }),
+          },
+        };
+      }
+
+      try {
+        await jobs.trigger({ jobName, guildId, actorDiscordId });
+      } catch (error) {
+        return {
+          error: {
+            kind: "SERVICE_ERROR" as const,
+            detail: error instanceof Error ? error.message : "the request could not be sent",
+          },
+        };
+      }
+
+      return {
+        result: { ok: true } as const,
+        change: { jobName },
+        note: "Requested. If the workers are running it will start within a moment — the last-run column is what confirms it.",
+      };
+    });
+  }
+
   // ─────────────────────────── moderation ───────────────────────────
 
   /**
@@ -1603,6 +2360,276 @@ type Step =
 
 function invalid(detail: string): Step {
   return { error: { kind: "INVALID_INPUT", detail } };
+}
+
+/**
+ * Bounds on the automod test box. Generous enough for anything a member could
+ * actually send — Discord's own limit is 2,000 — and finite so the endpoint
+ * cannot be used to run a regex over a megabyte of text.
+ */
+const MAX_AUTOMOD_TEST_LENGTH = 2_000;
+const MAX_AUTOMOD_TEST_MENTIONS = 200;
+const MAX_AUTOMOD_TEST_COUNTER = 10_000;
+
+/** The verdict in words, for the line the operator reads back. */
+function describeAutomodAction(action: "FLAG" | "WARN" | "MUTE", durationSeconds: number | null): string {
+  if (action === "FLAG") return "Flagged for staff";
+  if (action === "WARN") return "Warned";
+  return durationSeconds === null ? "Muted indefinitely" : `Muted for ${formatSeconds(durationSeconds)}`;
+}
+
+/**
+ * Bounds on the policy itself. A guild with two hundred rules has a performance
+ * problem it cannot see, since every rule runs on every message on both
+ * surfaces; the cap is where an operator finds that out from a refusal rather
+ * than from a slow bridge.
+ */
+const MAX_AUTOMOD_RULES = 40;
+const MAX_AUTOMOD_RULE_NAME = 60;
+const MAX_AUTOMOD_PATTERN = 300;
+const MAX_AUTOMOD_ALLOWLIST = 50;
+const MAX_AUTOMOD_WINDOW_SECONDS = 3_600;
+/** A day. Longer than this is a ban dressed as a mute, and should be issued as one. */
+const MAX_AUTOMOD_MUTE_SECONDS = 86_400;
+const MAX_AUTOMOD_EXEMPT_ROLES = 25;
+
+const MAX_COOLDOWN_OVERRIDES = 60;
+/** Discord's own rule for a command name, which is also what our registry uses. */
+const COMMAND_NAME_RE = /^[a-z0-9_-]{1,32}$/;
+
+/**
+ * Bounds on the permission model.
+ *
+ * All four are far above what a guild has and far below what would make
+ * resolution slow: every bound Discord role is compared against the member's on
+ * each permission question, and the whole policy is parsed on each read.
+ */
+const MAX_ROLE_BINDINGS = 25;
+const MAX_RANK_MAPPINGS = 50;
+const MAX_RANK_NAME = 64;
+const MAX_COMMAND_OVERRIDES = 100;
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function isMemberRole(value: unknown): value is MemberRole {
+  return typeof value === "string" && (ROLES as readonly string[]).includes(value);
+}
+
+function isSubjectKind(value: unknown): value is PermSubjectKind {
+  return value === "DISCORD_ROLE" || value === "DISCORD_USER" || value === "GUILD_RANK";
+}
+
+const AUTOMOD_SURFACES: readonly ModerationSurface[] = ["DISCORD", "GUILD_CHAT"];
+const BRIDGE_CAPABILITIES = Object.values(BridgeCapability);
+
+/**
+ * Validate one rule off the wire.
+ *
+ * Returns the rule or the sentence to show. Every branch refuses rather than
+ * repairs: a rule quietly corrected on save is a rule the operator believes says
+ * something it does not, and this one deletes messages and mutes people.
+ */
+function readAutomodRule(input: unknown): { rule: AutomodRule } | { error: string } {
+  if (typeof input !== "object" || input === null) return { error: "body must be an object" };
+  const body = input as Record<string, unknown>;
+
+  const id = body["id"];
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
+    return { error: "id must be 1–64 characters of letters, digits, dash or underscore" };
+  }
+
+  const name = body["name"];
+  if (typeof name !== "string" || name.trim().length === 0) return { error: "name is required" };
+  if (name.length > MAX_AUTOMOD_RULE_NAME) {
+    return { error: `name must be ${MAX_AUTOMOD_RULE_NAME} characters or fewer` };
+  }
+
+  const enabled = body["enabled"];
+  if (typeof enabled !== "boolean") return { error: "enabled must be a boolean" };
+
+  const rawSurfaces = body["surfaces"];
+  if (!Array.isArray(rawSurfaces) || rawSurfaces.length === 0) {
+    return { error: "pick at least one surface" };
+  }
+  const surfaces: ModerationSurface[] = [];
+  for (const s of rawSurfaces) {
+    if (s !== "DISCORD" && s !== "GUILD_CHAT") {
+      return { error: `surfaces must be drawn from ${AUTOMOD_SURFACES.join(", ")}` };
+    }
+    if (!surfaces.includes(s)) surfaces.push(s);
+  }
+
+  const trigger = readAutomodTrigger(body["trigger"]);
+  if ("error" in trigger) return trigger;
+
+  const rawExempt = body["exempt"] ?? {};
+  if (typeof rawExempt !== "object" || rawExempt === null || Array.isArray(rawExempt)) {
+    return { error: "exempt must be an object" };
+  }
+  const exemptBody = rawExempt as Record<string, unknown>;
+  const rawRoles = exemptBody["roleIds"] ?? [];
+  if (!Array.isArray(rawRoles) || rawRoles.length > MAX_AUTOMOD_EXEMPT_ROLES) {
+    return { error: `exempt.roleIds must be a list of up to ${MAX_AUTOMOD_EXEMPT_ROLES} role ids` };
+  }
+  const roleIds: string[] = [];
+  for (const role of rawRoles) {
+    if (typeof role !== "string" || !SNOWFLAKE.test(role)) {
+      return { error: "exempt.roleIds must all be Discord role ids" };
+    }
+    if (!roleIds.includes(role)) roleIds.push(role);
+  }
+  const rawCapability = exemptBody["capability"] ?? null;
+  if (rawCapability !== null && !BRIDGE_CAPABILITIES.includes(rawCapability as BridgeCapability)) {
+    return { error: `exempt.capability must be null or one of ${BRIDGE_CAPABILITIES.join(", ")}` };
+  }
+
+  const rawAction = body["action"];
+  if (typeof rawAction !== "object" || rawAction === null) return { error: "action is required" };
+  const actionBody = rawAction as Record<string, unknown>;
+  const type = actionBody["type"];
+  if (typeof type !== "string" || !AUTOMOD_ACTION_TYPES.includes(type as AutomodActionType)) {
+    return { error: `action.type must be one of ${AUTOMOD_ACTION_TYPES.join(", ")}` };
+  }
+  const deleteMessage = actionBody["deleteMessage"];
+  if (typeof deleteMessage !== "boolean") return { error: "action.deleteMessage must be a boolean" };
+
+  const rawDuration = actionBody["durationSeconds"] ?? null;
+  if (type !== "MUTE" && rawDuration !== null) {
+    // Refused rather than dropped: a duration on a FLAG means the operator
+    // believes they configured a timed action, and they did not.
+    return { error: "only a mute carries a duration" };
+  }
+  if (rawDuration !== null && (!isCount(rawDuration, MAX_AUTOMOD_MUTE_SECONDS) || rawDuration < 1)) {
+    return {
+      error: `action.durationSeconds must be from 1 to ${MAX_AUTOMOD_MUTE_SECONDS} seconds, or null for an open-ended mute`,
+    };
+  }
+
+  // FLAG records and notifies. A FLAG that also does nothing to the message is
+  // a rule with no effect at all, which is worth saying out loud once rather
+  // than letting somebody wonder why nothing happens.
+  if (type === "FLAG" && !deleteMessage && trigger.trigger.kind === "wordlist") {
+    // The wordlist already flags on its own; this pairing is the one that
+    // genuinely duplicates existing behaviour.
+    return { error: "a flag-only wordlist rule duplicates the chat filter — give it an action or delete the message" };
+  }
+
+  return {
+    rule: {
+      id,
+      name: name.trim(),
+      enabled,
+      surfaces,
+      trigger: trigger.trigger,
+      exempt: { roleIds, capability: (rawCapability as BridgeCapability | null) ?? null },
+      action: { type: type as AutomodActionType, deleteMessage, durationSeconds: rawDuration as number | null },
+    },
+  };
+}
+
+function readAutomodTrigger(input: unknown): { trigger: AutomodTrigger } | { error: string } {
+  if (typeof input !== "object" || input === null) return { error: "trigger is required" };
+  const t = input as Record<string, unknown>;
+  const kind = t["kind"];
+  if (typeof kind !== "string" || !AUTOMOD_TRIGGER_KINDS.includes(kind as AutomodTriggerKind)) {
+    return { error: `trigger.kind must be one of ${AUTOMOD_TRIGGER_KINDS.join(", ")}` };
+  }
+
+  const window = (): { seconds: number } | { error: string } => {
+    const value = t["windowSeconds"];
+    if (!isCount(value, MAX_AUTOMOD_WINDOW_SECONDS) || (value as number) < 1) {
+      return { error: `windowSeconds must be from 1 to ${MAX_AUTOMOD_WINDOW_SECONDS}` };
+    }
+    return { seconds: value as number };
+  };
+
+  switch (kind) {
+    case "wordlist":
+      return { trigger: { kind: "wordlist" } };
+    case "invites":
+      return { trigger: { kind: "invites" } };
+    case "regex": {
+      const pattern = t["pattern"];
+      if (typeof pattern !== "string" || pattern.trim().length === 0) return { error: "trigger.pattern is required" };
+      if (pattern.length > MAX_AUTOMOD_PATTERN) {
+        return { error: `trigger.pattern must be ${MAX_AUTOMOD_PATTERN} characters or fewer` };
+      }
+      const flags = t["flags"] ?? "";
+      if (typeof flags !== "string" || !/^[gimsuy]*$/.test(flags)) {
+        return { error: "trigger.flags may only contain g, i, m, s, u or y" };
+      }
+      try {
+        new RegExp(pattern, flags.includes("i") ? flags : `${flags}i`);
+      } catch {
+        // The one place a refusal is doing real work: an unparseable pattern
+        // saved here would drop the whole rule the next time the policy loaded.
+        return { error: "that is not a valid regular expression" };
+      }
+      return { trigger: { kind: "regex", pattern, flags } };
+    }
+    case "spam": {
+      const messages = t["messages"];
+      if (!isCount(messages, 100) || (messages as number) < 2) {
+        return { error: "trigger.messages must be from 2 to 100" };
+      }
+      const w = window();
+      if ("error" in w) return w;
+      return { trigger: { kind: "spam", messages: messages as number, windowSeconds: w.seconds } };
+    }
+    case "repeat": {
+      const times = t["times"];
+      if (!isCount(times, 100) || (times as number) < 2) return { error: "trigger.times must be from 2 to 100" };
+      const w = window();
+      if ("error" in w) return w;
+      return { trigger: { kind: "repeat", times: times as number, windowSeconds: w.seconds } };
+    }
+    case "mentions": {
+      const max = t["max"];
+      if (!isCount(max, 100) || (max as number) < 1) return { error: "trigger.max must be from 1 to 100" };
+      return { trigger: { kind: "mentions", max: max as number } };
+    }
+    case "caps": {
+      const percent = t["percent"];
+      // Below half, ordinary emphatic typing trips it; the floor is there so a
+      // rule cannot be saved that fires on almost everything.
+      if (!isCount(percent, 100) || (percent as number) < 50) {
+        return { error: "trigger.percent must be from 50 to 100" };
+      }
+      const minLength = t["minLength"];
+      if (!isCount(minLength, 500) || (minLength as number) < 4) {
+        return { error: "trigger.minLength must be from 4 to 500" };
+      }
+      return { trigger: { kind: "caps", percent: percent as number, minLength: minLength as number } };
+    }
+    default: {
+      const raw = t["allowlist"] ?? [];
+      if (!Array.isArray(raw) || raw.length > MAX_AUTOMOD_ALLOWLIST) {
+        return { error: `trigger.allowlist must be a list of up to ${MAX_AUTOMOD_ALLOWLIST} hostnames` };
+      }
+      const allowlist: string[] = [];
+      for (const host of raw) {
+        if (typeof host !== "string" || !/^[a-z0-9.-]{3,253}$/i.test(host) || !host.includes(".")) {
+          return { error: `“${String(host)}” is not a hostname` };
+        }
+        const lower = host.toLowerCase();
+        if (!allowlist.includes(lower)) allowlist.push(lower);
+      }
+      return { trigger: { kind: "links", allowlist } };
+    }
+  }
+}
+
+/** Whole units, largest that divides exactly — the same rule the relay's own formatter uses. */
+function formatSeconds(seconds: number): string {
+  const s = Math.max(1, Math.floor(seconds));
+  if (s % 86_400 === 0) return `${s / 86_400}d`;
+  if (s % 3_600 === 0) return `${s / 3_600}h`;
+  if (s % 60 === 0) return `${s / 60}m`;
+  return `${s}s`;
 }
 
 /**

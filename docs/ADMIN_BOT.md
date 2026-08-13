@@ -213,6 +213,36 @@ The Admin bot and the panel are **two clients of the same moderation/governance 
 
 ---
 
+## 7b. Internal API (loopback)
+
+The bot is the only process holding a Discord gateway cache, so it exposes that cache to the panel over a small HTTP server (`apps/admin-bot/src/internal-api.ts`). This is what removes ID-pasting from the panel: the channel, role and member dropdowns are reads of this endpoint.
+
+**Posture.** Bound to `127.0.0.1` only, never a public interface. Every request carries `Authorization: Bearer <INTERNAL_API_TOKEN>`; a missing or wrong token is a 401. **Treat that token as a credential of the same weight as the bot token** — anything holding it can enforce moderation actions.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /internal/g/{guildId}/channels` | `{id, name, type, parentName}[]` |
+| `GET /internal/g/{guildId}/roles` | `{id, name, color, position, managed}[]` |
+| `GET /internal/g/{guildId}/members?q=` | `{id, username, globalName, nick, avatarHash, roleIds, joinedAt, bot}[]` |
+| `POST /internal/g/{guildId}/enforce` | KICK / BAN / UNBAN / TIMEOUT / UNTIMEOUT, through `DiscordGuildEffects` |
+| `POST /internal/g/{guildId}/scheduled-event` | Creates a Discord scheduled event, returns its id |
+
+`{guildId}` is the **platform** guild id; the bot resolves it to the Discord snowflake itself, so the panel never has to hold both.
+
+**Environment.**
+
+| Variable | Where | Meaning |
+| --- | --- | --- |
+| `INTERNAL_API_TOKEN` | both | Shared secret. Unset on the panel side means every picker reports itself unavailable. |
+| `INTERNAL_API_PORT` | admin-bot | Loopback port to listen on. |
+| `INTERNAL_API_URL` | web-panel | Base URL of the above, e.g. `http://127.0.0.1:8791`. |
+
+**Manual step that cannot be done from code:** member listing requires the **Server Members** privileged intent, enabled by hand in the Discord developer portal for the admin-bot application (the code requests `GatewayIntentBits.GuildMembers`, but the portal switch is what makes Discord honour it). Without it the bot fails to log in — this is a deploy-time gate, not a silent degradation.
+
+**Degradation is deliberate.** A panel whose bot is down, unreachable, or token-mismatched is *degraded, not broken*: each picker falls back to the raw-snowflake text field it replaced, with a Save button and the same validation as before. Directory failures are never cached, so a picker recovers on its own as soon as the bot returns.
+
+---
+
 ## 8. Summary
 
 - **A separate, staff-only bot** whose sole purpose is safe, authorized, traceable governance — never member utility.

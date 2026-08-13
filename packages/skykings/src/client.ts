@@ -121,13 +121,19 @@ export class SkykingsClient {
   /**
    * `GET /user/lookup?uuid=` — is this Minecraft account on the scammer list?
    *
-   * **Known upstream outage (verified 2026-08-12):** this route answers
-   * `{"error":"Endpoint not found"}` with a 404 for every caller — key or none,
-   * GET or POST — while `/health`, `/user/info` and `/leaderboard/*` answer
-   * normally on the same key. The path, the `Authorization` header and the
-   * response reader here all match the published docs; there is nothing to fix
-   * on this side, so the verdict is `UNKNOWN` with `ENDPOINT_MISSING` until
-   * SkyKings deploys it again. See BRIDGE_BOT.md §6A.3.
+   * **The route is not mounted upstream (re-verified 2026-08-13).** It answers
+   * `{"error":"Endpoint not found"}` with a 404 to every caller, including for
+   * the docs' own sample identifiers.
+   *
+   * The proof that this is upstream and not our request is the *anonymous* one:
+   * SkyKings mounts auth per-route, so `/user/info` with no key answers 401 —
+   * auth ran — while `/user/lookup` with no key answers 404, meaning the router
+   * never found a route to run auth for. No key, scope, header form, method or
+   * path variant we send can reach a route that was never mounted. Run
+   * `npm run skykings:probe` to re-check; it exits 0 the day this comes back.
+   *
+   * So the verdict is `UNKNOWN` with `ENDPOINT_MISSING`, which by default holds
+   * the applicant for a human rather than admitting them. See BRIDGE_BOT.md §6A.3.
    */
   async checkUuid(uuid: string): Promise<ScammerCheck> {
     return this.check(`uuid=${encodeURIComponent(normalizeUuid(uuid))}`, `sk:scam:u:${normalizeUuid(uuid)}`);

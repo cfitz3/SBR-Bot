@@ -24,6 +24,8 @@ interface NewActionRecord {
   expiresAt: string | null;
   surfaces: readonly ModerationSurface[];
   active: boolean;
+  /** Defaults to DISCORD; only the bridge writes INGAME. Mirrors `@sbr/moderation`'s port. */
+  sourceContext?: "BRIDGE" | "DISCORD" | "INGAME";
 }
 
 type InfractionRow = {
@@ -105,6 +107,7 @@ export const moderationRepository = {
         expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
         surfaces: [...input.surfaces],
         active: input.active,
+        sourceContext: input.sourceContext ?? "DISCORD",
       },
     });
     return mapAction(row);
@@ -114,6 +117,18 @@ export const moderationRepository = {
     const rows = await prisma.infraction.findMany({
       where: { guildId, targetDiscordId: discordId },
       orderBy: { createdAt: "desc" },
+    });
+    return rows.map(mapInfraction);
+  },
+
+  async listRecentInfractions(guildId: string, limit: number): Promise<readonly InfractionDTO[]> {
+    const rows = await prisma.infraction.findMany({
+      where: { guildId },
+      orderBy: { createdAt: "desc" },
+      // Clamped here as well as at the caller: this is the one query on the
+      // table with no target narrowing it, so an unbounded limit reaching it
+      // would be a full scan of every infraction the guild has ever recorded.
+      take: Math.min(Math.max(limit, 1), 200),
     });
     return rows.map(mapInfraction);
   },

@@ -237,6 +237,17 @@ export interface CooldownGate {
   consume(key: string, ttlMs: number): Promise<{ allowed: boolean; retryAfterMs?: number }>;
 }
 
+/**
+ * Per-guild override for a command's own `cooldownMs`.
+ *
+ * Optional on the dispatcher: unwired, every command keeps the number its
+ * author chose. The port is this narrow — one question, one answer — so the
+ * dispatcher never learns where the policy is stored or how it parses.
+ */
+export interface CooldownPolicySource {
+  resolveMs(guildId: string, command: string, specMs: number): Promise<number>;
+}
+
 /** Capability check — wired to IdentityService.hasCapability. */
 export interface CapabilityChecker {
   can(guildId: string, userId: string, capability: BridgeCapability): Promise<boolean>;

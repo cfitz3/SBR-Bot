@@ -3,17 +3,86 @@
  * worker job-log sink. Satisfy the RoleResolver / RankResolver (moderation,
  * commands-admin, panel-core) and JobLogSink (jobs) ports.
  */
-import type { MemberRole } from "@sbr/shared-types";
+import {
+  ROLE_POLICY_SETTING_KEY,
+  capabilityFloor,
+  commandFloor,
+  parseRoleBindings,
+  parseRolePolicy,
+  resolveMemberRole,
+  type RolePolicy,
+} from "@sbr/guild-config";
+import type { BridgeCapability, MemberRole } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
-/** getRole(internalGuildId, discordId) → platform role (defaults MEMBER). */
+/**
+ * `getRole(internalGuildId, discordId)` → the level this person holds, or
+ * **null when they are not a member of this guild**.
+ *
+ * The null is the point. This used to end `?? "MEMBER"`, which answered the
+ * question "what is this stranger's role" with "the same as everyone who
+ * actually joined" — so every capability whose floor is MEMBER was open to
+ * anybody who could reach a message handler. Callers now have to say what a
+ * non-member gets, and every one of them says "nothing".
+ *
+ * The level itself is *derived* rather than read: the stored `role`, the Discord
+ * roles the member holds, and their in-game guild rank are combined by
+ * `resolveMemberRole`, with `roleOverride` able to demote. All four facts are on
+ * rows this query already touches, so the derivation costs no extra round trip
+ * beyond the guild's policy — which is a small, cached settings read.
+ */
 export const rankResolver = {
-  async getRole(guildId: string, discordId: string): Promise<MemberRole> {
-    const member = await prisma.guildMember.findFirst({
-      where: { guildId, discordUser: { discordId } },
-      select: { role: true },
+  async getRole(guildId: string, discordId: string): Promise<MemberRole | null> {
+    const [member, config, policyRaw] = await Promise.all([
+      prisma.guildMember.findFirst({
+        where: { guildId, discordUser: { discordId } },
+        select: { role: true, roleOverride: true, roleIds: true, guildRank: true },
+      }),
+      prisma.guildConfig.findUnique({ where: { guildId }, select: { roleMappings: true } }),
+      prisma.guildSetting.findUnique({
+        where: { guildId_key: { guildId, key: ROLE_POLICY_SETTING_KEY } },
+        select: { value: true },
+      }),
+    ]);
+
+    return resolveMemberRole(
+      {
+        present: member !== null,
+        assigned: (member?.role as MemberRole | undefined) ?? null,
+        override: (member?.roleOverride as MemberRole | null | undefined) ?? null,
+        discordRoleIds: member?.roleIds ?? [],
+        guildRank: member?.guildRank ?? null,
+      },
+      parseRoleBindings(config?.roleMappings),
+      parseRolePolicy(policyRaw?.value),
+    );
+  },
+};
+
+/**
+ * The guild's configured floors, for the two dispatchers and the identity
+ * service. Satisfies `CapabilityFloorReader` (@sbr/identity) and
+ * `CommandFloorReader` (@sbr/commands-admin).
+ *
+ * Both methods take the unconfigured answer as their own fallback, so a guild
+ * that has never opened the Permissions card behaves exactly as it did before
+ * the card existed.
+ */
+export const rolePolicyReader = {
+  async read(guildId: string): Promise<RolePolicy> {
+    const row = await prisma.guildSetting.findUnique({
+      where: { guildId_key: { guildId, key: ROLE_POLICY_SETTING_KEY } },
+      select: { value: true },
     });
-    return (member?.role as MemberRole | undefined) ?? "MEMBER";
+    return parseRolePolicy(row?.value);
+  },
+
+  async capabilityFloor(guildId: string, capability: BridgeCapability): Promise<MemberRole> {
+    return capabilityFloor(await this.read(guildId), capability);
+  },
+
+  async commandFloor(guildId: string, command: string, fallback: MemberRole): Promise<MemberRole> {
+    return commandFloor(await this.read(guildId), command, fallback);
   },
 };
 

@@ -12,6 +12,7 @@ import type {
   CommandReply,
   CommandSpec,
   CooldownGate,
+  CooldownPolicySource,
   HandlerDeps,
   UsageSink,
 } from "./types.js";
@@ -19,6 +20,8 @@ import type {
 export interface CommandDispatcherDeps {
   readonly registry: ReadonlyMap<string, CommandSpec>;
   readonly cooldowns: CooldownGate;
+  /** Per-guild cooldown overrides. Unwired, every command keeps its spec value. */
+  readonly cooldownPolicy?: CooldownPolicySource;
   readonly capabilities: CapabilityChecker;
   readonly handlerDeps: HandlerDeps;
   readonly logger: Logger;
@@ -76,11 +79,25 @@ export class CommandDispatcher {
       if (!allowed) return { ephemeral: true, text: "You don't have permission to use that command." };
     }
 
-    const cdKey = `${ctx.surface}:${name}:${ctx.userId}`;
-    const cd = await this.d.cooldowns.consume(cdKey, spec.cooldownMs);
-    if (!cd.allowed) {
-      const secs = Math.ceil((cd.retryAfterMs ?? spec.cooldownMs) / 1000);
-      return { ephemeral: true, text: `Slow down — try that again in ${secs}s.` };
+    // A guild may lengthen or shorten this; an unreadable policy leaves the
+    // spec's own number standing, because a config lookup failing is not a
+    // reason to stop answering commands.
+    let cooldownMs = spec.cooldownMs;
+    if (this.d.cooldownPolicy) {
+      cooldownMs = await this.d.cooldownPolicy
+        .resolveMs(ctx.guildId, name, spec.cooldownMs)
+        .catch(() => spec.cooldownMs);
+    }
+
+    // Zero means the guild switched this command's cooldown off. Consuming a
+    // 0ms key would still write to Redis for nothing, so skip the gate outright.
+    if (cooldownMs > 0) {
+      const cdKey = `${ctx.surface}:${name}:${ctx.userId}`;
+      const cd = await this.d.cooldowns.consume(cdKey, cooldownMs);
+      if (!cd.allowed) {
+        const secs = Math.ceil((cd.retryAfterMs ?? cooldownMs) / 1000);
+        return { ephemeral: true, text: `Slow down — try that again in ${secs}s.` };
+      }
     }
 
     const started = this.now();

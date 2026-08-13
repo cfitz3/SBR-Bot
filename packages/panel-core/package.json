@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@sbr/analytics": "*",
+    "@sbr/guild-config": "*",
     "@sbr/moderation": "*",
     "@sbr/observability": "*",
     "@sbr/screening": "*",

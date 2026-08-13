@@ -48,6 +48,18 @@ Every surface emits a small, typed analytics event at the moment of action — n
 | Web panel | `command.used(surface=WEB_PANEL)`, config-change audit (governance events) |
 | Workers | `job.completed`, `hypixel.result`, `member.joined/left` reconciliation, `event.attendance` |
 
+**How the domain packages emit.** `@sbr/bridge` and `@sbr/moderation` do not depend on `@sbr/analytics`; they declare narrow ports (`RelayMetrics`, `ModerationMetrics`) whose every method is **synchronous and returns `void`**. That signature is the design: these calls sit inside a message pipeline and a punishment path, and `void` makes awaiting one impossible rather than merely discouraged, so a full buffer or a dead Redis can never delay a chat line or fail a mute. `createDomainMetrics` in `@sbr/analytics` adapts them onto the stream, swallowing its own failures — a lost count is the cheaper loss by a wide margin. Each composition root supplies the adapter with its own `surface`.
+
+Live emitters, as of Phase 8:
+
+| Event | Emitted from | Dimensions |
+| --- | --- | --- |
+| `bridge.relay` | `BridgeService.processInbound`, on delivery | `direction` |
+| `mod.action` | `ModerationServiceImpl.applyAction`, where it means "a punishment took effect" | `type` |
+| `filter.hit` | `AutomodRunner.run` and the relay's `WordlistFilterImpl.check` | `rule`, `action` |
+
+`filter.hit` is recorded **once per matched rule**, not once per message: the question the chart answers is "which rule is doing the work", and collapsing three matches into one would answer it wrongly.
+
 ### 2.2 Event envelope
 A uniform shape so anything can be rolled up generically:
 ```
@@ -157,6 +169,9 @@ Retention is tiered by grain — raw facts are pruned aggressively, aggregates k
 - **Cross-guild benchmarking is out of scope.** Guild partitioning is strict; there's no "compare to other guilds" view by design (privacy + scope).
 - **Raw drill-down is time-bounded.** After the raw retention window, you can see trends but can't drill into individual historical events.
 - **Backfill limits.** Metrics only exist from when capture was deployed; historical Hypixel/Discord data isn't retroactively reconstructable beyond what workers snapshotted.
+- **Discord playtime is not sampled yet.** The presence-based estimate needs `XpService.recordPresence`, which exists but has no caller — so `ActivityDaily.presenceSamples` is always zero and the panel's Playtime card reads "Not sampled" rather than showing a fabricated hour count. The in-game half (days with GEXP > 0) works today.
+- **Playtime is an estimate on both sides.** Presence is sampled at the `guild-scan` cadence, not measured; a day with GEXP says somebody played, not for how long. Both are labelled on the card.
+- **GEXP and per-member activity require a verified link.** An unlinked Discord member has no uuid, so their GEXP and active-day figures are `null` — rendered as an em dash, never as zero. Link coverage is therefore the ceiling on how much of the roster these metrics can describe.
 - **Timezone edges.** Daily rollups use guild-local day boundaries; guilds spanning many timezones will see "days" defined by the configured guild timezone, not each member's local day.
 
 ---

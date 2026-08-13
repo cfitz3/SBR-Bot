@@ -6,39 +6,27 @@
  * can predict: "is the bridge suspended" and "which channel does the bridge use"
  * are the same question asked twice, and they were two tabs apart. Sections here
  * are ordered by how often they are touched, not by which service owns them.
+ *
+ * Role bindings used to be a card here. They moved to Permissions, which owns
+ * the whole question of what a level *is* — one page writes them, in one shape.
  */
 import type { SettingsVM } from "@sbr/panel-core";
 import type { ScreeningPolicyView } from "@sbr/screening";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { card, deniedState, errorState, pageTitle, spinner } from "../components.js";
 import {
+  channelPicker,
   fieldGroup,
   parseThreshold,
   textField,
   toggleField,
   validateCoins,
-  validateSnowflake,
   validateThreshold,
   validateWhole,
 } from "../forms.js";
 import { h, replace } from "../dom.js";
 import { CHANNEL_SLOT_COPY } from "./channel-slots.js";
 import { xpSection } from "./settings-xp.js";
-
-/**
- * Every platform role, including MEMBER and OWNER.
- *
- * The low and high ends are the ones people forget: an unmapped MEMBER role
- * means verification grants nothing visible, and an unmapped OWNER is why a
- * server owner can find themselves unable to use owner commands.
- */
-const ROLES: readonly (readonly [string, string])[] = [
-  ["MEMBER", "Verified member"],
-  ["MODERATOR", "Moderator"],
-  ["OFFICER", "Officer"],
-  ["ADMIN", "Admin"],
-  ["OWNER", "Owner"],
-];
 
 /** Mirrors the mutation layer's `FEATURE_NAME`; see forms.ts on why both exist. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
@@ -76,28 +64,14 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
 
   const channels = fieldGroup(
     ...CHANNEL_SLOT_COPY.map(({ slot, label, hint }) =>
-      textField({
+      channelPicker({
         label,
         hint,
+        guildId,
         value: result.data.channels[slot] ?? "",
         placeholder: "not set",
-        validate: validateSnowflake("channel"),
         save: (raw) => postAction(guildId, "config.channel", { slot, channelId: raw }),
         clear: () => postAction(guildId, "config.channel", { slot, channelId: null }),
-      }),
-    ),
-  );
-
-  const roles = fieldGroup(
-    ...ROLES.map(([role, label]) =>
-      textField({
-        label,
-        hint: `Discord role granted to ${label.toLowerCase()}s, and read back when deciding what they may do.`,
-        value: result.data.roleMappings[role] ?? "",
-        placeholder: "not set",
-        validate: validateSnowflake("role"),
-        save: (raw) => postAction(guildId, "config.role-mapping", { role, discordRoleId: raw }),
-        clear: () => postAction(guildId, "config.role-mapping", { role, discordRoleId: null }),
       }),
     ),
   );
@@ -260,7 +234,6 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
       card("Guild", identity),
       card("Bridge", bridge),
       card("Channels", channels),
-      card("Roles", roles),
       card("Feature flags", features),
       card("Join screening", screening),
       ...xpSection(guildId, result.data.xp),

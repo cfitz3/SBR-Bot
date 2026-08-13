@@ -22,6 +22,7 @@ export type DropReason =
   | "BRIDGE_SUSPENDED"
   | "MUTED"
   | "FILTERED"
+  | "AUTOMOD"
   | "RATE_LIMITED"
   | "DUPLICATE";
 
@@ -47,6 +48,42 @@ export type FilterVerdict =
 
 export interface WordlistFilter {
   check(guildId: string, content: string): Promise<FilterVerdict>;
+}
+
+/**
+ * Port: automod, judging a relayed message.
+ *
+ * A port rather than a direct dependency so this package keeps knowing nothing
+ * about Redis, the settings store or the moderation service — the same reason
+ * the wordlist arrives as `WordlistFilter` rather than as the filter itself.
+ * The implementation (bridge-bot's composition root, over `AutomodRunner`) is
+ * what issues any punishment; the pipeline only needs to know whether the
+ * message survives.
+ *
+ * Optional: a deployment without automod configured passes no gate, and the
+ * stage is skipped rather than stubbed.
+ */
+export interface AutomodGate {
+  check(msg: InboundMessage): Promise<{ readonly blocked: boolean }>;
+}
+
+/**
+ * Port: counting what the relay carried, for the Analytics page.
+ *
+ * Synchronous and returning nothing, unlike every other port here. Telemetry
+ * must never be able to delay or fail a relay — a chat message that arrives a
+ * second late because a metrics buffer was slow is a worse outcome than a lost
+ * count, and `void` in the signature makes awaiting it impossible rather than
+ * merely discouraged. The implementation buffers in Redis and is drained by the
+ * analytics job.
+ *
+ * Only deliveries are counted. A dropped message is a moderation fact, not a
+ * relay volume one, and the reasons it was dropped are already visible as
+ * filter hits and moderation actions; folding them in here would make the
+ * bridge chart answer two questions with one line.
+ */
+export interface RelayMetrics {
+  relayed(guildId: string, direction: RelayDirection): void;
 }
 
 export interface FloodControl {

@@ -5,7 +5,9 @@
  * (boot-ready) so it can be verified without credentials.
  */
 import { installLifecycle } from "@sbr/observability";
+import { guildRepository } from "@sbr/db";
 import { createAdminApp } from "./composition.js";
+import { startInternalApi } from "./internal-api.js";
 import { startSafetySweep } from "./safety-sweep.js";
 import { startAdminGateway } from "./transport.js";
 
@@ -33,12 +35,29 @@ async function main(): Promise<void> {
       gatewayPingMs: Number.isFinite(ping) && ping >= 0 ? Math.round(ping) : null,
     };
   });
+  // Started after ready for the same reason as the sweep: the API's whole job is
+  // answering from the gateway cache, and a cache that hasn't filled yet would
+  // report an empty server as though it really were empty.
+  const internalApi = app.config.internalApi.token
+    ? await startInternalApi({
+        client,
+        toDiscordGuildId: guildRepository.resolveDiscordId,
+        token: app.config.internalApi.token,
+        port: app.config.internalApi.port,
+        logger: app.log,
+      })
+    : null;
+  if (!internalApi) {
+    app.log.warn("INTERNAL_API_TOKEN not set — the panel will fall back to raw-ID entry");
+  }
+
   app.log.info("admin-bot serving");
 
   installLifecycle({
     logger: app.log,
     async shutdown() {
       stopSweep();
+      await internalApi?.stop();
       await client.destroy();
       await app.shutdown();
     },

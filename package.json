@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "SBR Guild Platform — Hypixel Skyblock community bots + web control panel (monorepo)",
+  "description": "SBR Guild Platform \u2014 Hypixel Skyblock community bots + web control panel (monorepo)",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=20"
@@ -17,17 +17,15 @@
     "start": "node scripts/start.mjs",
     "dev": "node scripts/start.mjs --watch",
     "doctor": "node scripts/doctor.mjs",
-
+    "skykings:probe": "node scripts/skykings-probe.mjs",
     "start:workers": "node scripts/start.mjs workers",
     "start:web-panel": "node scripts/start.mjs web-panel",
     "start:admin-bot": "node scripts/start.mjs admin-bot",
     "start:bridge-bot": "node scripts/start.mjs bridge-bot",
-
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v && docker compose up -d --wait",
     "infra:logs": "docker compose logs -f",
-
     "db:generate": "npm run generate -w @sbr/db",
     "db:validate": "npm run validate -w @sbr/db",
     "db:migrate": "npm run migrate:deploy -w @sbr/db",
@@ -35,7 +33,6 @@
     "db:seed": "npm run build && npm run seed -w @sbr/db",
     "db:reset": "npm run migrate:reset -w @sbr/db",
     "db:studio": "npm run studio -w @sbr/db",
-
     "build": "npm run db:generate && tsc -b",
     "typecheck": "npm run db:generate && tsc -b",
     "clean": "tsc -b --clean && node -e \"require('fs').rmSync('node_modules/.cache',{recursive:true,force:true})\"",

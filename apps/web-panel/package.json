@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@sbr/analytics": "*",
+    "@sbr/commands-admin": "*",
     "@sbr/community": "*",
     "@sbr/config": "*",
     "@sbr/db": "*",

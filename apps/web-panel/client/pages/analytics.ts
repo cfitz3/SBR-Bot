@@ -1,10 +1,16 @@
 /**
  * Analytics (WEB_PANEL.md §3.5).
  *
- * The chart list is whatever the server found in the rollups — see
- * `shapeAnalytics`. Today that is usually just `command.used`, so the page is
- * written to look deliberate with one chart rather than to look broken with
- * three empty ones.
+ * Six fixed cards — Messages, Engagement, Playtime, Guild experience, Top
+ * members, Top commands — plus whatever series the rollups happened to contain.
+ * The fixed cards read the daily counters directly, so they are populated on a
+ * guild that has never had a rollup run; the rollup charts are additive, and
+ * `shapeAnalytics` drops any metric with no events rather than drawing an empty
+ * frame. Each card states its own "nothing yet" rather than the page having one
+ * blank state for six unrelated questions.
+ *
+ * Nothing on this page sums Discord and in-game figures, and nothing prints a
+ * zero where the answer is unknown — an unlinked member's GEXP is an em dash.
  *
  * The window controls live in module state rather than the URL: they are a
  * viewing preference, not a place, and putting them in the hash would mean
@@ -12,12 +18,23 @@
  * The CSV links carry the same window explicitly so a download always matches
  * what is on screen.
  */
-import type { AnalyticsVM, RollupPeriod } from "@sbr/panel-core";
+import type { AnalyticsVM, MetricChart, RollupPeriod } from "@sbr/panel-core";
 import { loadPage } from "../api.js";
 import { barChart, lineChart, type BarRow } from "../chart.js";
-import { card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
+import {
+  badge,
+  card,
+  deniedState,
+  emptyState,
+  errorState,
+  pageTitle,
+  person,
+  spinner,
+  statTile,
+  table,
+} from "../components.js";
 import { h, replace } from "../dom.js";
-import { count, describeSpan, duration } from "../format.js";
+import { compactNumber, count, describeSpan, duration } from "../format.js";
 import { icon } from "../icons.js";
 
 const PERIODS: readonly RollupPeriod[] = ["HOURLY", "DAILY", "WEEKLY", "MONTHLY"];
@@ -82,10 +99,129 @@ export async function renderAnalytics(host: HTMLElement, guildId: string): Promi
           "Export command stats (CSV)",
         ),
       ),
+      card("Messages", messagesBody(data)),
+      card("Engagement", engagementBody(data)),
+      card("Playtime", playtimeBody(data)),
+      card("Guild experience", gexpBody(data)),
+      card("Top members", membersBody(data)),
       ...charts(data),
       card("Top commands", commandsBody(data)),
     ),
   );
+}
+
+/**
+ * Two numbers, never their sum.
+ *
+ * Discord messages and guild-chat lines come from different populations on
+ * different surfaces; a single "messages" tile would describe neither, the same
+ * way a blended member count describes neither roster.
+ */
+function messagesBody(data: AnalyticsVM): HTMLElement {
+  const m = data.messages;
+  if (m.discordMessages + m.guildChatMessages + m.commandsUsed === 0) {
+    return emptyState("No messages were counted in this window. Counting starts when the bots are in the server.");
+  }
+  const perDay = (total: number): string => `${count(Math.round(total / m.days))} / day`;
+  return h(
+    "div",
+    { class: "tiles" },
+    statTile("Discord", count(m.discordMessages), perDay(m.discordMessages)),
+    statTile("Guild chat", count(m.guildChatMessages), perDay(m.guildChatMessages)),
+    statTile("Commands", count(m.commandsUsed), perDay(m.commandsUsed)),
+  );
+}
+
+function engagementBody(data: AnalyticsVM): HTMLElement {
+  const m = data.messages;
+  if (m.activeMembers === 0) return emptyState("Nobody has been counted as active in this window.");
+  const spoke = m.discordMessages + m.guildChatMessages;
+  return h(
+    "div",
+    { class: "tiles" },
+    statTile("Active members", count(m.activeMembers), `said something in ${m.days} days`),
+    statTile("Messages each", count(Math.round(spoke / m.activeMembers)), "per active member"),
+    statTile("Tracked members", count(data.topMembers.length), "with any recorded activity"),
+  );
+}
+
+/**
+ * Playtime, labelled as the estimate it is.
+ *
+ * Neither surface measures time. The Discord figure is a sample count times the
+ * scan interval, and the in-game figure counts days with any GEXP at all — so
+ * both are stated in their own units with the method written underneath, rather
+ * than converted into an authoritative-looking "hours played".
+ */
+function playtimeBody(data: AnalyticsVM): HTMLElement {
+  const p = data.playtime;
+  const discordTile =
+    p.presenceSamples === 0
+      ? statTile("Discord presence", "Not sampled", "no presence samples have been recorded yet")
+      : statTile(
+          "Discord presence",
+          duration(p.presenceSamples * p.sampleIntervalMinutes * 60_000),
+          `estimated from ${count(p.presenceSamples)} samples ${p.sampleIntervalMinutes} minutes apart`,
+        );
+
+  return h(
+    "div",
+    {},
+    h("div", { class: "tiles" }, discordTile, statTile("In-game days active", count(p.gameActiveDays), "days with any GEXP earned")),
+    h("p", { class: "note" }, "Both figures are estimates. Presence is sampled, not measured, and a day with GEXP says somebody played, not for how long."),
+  );
+}
+
+function gexpBody(data: AnalyticsVM): HTMLElement {
+  if (data.gexp.length === 0) {
+    return emptyState("No guild experience has been recorded yet. It fills in once the guild scan has run.");
+  }
+  // Shaped into the same MetricChart the rollups produce so it draws through
+  // the one chart renderer — a second drawing path for a second data source is
+  // how two charts on one page end up disagreeing about what a gap means.
+  const chart: MetricChart = {
+    metric: "guild.gexp",
+    label: "Guild experience",
+    buckets: data.gexp.map((p) => `${p.day}T00:00:00.000Z`),
+    series: [
+      {
+        key: "",
+        label: "GEXP",
+        points: data.gexp.map((p) => p.value),
+        total: data.gexp.reduce((sum, p) => sum + p.value, 0),
+      },
+    ],
+    total: data.gexp.reduce((sum, p) => sum + p.value, 0),
+    truncated: false,
+  };
+  return lineChart(chart, "DAILY");
+}
+
+/**
+ * One table for both surfaces.
+ *
+ * A Discord list beside an in-game list answers half the question twice; the
+ * question is "who is carrying this guild", and somebody who only plays and
+ * somebody who only talks both belong in the answer.
+ */
+function membersBody(data: AnalyticsVM): HTMLElement {
+  if (data.topMembers.length === 0) return emptyState("No member activity has been recorded in this window.");
+
+  const rows = data.topMembers.map((m) => {
+    const name = m.ign ?? m.username ?? (m.discordId === null ? "Unknown" : `<@${m.discordId}>`);
+    const note = m.uuid === null ? badge("Discord only", "warn") : m.discordId === null ? badge("In-game only", "warn") : null;
+    return [
+      person(name, note),
+      count(m.discordMessages),
+      count(m.guildChatMessages),
+      // An unlinked member's GEXP is unknown, not zero — printing 0 here would
+      // claim they earned none, which is a different and unfounded statement.
+      m.gexp === null ? "—" : compactNumber(m.gexp),
+      m.activeDays === null ? "—" : count(m.activeDays),
+    ];
+  });
+
+  return table(["Member", "Discord", "Guild chat", "GEXP", "Days active"], rows);
 }
 
 function controls(rerender: () => void): HTMLElement {

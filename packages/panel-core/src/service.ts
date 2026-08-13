@@ -6,13 +6,19 @@
  * Reads only. Writes go through the same domain services the bots use (the panel
  * "commands, it doesn't bypass"), so nothing here mutates.
  */
-import { CONFIG_CHANNEL_SLOTS, rankOfRole } from "@sbr/shared-types";
+import { CONFIG_CHANNEL_SLOTS, rankOfRole, type MemberRole } from "@sbr/shared-types";
 import {
+  parseAutomod,
   parseEscalationPolicy,
+  parseRelaySync,
   punishmentState,
+  AUTOMOD_SETTING_KEY,
   ESCALATION_SETTING_KEY,
+  RELAY_SYNC_SETTING_KEY,
+  type AutomodPolicy,
   type EscalationPolicy,
   type PunishmentState,
+  type RelaySyncPolicy,
 } from "@sbr/moderation";
 import type {
   AuditQuery,
@@ -40,15 +46,39 @@ import {
   SCREENING_POLICY_KEY,
   type ScreeningPolicyView,
 } from "@sbr/screening";
+import {
+  CAPABILITIES,
+  COOLDOWN_SETTING_KEY,
+  DEFAULT_CAPABILITY_FLOOR,
+  ROLES,
+  ROLE_POLICY_SETTING_KEY,
+  capabilityFloor,
+  commandFloor,
+  parseCooldowns,
+  parseRoleBindings,
+  parseRolePolicy,
+  type CooldownPolicy,
+} from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import { authorize, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
+import type { DirectoryKind, DirectorySource, DirectoryVM } from "./directory.js";
 import { shapeAnalytics, type MetricChart } from "./series.js";
 import type {
+  ActivityEntry,
+  CommandCatalog,
+  PermissionException,
+  PermissionExceptionStore,
   CommandUsageStat,
+  MessageTotals,
+  ActiveMember,
+  DailyPoint,
+  DirectoryMemberRow,
+  DirectorySide,
   GuildCard,
   HeartbeatReader,
   JobHealth,
-  LinkedMember,
+  JoinAttempt,
+  MembershipStats,
   PanelEvent,
   PanelReads,
   PanelTicket,
@@ -96,6 +126,16 @@ export interface OverviewVM {
   readonly upcomingEventCount: number;
   readonly bridgeSuspended: boolean;
   readonly lastSnapshotAt: string | null;
+  /**
+   * The two rosters and their movement, reported separately. `memberCount`
+   * above is the Discord side alone and stays for the tiles that have always
+   * meant that; this is what the membership tab reads.
+   */
+  readonly membership: MembershipStats;
+  /** Newest-first merged feed of what the platform did in this guild. */
+  readonly activity: readonly ActivityEntry[];
+  /** Recent join attempts with the stat block screening saw at the time. */
+  readonly joinAttempts: readonly JoinAttempt[];
 }
 
 /**
@@ -116,12 +156,25 @@ export interface WordlistVM {
   readonly rules: readonly WordlistRuleDTO[];
   /** Resolved, not raw: built-in rungs layered under whatever the guild stored. */
   readonly escalation: EscalationPolicy;
+  /**
+   * What a Discord punishment does in guild chat. Resolved the same way the
+   * ladder is, so a row this release added shows up for a guild that customised
+   * a different one.
+   */
+  readonly relaySync: RelaySyncPolicy;
 }
 
 export interface ModerationVM {
   readonly target: string;
   readonly infractionCount: number;
   readonly infractions: readonly InfractionDTO[];
+  /**
+   * The guild's latest infractions regardless of target — what the page shows
+   * before anybody has been looked up. Always present, so a moderator arriving
+   * at the page sees the week's activity rather than an empty box asking them
+   * to already know whose id to type.
+   */
+  readonly recentInfractions: readonly InfractionDTO[];
   readonly actions: readonly ModerationActionVM[];
   /**
    * The punishments being served right now, guild-wide when no target is named.
@@ -130,11 +183,37 @@ export interface ModerationVM {
    * and only the second one is expiry-aware.
    */
   readonly inForce: readonly ModerationActionDTO[];
+  /**
+   * Whether this session may edit the configuration sections — the automod
+   * rules, the filter, the ladder, the mapping table and the cooldowns. The
+   * page is Moderator so the people who work the queue can reach it; the
+   * sections below it are Admin, and the answer is computed per-load rather
+   * than by raising the whole page's tier and shutting moderators out of their
+   * own history view. Same shape the tickets page already uses.
+   */
+  readonly canConfigure: boolean;
+  /** The chat filter, the escalation ladder and the in-game mapping table. */
+  readonly filter: WordlistVM;
+  /** Resolved automod policy — defaults layered under whatever the guild stored. */
+  readonly automod: AutomodPolicy;
+  readonly cooldowns: CooldownPolicy;
 }
 
 export interface SelectorVM {
   readonly guilds: readonly GuildCard[];
 }
+
+/**
+ * How far apart two presence samples are, in minutes.
+ *
+ * Pinned to the `guild-scan` cadence in `apps/workers/src/schedule.ts`, which is
+ * the only thing positioned to observe who is online. Note that as of this
+ * writing **nothing calls `XpService.recordPresence`**, so the counter is always
+ * zero and the Analytics page says "not sampled yet" rather than rendering a
+ * plausible-looking nothing. Wiring the scan to call it is what turns this
+ * constant into a real number; until then it documents the intended unit.
+ */
+export const PRESENCE_SAMPLE_INTERVAL_MINUTES = 360;
 
 export interface AnalyticsVM {
   readonly period: RollupPeriod;
@@ -146,6 +225,23 @@ export interface AnalyticsVM {
   /** The same rows zero-filled and grouped into drawable series. */
   readonly charts: readonly MetricChart[];
   readonly topCommands: readonly CommandUsageStat[];
+  /** Message volume over the window, Discord and guild chat kept apart. */
+  readonly messages: MessageTotals;
+  readonly topMembers: readonly ActiveMember[];
+  readonly gexp: readonly DailyPoint[];
+  /**
+   * Playtime, stated as the estimate it is.
+   *
+   * Neither surface measures time. Discord presence is *sampled* by the guild
+   * scan, so hours are samples × the scan interval; the in-game figure is a
+   * count of days with any GEXP at all. The interval travels with the number so
+   * the page can say what it is rather than printing an unexplained "hours".
+   */
+  readonly playtime: {
+    readonly presenceSamples: number;
+    readonly sampleIntervalMinutes: number;
+    readonly gameActiveDays: number;
+  };
 }
 
 /** One person's response to one event, with the name resolved for display. */
@@ -172,10 +268,37 @@ export interface EventsVM {
   readonly attendance: EventAttendance | null;
 }
 
+/**
+ * The member directory: both rosters merged, not just the people who linked.
+ *
+ * There is no `pendingCount`. A "pending" link is a state nothing in
+ * `packages/identity` ever writes — the verification either succeeds and the
+ * link is VERIFIED or it does not and there is no link — so a tile counting it
+ * was always zero and reading it as "awaiting verification" invited staff to
+ * wait for something that was never going to arrive. Linked is a yes or a no.
+ */
 export interface MembersVM {
-  readonly members: readonly LinkedMember[];
-  readonly unlinkedCount: number;
-  readonly pendingCount: number;
+  readonly rows: readonly DirectoryMemberRow[];
+  /** Roster totals, unaffected by the current search. */
+  readonly discordCount: number;
+  readonly guildCount: number;
+  readonly linkedCount: number;
+  /** More rows matched than were returned; the page says so rather than lying by omission. */
+  readonly truncated: boolean;
+  /** The current query, echoed so the client can render the state it asked for. */
+  readonly q: string;
+  readonly side: DirectorySide;
+  /** When each roster was last scanned. Null means it never has been. */
+  readonly scannedAt: { readonly discord: string | null; readonly hypixel: string | null };
+}
+
+/** Rows returned to one page load. Large enough that most guilds never page. */
+export const DIRECTORY_PAGE_SIZE = 300;
+
+export const DIRECTORY_SIDES: readonly DirectorySide[] = ["all", "discord", "game", "unlinked"];
+
+export function isDirectorySide(value: unknown): value is DirectorySide {
+  return typeof value === "string" && (DIRECTORY_SIDES as readonly string[]).includes(value);
 }
 
 /**
@@ -211,7 +334,6 @@ export interface SettingsVM {
    * omitting the slot nobody has bound yet.
    */
   readonly channels: Readonly<Record<string, string | null>>;
-  readonly roleMappings: Readonly<Record<string, string>>;
   readonly features: Readonly<Record<string, boolean>>;
   readonly xp: XpSettingsVM;
 }
@@ -316,13 +438,66 @@ export interface ServiceHealthVM {
 }
 
 export interface HealthVM {
-  readonly jobs: readonly (JobHealth & { readonly stale: boolean })[];
+  /**
+   * `runnable` is what the page's "Run now" button hangs off. It is carried per
+   * row rather than as a separate list because the alternative — the client
+   * holding its own copy of the allow-list — is the drift the allow-list exists
+   * to prevent: a job the fleet stopped accepting would keep its button.
+   */
+  readonly jobs: readonly (JobHealth & { readonly stale: boolean; readonly runnable: boolean })[];
   readonly services: readonly ServiceHealthVM[];
 }
 
 export type PageResult<T> =
   | { readonly access: Extract<AccessDecision, { allowed: true }>; readonly data: T }
   | { readonly access: Extract<AccessDecision, { allowed: false }>; readonly data: null };
+
+/**
+ * Permissions — one page for the whole question of what a level *is*.
+ *
+ * Four sections, in the order the question is actually asked: who is at each
+ * level, what each level may do on the bridge, what each level may run, and who
+ * the answer is wrong about.
+ *
+ * Every row carries its platform default beside its current value, because the
+ * useful question on this page is never "what does it say" but "what have we
+ * changed" — an operator debugging a permission needs to see at a glance which
+ * of thirty rows their guild actually touched.
+ */
+export interface PermissionsVM {
+  /** The ladder, lowest first. The render order for every control here. */
+  readonly roles: readonly string[];
+  /** Level → the Discord roles that confer it, as stored. */
+  readonly bindings: Readonly<Record<string, readonly string[]>>;
+  /** In-game rank → level, sorted by name. Normalised keys, as stored. */
+  readonly guildRanks: readonly { readonly rank: string; readonly role: string }[];
+  readonly capabilities: readonly PermissionCapabilityVM[];
+  /**
+   * Every staff command with its floor. Empty when no catalog was supplied —
+   * `commandsAvailable` is what says which of the two it is.
+   */
+  readonly commands: readonly PermissionCommandVM[];
+  readonly commandsAvailable: boolean;
+  readonly exceptions: readonly PermissionException[];
+  readonly exceptionsAvailable: boolean;
+}
+
+export interface PermissionCapabilityVM {
+  readonly capability: string;
+  /** The level in force. */
+  readonly role: string;
+  /** What it would be if the guild had configured nothing. */
+  readonly defaultRole: string;
+}
+
+export interface PermissionCommandVM {
+  readonly name: string;
+  readonly description: string;
+  readonly role: string;
+  readonly defaultRole: string;
+  /** True when this guild has written an override, whatever its value. */
+  readonly overridden: boolean;
+}
 
 export interface PanelServiceDeps {
   readonly roles: RoleResolver;
@@ -344,6 +519,27 @@ export interface PanelServiceDeps {
   readonly wordlist?: WordlistService;
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
+  /**
+   * Optional: without it the Permissions page renders its levels, floors and
+   * command table but reports that per-person exceptions are unavailable —
+   * rather than showing an empty list, which would read as "none configured".
+   */
+  readonly permissionExceptions?: PermissionExceptionStore;
+  /** Optional for the same reason: absent means no command table, said so. */
+  readonly commands?: CommandCatalog;
+  /**
+   * Optional: absent means every picker reports itself unavailable and the
+   * config pages fall back to raw-id entry. That is the deployment shape when
+   * no INTERNAL_API_TOKEN is set, and it must stay a working panel.
+   */
+  readonly directory?: DirectorySource;
+  /**
+   * Job names this deployment will start on request. Passed in rather than
+   * imported so panel-core keeps no dependency on the Redis package that owns
+   * the bus; absent means no "Run now" buttons, which is the honest rendering
+   * of a panel with no worker fleet to ask.
+   */
+  readonly runnableJobs?: readonly string[];
   readonly logger: Logger;
 }
 
@@ -413,16 +609,22 @@ export class PanelService {
     const access = await authorize(session, guildId, "overview", this.d.roles);
     if (!access.allowed) return this.denied(access, "overview", guildId);
 
-    const [counts, lastSnapshotAt, config] = await Promise.all([
+    const [counts, lastSnapshotAt, config, membership, activity, joinAttempts] = await Promise.all([
       this.d.reads.overviewCounts(guildId),
       this.d.reads.lastSnapshotAt(guildId),
       this.d.config.get(guildId),
+      this.d.reads.membershipStats(guildId),
+      this.d.reads.listActivity(guildId, 40),
+      this.d.reads.listJoinAttempts(guildId, 15),
     ]);
 
     const data: OverviewVM = {
       ...counts,
       bridgeSuspended: config.ok ? (config.value?.bridgeSuspended ?? false) : false,
       lastSnapshotAt,
+      membership,
+      activity,
+      joinAttempts,
     };
     return { access, data };
   }
@@ -439,21 +641,34 @@ export class PanelService {
 
     const now = new Date();
     const query: AuditQuery = { guildId, limit: 50, ...(targetDiscordId ? { targetDiscordId } : {}) };
-    const [infractions, actions, inForce] = await Promise.all([
-      this.d.moderation.listInfractions(guildId, targetDiscordId),
+    // Only asked when somebody is named: with no target this would be a query
+    // for the member whose id is the empty string, which is nobody.
+    const targeted =
+      targetDiscordId === "" ? null : this.d.moderation.listInfractions(guildId, targetDiscordId);
+    const [infractions, recent, actions, inForce, filter, storedAutomod, storedCooldowns] = await Promise.all([
+      targeted,
+      this.d.moderation.listRecentInfractions(guildId, 50),
       this.d.moderation.listActions(query),
       // Empty target means the whole guild, which is what the page shows before
       // anybody has been looked up.
       this.d.moderation.listInForce(guildId, targetDiscordId === "" ? null : targetDiscordId),
+      this.loadFilter(guildId),
+      this.d.config.getSetting<unknown>(guildId, AUTOMOD_SETTING_KEY),
+      this.d.config.getSetting<unknown>(guildId, COOLDOWN_SETTING_KEY),
     ]);
 
-    const list = infractions.ok ? infractions.value : [];
+    const list = infractions !== null && infractions.ok ? infractions.value : [];
     const data: ModerationVM = {
       target: targetDiscordId,
       infractionCount: list.length,
       infractions: list,
+      recentInfractions: recent.ok ? recent.value : [],
       actions: (actions.ok ? actions.value : []).map((a) => ({ ...a, state: punishmentState(a, now) })),
       inForce: inForce.ok ? inForce.value : [],
+      canConfigure: rankOfRole(access.role) >= rankOfRole("ADMIN"),
+      filter,
+      automod: parseAutomod(storedAutomod),
+      cooldowns: parseCooldowns(storedCooldowns),
     };
     return { access, data };
   }
@@ -475,7 +690,7 @@ export class PanelService {
     const until = new Date();
     const since = new Date(until.getTime() - rangeDays * 86_400_000);
 
-    const [rollups, topCommands] = await Promise.all([
+    const [rollups, topCommands, messages, topMembers, gexp] = await Promise.all([
       this.d.reads.listRollups({
         guildId,
         period,
@@ -483,6 +698,9 @@ export class PanelService {
         ...(opts.metrics ? { metrics: opts.metrics } : {}),
       }),
       this.d.reads.topCommands(guildId, since),
+      this.d.reads.messageTotals(guildId, since),
+      this.d.reads.topActiveMembers(guildId, since),
+      this.d.reads.gexpSeries(guildId, rangeDays),
     ]);
 
     // Shaped here rather than in the browser so the raw rows stay the API's
@@ -503,6 +721,14 @@ export class PanelService {
         rollups,
         charts,
         topCommands,
+        messages,
+        topMembers,
+        gexp,
+        playtime: {
+          presenceSamples: topMembers.reduce((sum, m) => sum + m.presenceSamples, 0),
+          sampleIntervalMinutes: PRESENCE_SAMPLE_INTERVAL_MINUTES,
+          gameActiveDays: topMembers.reduce((sum, m) => sum + (m.activeDays ?? 0), 0),
+        },
       },
     };
   }
@@ -573,17 +799,36 @@ export class PanelService {
 
   // ─────────────────────────── linked members ───────────────────────────
 
-  async loadMembers(session: PanelSession | null, guildId: string): Promise<PageResult<MembersVM>> {
+  async loadMembers(
+    session: PanelSession | null,
+    guildId: string,
+    query: { q?: string; side?: string } = {},
+  ): Promise<PageResult<MembersVM>> {
     const access = await authorize(session, guildId, "members", this.d.roles);
     if (!access.allowed) return this.denied(access, "members", guildId);
 
-    const members = await this.d.reads.listLinkedMembers(guildId);
+    // An unrecognised side falls back to "all" rather than erroring: it arrives
+    // from a URL a user can edit, and the honest response to a nonsense filter
+    // is the unfiltered list, not a broken page.
+    const side: DirectorySide = isDirectorySide(query.side) ? query.side : "all";
+    const q = (query.q ?? "").slice(0, 100);
+
+    const [page, scannedAt] = await Promise.all([
+      this.d.reads.listDirectory(guildId, { q, side, limit: DIRECTORY_PAGE_SIZE }),
+      this.d.reads.directoryScannedAt(guildId),
+    ]);
+
     return {
       access,
       data: {
-        members,
-        unlinkedCount: members.filter((m) => m.verification === "UNLINKED").length,
-        pendingCount: members.filter((m) => m.verification === "PENDING").length,
+        rows: page.rows,
+        discordCount: page.discordCount,
+        guildCount: page.guildCount,
+        linkedCount: page.linkedCount,
+        truncated: page.truncated,
+        q,
+        side,
+        scannedAt,
       },
     };
   }
@@ -618,7 +863,6 @@ export class PanelService {
         channels: Object.fromEntries(
           CONFIG_CHANNEL_SLOTS.map((slot) => [slot, cfg?.channels[slot] ?? null] as const),
         ),
-        roleMappings: cfg?.roleMappings ?? {},
         features: cfg?.features ?? {},
         xp:
           xpPolicy === null
@@ -699,19 +943,89 @@ export class PanelService {
    * tuning the filter's severities had to open a different page to see what
    * those severities eventually add up to.
    */
+  /**
+   * Kept as its own page id even though the nav entry is gone and the content
+   * now renders inside Moderation. Removing a page id is a contract break for
+   * anything driving the JSON API directly (§0), where removing a tab is not.
+   */
   async loadWordlist(session: PanelSession | null, guildId: string): Promise<PageResult<WordlistVM>> {
     const access = await authorize(session, guildId, "wordlist", this.d.roles);
     if (!access.allowed) return this.denied(access, "wordlist", guildId);
+    return { access, data: await this.loadFilter(guildId) };
+  }
 
+  /** The filter block, shared by the standalone page and the Moderation page. */
+  private async loadFilter(guildId: string): Promise<WordlistVM> {
     const wordlist = this.d.wordlist;
     // The escalation policy is readable either way: it is a setting, not a
     // service, and a deployment without the filter still escalates warnings.
-    const stored = await this.d.config.getSetting<unknown>(guildId, ESCALATION_SETTING_KEY);
-    const escalation = parseEscalationPolicy(stored);
-    if (wordlist === undefined) return { access, data: { installed: false, rules: [], escalation } };
+    const [storedEscalation, storedRelay] = await Promise.all([
+      this.d.config.getSetting<unknown>(guildId, ESCALATION_SETTING_KEY),
+      this.d.config.getSetting<unknown>(guildId, RELAY_SYNC_SETTING_KEY),
+    ]);
+    const escalation = parseEscalationPolicy(storedEscalation);
+    const relaySync = parseRelaySync(storedRelay);
+    if (wordlist === undefined) return { installed: false, rules: [], escalation, relaySync };
 
     const rules = await wordlist.list(guildId);
-    return { access, data: { installed: true, rules: rules.ok ? rules.value : [], escalation } };
+    return { installed: true, rules: rules.ok ? rules.value : [], escalation, relaySync };
+  }
+
+  /**
+   * The permission model, assembled from the two stores that hold it.
+   *
+   * Bindings live on `GuildConfig.roleMappings` (where `/set-role` writes them)
+   * and everything else in the `roles.policy` setting. Both are read through the
+   * same tolerant parsers the bots resolve permissions with, so the page shows
+   * what is actually in force rather than a tidier reading of the stored rows.
+   */
+  async loadPermissions(session: PanelSession | null, guildId: string): Promise<PageResult<PermissionsVM>> {
+    const access = await authorize(session, guildId, "permissions", this.d.roles);
+    if (!access.allowed) return this.denied(access, "permissions", guildId);
+
+    const [config, stored, exceptions] = await Promise.all([
+      this.d.config.get(guildId),
+      this.d.config.getSetting<unknown>(guildId, ROLE_POLICY_SETTING_KEY),
+      // An unreadable exception store must not blank the rest of the page: the
+      // floors above it are the part most guilds ever configure.
+      this.d.permissionExceptions?.list(guildId).catch((error: unknown) => {
+        this.log.warn("permission exceptions unreadable", {
+          guildId,
+          error: error instanceof Error ? error.message : "unknown",
+        });
+        return null;
+      }) ?? Promise.resolve(null),
+    ]);
+
+    const policy = parseRolePolicy(stored);
+    const bindings = parseRoleBindings(config.ok ? config.value?.roleMappings : {});
+    const catalog = this.d.commands?.list() ?? null;
+
+    return {
+      access,
+      data: {
+        roles: [...ROLES],
+        bindings: Object.fromEntries(ROLES.map((role) => [role, bindings[role]] as const)),
+        guildRanks: Object.entries(policy.guildRanks)
+          .map(([rank, role]) => ({ rank, role: role as string }))
+          .sort((a, b) => a.rank.localeCompare(b.rank)),
+        capabilities: CAPABILITIES.map((capability) => ({
+          capability,
+          role: capabilityFloor(policy, capability),
+          defaultRole: DEFAULT_CAPABILITY_FLOOR[capability],
+        })),
+        commands: (catalog ?? []).map((entry) => ({
+          name: entry.name,
+          description: entry.description,
+          role: commandFloor(policy, entry.name, entry.minRole as MemberRole),
+          defaultRole: entry.minRole,
+          overridden: policy.commands[entry.name.trim().toLowerCase()] !== undefined,
+        })),
+        commandsAvailable: catalog !== null,
+        exceptions: exceptions ?? [],
+        exceptionsAvailable: exceptions !== null,
+      },
+    };
   }
 
   async loadHealth(session: PanelSession | null, guildId: string): Promise<PageResult<HealthVM>> {
@@ -732,17 +1046,59 @@ export class PanelService {
     ]);
 
     const now = Date.now();
+    const runnable = this.d.runnableJobs ?? [];
     return {
       access,
       data: {
         jobs: jobs.map((j) => {
           const threshold = STALE_AFTER_MS[j.type] ?? 60 * 60_000;
           const stale = j.lastRunAt === null || now - Date.parse(j.lastRunAt) > threshold;
-          return { ...j, stale };
+          // No list configured means no worker bus is wired, so nothing here can
+          // be started by hand — false, not "assume yes", so the page does not
+          // offer a button whose only outcome is an error.
+          return { ...j, stale, runnable: runnable.includes(j.type) };
         }),
         services: gradeServices(beats, now),
       },
     };
+  }
+
+  // ─────────────────────────── directory (backs the pickers) ───────────────────────────
+
+  /**
+   * A guild's channels, roles or members, for a picker control.
+   *
+   * Authorized like any other read — the two gates are the whole reason this
+   * goes through the panel rather than the browser calling the bot — but it
+   * never fails: an unreachable bot answers `available: false`, and the control
+   * degrades to raw-id entry instead of the page erroring.
+   */
+  async loadDirectory(
+    session: PanelSession | null,
+    guildId: string,
+    kind: DirectoryKind,
+    q: string,
+  ): Promise<PageResult<DirectoryVM>> {
+    const access = await authorize(session, guildId, "directory", this.d.roles);
+    if (!access.allowed) return this.denied(access, "directory", guildId);
+
+    const source = this.d.directory;
+    if (source === undefined) return { access, data: { kind, available: false, rows: [] } as DirectoryVM };
+
+    switch (kind) {
+      case "channels": {
+        const { available, rows } = await source.channels(guildId, q);
+        return { access, data: { kind: "channels", available, rows } };
+      }
+      case "roles": {
+        const { available, rows } = await source.roles(guildId, q);
+        return { access, data: { kind: "roles", available, rows } };
+      }
+      case "members": {
+        const { available, rows } = await source.members(guildId, q);
+        return { access, data: { kind: "members", available, rows } };
+      }
+    }
   }
 
   private denied<T>(

@@ -384,7 +384,13 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
             await app.panel.loadEvents(session, guildId, url.searchParams.get("event") ?? ""),
           );
         case "members":
-          return sendPage(res, await app.panel.loadMembers(session, guildId));
+          return sendPage(
+            res,
+            await app.panel.loadMembers(session, guildId, {
+              q: url.searchParams.get("q") ?? "",
+              side: url.searchParams.get("side") ?? "all",
+            }),
+          );
         case "settings":
           return sendPage(res, await app.panel.loadSettings(session, guildId));
         case "milestones":
@@ -393,8 +399,28 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(res, await app.panel.loadTickets(session, guildId));
         case "wordlist":
           return sendPage(res, await app.panel.loadWordlist(session, guildId));
+        case "permissions":
+          return sendPage(res, await app.panel.loadPermissions(session, guildId));
         case "health":
           return sendPage(res, await app.panel.loadHealth(session, guildId));
+        // Backs the pickers rather than a page of its own. Three route names for
+        // one read so the resource is in the URL — a log line then says which
+        // picker was open, and a cache in front of the panel can vary on it.
+        case "directory-channels":
+          return sendPage(
+            res,
+            await app.panel.loadDirectory(session, guildId, "channels", url.searchParams.get("q") ?? ""),
+          );
+        case "directory-roles":
+          return sendPage(
+            res,
+            await app.panel.loadDirectory(session, guildId, "roles", url.searchParams.get("q") ?? ""),
+          );
+        case "directory-members":
+          return sendPage(
+            res,
+            await app.panel.loadDirectory(session, guildId, "members", url.searchParams.get("q") ?? ""),
+          );
         default:
           return send(res, 404, { error: "not_found" });
       }
@@ -556,6 +582,35 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.deleteWordlistRule(session, guildId, b["id"]));
       case "moderation.defaults":
         return sendMutation(res, await m.setModerationDefaults(session, guildId, b));
+      case "moderation.relay-sync":
+        return sendMutation(res, await m.setRelaySync(session, guildId, b));
+      case "automod.test":
+        return sendMutation(res, await m.testAutomod(session, guildId, b));
+      case "automod.rule.upsert":
+        return sendMutation(res, await m.upsertAutomodRule(session, guildId, b));
+      case "automod.rule.remove":
+        return sendMutation(res, await m.removeAutomodRule(session, guildId, b));
+      case "automod.enable":
+        return sendMutation(res, await m.setAutomodEnabled(session, guildId, b));
+      case "config.cooldowns":
+        return sendMutation(res, await m.setCooldowns(session, guildId, b));
+      // Permissions. Six writes because the page edits four independent stores
+      // and one of them has a delete — batching them behind one action name
+      // would make a failed rank mapping look like a failed capability floor.
+      case "roles.binding":
+        return sendMutation(res, await m.setRoleBinding(session, guildId, b));
+      case "roles.rank":
+        return sendMutation(res, await m.setRankMapping(session, guildId, b));
+      case "roles.capability":
+        return sendMutation(res, await m.setCapabilityFloor(session, guildId, b));
+      case "roles.command":
+        return sendMutation(res, await m.setCommandFloor(session, guildId, b));
+      case "roles.exception":
+        return sendMutation(res, await m.setPermissionException(session, guildId, b));
+      case "roles.exception.remove":
+        return sendMutation(res, await m.removePermissionException(session, guildId, b));
+      case "health.run-job":
+        return sendMutation(res, await m.runJob(session, guildId, b));
       case "bridge.suspend":
         return sendMutation(res, await m.setBridgeSuspended(session, guildId, b["suspended"]));
       case "moderation.action":

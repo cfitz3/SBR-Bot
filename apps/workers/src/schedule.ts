@@ -75,6 +75,10 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // offset from midnight so a scan lands shortly *before* the cache goes stale
   // rather than at the same instant as every other daily job on the box.
   { name: "guild-scan", repeat: { pattern: "26 1,7,13,19 * * *" }, priority: LANE.bulk },
+  // The Discord roster, on the 2-hour cadence the member page is written
+  // against. Odd hours and :19 keep it away from the guild scan above and from
+  // the roster sync's :09/:39 — three jobs that all walk every guild.
+  { name: "discord-member-sync", repeat: { pattern: "19 1,3,5,7,9,11,13,15,17,19,21,23 * * *" }, priority: LANE.bulk },
   { name: "analytics-rollup", repeat: { pattern: "13 * * * *" }, priority: LANE.bulk },
   // Every three hours rather than nightly: a member who asks for their standing
   // should not be told about the person they were yesterday. Not more often than

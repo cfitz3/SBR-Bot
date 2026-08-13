@@ -157,7 +157,7 @@ export interface GuildConfigRow {
   features: Record<string, boolean>;
   minWeight: number | null;
   minNetworth: number | null;
-  roleMappings: Record<string, string>;
+  roleMappings: Record<string, string | string[]>;
 }
 
 /** `features` is a Json column, so coerce defensively rather than trusting its shape. */
@@ -170,12 +170,20 @@ function toFeatureMap(value: unknown): Record<string, boolean> {
   return out;
 }
 
-/** Same defensive coercion for the `roleMappings` Json column. */
-function toRoleMap(value: unknown): Record<string, string> {
+/**
+ * Same defensive coercion for the `roleMappings` Json column.
+ *
+ * Both shapes survive the trip: a bare id is what `/set-role` and every guild
+ * configured before the Permissions page wrote, a list is what the page writes
+ * now. Neither is rewritten on read — `parseRoleBindings` in @sbr/guild-config
+ * is the one place that flattens them into a list.
+ */
+function toRoleMap(value: unknown): Record<string, string | string[]> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
-  const out: Record<string, string> = {};
+  const out: Record<string, string | string[]> = {};
   for (const [role, id] of Object.entries(value as Record<string, unknown>)) {
     if (typeof id === "string") out[role] = id;
+    else if (Array.isArray(id)) out[role] = id.filter((entry): entry is string => typeof entry === "string");
   }
   return out;
 }
@@ -256,6 +264,22 @@ export const guildConfigRepository = {
     const roleMappings = toRoleMap(current?.roleMappings);
     if (discordRoleId === null) delete roleMappings[role];
     else roleMappings[role] = discordRoleId;
+    await prisma.guildConfig.upsert({
+      where: { guildId },
+      create: { guildId, roleMappings },
+      update: { roleMappings },
+    });
+  },
+
+  /** Replace the set of Discord roles bound to one level; empty clears it. */
+  async setRoleBinding(guildId: string, role: string, discordRoleIds: readonly string[]): Promise<void> {
+    const current = await prisma.guildConfig.findUnique({ where: { guildId }, select: { roleMappings: true } });
+    const roleMappings = toRoleMap(current?.roleMappings);
+    // Deduplicated on the way in so the stored document matches what the page
+    // shows; the picker can hand the same id twice if two rows are edited fast.
+    const ids = [...new Set(discordRoleIds)];
+    if (ids.length === 0) delete roleMappings[role];
+    else roleMappings[role] = ids;
     await prisma.guildConfig.upsert({
       where: { guildId },
       create: { guildId, roleMappings },

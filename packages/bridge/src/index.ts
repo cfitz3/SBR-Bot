@@ -13,4 +13,6 @@ export type {
   WordlistFilter,
   FilterVerdict,
   FloodControl,
+  AutomodGate,
+  RelayMetrics,
 } from "./types.js";

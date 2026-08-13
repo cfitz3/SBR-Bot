@@ -27,6 +27,7 @@ function repo(over: Partial<GuildConfigRepository> = {}): GuildConfigRepository 
     async update() {},
     async setFeature() {},
     async setRoleMapping() {},
+    async setRoleBinding() {},
     async setChannelBinding() {},
     async setHypixelGuild() {},
     async getSetting() { return null; },

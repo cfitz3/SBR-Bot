@@ -1,14 +1,14 @@
 /**
- * Health / status (WEB_PANEL.md §3.11), read-only for now — the requeue and
- * force-sync actions land with the write layer.
+ * Health / status (WEB_PANEL.md §3.11).
  *
  * Sorted worst-first: a Health page is read when something is suspected to be
  * broken, and alphabetical order buries the one row that matters.
  */
 import type { HealthVM } from "@sbr/panel-core";
-import { loadPage } from "../api.js";
+import { loadPage, postAction } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner, table } from "../components.js";
 import { h, replace } from "../dom.js";
+import { actionButton, statusSlot } from "../forms.js";
 import { count, describeSpan, duration, humanizeJob, relativeTime } from "../format.js";
 
 type JobRow = HealthVM["jobs"][number];
@@ -30,13 +30,14 @@ export async function renderHealth(host: HTMLElement, guildId: string): Promise<
     jobs.length === 0
       ? emptyState("No worker jobs have reported in yet.")
       : table(
-          ["Job", "Status", "Last run", "Duration", "Failures (24h)"],
+          ["Job", "Status", "Last run", "Duration", "Failures (24h)", ""],
           jobs.map((job) => [
             jobCell(job),
             statusBadge(job),
             relativeTime(job.lastRunAt),
             duration(job.durationMs),
             count(job.failuresLastDay),
+            runCell(job, guildId, host),
           ]),
         );
 
@@ -118,6 +119,34 @@ function jobCell(job: JobRow): HTMLElement {
     { class: "job-cell" },
     h("span", {}, humanizeJob(job.type)),
     job.error ? h("span", { class: "job-error" }, job.error) : null,
+  );
+}
+
+/**
+ * "Run now".
+ *
+ * The request is published to the worker fleet, not enqueued here, so a green
+ * status line means *asked*, not *ran* — the note says so, and the last-run
+ * column is what turns the request into a fact. A row this deployment will not
+ * start by hand gets no button rather than a disabled one: there is nothing the
+ * reader could do to enable it, so the affordance would only raise a question.
+ */
+function runCell(job: JobRow, guildId: string, host: HTMLElement): HTMLElement {
+  if (!job.runnable) return h("span", { class: "muted" }, "—");
+  const status = statusSlot();
+  return h(
+    "div",
+    { class: "job-run" },
+    actionButton({
+      label: "Run now",
+      status,
+      run: () => postAction(guildId, "health.run-job", { jobName: job.type }),
+      // Re-read after a beat rather than immediately: the queue has to accept
+      // the job and the runner has to write its log row before a re-read shows
+      // anything, and a table that visibly redraws unchanged reads as failure.
+      onDone: () => window.setTimeout(() => void renderHealth(host, guildId), 4_000),
+    }),
+    status.el,
   );
 }
 

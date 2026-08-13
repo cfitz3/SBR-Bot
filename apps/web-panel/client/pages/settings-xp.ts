@@ -16,7 +16,16 @@ import type { XpSettingsVM } from "@sbr/panel-core";
 import type { XpSourcePolicyDTO } from "@sbr/shared-types";
 import { postAction, type WriteResult } from "../api.js";
 import { card, emptyState } from "../components.js";
-import { actionButton, fieldGroup, isSnowflake, reasonBox, statusSlot, textField, toggleField } from "../forms.js";
+import {
+  actionButton,
+  fieldGroup,
+  idChooser,
+  isSnowflake,
+  reasonBox,
+  statusSlot,
+  textField,
+  toggleField,
+} from "../forms.js";
 import { h } from "../dom.js";
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
@@ -171,14 +180,12 @@ function sourceCard(guildId: string, policy: XpSourcePolicyDTO): HTMLElement {
 function adjustForm(guildId: string): HTMLElement {
   const status = statusSlot();
 
-  const member = h("input", {
-    class: "control control-text",
-    type: "text",
-    placeholder: "Discord user id",
-    "aria-label": "Discord user id",
-    autocomplete: "off",
-    spellcheck: "false",
-  }) as HTMLInputElement;
+  const member = idChooser({
+    guildId,
+    kind: "member",
+    placeholder: "Search by name, or paste an id",
+    ariaLabel: "Member to adjust",
+  });
 
   const amount = h("input", {
     class: "control control-text",
@@ -197,8 +204,10 @@ function adjustForm(guildId: string): HTMLElement {
     confirm: "Confirm adjustment",
     status,
     run: async () => {
-      const discordId = member.value.trim();
-      if (!isSnowflake(discordId)) return { kind: "error", message: "Enter a Discord user id." };
+      const discordId = member.value();
+      if (!isSnowflake(discordId)) {
+        return { kind: "error", message: "Pick the member, or paste their Discord user id." };
+      }
       const value = Number(amount.value.trim());
       if (!Number.isInteger(value) || value === 0 || Math.abs(value) > MAX_ADJUSTMENT) {
         return { kind: "error", message: `Enter a non-zero whole number within ±${MAX_ADJUSTMENT}.` };
@@ -210,7 +219,7 @@ function adjustForm(guildId: string): HTMLElement {
       // Emptied on success so the next adjustment starts from nothing. A form
       // still holding the last amount is how the same 5,000 XP gets applied
       // twice to two different people.
-      member.value = "";
+      member.clear();
       amount.value = "";
       reason.value = "";
     },
@@ -220,7 +229,7 @@ function adjustForm(guildId: string): HTMLElement {
     "div",
     { class: "field" },
     h("p", { class: "field-hint" }, "Adds or removes XP directly. Positive credits, negative deducts."),
-    h("div", { class: "field-row" }, member, amount),
+    h("div", { class: "field-row" }, member.el, amount),
     reason,
     h("div", { class: "field-row" }, button),
     status.el,

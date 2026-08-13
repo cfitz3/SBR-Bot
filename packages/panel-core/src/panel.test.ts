@@ -17,8 +17,23 @@ import {
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { authorize, type PanelSession, type RoleResolver } from "./access.js";
-import type { HeartbeatReader, JobHealth, PanelReads, ServiceHeartbeat } from "./reads.js";
-import { EXPECTED_SERVICES, HEARTBEAT_STALE_MS, PanelService, XP_SOURCE_ORDER } from "./service.js";
+import type {
+  CommandCatalog,
+  DirectoryMemberRow,
+  HeartbeatReader,
+  JobHealth,
+  PanelReads,
+  PermissionException,
+  PermissionExceptionStore,
+  ServiceHeartbeat,
+} from "./reads.js";
+import {
+  EXPECTED_SERVICES,
+  HEARTBEAT_STALE_MS,
+  PRESENCE_SAMPLE_INTERVAL_MINUTES,
+  PanelService,
+  XP_SOURCE_ORDER,
+} from "./service.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -82,6 +97,9 @@ const moderation = (n: number): ModerationService => ({
   async listActions() { return ok([]); },
   async listInForce() { return ok([]); },
   async sweepExpired() { return ok(0); },
+  // The guild-wide feed the Moderation page shows with nobody selected. Empty
+  // by default: the tests that care about it supply their own rows.
+  async listRecentInfractions() { return ok([]); },
   async listInfractions() {
     return ok(
       Array.from({ length: n }, (_v, i) => ({
@@ -98,6 +116,65 @@ const COUNTS = {
   upcomingEventCount: 1, recentJoinCount: 0, recentLeaveCount: 0,
 } as const;
 
+/** Two rosters that disagree, so a test can tell which side a number came from. */
+const MEMBERSHIP = {
+  discordMemberCount: 3, guildMemberCount: 5, linkedCount: 2,
+  discordJoins: 1, discordLeaves: 0, gameJoins: 4, gameLeaves: 2,
+  windowDays: 7, scannedAt: { discord: "2026-08-07T10:00:00.000Z", hypixel: null },
+} as const;
+
+const ACTIVITY = [
+  { kind: "SCREENING", at: "2026-08-07T11:00:00.000Z", title: "Notch asked to join", detail: "accept · joined · risk 4", tone: "good" },
+  { kind: "MODERATION", at: "2026-08-07T09:00:00.000Z", title: "MUTE — 222", detail: "spam — by 111", tone: "bad" },
+] as const;
+
+/**
+ * One of each scam-check state, including the one that matters most: `null`,
+ * meaning the check could not be run. A page that renders it as "clear" is the
+ * failure this record exists to prevent.
+ */
+const JOIN_ATTEMPTS = [
+  {
+    id: "s1", uuid: "u1", ign: "Notch", discordId: null, requestedAt: "2026-08-07T11:00:00.000Z",
+    verdict: "ACCEPT", outcome: "JOINED", riskScore: 4, reasons: [],
+    scammer: false, scammerReason: null,
+    networth: 1_000_000_000, skillAverage: 42.5, catacombsLevel: 30.2, senitherWeight: 5000, skyblockLevel: 210,
+  },
+  {
+    id: "s2", uuid: "u2", ign: "Herobrine", discordId: "333", requestedAt: "2026-08-06T11:00:00.000Z",
+    verdict: "REVIEW", outcome: "PENDING", riskScore: 55, reasons: ["SCAMMER_LOOKUP_FAILED"],
+    scammer: null, scammerReason: null,
+    networth: null, skillAverage: null, catacombsLevel: null, senitherWeight: null, skyblockLevel: null,
+  },
+] as const;
+
+const MESSAGE_TOTALS = {
+  discordMessages: 900, guildChatMessages: 300, commandsUsed: 40, activeMembers: 2, days: 30,
+} as const;
+
+/**
+ * The three shapes a row can take, so a test can tell null from zero: a linked
+ * member with both surfaces, an unlinked Discord member whose GEXP is *unknown*,
+ * and a game-only member with no Discord counters at all.
+ */
+const ACTIVE_MEMBERS = [
+  { discordId: "1", username: "a", uuid: "u", ign: "A", discordMessages: 800, guildChatMessages: 200, commandsUsed: 30, presenceSamples: 0, gexp: 5_000, activeDays: 6 },
+  { discordId: "2", username: "b", uuid: null, ign: null, discordMessages: 100, guildChatMessages: 100, commandsUsed: 10, presenceSamples: 0, gexp: null, activeDays: null },
+  { discordId: null, username: null, uuid: "w", ign: "C", discordMessages: 0, guildChatMessages: 0, commandsUsed: 0, presenceSamples: 0, gexp: 9_000, activeDays: 12 },
+] as const;
+
+const GEXP_SERIES = [
+  { day: "2026-08-06", value: 4_000 },
+  { day: "2026-08-07", value: 10_000 },
+] as const;
+
+/** One of each shape the merge can produce: linked, Discord-only, game-only. */
+const DIRECTORY_ROWS: readonly DirectoryMemberRow[] = [
+  { discordId: "1", username: "a", nickname: null, uuid: "u", ign: "A", guildRank: null, linked: true, role: "MEMBER", status: "ACTIVE", weeklyGexp: 10, lastSeenAt: null },
+  { discordId: "2", username: "b", nickname: null, uuid: null, ign: null, guildRank: null, linked: false, role: "MEMBER", status: "ACTIVE", weeklyGexp: null, lastSeenAt: null },
+  { discordId: null, username: null, nickname: null, uuid: "w", ign: "C", guildRank: "Member", linked: false, role: null, status: null, weeklyGexp: 5, lastSeenAt: null },
+];
+
 function reads(over: Partial<PanelReads> = {}): PanelReads {
   const base: PanelReads = {
     async listGuildCards(ids) {
@@ -106,6 +183,9 @@ function reads(over: Partial<PanelReads> = {}): PanelReads {
       }));
     },
     async overviewCounts() { return COUNTS; },
+    async membershipStats() { return MEMBERSHIP; },
+    async listActivity() { return ACTIVITY; },
+    async listJoinAttempts() { return JOIN_ATTEMPTS; },
     async lastSnapshotAt() { return null; },
     async listLinkedMembers() {
       return [
@@ -114,8 +194,37 @@ function reads(over: Partial<PanelReads> = {}): PanelReads {
         { discordId: "3", username: "c", role: "MEMBER", status: "ACTIVE", guildRank: null, lastSeenAt: null, ign: "C", uuid: "v", verification: "PENDING" },
       ];
     },
+    // Mirrors the repository's own filter semantics so a test can assert on the
+    // tabs without a database: "discord only" means absent from the game side,
+    // not merely present on the Discord one.
+    async listDirectory(_guildId, query) {
+      const all = DIRECTORY_ROWS;
+      const needle = query.q.trim().toLowerCase();
+      const rows = all.filter((row) => {
+        const sideOk =
+          query.side === "discord" ? row.discordId !== null && !row.linked
+          : query.side === "game" ? row.uuid !== null && row.discordId === null
+          : query.side === "unlinked" ? !row.linked
+          : true;
+        if (!sideOk) return false;
+        if (needle.length === 0) return true;
+        return [row.username, row.ign].some((f) => (f ?? "").toLowerCase().includes(needle));
+      });
+      return {
+        rows: rows.slice(0, query.limit),
+        discordCount: all.filter((r) => r.discordId !== null).length,
+        guildCount: all.filter((r) => r.uuid !== null).length,
+        linkedCount: all.filter((r) => r.linked).length,
+        truncated: rows.length > query.limit,
+      };
+    },
+    async directoryScannedAt() { return { discord: null, hypixel: null }; },
     async listRollups() { return []; },
     async topCommands() { return []; },
+    async messageTotals() { return MESSAGE_TOTALS; },
+    async topActiveMembers() { return ACTIVE_MEMBERS; },
+    async gexpSeries() { return GEXP_SERIES; },
+    async memberActivity() { return ACTIVE_MEMBERS[0] ?? null; },
     async listEvents() { return []; },
     async listTickets() { return []; },
     async listJobHealth() { return []; },
@@ -153,6 +262,8 @@ function svc(
     milestones?: MilestoneDefinitionService;
     tickets?: TicketConfigService;
     wordlist?: WordlistService;
+    permissionExceptions?: PermissionExceptionStore;
+    commands?: CommandCatalog;
   } = {},
 ) {
   return new PanelService({
@@ -166,6 +277,8 @@ function svc(
     ...(over.milestones ? { milestones: over.milestones } : {}),
     ...(over.tickets ? { tickets: over.tickets } : {}),
     ...(over.wordlist ? { wordlist: over.wordlist } : {}),
+    ...(over.permissionExceptions ? { permissionExceptions: over.permissionExceptions } : {}),
+    ...(over.commands ? { commands: over.commands } : {}),
     logger: silent,
   });
 }
@@ -196,6 +309,43 @@ test("loadOverview returns counts when authorized", async () => {
   assert.equal(r.data?.memberCount, 3);
   assert.equal(r.data?.openTicketCount, 4);
   assert.equal(r.data?.openInfractionCount, 5);
+});
+
+test("the overview carries both rosters separately, never a blended one", async () => {
+  const r = await svc().loadOverview(session(), "g1");
+
+  const m = r.data?.membership;
+  assert.equal(m?.discordMemberCount, 3);
+  assert.equal(m?.guildMemberCount, 5);
+  // Movement is per side. A single joins figure would be the one that hides
+  // five people leaving the guild while one joined the server.
+  assert.equal(m?.discordJoins, 1);
+  assert.equal(m?.gameJoins, 4);
+  assert.equal(m?.gameLeaves, 2);
+  // The clock travels with the counts; a null one is a real answer, not a gap.
+  assert.equal(m?.scannedAt.hypixel, null);
+});
+
+test("the activity feed arrives newest-first and already worded", async () => {
+  const r = await svc().loadOverview(session(), "g1");
+
+  const feed = r.data?.activity ?? [];
+  assert.equal(feed.length, 2);
+  assert.equal(feed[0]?.kind, "SCREENING");
+  assert.ok((feed[0]?.at ?? "") > (feed[1]?.at ?? ""));
+});
+
+test("a scam check that could not run stays its own state all the way to the page", async () => {
+  const r = await svc().loadOverview(session(), "g1");
+
+  const [clear, unknown] = r.data?.joinAttempts ?? [];
+  assert.equal(clear?.scammer, false);
+  // Not false, and not absent: null is "we could not find out", and the whole
+  // record exists so that an outage cannot read as an all-clear.
+  assert.equal(unknown?.scammer, null);
+  // An unreadable profile is nulls, never zeroes.
+  assert.equal(unknown?.networth, null);
+  assert.equal(unknown?.skillAverage, null);
 });
 
 test("loadModeration returns the infraction view when authorized", async () => {
@@ -265,10 +415,27 @@ test("the selector is still closed to anonymous callers", async () => {
   assert.equal(r.data, null);
 });
 
-test("members page counts unlinked and pending separately", async () => {
+test("members page reports both rosters and how many are joined", async () => {
   const r = await svc().loadMembers(session(), "g1");
-  assert.equal(r.data?.unlinkedCount, 1);
-  assert.equal(r.data?.pendingCount, 1);
+  assert.equal(r.data?.discordCount, 2);
+  assert.equal(r.data?.guildCount, 2);
+  assert.equal(r.data?.linkedCount, 1);
+  assert.equal(r.data?.rows.length, 3);
+});
+
+test("the in-game-only tab shows people with no Discord membership at all", async () => {
+  const r = await svc().loadMembers(session(), "g1", { side: "game" });
+  assert.equal(r.data?.rows.length, 1);
+  assert.equal(r.data?.rows[0]?.ign, "C");
+  // Totals describe the roster, not the filter — otherwise the tabs would each
+  // report a different guild size.
+  assert.equal(r.data?.discordCount, 2);
+});
+
+test("an unrecognised side falls back to the unfiltered list rather than erroring", async () => {
+  const r = await svc().loadMembers(session(), "g1", { side: "sideways" });
+  assert.equal(r.data?.side, "all");
+  assert.equal(r.data?.rows.length, 3);
 });
 
 test("analytics clamps an absurd range instead of trusting the query string", async () => {
@@ -280,6 +447,42 @@ test("analytics clamps an absurd range instead of trusting the query string", as
   assert.ok(seen !== null);
   const days = (Date.now() - (seen as unknown as Date).getTime()) / 86_400_000;
   assert.ok(days <= 366, `range was ${days} days`);
+});
+
+test("analytics splits message volume by surface instead of blending it", async () => {
+  const r = await svc().loadAnalytics(session(), "g1");
+  assert.equal(r.data?.messages.discordMessages, 900);
+  assert.equal(r.data?.messages.guildChatMessages, 300);
+  // The two are never summed into a single "messages" figure — they describe
+  // different populations, exactly as the Overview's two rosters do.
+  assert.equal(Object.hasOwn(r.data?.messages ?? {}, "totalMessages"), false);
+});
+
+test("analytics ranks members from both surfaces in one table", async () => {
+  const r = await svc().loadAnalytics(session(), "g1");
+  const rows = r.data?.topMembers ?? [];
+  assert.equal(rows.length, 3);
+  // The game-only member is present with no Discord id at all. A table that
+  // could only show Discord-keyed rows would drop them, which is the whole
+  // reason this is one read rather than two lists side by side.
+  assert.ok(rows.some((m) => m.discordId === null && m.ign === "C"));
+});
+
+test("a member with no linked account reports unknown GEXP, never zero", async () => {
+  const r = await svc().loadAnalytics(session(), "g1");
+  const unlinked = r.data?.topMembers.find((m) => m.discordId === "2");
+  assert.equal(unlinked?.gexp, null, "no linked account means we cannot know, not that they earned none");
+  assert.equal(unlinked?.activeDays, null);
+});
+
+test("playtime carries its sample interval so the page can call it an estimate", async () => {
+  const r = await svc().loadAnalytics(session(), "g1");
+  assert.equal(r.data?.playtime.sampleIntervalMinutes, PRESENCE_SAMPLE_INTERVAL_MINUTES);
+  // Nothing samples presence yet, so the honest answer is zero samples — and a
+  // zero here must mean "not sampled", which is why the interval travels with it
+  // rather than the service pre-multiplying into a fabricated hour count.
+  assert.equal(r.data?.playtime.presenceSamples, 0);
+  assert.equal(r.data?.playtime.gameActiveDays, 18);
 });
 
 test("settings shows the screening policy in force, not an empty form", async () => {
@@ -631,4 +834,128 @@ test("an officer cannot open the filter page", async () => {
   const r = await svc({ wordlist: wordlistService() }).loadWordlist(session(), "g1");
   assert.equal(r.access.allowed, false);
   assert.equal(r.data, null);
+});
+
+// ── permissions ──
+
+/** A config service answering one stored policy document and one config row. */
+function permissionConfig(policy: unknown, roleMappings: Record<string, unknown> = {}): GuildConfigService {
+  const partial: Partial<GuildConfigService> = {
+    async get() {
+      return ok({
+        guildId: "g1", channels: {}, prefixes: ["!"], timezone: "UTC",
+        applicationsOpen: true, bridgeSuspended: false, features: {}, minWeight: null,
+        minNetworth: null, roleMappings: roleMappings as Record<string, string>,
+      });
+    },
+    async getSetting(_g: string, key: string) {
+      return key === "roles.policy" ? (policy as never) : null;
+    },
+  };
+  return partial as GuildConfigService;
+}
+
+const catalog: CommandCatalog = {
+  list() {
+    return [
+      { name: "warn", description: "Issue a formal warning", minRole: "MODERATOR" },
+      { name: "setup", description: "Configure the guild", minRole: "ADMIN" },
+    ];
+  },
+};
+
+const EXCEPTION: PermissionException = {
+  id: "e1",
+  subjectType: "DISCORD_USER",
+  subjectId: "222",
+  capability: "RELAY_MESSAGE",
+  allow: false,
+  createdAt: "2026-08-01T00:00:00.000Z",
+};
+
+const exceptionStore = (list: readonly PermissionException[]): PermissionExceptionStore => ({
+  async list() { return list; },
+  async set() {},
+  async remove() { return true; },
+});
+
+test("an officer cannot open the permissions page", async () => {
+  const r = await svc().loadPermissions(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+test("a guild that has configured nothing sees the platform defaults, not blanks", async () => {
+  const r = await svc({ roles: admin(), config: permissionConfig(null) }).loadPermissions(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  // Every capability answers with a floor and the default it would have had.
+  // That pairing is what tells "unchanged" from "deliberately set to this".
+  assert.equal(r.data?.capabilities.every((c) => c.role === c.defaultRole), true);
+  assert.deepEqual(r.data?.guildRanks, []);
+  assert.equal(r.data?.roles.includes("ADMIN"), true);
+});
+
+test("a stored floor is what the page shows, beside the default it replaced", async () => {
+  const r = await svc({
+    roles: admin(),
+    config: permissionConfig({
+      capabilities: { MENTION: "ADMIN" },
+      guildRanks: { officer: "OFFICER" },
+      commands: { warn: "OFFICER" },
+    }),
+    commands: catalog,
+  }).loadPermissions(session(), "g1");
+
+  const mention = r.data?.capabilities.find((c) => c.capability === "MENTION");
+  assert.equal(mention?.role, "ADMIN");
+  assert.notEqual(mention?.defaultRole, "ADMIN");
+  assert.deepEqual(r.data?.guildRanks, [{ rank: "officer", role: "OFFICER" }]);
+
+  const warn = r.data?.commands.find((c) => c.name === "warn");
+  assert.equal(warn?.role, "OFFICER");
+  assert.equal(warn?.defaultRole, "MODERATOR");
+  assert.equal(warn?.overridden, true);
+  // The untouched one has to say so, or the page cannot show what was changed.
+  assert.equal(r.data?.commands.find((c) => c.name === "setup")?.overridden, false);
+});
+
+test("a level bound to several Discord roles keeps all of them", async () => {
+  const r = await svc({
+    roles: admin(),
+    config: permissionConfig(null, { OFFICER: ["1", "2"], ADMIN: "3" }),
+  }).loadPermissions(session(), "g1");
+
+  // Both stored shapes read back as a list: /set-role writes a single id and
+  // the panel writes a set, and the page must not care which wrote last.
+  assert.deepEqual(r.data?.bindings["OFFICER"], ["1", "2"]);
+  assert.deepEqual(r.data?.bindings["ADMIN"], ["3"]);
+  assert.deepEqual(r.data?.bindings["MEMBER"], []);
+});
+
+test("with no command catalog the page says so rather than showing no commands", async () => {
+  const r = await svc({ roles: admin(), config: permissionConfig(null) }).loadPermissions(session(), "g1");
+  assert.equal(r.data?.commandsAvailable, false);
+  assert.deepEqual(r.data?.commands, []);
+});
+
+test("exceptions arrive when the store answers, and are marked unavailable when it fails", async () => {
+  const good = await svc({
+    roles: admin(),
+    config: permissionConfig(null),
+    permissionExceptions: exceptionStore([EXCEPTION]),
+  }).loadPermissions(session(), "g1");
+  assert.equal(good.data?.exceptionsAvailable, true);
+  assert.equal(good.data?.exceptions[0]?.allow, false);
+
+  // A store that throws must not blank the floors above it, which are the part
+  // most guilds ever configure.
+  const bad = await svc({
+    roles: admin(),
+    config: permissionConfig(null),
+    permissionExceptions: { ...exceptionStore([]), async list() { throw new Error("db down"); } },
+  }).loadPermissions(session(), "g1");
+  assert.equal(bad.access.allowed, true);
+  assert.equal(bad.data?.exceptionsAvailable, false);
+  assert.equal((bad.data?.capabilities.length ?? 0) > 0, true);
 });

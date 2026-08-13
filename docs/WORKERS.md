@@ -33,8 +33,11 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `guild-roster-sync` | Repeatable | 5–15 min | Diff-based reconcile to DB | Backoff; per-guild lock | Roster/rank drift until next run |
 | `guild-scan` | Repeatable (cron) | every 6 h (`26 1,7,13,19 * * *`) | Upsert on `(guildId,uuid)`; GEXP upsert on `(guildId,uuid,day)` overwrites | 1 retry; global lock, 10 min TTL | Member cache ages past its 6 h TTL; a missed day of GEXP is unrecoverable |
 
+| `discord-member-sync` | Repeatable (cron) | every 2 h (`19 1,3,5,…,23 * * *`) | Upsert on `(guildId,discordUserId)`; departures marked `LEFT`, never deleted | 2 retries; global lock, 3 min TTL | The Discord side of the member directory ages; departures linger as ACTIVE |
+
 *(guild-roster-sync included as the membership counterpart to the required set;
-guild-scan is the in-game counterpart to both — see §2.14.)*
+guild-scan is the in-game counterpart to both — see §2.14; discord-member-sync
+mirrors the Discord roster for the panel's directory — see §2.15.)*
 
 ---
 
@@ -171,6 +174,17 @@ guild-scan is the in-game counterpart to both — see §2.14.)*
 - **Failure impact:** the member cache ages past its 6 h freshness window and commands warn rather than fail. The real cost is GEXP: Hypixel's `expHistory` window is only ~7 days wide, so a gap longer than that is permanently unrecoverable.
 - **Distinct from `guild-roster-sync`,** which reconciles Discord-keyed platform membership and drives roles and access. This job caches the in-game guild as it actually is.
 
+### 2.15 `discord-member-sync`
+- **Trigger / frequency:** repeatable cron `19 1,3,5,7,9,11,13,15,17,19,21,23 * * *` — every 2 h on odd hours. The odd hours and the :19 keep it clear of `guild-scan` (:26 on even-ish hours) and `guild-roster-sync` (:09/:39): three jobs that each walk every guild, deliberately never at once.
+- **Inputs:** the admin bot's loopback internal API, `GET /internal/g/{id}/members?all=1`. The `all=1` is not optional — the picker endpoint caps at 200 rows, and a sync that inherited that cap would record every member past the 200th as having left the server.
+- **Outputs:** `DiscordUser` (username, globalName, avatarHash) and `GuildMember` (nickname, joinedAt, status).
+- **Idempotency:** two multi-row `ON CONFLICT` upserts per 100-row chunk, on `("discordId")` and `("guildId","discordUserId")`. `joinedAt` is written with `COALESCE(EXCLUDED, existing)` so a response without it never erases one we already had. `GuildMember.role` is deliberately **not** written: it is the platform role staff set on the Members page, and a roster scan has no business resetting somebody to MEMBER.
+- **Partial-failure rule:** an unreachable bot returns `null`, distinct from an empty roster, and the job returns `skipped: "unreachable"` having written nothing. Conflating the two would mark the entire server as departed.
+- **Departures** set `status = LEFT` and `leftAt`; rows are never deleted, because moderation history and XP ledgers point at them and a rejoin should find its own past.
+- **Bots are excluded** from the mirror. Every consumer of these rows — the directory, link coverage, activity — is about people. Bots remain visible in the ID pickers, which read the gateway cache directly rather than this table.
+- **Requires the Server Members privileged intent** (see ADMIN_BOT.md §7b). Without it the endpoint returns an empty-looking cache, which is why "unreachable" and "empty" are kept distinct at every layer.
+- **Failure impact:** the Members page's Discord column ages. It shows its own `Scanned …` clock rather than presenting a stale count as current.
+
 ---
 
 ## 3. Scheduling & Coordination
@@ -179,6 +193,7 @@ guild-scan is the in-game counterpart to both — see §2.14.)*
 - **Staggering:** periodic jobs fire on **off-minutes** (never :00/:30) and daily jobs use guild-local boundaries, avoiding thundering-herd on both our DB and the Hypixel API.
 - **Priority lanes:** live-serving refreshes (bazaar, pricing) run at higher queue priority than bulk/backfill (snapshots, scans) so user-facing freshness wins contention.
 - **Reserved rate budget:** Hypixel-touching jobs share `rl:hypixel` with a capped worker fraction; live commands always out-prioritize workers for a token.
+- **A third trigger style: by hand, from the panel.** The Health page (WEB_PANEL.md §3.11) publishes `{jobName, guildId, actorDiscordId}` on `chan:jobs`; `main.ts` subscribes and calls `queue.add`. The panel deliberately does not enqueue — BullMQ stays out of that process and this stays the only writer to the queue. A hand-started job is added **at its scheduled lane priority**, not ahead of it, so an operator pressing a button cannot push live-serving work behind a bulk sweep. Names are gated by `RUNNABLE_JOBS` (`@sbr/redis`) on both sides; `heartbeat` and `analytics-ingest` are excluded as continuous plumbing, and a schedule test asserts every runnable name exists in `SCHEDULE`. A request for a name this build does not define is dropped with a warning line — it means the panel is ahead of the fleet, which an operator watching a button do nothing deserves to be able to find.
 - **Scaling:** workers scale horizontally by queue depth; locks + idempotency make multiple replicas safe. Singleton-per-scope jobs (roster per guild) lock by scope.
 
 ---
@@ -189,7 +204,7 @@ guild-scan is the in-game counterpart to both — see §2.14.)*
 - **Transient vs permanent:** transient (5xx/timeout/`RATE_LIMITED`) → backoff+jitter, capped attempts; permanent (bad input/4xx auth) → **dead-letter queue** + staff alert, no blind retry.
 - **Degrade, don't fail:** a missed refresh serves last-known-good tagged `STALE`; consumers show "as of Xm ago" rather than erroring.
 - **Self-healing:** reconcile passes (cache invalidation, analytics counters, roster diff) repair drift from missed events without manual intervention.
-- **Observability:** `WorkerJobLog` + BullMQ live state feed the panel Health page (queue depth, failed/**stale jobs**, last run/duration, failure rate); operators can requeue/force-run from there.
+- **Observability:** `WorkerJobLog` + BullMQ live state feed the panel Health page (queue depth, failed/**stale jobs**, last run/duration, failure rate); operators can force-run any scheduled job from there (§3 above); requeueing one specific failed job is not wired yet.
 - **Blast-radius:** a crash in one processor doesn't stop others; jobs are isolated per-queue, and poison messages dead-letter rather than loop.
 
 ---

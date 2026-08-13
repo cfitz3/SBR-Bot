@@ -81,7 +81,12 @@ export async function startAdminGateway(
   token: string,
   discordGuildId?: string,
 ): Promise<AdminHandles> {
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  // GuildMembers is privileged and must also be enabled for this application in
+  // the Discord developer portal. Without it the gateway still connects, but
+  // `members.fetch()` returns only the bot — the panel's member picker and the
+  // Discord-side member scan both come back empty rather than erroring, so the
+  // internal API logs a warning when it sees that shape.
+  const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
   const handle = createInteractionHandler(app);
   const complete = createAutocompleteHandler(app);
   // Buttons whose state lives in the customId, so they survive a restart

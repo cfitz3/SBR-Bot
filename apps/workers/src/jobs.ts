@@ -17,6 +17,7 @@ import {
   milestoneDefinitionRepository,
   guildRepository,
   guildScanRepository,
+  discordSyncRepository,
   xpRepository,
   activitySink,
 } from "@sbr/db";
@@ -26,6 +27,7 @@ import {
   defineAuctionSweepJob,
   defineBazaarRefreshJob,
   defineConfigInvalidationJob,
+  defineDiscordMemberSyncJob,
   defineEndedAuctionJob,
   defineEventTransitionJob,
   defineGuildScanJob,
@@ -48,9 +50,11 @@ import {
   scanInactivity,
   snapshotProfiles,
   sweepAuctions,
+  syncDiscordMembers,
   syncRoster,
   transitionEvents,
   type JobDefinition,
+  type DiscordMemberRow,
   type MilestoneDefinition,
 } from "@sbr/jobs";
 import { XpService } from "@sbr/xp";
@@ -390,6 +394,76 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("roster"),
   };
 
+  /**
+   * The Discord roster mirror.
+   *
+   * The workers process holds no gateway connection either, so it dials the same
+   * loopback API the panel's pickers use — with `all=1`, because a truncated
+   * roster here would be recorded as a mass departure.
+   */
+  const discordMemberSync: JobDefinition<number> = {
+    ...defineDiscordMemberSyncJob(async () => {
+      const token = ctx.config.internalApi.token;
+      if (token === undefined) {
+        // Not a failure: a deployment without the internal API is a deployment
+        // whose member page shows the in-game side only, which is the documented
+        // degraded shape rather than something to retry against.
+        ctx.log.debug("discord member sync skipped: no INTERNAL_API_TOKEN");
+        return 0;
+      }
+      const base = ctx.config.internalApi.baseUrl.replace(/\/+$/, "");
+      const guilds = await guildRepository.listActive();
+      let seen = 0;
+      for (const guild of guilds) {
+        const result = await syncDiscordMembers(guild.id, {
+          async fetchMembers(guildId) {
+            try {
+              const res = await fetch(
+                `${base}/internal/g/${encodeURIComponent(guildId)}/members?all=1`,
+                { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) },
+              );
+              if (!res.ok) {
+                ctx.log.warn("discord member sync refused", {
+                  guildId,
+                  status: res.status,
+                  hint:
+                    res.status === 401
+                      ? "INTERNAL_API_TOKEN differs between the workers and the bot"
+                      : undefined,
+                });
+                return null;
+              }
+              const body = (await res.json()) as { members?: unknown };
+              return Array.isArray(body.members) ? (body.members as readonly DiscordMemberRow[]) : null;
+            } catch (error: unknown) {
+              ctx.log.warn("discord member sync unreachable", {
+                guildId,
+                error: error instanceof Error ? error.message : "unknown",
+              });
+              return null;
+            }
+          },
+          listActiveIds: (id) => discordSyncRepository.listActiveIds(id),
+          upsertMembers: (id, rows) => discordSyncRepository.upsertMembers(id, rows),
+          markLeft: (id, ids) => discordSyncRepository.markLeft(id, ids),
+        });
+        if (result.skipped) {
+          ctx.log.warn("discord member sync incomplete", { guildId: guild.id, reason: result.skipped });
+          continue;
+        }
+        ctx.log.info("discord roster synced", {
+          guildId: guild.id,
+          members: result.seen,
+          joined: result.joined,
+          left: result.left,
+        });
+        seen += result.seen;
+      }
+      return seen;
+    }),
+    lockKey: keys.lockJob("discord-member-sync"),
+  };
+
   const guildScan: JobDefinition<number> = {
     ...defineGuildScanJob(async () => {
       const guilds = await guildRepository.listActive();
@@ -571,6 +645,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     reminders,
     rosterSync,
     guildScan,
+    discordMemberSync,
     inactivity,
     punishmentExpiry,
     xpAggregate,

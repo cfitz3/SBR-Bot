@@ -14,14 +14,21 @@ import {
   identityRepository,
   moderationRepository,
   rankResolver,
+  rolePolicyReader,
   wordlistRepository,
 } from "@sbr/db";
-import { ESCALATION_SETTING_KEY, ModerationServiceImpl, SafetyServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
+import {
+  ESCALATION_SETTING_KEY,
+  ModerationServiceImpl,
+  RELAY_SYNC_SETTING_KEY,
+  SafetyServiceImpl,
+  WordlistServiceImpl,
+} from "@sbr/moderation";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { HypixelClient } from "@sbr/hypixel";
 import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
-import { AnalyticsServiceImpl } from "@sbr/analytics";
+import { AnalyticsServiceImpl, createDomainMetrics } from "@sbr/analytics";
 import { AdminDispatcher, buildAdminRegistry } from "@sbr/commands-admin";
 import { createLogger, type Logger } from "@sbr/observability";
 import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
@@ -73,16 +80,35 @@ export async function createAdminApp(): Promise<AdminApp> {
     logger: log,
   });
 
+  // Constructed before the services that feed it, so every emitter can be
+  // handed the same buffer rather than a second one.
+  const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
+  const metrics = createDomainMetrics({ analytics, surface: "ADMIN_BOT", logger: log });
+
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
     enforcement: adapters.enforcement,
+    metrics,
     // Until the discord.js permission check exists, assume the bot can enforce.
     botCaps: { async canPerform() { return true; } },
     // Warnings escalate on a ladder the guild can edit; the policy lives in the
     // settings KV, read fresh on each warning so an edit takes effect on the
     // next one rather than at the next restart.
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
+    // Punishment sync into guild chat. The command is published, not typed:
+    // only the bridge process holds a Minecraft session, and only it knows how
+    // fast Hypixel will let that account speak.
+    gameCommands: { send: (guildId, command) => adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() }) },
+    igns: {
+      async ignFor(_guildId, discordId) {
+        // Guild-agnostic on purpose: a link is to a person, not to a server, and
+        // the same account carries across every guild on the platform.
+        const link = await identityRepository.findPrimaryLinkByDiscordId(discordId).catch(() => null);
+        return link?.ign ?? null;
+      },
+    },
+    relaySync: { readRelaySync: (guildId) => guildConfigRepository.getSetting(guildId, RELAY_SYNC_SETTING_KEY) },
     logger: log,
   });
 
@@ -95,7 +121,15 @@ export async function createAdminApp(): Promise<AdminApp> {
     rateGate: adapters.rateGate,
     logger: log,
   });
-  const identity = new IdentityServiceImpl({ repo: identityRepository, social: hypixel, roles: rankResolver, logger: log });
+  const identity = new IdentityServiceImpl({
+    repo: identityRepository,
+    social: hypixel,
+    roles: rankResolver,
+    // Capability floors are the guild's to set on the panel; without this the
+    // service falls back to its own compiled-in defaults.
+    floors: rolePolicyReader,
+    logger: log,
+  });
   const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
   // Publishes so a `/set-channel` here reaches the bridge and the panel, and
   // subscribes (below) so their writes reach this process.
@@ -104,13 +138,13 @@ export async function createAdminApp(): Promise<AdminApp> {
     broadcast: adapters.configBus,
     logger: log,
   });
-  const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
   const safety = new SafetyServiceImpl({ store: adapters.safety, effects, logger: log });
   const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
 
   const dispatcher = new AdminDispatcher({
     registry: buildAdminRegistry(),
     roles: rankResolver,
+    policies: rolePolicyReader,
     handlerDeps: {
       moderation,
       identity,

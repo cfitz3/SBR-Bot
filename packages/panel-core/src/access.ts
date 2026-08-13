@@ -33,7 +33,9 @@ export type PanelPage =
   | "milestones"
   | "tickets"
   | "wordlist"
-  | "health";
+  | "health"
+  | "permissions"
+  | "directory";
 
 /**
  * Minimum platform role per page (WEB_PANEL.md §2). Staff read and work the
@@ -75,6 +77,16 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // which is exactly the kind of thing that belongs behind the config tier.
   wordlist: "ADMIN",
   health: "ADMIN",
+  // Who is staff, and what staff means. Every other tier on this table is
+  // enforced by comparing against a level this page defines, so it sits at the
+  // top of the ladder that it configures — an Officer who could edit it could
+  // make themselves an Admin in one write.
+  permissions: "ADMIN",
+  // Not a page anyone navigates to — it backs the channel/role/member pickers
+  // that the config pages are built from. Moderator rather than Admin because
+  // Moderator-tier pages use pickers too (a moderation target, a ticket
+  // assignee), and it discloses nothing a member cannot see in Discord itself.
+  directory: "MODERATOR",
 };
 
 export type DenyReason = "NOT_AUTHENTICATED" | "NOT_MANAGEABLE" | "INSUFFICIENT_ROLE";
@@ -84,7 +96,8 @@ export type AccessDecision =
   | { readonly allowed: false; readonly reason: DenyReason };
 
 export interface RoleResolver {
-  getRole(guildId: string, discordId: string): Promise<MemberRole>;
+  /** Null when the session's account is not a member of the guild at all. */
+  getRole(guildId: string, discordId: string): Promise<MemberRole | null>;
 }
 
 export async function authorize(
@@ -113,8 +126,11 @@ export async function authorizeRole(
   if (!session) return { allowed: false, reason: "NOT_AUTHENTICATED" };
   if (!session.manageableGuildIds.includes(guildId)) return { allowed: false, reason: "NOT_MANAGEABLE" };
 
+  // A Discord-side server manager who has never been recorded as a member of
+  // this guild resolves to null. That is INSUFFICIENT_ROLE rather than a crash
+  // or an implicit MEMBER: the panel's ladder is the platform's, not Discord's.
   const role = await roles.getRole(guildId, session.discordId);
-  if (rankOf(role) < rankOf(minRole)) return { allowed: false, reason: "INSUFFICIENT_ROLE" };
+  if (role === null || rankOf(role) < rankOf(minRole)) return { allowed: false, reason: "INSUFFICIENT_ROLE" };
 
   return { allowed: true, role };
 }

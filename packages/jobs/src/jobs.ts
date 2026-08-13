@@ -219,6 +219,25 @@ export function defineGuildScanJob(scan: () => Promise<number>): JobDefinition<n
 }
 
 /**
+ * discord-member-sync: mirror each server's Discord roster into our tables.
+ *
+ * Short lock and two retries: the work is one HTTP call to the admin bot plus a
+ * batched upsert per guild, so a failed run is cheap to repeat, and the two
+ * hours until the next scheduled one is a long time for the member page to be
+ * showing a roster that predates a raid or a purge.
+ */
+export function defineDiscordMemberSyncJob(sync: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "discord-member-sync",
+    queue: "progression",
+    lockKey: "lock:job:discord-member-sync",
+    lockTtlMs: 3 * 60_000,
+    maxRetries: 2,
+    handler: sync,
+  };
+}
+
+/**
  * punishment-expiry: clear the `active` flag on mutes and bans whose duration
  * has run out.
  *

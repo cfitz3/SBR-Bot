@@ -667,6 +667,14 @@ a.guild-switch:hover {
   gap: var(--space-1);
 }
 
+/* Button and its status line, side by side so a row keeps its height. */
+.job-run {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
 .job-error {
   font-size: 12px;
   color: var(--tone-bad);
@@ -779,6 +787,39 @@ a.guild-switch:hover {
   gap: var(--space-5);
   align-items: center;
   margin-bottom: var(--space-5);
+}
+
+/* Segmented filter tabs. A row of buttons rather than a <select> because the
+   options are few, mutually exclusive, and worth reading at a glance — the
+   selected one is the page's current answer, not a setting tucked in a menu. */
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--color-neutral-900) 70%, transparent);
+  border: 1px solid var(--color-neutral-800);
+  border-radius: var(--radius-md);
+}
+
+.tab {
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+  transition: color 120ms ease, background-color 120ms ease;
+}
+
+.tab:hover {
+  color: var(--color-text);
+}
+
+.tab[aria-selected="true"] {
+  color: var(--color-text);
+  background: var(--color-neutral-800);
 }
 
 .control-label {
@@ -1044,6 +1085,131 @@ a.guild-switch:hover {
 .control-short {
   flex: 0 0 14ch;
   max-width: 14ch;
+}
+
+/*
+ * Combobox pickers (channel / role / member).
+ *
+ * The wrapper takes the flex sizing the bare input would otherwise have, and is
+ * the positioning context for the listbox — the list has to leave the flow, or
+ * opening it would push every field below it down the page.
+ */
+.picker {
+  position: relative;
+  flex: 1 1 26ch;
+  min-width: 0;
+  max-width: 44ch;
+}
+
+.picker .control-text {
+  display: block;
+  width: 100%;
+  max-width: none;
+}
+
+.picker-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: var(--space-2);
+  list-style: none;
+  /* Roughly seven rows; past that the list is scrolled rather than taller, so
+     it can never run off the bottom of a short page. */
+  max-height: 264px;
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+  /* Opaque, not translucent: this sits over other fields, and a see-through
+     dropdown with text behind it is unreadable exactly when it matters. */
+  background: var(--color-neutral-900);
+  box-shadow: var(--shadow-md);
+}
+
+.picker-list[hidden] {
+  display: none;
+}
+
+.picker-option {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.picker-option-active {
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+.picker-option-label {
+  color: var(--color-text);
+}
+
+.picker-option-sub {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  /* The secondary line yields first — a long category name must not push the
+     channel name it belongs to out of view. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-empty {
+  padding: var(--space-2) var(--space-3);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* Chips for multi-select pickers — the current set, above the search box. */
+.picker-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.picker-chips[hidden] {
+  display: none;
+}
+
+.picker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-1) 2px var(--space-2);
+  border: 1px solid var(--color-neutral-700);
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-800);
+  font-size: 12.5px;
+}
+
+.picker-chip-label {
+  overflow: hidden;
+  max-width: 24ch;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-chip-remove {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.picker-chip-remove:hover {
+  background: color-mix(in srgb, var(--tone-bad) 24%, transparent);
+  color: var(--color-text);
 }
 
 .control-area {

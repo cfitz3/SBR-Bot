@@ -142,6 +142,11 @@ export class GuildConfigServiceImpl implements GuildConfigService {
     return this.write(guildId, () => this.repo.setRoleMapping(guildId, role, discordRoleId));
   }
 
+  /** The set form of `setRoleMapping`, for the panel's Permissions page. */
+  async setRoleBinding(guildId: string, role: MemberRole, discordRoleIds: readonly string[]): Promise<Result<void>> {
+    return this.write(guildId, () => this.repo.setRoleBinding(guildId, role, discordRoleIds));
+  }
+
   async setHypixelGuild(guildId: string, hypixelGuildId: string | null): Promise<Result<void>> {
     // The one write here whose failure an admin can act on: the id is unique, so
     // a collision means another guild already holds it. `keepMessage` lets that

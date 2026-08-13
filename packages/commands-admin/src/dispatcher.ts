@@ -4,7 +4,7 @@
  * guards are enforced here and (authoritatively) in the ModerationService.
  */
 import { rankOf } from "@sbr/moderation";
-import { isUpstreamUnavailable, UPSTREAM_UNAVAILABLE_MESSAGE } from "@sbr/shared-types";
+import { isUpstreamUnavailable, UPSTREAM_UNAVAILABLE_MESSAGE, type MemberRole } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type {
   AdminAutocompleteContext,
@@ -15,9 +15,25 @@ import type {
   RoleResolver,
 } from "./types.js";
 
+/**
+ * Reads the guild's configured floor for one command.
+ *
+ * Takes the fallback rather than returning null so the dispatcher never has to
+ * decide what "unconfigured" means — the answer is always a role.
+ */
+export interface CommandFloorReader {
+  commandFloor(guildId: string, command: string, fallback: MemberRole): Promise<MemberRole>;
+}
+
 export interface AdminDispatcherDeps {
   readonly registry: ReadonlyMap<string, AdminCommandSpec>;
   readonly roles: RoleResolver;
+  /**
+   * Per-guild overrides of each command's minimum role, from the panel's
+   * Permissions card. Optional: a deployment that has not wired it — and every
+   * existing test — keeps the floors the handlers declare.
+   */
+  readonly policies?: CommandFloorReader;
   readonly handlerDeps: AdminHandlerDeps;
   readonly logger: Logger;
 }
@@ -63,10 +79,20 @@ export class AdminDispatcher {
     const spec = this.d.registry.get(name);
     if (!spec) return { ephemeral: true, text: `Unknown command: ${name}` };
 
+    // The floor is the handler's own unless the guild has raised or lowered it
+    // on the panel. Resolved before the actor's role so a denial message quotes
+    // the level actually in force rather than the compiled-in default.
+    const need = (await this.d.policies?.commandFloor(ctx.guildId, name, spec.minRole)) ?? spec.minRole;
     const actorRole = await this.d.roles.getRole(ctx.guildId, ctx.actorId);
-    if (rankOf(actorRole) < rankOf(spec.minRole)) {
-      this.log.warn("admin command denied (role)", { command: name, actor: ctx.actorId, actorRole, need: spec.minRole });
-      return { ephemeral: true, text: `That command requires ${spec.minRole} or higher.` };
+    if (actorRole === null || rankOf(actorRole) < rankOf(need)) {
+      this.log.warn("admin command denied (role)", { command: name, actor: ctx.actorId, actorRole, need });
+      return {
+        ephemeral: true,
+        text:
+          actorRole === null
+            ? "You are not recorded as a member of this guild."
+            : `That command requires ${need} or higher.`,
+      };
     }
 
     if (spec.destructive && ctx.args.getBoolean("confirm") !== true) {

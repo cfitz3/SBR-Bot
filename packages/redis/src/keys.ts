@@ -26,6 +26,13 @@ export function createKeyFactory(prefix: string) {
     chanBridge: (guildId: string) => p(`chan:bridge:${guildId}`),
     chanConfig: (guildId: string) => p(`chan:config:${guildId}`),
     chanMod: (guildId: string) => p(`chan:mod:${guildId}`),
+    /**
+     * Manual job triggers, panel → workers. One channel for the whole platform
+     * rather than one per guild: the subscriber is the worker fleet, which is
+     * not scoped to a guild, and the guild a run is *for* travels in the payload
+     * where the job handler can read it.
+     */
+    chanJobs: () => p(`chan:jobs`),
     analyticsBuffer: () => p(`buf:analytics`),
 
     // 3b. Liveness. One key per service instance, written on a timer and given a
@@ -42,6 +49,16 @@ export function createKeyFactory(prefix: string) {
     floodUser: (guildId: string, userId: string) => p(`flood:user:${guildId}:${userId}`),
     floodGuild: (guildId: string) => p(`flood:guild:${guildId}`),
     floodMention: (guildId: string, userId: string) => p(`flood:mention:${guildId}:${userId}`),
+
+    // 5b. Automod windows. One key per rule, because two spam rules with
+    // different windows are two independent counts of the same messages, and
+    // sharing a key would make the tighter one decide for both. The repeat
+    // counter carries a hash of the text: what it measures is "this line
+    // again", not "another line".
+    automodSpam: (guildId: string, ruleId: string, author: string) =>
+      p(`am:spam:${guildId}:${ruleId}:${author}`),
+    automodRepeat: (guildId: string, ruleId: string, author: string, textHash: string) =>
+      p(`am:rep:${guildId}:${ruleId}:${author}:${textHash}`),
 
     // 6. Temporary mutes / suspensions (mirror of Postgres, rehydrated on boot)
     mute: (guildId: string, userId: string) => p(`mute:${guildId}:${userId}`),
@@ -66,6 +83,14 @@ export function createKeyFactory(prefix: string) {
     cachePriceItem: (itemId: string) => p(`cache:pricing:item:${itemId}`),
     cacheLowestBin: (itemId: string) => p(`cache:ah:lbin:${itemId}`),
     cacheGlobal: (name: string) => p(`cache:sb:${name}`),
+
+    // 7b. Cached Discord directory answers (channels/roles/members) served to
+    // the panel's pickers. Keyed by query as well as resource because the bot
+    // filters server-side, so two searches are two different answers. Short TTL:
+    // this is a convenience cache in front of a gateway cache, and a role
+    // created a minute ago should show up without anyone flushing anything.
+    directory: (guildId: string, resource: string, q: string) =>
+      p(`dir:${guildId}:${resource}:${q}`),
 
     // 8. Worker locks
     lockJob: (name: string, scope?: string) => p(`lock:job:${name}${scope ? `:${scope}` : ""}`),

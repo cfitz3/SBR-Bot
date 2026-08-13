@@ -6,6 +6,7 @@ import type { BridgeGuard, FilterVerdict, FloodControl, WordlistFilter } from "@
 import type { IdentityService, WordlistRuleDTO } from "@sbr/shared-types";
 import { guildConfigRepository, wordlistRepository } from "@sbr/db";
 import { evaluateText } from "@sbr/moderation";
+import { COOLDOWN_SETTING_KEY, parseCooldowns } from "@sbr/guild-config";
 import type { RedisContext } from "@sbr/redis";
 
 const FLOOD_LIMIT = 6;
@@ -27,10 +28,22 @@ export class BridgeGuardImpl implements BridgeGuard {
     return (await this.ctx.client.exists(this.ctx.keys.mute(guildId, authorId))) === 1;
   }
 
+  /**
+   * Whether this author's message may cross into guild chat.
+   *
+   * This used to end `|| true`, which made the whole check decorative: the
+   * capability was resolved and then discarded, so a deny row, a demotion and a
+   * stranger all relayed anyway. It is a real gate now.
+   *
+   * It is still an *open* gate by default, which is the intended posture — the
+   * `RELAY_MESSAGE` floor is MEMBER, so anyone recorded as a member of the guild
+   * may speak (BRIDGE_BOT.md §3.3). What changed is that the three cases which
+   * were always supposed to fail now do: an explicit deny row, a member the
+   * guild has demoted below its configured floor, and somebody with no
+   * membership at all.
+   */
   async canRelay(guildId: string, authorId: string): Promise<boolean> {
-    // Open bridge by default; an explicit BYPASS/deny model tightens this later.
-    // A granted RELAY_MESSAGE capability always permits.
-    return (await this.identity.hasCapability(guildId, authorId, "RELAY_MESSAGE")) || true;
+    return this.identity.hasCapability(guildId, authorId, "RELAY_MESSAGE");
   }
 }
 
@@ -46,7 +59,15 @@ export class BridgeGuardImpl implements BridgeGuard {
  */
 export class WordlistFilterImpl implements WordlistFilter {
   private cache = new Map<string, { rules: readonly WordlistRuleDTO[]; expiry: number }>();
-  constructor(private readonly ttlMs = 30_000) {}
+  /**
+   * `metrics` is the Analytics page's `filter.hit` series for the relay. The
+   * automod runner records its own hits; this covers the plain wordlist, which
+   * runs on every relayed line and is the one most guilds actually configure.
+   */
+  constructor(
+    private readonly ttlMs = 30_000,
+    private readonly metrics?: { filterHit(guildId: string, ruleId: string, action: string): void },
+  ) {}
 
   private async load(guildId: string): Promise<readonly WordlistRuleDTO[]> {
     const cached = this.cache.get(guildId);
@@ -60,6 +81,12 @@ export class WordlistFilterImpl implements WordlistFilter {
 
   async check(guildId: string, content: string): Promise<FilterVerdict> {
     const result = evaluateText(await this.load(guildId), content);
+    // One per matched rule, not one per message: "which rule is doing the work"
+    // is the question the chart answers, and a message caught by three rules is
+    // three answers to it.
+    for (const rule of result.matched) {
+      this.metrics?.filterHit(guildId, rule.id, result.action);
+    }
     if (result.action === "REPLACE") {
       return { action: "REPLACE", replacement: result.replacement ?? content };
     }
@@ -82,13 +109,37 @@ export class FloodControlImpl implements FloodControl {
     const dup = await client.set(keys.dedupRelay(guildId, hash), "1", { NX: true, EX: DEDUP_WINDOW_S });
     if (!dup) return { allowed: false, reason: "DUPLICATE" };
 
-    // Per-user rate.
+    // Per-user rate. Two limits sit here, and they are not the same thing:
+    // the hard flood window below protects the bridge account from Hypixel's
+    // own limit and is not configurable, while the guild's own relay cooldown
+    // is a comfort setting layered on top of it.
     const rateKey = keys.floodUser(guildId, authorId);
     const count = await client.incr(rateKey);
     if (count === 1) await client.expire(rateKey, FLOOD_WINDOW_S);
     if (count > FLOOD_LIMIT) return { allowed: false, reason: "RATE" };
 
+    const relaySeconds = await this.relayCooldownSeconds(guildId);
+    if (relaySeconds > 0) {
+      const cdKey = keys.relayCooldown(guildId, authorId);
+      const fresh = await client.set(cdKey, "1", { NX: true, EX: relaySeconds });
+      if (!fresh) return { allowed: false, reason: "RATE" };
+    }
+
     return { allowed: true };
+  }
+
+  /**
+   * Read on the hot path rather than cached, because the setting is a single
+   * indexed lookup Redis already fronts, and a stale cooldown is the kind of
+   * "I changed it and nothing happened" that makes operators stop trusting a
+   * panel. An unreadable policy means no extra cooldown, never a blocked relay.
+   */
+  private async relayCooldownSeconds(guildId: string): Promise<number> {
+    try {
+      return parseCooldowns(await guildConfigRepository.getSetting(guildId, COOLDOWN_SETTING_KEY)).relaySeconds;
+    } catch {
+      return 0;
+    }
   }
 }
 

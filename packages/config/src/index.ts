@@ -36,6 +36,21 @@ export interface AppConfig {
     readonly redirectUri: string | undefined;
     readonly sessionSecret: string | undefined;
   };
+  /**
+   * The admin bot's loopback control API — how the web panel reads a Discord
+   * guild's channels, roles and members without holding a gateway connection of
+   * its own, and how a panel ban actually reaches Discord.
+   *
+   * Optional throughout: with no token the bot doesn't listen and the panel falls
+   * back to raw-ID entry, which is exactly the pre-picker behaviour rather than
+   * an outage.
+   */
+  readonly internalApi: {
+    readonly token: string | undefined;
+    readonly port: number;
+    /** Where the panel dials the bot. Loopback unless the two are split apart. */
+    readonly baseUrl: string;
+  };
   readonly hypixel: { readonly apiKey: string | undefined };
   /**
    * SkyKings — the third-party scammer database consulted when screening join
@@ -183,6 +198,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       redirectUri: v.optionalString("DISCORD_OAUTH_REDIRECT_URI"),
       sessionSecret: v.optionalString("SESSION_SECRET"),
     },
+    internalApi: internalApiConfig(v),
     hypixel: { apiKey: v.optionalString("HYPIXEL_API_KEY") },
     skykings: { apiKey: v.optionalString("SKYKINGS_API_KEY") },
     minecraft: {
@@ -197,6 +213,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   v.throwIfInvalid();
   cached = config;
   return config;
+}
+
+/**
+ * Resolve the admin bot's internal control API.
+ *
+ * The token is the only authentication this API has, so a short one is worse
+ * than none: it is checked here rather than left to be discovered when someone
+ * guesses it. The default bind is loopback, and a non-loopback base URL is
+ * allowed but called out, since the API answers "list every member of this
+ * server" to anyone holding the token.
+ */
+function internalApiConfig(v: Validator): AppConfig["internalApi"] {
+  const token = v.optionalString("INTERNAL_API_TOKEN");
+  const port = v.int("INTERNAL_API_PORT", 3011);
+  if (token !== undefined && token.length < 24) {
+    v.push("INTERNAL_API_TOKEN is shorter than 24 characters — generate one with `openssl rand -hex 32`");
+  }
+  const baseUrl = v.optionalString("INTERNAL_API_URL") ?? `http://127.0.0.1:${String(port)}`;
+  if (parseOrigin(baseUrl) === null) {
+    v.push(`Invalid INTERNAL_API_URL="${baseUrl}" (expected an absolute URL)`);
+  }
+  return { token, port, baseUrl };
 }
 
 /**

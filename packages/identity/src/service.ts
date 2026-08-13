@@ -23,13 +23,30 @@ import {
 import type { Logger } from "@sbr/observability";
 
 /**
- * The platform role that carries a capability on its own, with no
- * `BridgePermission` row behind it.
+ * Reads a guild's configured capability floors.
+ *
+ * Declared as a port rather than imported so identity keeps depending on
+ * nothing: the floors live in `@sbr/guild-config`, which is a peer, and an
+ * import here would put configuration parsing inside the relay's permission
+ * path. Optional on the deps — without it the platform defaults apply, which is
+ * what every guild ran before the panel could edit them.
+ */
+export interface CapabilityFloorReader {
+  capabilityFloor(guildId: string, capability: BridgeCapability): Promise<MemberRole>;
+}
+
+/**
+ * The floors a guild gets before it configures anything.
+ *
+ * A duplicate of `DEFAULT_CAPABILITY_FLOOR` in `@sbr/guild-config`, kept here so
+ * this package still answers correctly with no floor reader wired. The two are
+ * pinned together by a test in that package's suite, and there is exactly one
+ * rule for changing them: change both.
  *
  * `BridgePermission` is the fine-grained model, but it starts *empty*: a guild
  * that has just been onboarded has no rows at all. Resolving capabilities from
  * rows alone therefore denies `/stats` to every member including the owner,
- * which contradicts both COMMANDS.md §1–7 (the lookup surface is Public) and
+ * which contradicts both COMMANDS.md §1-7 (the lookup surface is Public) and
  * BRIDGE_BOT.md §3.3 (the relay is open to any linked, non-muted member). These
  * floors are what makes an unconfigured guild usable, and what makes setting
  * someone to OWNER mean something before the panel can write rows.
@@ -42,7 +59,6 @@ const MIN_ROLE: Readonly<Record<BridgeCapability, MemberRole>> = {
   BYPASS_FILTER: "ADMIN",
   ADMIN: "ADMIN",
 };
-
 /**
  * Compare Discord handles the way a human would.
  *
@@ -60,6 +76,7 @@ export interface IdentityServiceDeps {
   readonly repo: IdentityRepository;
   readonly social: HypixelSocialLookup;
   readonly roles: MemberRoleReader;
+  readonly floors?: CapabilityFloorReader;
   readonly logger: Logger;
 }
 
@@ -67,12 +84,14 @@ export class IdentityServiceImpl implements IdentityService {
   private readonly repo: IdentityRepository;
   private readonly social: HypixelSocialLookup;
   private readonly roles: MemberRoleReader;
+  private readonly floors: CapabilityFloorReader | null;
   private readonly log: Logger;
 
   constructor(deps: IdentityServiceDeps) {
     this.repo = deps.repo;
     this.social = deps.social;
     this.roles = deps.roles;
+    this.floors = deps.floors ?? null;
     this.log = deps.logger.child({ service: "identity" });
   }
 
@@ -142,9 +161,10 @@ export class IdentityServiceImpl implements IdentityService {
     discordId: string,
     capability: BridgeCapability,
   ): Promise<boolean> {
-    const [grants, role] = await Promise.all([
+    const [grants, role, floor] = await Promise.all([
       this.repo.getCapabilityGrants(guildId, discordId),
       this.roles.getRole(guildId, discordId),
+      this.floors?.capabilityFloor(guildId, capability) ?? Promise.resolve(MIN_ROLE[capability]),
     ]);
 
     if (grants.some((g) => !g.allow && g.capability === capability)) return false;
@@ -152,6 +172,9 @@ export class IdentityServiceImpl implements IdentityService {
       return true;
     }
 
-    return rankOfRole(role) >= rankOfRole(MIN_ROLE[capability]);
+    // Null is a non-member, and a non-member clears no floor. This is the line
+    // that used to read a stranger as MEMBER and so hand them every capability
+    // whose floor is MEMBER — which is the relay and every lookup command.
+    return role !== null && rankOfRole(role) >= rankOfRole(floor);
   }
 }

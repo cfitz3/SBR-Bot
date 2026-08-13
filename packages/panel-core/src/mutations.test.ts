@@ -29,13 +29,17 @@ import {
 } from "@sbr/shared-types";
 import type { AnalyticsService, CommandUsageDTO } from "@sbr/shared-types";
 import { DEFAULT_POLICY, SCREENING_POLICY_KEY, serializePolicy } from "@sbr/screening";
+import { ROLE_POLICY_SETTING_KEY } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import type { PanelSession, RoleResolver } from "./access.js";
+import type { PermissionExceptionStore } from "./reads.js";
 import {
+  MANUAL_JOB_COOLDOWN_MS,
   MUTATION_COOLDOWN_MS,
   PanelMutations,
   type ConfigAuditEntry,
   type HypixelGuildLookup,
+  type JobTrigger,
   type MutationLimiter,
 } from "./mutations.js";
 
@@ -60,17 +64,26 @@ interface Recorded {
 }
 
 /** A config service that records what it was asked to do and answers `result`. */
-function configRecorder(recorded: Recorded, result: Result<void> = ok(undefined)): GuildConfigService {
+function configRecorder(
+  recorded: Recorded,
+  result: Result<void> = ok(undefined),
+  settings: Readonly<Record<string, unknown>> = {},
+): GuildConfigService {
   const record = (method: string) => async (...args: unknown[]): Promise<Result<void>> => {
     recorded.calls.push({ method, args });
     return result;
   };
   const partial: Partial<GuildConfigService> = {
+    getSetting: (async (guildId: string, key: string) => {
+      recorded.calls.push({ method: "getSetting", args: [guildId, key] });
+      return settings[key] ?? null;
+    }) as GuildConfigService["getSetting"],
     setChannel: record("setChannel") as GuildConfigService["setChannel"],
     setFeature: record("setFeature") as GuildConfigService["setFeature"],
     setBridgeSuspended: record("setBridgeSuspended") as GuildConfigService["setBridgeSuspended"],
     setRecruitment: record("setRecruitment") as GuildConfigService["setRecruitment"],
     setRoleMapping: record("setRoleMapping") as GuildConfigService["setRoleMapping"],
+    setRoleBinding: record("setRoleBinding") as GuildConfigService["setRoleBinding"],
     setSetting: record("setSetting") as GuildConfigService["setSetting"],
     setHypixelGuild: record("setHypixelGuild") as GuildConfigService["setHypixelGuild"],
   };
@@ -220,6 +233,34 @@ function wordlistRecorder(
   };
 }
 
+/**
+ * Two runnable names, so "not on the list" can be tested against a list that is
+ * not empty — an empty allow-list would reject everything for the wrong reason.
+ */
+function jobsRecorder(recorded: Recorded, throws: boolean): JobTrigger {
+  return {
+    runnable: ["guild-scan", "xp-aggregate"],
+    async trigger(request) {
+      recorded.calls.push({ method: "triggerJob", args: [request] });
+      if (throws) throw new Error("redis is down");
+    },
+  };
+}
+
+/** The per-subject exception store, recording rather than persisting. */
+function exceptionRecorder(recorded: Recorded, removed: boolean): PermissionExceptionStore {
+  return {
+    async list() { return []; },
+    async set(guildId, subjectType, subjectId, capability, allow) {
+      recorded.calls.push({ method: "setException", args: [guildId, subjectType, subjectId, capability, allow] });
+    },
+    async remove(guildId, id) {
+      recorded.calls.push({ method: "removeException", args: [guildId, id] });
+      return removed;
+    },
+  };
+}
+
 /** Allows everything unless the key is in `blocked` — the real gate is Redis. */
 function limiter(recorded: Recorded, blocked: readonly string[] = []): MutationLimiter {
   return {
@@ -255,6 +296,16 @@ function make(
     noHypixel?: boolean;
     /** What the guild lookup answers with. */
     lookup?: LookupOutcome;
+    /** Stored `GuildSetting` rows the mutation reads back. */
+    settings?: Readonly<Record<string, unknown>>;
+    /** Same, for a deployment with no worker fleet on the other end of the bus. */
+    noJobs?: boolean;
+    /** Redis refused the publish. */
+    jobsThrow?: boolean;
+    /** Same, for a deployment with no per-subject exception store. */
+    noExceptions?: boolean;
+    /** What `remove` reports back: false is "another admin got there first". */
+    exceptionRemoved?: boolean;
   } = {},
 ) {
   const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
@@ -264,7 +315,7 @@ function make(
   };
   const mutations = new PanelMutations({
     roles: roles(over.roleMap ?? { "111": "ADMIN" }),
-    config: configRecorder(recorded, over.result ?? ok(undefined)),
+    config: configRecorder(recorded, over.result ?? ok(undefined), over.settings ?? {}),
     ...actionRecorders(recorded, over.result ?? ok(undefined)),
     ...(over.noXp === true ? {} : { xp: xpRecorder(recorded, over.xpThrows === true) }),
     ...(over.noMilestones === true
@@ -282,6 +333,10 @@ function make(
           }),
         }),
     ...(over.noHypixel === true ? {} : { hypixel: hypixelRecorder(recorded, over.lookup ?? "found") }),
+    ...(over.noJobs === true ? {} : { jobs: jobsRecorder(recorded, over.jobsThrow === true) }),
+    ...(over.noExceptions === true
+      ? {}
+      : { permissionExceptions: exceptionRecorder(recorded, over.exceptionRemoved ?? true) }),
     limiter: limiter(recorded, over.blocked ?? []),
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
@@ -1570,4 +1625,821 @@ test("an officer cannot decide what a third warning does", async () => {
 
   assert.equal((await mutations.setModerationDefaults(session(), "g1", ladderBody())).access.allowed, false);
   assert.deepEqual(recorded.calls, []);
+});
+
+// ── the in-game punishment mapping ──
+
+const relayBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  enabled: true,
+  rows: [
+    { discordAction: "MUTE", gameAction: "g mute", durationMode: "same", fixedSeconds: null, enabled: true },
+    { discordAction: "BAN", gameAction: "g kick", durationMode: "same", fixedSeconds: null, enabled: true },
+  ],
+  ...over,
+});
+
+test("a saved mapping reaches the settings key the relay reads", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setRelaySync(session(), "g1", relayBody());
+
+  assert.equal(result.ok, true);
+  const [guildId, key, value] = recorded.calls[0]?.args as [string, string, Record<string, unknown>];
+  assert.equal(guildId, "g1");
+  assert.equal(key, "moderation.relay-sync");
+  assert.equal((value["rows"] as unknown[]).length, 2);
+  assert.equal(recorded.audits[0]?.mutation, "moderation.relay-sync");
+});
+
+test("a mapping that would misfire is refused rather than stored half-formed", async () => {
+  const { mutations, recorded } = make();
+
+  const cases: Record<string, unknown>[] = [
+    { enabled: "yes" },
+    { rows: "none" },
+    { rows: [{ discordAction: "SHOUT", gameAction: "none", durationMode: "same", fixedSeconds: null, enabled: true }] },
+    // The whole point of the closed list: an arbitrary command line here would
+    // be typed by an account holding guild-officer permissions.
+    { rows: [{ discordAction: "BAN", gameAction: "g demote everyone", durationMode: "same", fixedSeconds: null, enabled: true }] },
+    { rows: [{ discordAction: "MUTE", gameAction: "g mute", durationMode: "forever", fixedSeconds: null, enabled: true }] },
+    // Fixed with nothing fixed: parseRelaySync would drop the duration and the
+    // row would simply never fire.
+    { rows: [{ discordAction: "MUTE", gameAction: "g mute", durationMode: "fixed", fixedSeconds: null, enabled: true }] },
+    { rows: [{ discordAction: "MUTE", gameAction: "g mute", durationMode: "fixed", fixedSeconds: 0, enabled: true }] },
+    { rows: [{ discordAction: "MUTE", gameAction: "g mute", durationMode: "same", fixedSeconds: null, enabled: "on" }] },
+    // One action mapped twice: the later would win, unannounced.
+    {
+      rows: [
+        { discordAction: "BAN", gameAction: "g kick", durationMode: "same", fixedSeconds: null, enabled: true },
+        { discordAction: "BAN", gameAction: "none", durationMode: "same", fixedSeconds: null, enabled: true },
+      ],
+    },
+  ];
+
+  for (const [i, over] of cases.entries()) {
+    const result = await mutations.setRelaySync(session(), "g1", relayBody(over));
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  assert.deepEqual(recorded.calls, []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("an officer cannot decide what a Discord ban does inside the game guild", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.setRelaySync(session(), "g1", relayBody())).access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+// ── the automod test box ──
+
+/**
+ * A policy as it sits in the settings row: two rules, so precedence is visible
+ * in the answer rather than assumed.
+ */
+const automodPolicy = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  enabled: true,
+  rules: [
+    {
+      id: "r-caps",
+      name: "Shouting",
+      enabled: true,
+      surfaces: ["DISCORD", "GUILD_CHAT"],
+      trigger: { kind: "caps", percent: 60, minLength: 8 },
+      exempt: { roleIds: [], capability: null },
+      action: { type: "FLAG", deleteMessage: false, durationSeconds: null },
+    },
+    {
+      id: "r-invite",
+      name: "No invites",
+      enabled: true,
+      surfaces: ["DISCORD"],
+      trigger: { kind: "invites" },
+      exempt: { roleIds: [], capability: null },
+      action: { type: "MUTE", deleteMessage: true, durationSeconds: 600 },
+    },
+  ],
+  ...over,
+});
+
+const testBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  text: "hello there everyone",
+  surface: "DISCORD",
+  ...over,
+});
+
+test("the test box reports the rule that fired and what it would have done", async () => {
+  const { mutations, recorded } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy() },
+  });
+
+  const result = await mutations.testAutomod(
+    session(),
+    "g1",
+    testBody({ text: "JOIN NOW discord.gg/abcdef" }),
+  );
+
+  assert.equal(result.ok, true);
+  // Both rules match; the mute outranks the flag, and the delete survives.
+  assert.match(result.note ?? "", /Mute/);
+  assert.match(result.note ?? "", /10m/);
+  assert.match(result.note ?? "", /message deleted/);
+  assert.match(result.note ?? "", /No invites/);
+});
+
+test("a message nothing objects to is reported as delivered, and nothing is written", async () => {
+  const { mutations, recorded } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy() },
+  });
+
+  const result = await mutations.testAutomod(session(), "g1", testBody());
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /No rule matched/);
+  // Reads only: the settings lookup is the sole call, and no setSetting among them.
+  assert.deepEqual(
+    recorded.calls.filter((c) => c.method !== "getSetting" && c.method !== "list"),
+    [],
+  );
+});
+
+test("a switched-off policy still answers, and says so rather than pretending", async () => {
+  const { mutations } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy({ enabled: false }) },
+  });
+
+  const result = await mutations.testAutomod(
+    session(),
+    "g1",
+    testBody({ text: "discord.gg/abcdef" }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /switched off/);
+});
+
+test("a surface the rule does not cover does not fire on it", async () => {
+  const { mutations } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy() },
+  });
+
+  const result = await mutations.testAutomod(
+    session(),
+    "g1",
+    testBody({ text: "discord.gg/abcdef", surface: "GUILD_CHAT" }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /No rule matched/);
+});
+
+test("supplied counters stand in for the windows Redis would have counted", async () => {
+  const spam = automodPolicy({
+    rules: [
+      {
+        id: "r-spam",
+        name: "Flooding",
+        enabled: true,
+        surfaces: ["DISCORD", "GUILD_CHAT"],
+        trigger: { kind: "spam", messages: 5, windowSeconds: 10 },
+        exempt: { roleIds: [], capability: null },
+        action: { type: "WARN", deleteMessage: false, durationSeconds: null },
+      },
+    ],
+  });
+  const { mutations } = make({ roleMap: { "111": "MODERATOR" }, settings: { "moderation.automod": spam } });
+
+  const quiet = await mutations.testAutomod(session(), "g1", testBody({ counters: { "r-spam": 2 } }));
+  assert.equal(quiet.ok, true);
+  assert.match(quiet.note ?? "", /No rule matched/);
+
+  const loud = await mutations.testAutomod(session(), "g1", testBody({ counters: { "r-spam": 9 } }));
+  assert.equal(loud.ok, true);
+  assert.match(loud.note ?? "", /Warn/);
+  assert.match(loud.note ?? "", /Flooding/);
+});
+
+test("the audit records the outcome and never the text that was tested", async () => {
+  const { mutations, recorded } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy() },
+  });
+
+  const secret = "JOIN NOW discord.gg/abcdef";
+  await mutations.testAutomod(session(), "g1", testBody({ text: secret }));
+
+  const entry = recorded.audits[0];
+  assert.equal(entry?.mutation, "automod.test");
+  const change = entry?.change as Record<string, unknown>;
+  assert.equal(change["textLength"], secret.length);
+  assert.equal(change["action"], "MUTE");
+  assert.equal(change["deleted"], true);
+  assert.deepEqual(change["rules"], ["r-invite"]);
+  // Testing a slur rule means pasting the slur. The trail must not become the
+  // permanent copy of what nobody wanted written down.
+  assert.equal(JSON.stringify(entry).includes("discord.gg"), false);
+});
+
+test("a malformed test is refused rather than silently answered about something else", async () => {
+  const { mutations, recorded } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy() },
+  });
+
+  const cases: unknown[] = [
+    "not an object",
+    testBody({ text: "" }),
+    testBody({ text: "   " }),
+    testBody({ text: 42 }),
+    testBody({ text: "x".repeat(2_001) }),
+    testBody({ surface: "GAME" }),
+    { text: "hi" },
+    testBody({ mentionCount: -1 }),
+    testBody({ mentionCount: 1.5 }),
+    testBody({ mentionCount: 500 }),
+    testBody({ counters: [] }),
+    testBody({ counters: { "r-spam": "many" } }),
+    testBody({ counters: { "r-spam": 99_999 } }),
+  ];
+
+  for (const [i, body] of cases.entries()) {
+    const result = await mutations.testAutomod(session(), "g1", body);
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("a member cannot test the rules that police them", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "MEMBER" } });
+
+  assert.equal((await mutations.testAutomod(session(), "g1", testBody())).access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+// ── automod rules and cooldowns ──
+
+/** A rule as the panel sends one: complete, because the mutation validates the result. */
+const automodRuleBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: "r-links",
+  name: "No links",
+  enabled: true,
+  surfaces: ["DISCORD"],
+  trigger: { kind: "links", allowlist: ["hypixel.net"] },
+  exempt: { roleIds: [], capability: null },
+  action: { type: "FLAG", deleteMessage: true, durationSeconds: null },
+  ...over,
+});
+
+test("a new rule is appended and the rules already stored are kept", async () => {
+  const { mutations, recorded } = make({ settings: { "moderation.automod": automodPolicy() } });
+
+  const result = await mutations.upsertAutomodRule(session(), "g1", automodRuleBody());
+
+  assert.equal(result.ok, true);
+  const [, key, value] = recorded.calls.find((c) => c.method === "setSetting")?.args as [
+    string,
+    string,
+    { enabled: boolean; rules: { id: string }[] },
+  ];
+  assert.equal(key, "moderation.automod");
+  assert.equal(value.enabled, true);
+  assert.deepEqual(value.rules.map((r) => r.id), ["r-caps", "r-invite", "r-links"]);
+  assert.match(result.note ?? "", /Added/);
+});
+
+test("editing a rule replaces that rule and nothing else", async () => {
+  const { mutations, recorded } = make({ settings: { "moderation.automod": automodPolicy() } });
+
+  const result = await mutations.upsertAutomodRule(
+    session(),
+    "g1",
+    automodRuleBody({ id: "r-caps", name: "Shouting", trigger: { kind: "caps", percent: 80, minLength: 8 } }),
+  );
+
+  assert.equal(result.ok, true);
+  const [, , value] = recorded.calls.find((c) => c.method === "setSetting")?.args as [
+    string,
+    string,
+    { rules: { id: string; trigger: { percent?: number } }[] },
+  ];
+  // Same length and same order: an edit is not an append.
+  assert.deepEqual(value.rules.map((r) => r.id), ["r-caps", "r-invite"]);
+  assert.equal(value.rules[0]?.trigger.percent, 80);
+  assert.match(result.note ?? "", /Updated/);
+});
+
+test("a rule that could not do what it says is refused rather than stored", async () => {
+  const { mutations, recorded } = make({ settings: { "moderation.automod": automodPolicy() } });
+
+  const cases: unknown[] = [
+    "not an object",
+    automodRuleBody({ id: "" }),
+    automodRuleBody({ id: "spaces are not ids" }),
+    automodRuleBody({ name: "" }),
+    automodRuleBody({ name: "n".repeat(61) }),
+    automodRuleBody({ enabled: "yes" }),
+    automodRuleBody({ surfaces: [] }),
+    automodRuleBody({ surfaces: ["GAME"] }),
+    // A regex that does not compile would be dropped silently on the next read,
+    // leaving a rule on screen that matches nothing.
+    automodRuleBody({ trigger: { kind: "regex", pattern: "([a-z", flags: "i" } }),
+    automodRuleBody({ trigger: { kind: "regex", pattern: "ok", flags: "zz" } }),
+    automodRuleBody({ trigger: { kind: "spam", messages: 1, windowSeconds: 10 } }),
+    automodRuleBody({ trigger: { kind: "spam", messages: 5, windowSeconds: 0 } }),
+    // Below half, ordinary emphatic typing is "shouting".
+    automodRuleBody({ trigger: { kind: "caps", percent: 20, minLength: 8 } }),
+    automodRuleBody({ trigger: { kind: "mentions", max: 0 } }),
+    automodRuleBody({ trigger: { kind: "nonsense" } }),
+    automodRuleBody({ exempt: { roleIds: ["not-a-snowflake"], capability: null } }),
+    automodRuleBody({ exempt: { roleIds: [], capability: "BECOME_ADMIN" } }),
+    automodRuleBody({ action: { type: "DELETE", deleteMessage: true, durationSeconds: null } }),
+    automodRuleBody({ action: { type: "FLAG", deleteMessage: "yes", durationSeconds: null } }),
+    // A duration on an untimed action means the operator believes they
+    // configured something timed, and they did not.
+    automodRuleBody({ action: { type: "WARN", deleteMessage: false, durationSeconds: 60 } }),
+    automodRuleBody({ action: { type: "MUTE", deleteMessage: false, durationSeconds: 0 } }),
+    // Flag-only over the wordlist is what the chat filter already does.
+    automodRuleBody({
+      trigger: { kind: "wordlist" },
+      action: { type: "FLAG", deleteMessage: false, durationSeconds: null },
+    }),
+  ];
+
+  for (const [i, body] of cases.entries()) {
+    const result = await mutations.upsertAutomodRule(session(), "g1", body);
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "setSetting"), []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("removing a rule leaves the others, and a rule that was never there is reported honestly", async () => {
+  const present = make({ settings: { "moderation.automod": automodPolicy() } });
+  const gone = make({ settings: { "moderation.automod": automodPolicy() } });
+
+  const removed = await present.mutations.removeAutomodRule(session(), "g1", { id: "r-caps" });
+  assert.equal(removed.ok, true);
+  const [, , value] = present.recorded.calls.find((c) => c.method === "setSetting")?.args as [
+    string,
+    string,
+    { rules: { id: string }[] },
+  ];
+  assert.deepEqual(value.rules.map((r) => r.id), ["r-invite"]);
+
+  const missing = await gone.mutations.removeAutomodRule(session(), "g1", { id: "r-nothing" });
+  assert.equal(missing.ok, true);
+  assert.match(missing.note ?? "", /already gone/);
+  // Nothing is written for a no-op: a settings write here would bump the row's
+  // timestamp and invalidate every cache for a change that did not happen.
+  assert.deepEqual(gone.recorded.calls.filter((c) => c.method === "setSetting"), []);
+});
+
+test("the master switch keeps the rules it switches off", async () => {
+  const { mutations, recorded } = make({ settings: { "moderation.automod": automodPolicy() } });
+
+  const result = await mutations.setAutomodEnabled(session(), "g1", { enabled: false });
+
+  assert.equal(result.ok, true);
+  const [, , value] = recorded.calls.find((c) => c.method === "setSetting")?.args as [
+    string,
+    string,
+    { enabled: boolean; rules: unknown[] },
+  ];
+  assert.equal(value.enabled, false);
+  assert.equal(value.rules.length, 2);
+  assert.match(result.note ?? "", /kept/);
+
+  const refused = await mutations.setAutomodEnabled(session(), "g1", { enabled: "off" });
+  assert.equal(refused.error?.kind, "INVALID_INPUT");
+});
+
+test("an officer cannot write the rules that act without a person", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.upsertAutomodRule(session(), "g1", automodRuleBody())).access.allowed, false);
+  assert.equal((await mutations.removeAutomodRule(session(), "g1", { id: "r-caps" })).access.allowed, false);
+  assert.equal((await mutations.setAutomodEnabled(session(), "g1", { enabled: false })).access.allowed, false);
+  assert.equal((await mutations.setCooldowns(session(), "g1", { relaySeconds: 5 })).access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("cooldowns are stored whole, and a blank default is not the same as zero", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setCooldowns(session(), "g1", {
+    commandDefaultSeconds: null,
+    relaySeconds: 3,
+    perCommand: { networth: 30 },
+  });
+
+  assert.equal(result.ok, true);
+  const [, key, value] = recorded.calls.find((c) => c.method === "setSetting")?.args as [
+    string,
+    string,
+    { commandDefaultSeconds: number | null; relaySeconds: number; perCommand: Record<string, number> },
+  ];
+  assert.equal(key, "config.cooldowns");
+  assert.equal(value.commandDefaultSeconds, null);
+  assert.equal(value.relaySeconds, 3);
+  assert.deepEqual(value.perCommand, { networth: 30 });
+  assert.equal(recorded.audits[0]?.mutation, "config.cooldowns");
+});
+
+test("a cooldown nobody could wait out is refused", async () => {
+  const { mutations, recorded } = make();
+
+  const cases: unknown[] = [
+    "not an object",
+    { commandDefaultSeconds: -1 },
+    { commandDefaultSeconds: 1.5 },
+    { commandDefaultSeconds: 601 },
+    { relaySeconds: 601 },
+    { relaySeconds: "none" },
+    { perCommand: [] },
+    { perCommand: { "not a command": 5 } },
+    { perCommand: { networth: 601 } },
+    { perCommand: { networth: "slow" } },
+  ];
+
+  for (const [i, body] of cases.entries()) {
+    const result = await mutations.setCooldowns(session(), "g1", body);
+    assert.equal(result.ok, false, `case ${i}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  assert.deepEqual(recorded.calls, []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+// ── health: running a job by hand ──
+
+test("an ADMIN starting a job reaches the fleet, the audit and usage", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.runJob(session(), "g1", { jobName: "guild-scan" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    { method: "triggerJob", args: [{ jobName: "guild-scan", guildId: "g1", actorDiscordId: "111" }] },
+  ]);
+  assert.equal(recorded.audits[0]?.mutation, "health.run-job");
+  assert.deepEqual(recorded.audits[0]?.change, { jobName: "guild-scan" });
+  assert.equal(recorded.usage[0]?.success, true);
+  // The note must promise a request, not a run: the bus is fire-and-forget and
+  // the last-run column is the only thing that can confirm the work happened.
+  assert.match(result.note ?? "", /Requested/);
+});
+
+test("an OFFICER cannot start a job by hand", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.runJob(session(), "g1", { jobName: "guild-scan" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.access.allowed, false);
+  if (!result.access.allowed) assert.equal(result.access.reason, "INSUFFICIENT_ROLE");
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a job name outside the allow-list is refused, and nothing is published", async () => {
+  const { mutations, recorded } = make();
+
+  for (const body of [null, "guild-scan", {}, { jobName: "" }, { jobName: 7 }, { jobName: "rm -rf" }] as unknown[]) {
+    const result = await mutations.runJob(session(), "g1", body);
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.kind, "INVALID_INPUT");
+  }
+  assert.deepEqual(recorded.calls, []);
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("a deployment with no worker bus says so rather than silently doing nothing", async () => {
+  const { mutations, recorded } = make({ noJobs: true });
+
+  const result = await mutations.runJob(session(), "g1", { jobName: "guild-scan" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "SERVICE_ERROR");
+  assert.deepEqual(recorded.audits, []);
+});
+
+test("a publish that throws is reported, not swallowed as a success", async () => {
+  const { mutations } = make({ jobsThrow: true });
+
+  const result = await mutations.runJob(session(), "g1", { jobName: "guild-scan" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "SERVICE_ERROR");
+  assert.match(result.error?.detail ?? "", /redis is down/);
+});
+
+/**
+ * The second gate is keyed per job and per guild rather than per actor, so two
+ * different admins cannot each start the same sweep inside the minute. That is
+ * the whole point of it existing on top of the standard per-user limiter.
+ */
+test("the manual-run gate is per job and per guild, not per person", async () => {
+  const { mutations, recorded } = make();
+  await mutations.runJob(session(), "g1", { jobName: "guild-scan" });
+
+  assert.ok(recorded.limited.includes("cd:web:job:g1:guild-scan"));
+  assert.ok(recorded.limited.some((k) => k.includes("111")), "the standard per-user gate still runs");
+  assert.ok(MANUAL_JOB_COOLDOWN_MS > MUTATION_COOLDOWN_MS);
+
+  const second = make({
+    roleMap: { "111": "ADMIN", "222": "ADMIN" },
+    blocked: ["cd:web:job:g1:guild-scan"],
+  });
+  const result = await second.mutations.runJob(
+    session({ discordId: "222" }),
+    "g1",
+    { jobName: "guild-scan" },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "RATE_LIMITED");
+  assert.equal(result.error?.retryAfterMs, 1500);
+  assert.deepEqual(second.recorded.calls, []);
+});
+
+// ── permissions ──
+
+/**
+ * The four dimensions write to two different places — bindings to their own
+ * config method, the other three into one policy document — so these tests
+ * assert *where* a change landed as much as whether it was accepted.
+ */
+
+test("an OFFICER cannot edit the permission model", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  for (const call of [
+    mutations.setRoleBinding(session(), "g1", { role: "ADMIN", discordRoleIds: ["123456789012345678"] }),
+    mutations.setRankMapping(session(), "g1", { rank: "Officer", role: "OFFICER" }),
+    mutations.setCapabilityFloor(session(), "g1", { capability: "MENTION", role: "ADMIN" }),
+    mutations.setCommandFloor(session(), "g1", { command: "warn", role: "OFFICER" }),
+    mutations.setPermissionException(session(), "g1", {
+      subjectType: "DISCORD_USER", subjectId: "222222222222222222", capability: "RELAY_MESSAGE", allow: false,
+    }),
+    mutations.removePermissionException(session(), "g1", { id: "e1" }),
+  ]) {
+    const result = await call;
+    assert.equal(result.ok, false);
+    assert.equal(result.access.allowed, false);
+  }
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("binding a level writes the whole set of Discord roles at once", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setRoleBinding(session(), "g1", {
+    role: "MODERATOR",
+    // The duplicate is the point: the page can post one, and a set with a
+    // repeat in it is a set, not a rejection.
+    discordRoleIds: ["123456789012345678", "223456789012345678", "123456789012345678"],
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    { method: "setRoleBinding", args: ["g1", "MODERATOR", ["123456789012345678", "223456789012345678"]] },
+  ]);
+  assert.deepEqual(recorded.audits[0]?.change, {
+    role: "MODERATOR",
+    discordRoleIds: ["123456789012345678", "223456789012345678"],
+  });
+});
+
+test("an empty list clears a binding rather than being rejected as missing", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.setRoleBinding(session(), "g1", { role: "ADMIN", discordRoleIds: [] })).ok, true);
+  assert.deepEqual(recorded.calls[0]?.args, ["g1", "ADMIN", []]);
+});
+
+test("a binding to something that is not a Discord role id never reaches the config service", async () => {
+  const { mutations, recorded } = make();
+
+  for (const body of [
+    { role: "WIZARD", discordRoleIds: ["123456789012345678"] },
+    { role: "ADMIN", discordRoleIds: "123456789012345678" },
+    { role: "ADMIN", discordRoleIds: ["not-a-snowflake"] },
+  ]) {
+    const result = await mutations.setRoleBinding(session(), "g1", body);
+    assert.equal(result.ok, false, JSON.stringify(body));
+    assert.equal(result.error?.kind, "INVALID_INPUT");
+  }
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("mapping an in-game rank reads the policy document and writes it back whole", async () => {
+  const { mutations, recorded } = make({
+    settings: { [ROLE_POLICY_SETTING_KEY]: { guildRanks: { "Guild Master": "OWNER" } } },
+  });
+
+  // Ranks are matched case-insensitively in game chat, so they are stored
+  // folded — "  Officer  " and "officer" are one mapping, not two.
+  const result = await mutations.setRankMapping(session(), "g1", { rank: "  Officer  ", role: "OFFICER" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    { method: "getSetting", args: ["g1", ROLE_POLICY_SETTING_KEY] },
+    {
+      method: "setSetting",
+      args: [
+        "g1",
+        ROLE_POLICY_SETTING_KEY,
+        // The rank already there survives: this is a read-modify-write of one
+        // document, not a replacement of it.
+        { guildRanks: { "guild master": "OWNER", officer: "OFFICER" }, capabilities: {}, commands: {} },
+      ],
+    },
+  ]);
+});
+
+test("a null role unmaps a rank instead of storing null as a level", async () => {
+  const { mutations, recorded } = make({
+    settings: { [ROLE_POLICY_SETTING_KEY]: { guildRanks: { Officer: "OFFICER", Member: "MEMBER" } } },
+  });
+
+  const result = await mutations.setRankMapping(session(), "g1", { rank: "Officer", role: null });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls[1]?.args[2], { guildRanks: { member: "MEMBER" }, capabilities: {}, commands: {} });
+});
+
+test("a blank rank name is refused before anything is read", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setRankMapping(session(), "g1", { rank: "   ", role: "OFFICER" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a capability floor lands in the policy beside whatever else it holds", async () => {
+  const { mutations, recorded } = make({
+    settings: { [ROLE_POLICY_SETTING_KEY]: { commands: { warn: "OFFICER" } } },
+  });
+
+  const result = await mutations.setCapabilityFloor(session(), "g1", { capability: "MENTION", role: "OFFICER" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls[1]?.args[2], {
+    guildRanks: {},
+    capabilities: { MENTION: "OFFICER" },
+    commands: { warn: "OFFICER" },
+  });
+});
+
+/**
+ * The reader fills every default in, so writing its result back verbatim would
+ * freeze today's floors into the guild's document the first time anyone saved
+ * anything — and a later change to a platform default would then skip every
+ * guild that had ever touched the page.
+ */
+test("a floor set back to the platform default is stored as nothing at all", async () => {
+  const { mutations, recorded } = make({
+    settings: { [ROLE_POLICY_SETTING_KEY]: { capabilities: { MENTION: "OFFICER" } } },
+  });
+
+  const result = await mutations.setCapabilityFloor(session(), "g1", { capability: "MENTION", role: "MODERATOR" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls[1]?.args[2], { guildRanks: {}, capabilities: {}, commands: {} });
+});
+
+/**
+ * ADMIN is the capability that implies every other one, so a guild that could
+ * hand it to MEMBER would have a permission model with one level in it. The
+ * refusal comes from the shared validator, which is what the bots read with.
+ */
+test("the ADMIN capability cannot be dropped below the ADMIN level", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setCapabilityFloor(session(), "g1", { capability: "ADMIN", role: "MEMBER" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.match(result.error?.detail ?? "", /ADMIN/);
+  assert.ok(!recorded.calls.some((c) => c.method === "setSetting"));
+});
+
+test("a capability the platform does not define is refused", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setCapabilityFloor(session(), "g1", { capability: "FLY", role: "ADMIN" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a command override is stored lowercased under its own key", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setCommandFloor(session(), "g1", { command: " Warn ", role: "MODERATOR" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls[1]?.args[2], {
+    guildRanks: {},
+    capabilities: {},
+    commands: { warn: "MODERATOR" },
+  });
+  assert.deepEqual(recorded.audits[0]?.change, { command: "warn", role: "MODERATOR" });
+});
+
+/**
+ * Clearing stores nothing rather than storing the handler's current floor: a
+ * command whose compiled-in floor is later raised must not stay lowered by a
+ * policy written against the old one.
+ */
+test("clearing a command override removes the key rather than pinning the default", async () => {
+  const { mutations, recorded } = make({
+    settings: { [ROLE_POLICY_SETTING_KEY]: { commands: { warn: "MEMBER" } } },
+  });
+
+  const result = await mutations.setCommandFloor(session(), "g1", { command: "warn", role: null });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls[1]?.args[2], { guildRanks: {}, capabilities: {}, commands: {} });
+});
+
+test("an exception names a subject, a capability and which way it points", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setPermissionException(session(), "g1", {
+    subjectType: "DISCORD_USER",
+    subjectId: "222222222222222222",
+    capability: "RELAY_MESSAGE",
+    allow: false,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls, [
+    { method: "setException", args: ["g1", "DISCORD_USER", "222222222222222222", "RELAY_MESSAGE", false] },
+  ]);
+});
+
+test("a rank subject is a name and a Discord subject is a snowflake, and neither takes the other's shape", async () => {
+  const { mutations, recorded } = make();
+
+  const rank = await mutations.setPermissionException(session(), "g1", {
+    subjectType: "GUILD_RANK", subjectId: " Officer ", capability: "RELAY_MESSAGE", allow: true,
+  });
+  assert.equal(rank.ok, true);
+  assert.deepEqual(recorded.calls[0]?.args, ["g1", "GUILD_RANK", "Officer", "RELAY_MESSAGE", true]);
+
+  const role = await mutations.setPermissionException(session(), "g1", {
+    subjectType: "DISCORD_ROLE", subjectId: "Officer", capability: "RELAY_MESSAGE", allow: true,
+  });
+  assert.equal(role.ok, false);
+  assert.equal(role.error?.kind, "INVALID_INPUT");
+  assert.equal(recorded.calls.length, 1);
+});
+
+/** A missing `allow` is not a deny: the strongest statement here is asked for. */
+test("which way an exception points has to be said out loud", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.setPermissionException(session(), "g1", {
+    subjectType: "DISCORD_USER", subjectId: "222222222222222222", capability: "RELAY_MESSAGE",
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a deployment without the exception store says so instead of failing obscurely", async () => {
+  const { mutations } = make({ noExceptions: true });
+
+  const set = await mutations.setPermissionException(session(), "g1", {
+    subjectType: "DISCORD_USER", subjectId: "222222222222222222", capability: "RELAY_MESSAGE", allow: true,
+  });
+  const remove = await mutations.removePermissionException(session(), "g1", { id: "e1" });
+
+  for (const result of [set, remove]) {
+    assert.equal(result.ok, false);
+    assert.equal(result.error?.kind, "SERVICE_ERROR");
+    assert.match(result.error?.detail ?? "", /aren't available/);
+  }
+});
+
+test("removing an exception another admin already removed is reported, not passed off as a deletion", async () => {
+  const { mutations, recorded } = make({ exceptionRemoved: false });
+
+  const result = await mutations.removePermissionException(session(), "g1", { id: "e1" });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error?.kind, "INVALID_INPUT");
+  assert.deepEqual(recorded.calls, [{ method: "removeException", args: ["g1", "e1"] }]);
+  assert.deepEqual(recorded.audits, []);
 });

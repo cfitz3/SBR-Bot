@@ -10,7 +10,7 @@ import { Queue, Worker, type Job } from "bullmq";
 import { installLifecycle } from "@sbr/observability";
 import { createWorkerContext } from "./composition.js";
 import { buildJobDefinitions } from "./jobs.js";
-import { SCHEDULE, reconcileSchedule } from "./schedule.js";
+import { LANE, SCHEDULE, reconcileSchedule } from "./schedule.js";
 
 const QUEUE = "sbr-worker";
 
@@ -47,6 +47,37 @@ async function main(): Promise<void> {
     if (entry.warm) await queue.add(entry.name, {}, { priority: entry.priority });
   }
 
+  // "Run now", from the panel's Health page. The panel publishes a request
+  // rather than enqueueing, so this process stays the only writer to the queue
+  // (see RedisJobTriggerBus). A request for a job this build does not define is
+  // dropped with a line in the log: it means the panel is ahead of the fleet,
+  // which an operator watching a button do nothing deserves to be able to find.
+  const stopTriggers = await ctx.adapters.jobTriggers.subscribe((message) => {
+    const def = defs.get(message.jobName);
+    if (!def) {
+      ctx.log.warn("manual run requested for an unknown job", { name: message.jobName, actor: message.actorDiscordId });
+      return;
+    }
+    // Its scheduled lane, so a hand-started sweep does not jump ahead of the
+    // live-serving work a repeatable of the same name would have waited behind.
+    const priority = SCHEDULE.find((entry) => entry.name === message.jobName)?.priority ?? LANE.bulk;
+    void queue
+      .add(message.jobName, {}, { priority })
+      .then(() => {
+        ctx.log.info("manual run queued", {
+          name: message.jobName,
+          guildId: message.guildId,
+          actor: message.actorDiscordId,
+        });
+      })
+      .catch((error: unknown) => {
+        ctx.log.error("manual run could not be queued", {
+          name: message.jobName,
+          error: error instanceof Error ? error.message : "unknown",
+        });
+      });
+  });
+
   ctx.log.info("workers scheduler started", { queue: QUEUE, jobs: [...defs.keys()] });
 
   installLifecycle({
@@ -57,6 +88,7 @@ async function main(): Promise<void> {
     // default before the watchdog decides it is hung rather than busy.
     timeoutMs: 30_000,
     async shutdown() {
+      await stopTriggers();
       await worker.close();
       await queue.close();
       await ctx.shutdown();

@@ -123,9 +123,21 @@ A DiscordUser's membership in a specific Guild (roles/rank/status scoped per gui
 | `guildId` | FK |
 | `discordUserId` | FK |
 | `guildRank` | in-game rank name (cached) |
-| `role` | platform role, see enum |
+| `role` | platform role, see enum — one input to the derived level, not the answer |
+| `roleOverride` | explicit level; null means derived. Participates as a floor *and* can demote |
+| `roleIds` | the member's Discord role ids, mirrored by `discord-member-sync` |
 | `status` | see enum |
 | `joinedAt`, `leftAt` | membership window |
+
+The level a member actually holds is **derived**, by `resolveMemberRole`
+(`packages/guild-config/src/roles.ts`): the max of the stored `role`, the
+highest level whose bound Discord role they hold (`GuildConfig.roleMappings`),
+and the level their in-game rank maps to (`GuildSetting["roles.policy"]`) —
+except that an explicit `roleOverride` below the derived value wins, because
+removing somebody's authority has to be enforceable without first unwinding
+three Discord roles. `rankResolver.getRole` returns **null** for a person with
+no row here, and null is not a point on the ladder: a non-member clears no
+floor.
 
 **Enum — `MemberRole`:** `MEMBER`, `MODERATOR`, `OFFICER`, `ADMIN`, `OWNER`.
 **Enum — `MemberStatus`:** `ACTIVE`, `INACTIVE`, `LEFT`, `BANNED`.
@@ -259,6 +271,15 @@ panel-editable knobs out of `.env` without a migration per knob.
 | `key` | dotted namespace, unique per guild |
 | `value` | JSON; an absent row means "use the code default" |
 
+`roles.policy` is worth naming here because three of the panel's four permission
+dimensions share it: the in-game-rank → level map, the capability floors and the
+per-command overrides all live in one document, so "what is this guild's
+permission model" is a single read that cannot disagree with itself. Only
+deviations from the platform default are stored. The fourth dimension, the
+level → Discord-role bindings, stays on `GuildConfig.roleMappings`, which now
+holds a *set* of role ids per level (a bare string is still read, from before it
+widened).
+
 **Relationships:** N—1 `Guild`.
 
 #### BridgePermission
@@ -277,14 +298,19 @@ Who may do what through the chat bridge (e.g. run commands, use @mentions, bypas
 **Relationships:** N—1 `Guild`. Effective permissions cached in Redis for fast checks.
 
 **Resolution order** (`packages/identity`): explicit deny → explicit grant (an `ADMIN`
-grant carries every capability) → **`GuildMember.role` floor**. The floor exists because
+grant carries every capability) → **role floor**. The floor exists because
 this table starts empty: a freshly onboarded guild has no rows, so resolving from rows
-alone would deny every command to everyone including the owner. Floors are
+alone would deny every command to everyone including the owner. Platform defaults are
 `RELAY_MESSAGE`/`RUN_COMMAND` → `MEMBER`, `MENTION` → `MODERATOR`, `BYPASS_COOLDOWN` →
-`OFFICER`, `BYPASS_FILTER`/`ADMIN` → `ADMIN`. Deny is checked first so a capability can be
-taken from someone who holds it by rank without demoting them. Only `DISCORD_USER` rows
-are resolved today — `DISCORD_ROLE` and `GUILD_RANK` subjects need the caller's Discord
-roles or in-game rank, which the check does not yet receive.
+`OFFICER`, `BYPASS_FILTER`/`ADMIN` → `ADMIN`; a guild raises or lowers any of them from
+the panel's Permissions page, and only the floors it *changes* are stored, so a later
+change to a default still reaches every guild that never touched it. Deny is checked
+first so a capability can be taken from someone who holds it by rank without demoting
+them. **All three subject types resolve**: `getCapabilityGrants` reads the member's
+Discord role ids and in-game rank off the row it already fetches and matches every
+subject in one query, so "every Officer gets `BYPASS_COOLDOWN`" is one row. `GUILD_RANK`
+subject ids are stored normalised (trimmed, lower-cased), because Hypixel rank names are
+guild-authored free text.
 
 #### WordlistEntry
 Filter/wordlist rules for bridge content moderation.

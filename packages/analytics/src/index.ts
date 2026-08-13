@@ -11,3 +11,4 @@ export {
   type PeriodMetricRow,
 } from "./rollup.js";
 export type { AnalyticsBuffer } from "./ports.js";
+export { createDomainMetrics, type DomainMetrics, type DomainMetricsOptions } from "./metrics.js";

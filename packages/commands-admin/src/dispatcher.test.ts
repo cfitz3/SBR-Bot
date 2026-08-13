@@ -60,6 +60,7 @@ function moderation(over: Partial<ModerationService> = {}): ModerationService {
     async recordInfraction(i) { return ok({ ...i, id: "inf", createdAt: "t" }); },
     async applyAction() { return ok(action()); },
     async listInfractions() { return ok([]); },
+    async listRecentInfractions() { return ok([]); },
     async listActions() { return ok([]); },
     async listInForce() { return ok([]); },
     async sweepExpired() { return ok(0); },
@@ -118,6 +119,7 @@ function guildConfig(over: Partial<GuildConfigService> = {}): GuildConfigService
     async setBridgeSuspended() { return ok(undefined); },
     async setRecruitment() { return ok(undefined); },
     async setRoleMapping() { return ok(undefined); },
+    async setRoleBinding() { return ok(undefined); },
     async setHypixelGuild() { return ok(undefined); },
     ...over,
   };

@@ -11,6 +11,7 @@
     { "path": "../observability" },
     { "path": "../moderation" },
     { "path": "../analytics" },
-    { "path": "../screening" }
+    { "path": "../screening" },
+    { "path": "../guild-config" }
   ]
 }

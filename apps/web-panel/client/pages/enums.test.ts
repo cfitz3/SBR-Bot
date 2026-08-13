@@ -11,13 +11,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  BridgeCapability as PlatformBridgeCapability,
   MILESTONE_METRICS as PLATFORM_MILESTONE_METRICS,
   MilestoneType as PlatformMilestoneType,
   TicketCategory as PlatformTicketCategory,
   WordAction as PlatformWordAction,
   WordMatchType as PlatformWordMatchType,
 } from "@sbr/shared-types";
-import { MILESTONE_METRICS, MilestoneType, TicketCategory, WordAction, WordMatchType } from "./enums.js";
+import { BridgeCapability, MILESTONE_METRICS, MilestoneType, TicketCategory, WordAction, WordMatchType } from "./enums.js";
 
 test("the milestone metrics the page offers are the ones the platform defines", () => {
   assert.deepEqual([...MILESTONE_METRICS], [...PLATFORM_MILESTONE_METRICS]);
@@ -29,6 +30,7 @@ test("every enum copy matches the platform's, in declaration order", () => {
     ["TicketCategory", TicketCategory, PlatformTicketCategory],
     ["WordMatchType", WordMatchType, PlatformWordMatchType],
     ["WordAction", WordAction, PlatformWordAction],
+    ["BridgeCapability", BridgeCapability, PlatformBridgeCapability],
   ] as const;
 
   for (const [name, mine, platform] of cases) {

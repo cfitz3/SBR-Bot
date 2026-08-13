@@ -6,6 +6,7 @@
  */
 import { loadConfig, type AppConfig } from "@sbr/config";
 import {
+  bridgePermissionRepository,
   communityRepository,
   assertDatabaseReady,
   disconnectDb,
@@ -17,21 +18,25 @@ import {
   moderationRepository,
   panelRepository,
   rankResolver,
+  rolePolicyReader,
   wordlistRepository,
   activitySink,
   xpRepository,
 } from "@sbr/db";
-import { AnalyticsServiceImpl } from "@sbr/analytics";
+import { AnalyticsServiceImpl, createDomainMetrics } from "@sbr/analytics";
+import { buildAdminRegistry } from "@sbr/commands-admin";
 import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { HypixelClient } from "@sbr/hypixel";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { ESCALATION_SETTING_KEY, ModerationServiceImpl, WordlistServiceImpl } from "@sbr/moderation";
+import { ESCALATION_SETTING_KEY, ModerationServiceImpl, RELAY_SYNC_SETTING_KEY, WordlistServiceImpl } from "@sbr/moderation";
 import { PanelMutations, PanelService, type ConfigAuditSink } from "@sbr/panel-core";
 import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
-import { createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
+import { createRedisAdapters, getRedis, RUNNABLE_JOBS, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
+import { createBotDirectory, createDiscordEnforcer, MAX_TIMEOUT_SECONDS, type EnforceRequest } from "./directory.js";
+import type { ModerationActionDTO } from "@sbr/shared-types";
 
 /**
  * This process's identity in the heartbeat keyspace.
@@ -67,6 +72,7 @@ export async function createPanelApp(): Promise<PanelApp> {
   const adapters = createRedisAdapters(redis);
 
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
+  const metrics = createDomainMetrics({ analytics, surface: "WEB_PANEL", logger: log });
   const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
   // Every config write announces itself, so a bot picks the change up in the
   // second it lands instead of after its own cache TTL. This is the panel's half
@@ -78,13 +84,50 @@ export async function createPanelApp(): Promise<PanelApp> {
     logger: log,
   });
 
+  /**
+   * The bot's enforcement arm, and the panel's half of a punishment.
+   *
+   * Constructed before the moderation service because the service's enforcement
+   * port wraps it: recording an action and not carrying it out is the bug this
+   * closes, so the two are deliberately the same call.
+   */
+  const enforcer = createDiscordEnforcer({
+    baseUrl: config.internalApi.baseUrl,
+    token: config.internalApi.token,
+    logger: log,
+  });
+
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
+    metrics,
     // The real Redis mirror, same object the admin bot uses: a mute issued from
     // the panel has to be visible to the bridge immediately, and a no-op stub
     // would have written the audit row while enforcing nothing.
-    enforcement: adapters.enforcement,
+    enforcement: {
+      async apply(action) {
+        // Mirror first. The mirror is what the bridge and the dispatchers read
+        // to decide whether someone is muted, and it must land even if Discord
+        // refuses — otherwise a failed timeout would also leave the person
+        // un-muted everywhere else.
+        await adapters.enforcement.apply(action);
+        const request = discordEnforcementFor(action);
+        if (request === null) return;
+        const outcome = await enforcer.enforce(action.guildId, request);
+        if (!outcome.ok) {
+          // Logged, not thrown: the audit row is already written and the mirror
+          // already holds, so failing the whole action here would leave the
+          // panel reporting an error against work that partly succeeded. The
+          // Health page is where a persistently unreachable bot shows up.
+          log.warn("discord enforcement did not apply", {
+            guildId: action.guildId,
+            type: action.type,
+            target: action.targetDiscordId,
+            error: outcome.error,
+          });
+        }
+      },
+    },
     // Still assumed, exactly as in the admin bot: proving the bot holds a
     // Discord permission needs a gateway connection, which this process does not
     // have. Wiring a `false` here would block every action instead.
@@ -93,6 +136,19 @@ export async function createPanelApp(): Promise<PanelApp> {
     // settings KV, read fresh on each warning so an edit takes effect on the
     // next one rather than at the next restart.
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
+    // Punishment sync into guild chat. The command is published, not typed:
+    // only the bridge process holds a Minecraft session, and only it knows how
+    // fast Hypixel will let that account speak.
+    gameCommands: { send: (guildId, command) => adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() }) },
+    igns: {
+      async ignFor(_guildId, discordId) {
+        // Guild-agnostic on purpose: a link is to a person, not to a server, and
+        // the same account carries across every guild on the platform.
+        const link = await identityRepository.findPrimaryLinkByDiscordId(discordId).catch(() => null);
+        return link?.ign ?? null;
+      },
+    },
+    relaySync: { readRelaySync: (guildId) => guildConfigRepository.getSetting(guildId, RELAY_SYNC_SETTING_KEY) },
     logger: log,
   });
 
@@ -123,6 +179,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     repo: identityRepository,
     social: hypixel,
     roles: rankResolver,
+    floors: rolePolicyReader,
     logger: log,
   });
 
@@ -162,6 +219,30 @@ export async function createPanelApp(): Promise<PanelApp> {
     tickets: ticketConfigRepository,
     wordlist,
     heartbeats: adapters.heartbeat,
+    permissionExceptions: bridgePermissionRepository,
+    // The command table on the Permissions page is the admin bot's own
+    // registry, read for its metadata only — the panel never dispatches these.
+    // Building it here rather than hardcoding a list is what stops the page
+    // from quietly going stale when a command is added or its floor changes.
+    commands: {
+      list() {
+        return [...buildAdminRegistry().values()].map((spec) => ({
+          name: spec.name,
+          description: spec.description,
+          minRole: spec.minRole,
+        }));
+      },
+    },
+    // The channel/role/member source behind every picker. Constructed
+    // unconditionally — it reports itself unavailable when no token is set,
+    // which is the same answer it gives when the bot is simply down, and the
+    // pages handle that one case rather than two.
+    directory: createBotDirectory({
+      baseUrl: config.internalApi.baseUrl,
+      token: config.internalApi.token,
+      logger: log,
+    }),
+    runnableJobs: RUNNABLE_JOBS,
     logger: log,
   });
 
@@ -196,6 +277,18 @@ export async function createPanelApp(): Promise<PanelApp> {
     tickets: ticketConfigRepository,
     wordlist,
     hypixel,
+    // The same store the read side lists from, so an exception written here is
+    // the row the resolver consults on the relay's next message.
+    permissionExceptions: bridgePermissionRepository,
+    // "Run now" on the Health page. The panel publishes a request and the
+    // worker fleet queues it, so `bullmq` stays out of this process entirely
+    // and exactly one writer owns the queue.
+    jobs: {
+      runnable: RUNNABLE_JOBS,
+      async trigger(request) {
+        await adapters.jobTriggers.publish({ ...request, at: new Date().toISOString() });
+      },
+    },
     limiter: adapters.cooldowns,
     audit,
     analytics,
@@ -228,4 +321,43 @@ export async function createPanelApp(): Promise<PanelApp> {
       await disconnectDb();
     },
   };
+}
+
+/**
+ * Which Discord action, if any, a recorded moderation action implies.
+ *
+ * `null` for WARN and NOTE on purpose: those are records, not removals, and
+ * inventing a Discord effect for them would punish twice for one action — the
+ * warning already escalates on its own ladder, and the ladder's rungs come back
+ * through here as MUTE or BAN when they are reached.
+ *
+ * MUTE becomes a Discord *timeout* because that is the only server-wide silence
+ * Discord offers; a mute role would have to be configured, maintained and
+ * re-applied per channel, and the mirror already covers the surfaces we own.
+ */
+function discordEnforcementFor(action: ModerationActionDTO): EnforceRequest | null {
+  if (action.targetDiscordId === null) return null;
+  const base = {
+    userId: action.targetDiscordId,
+    reason: action.reason ?? "No reason given",
+    durationSeconds: action.durationSeconds,
+  };
+  switch (action.type) {
+    case "MUTE":
+      // An unbounded mute has no timeout to express, and clamping it to 28 days
+      // would quietly convert a permanent punishment into a temporary one. The
+      // mirror still holds it everywhere the platform controls.
+      if (action.durationSeconds === null || action.durationSeconds <= 0) return null;
+      return { ...base, type: "TIMEOUT", durationSeconds: Math.min(action.durationSeconds, MAX_TIMEOUT_SECONDS) };
+    case "UNMUTE":
+      return { ...base, type: "UNTIMEOUT" };
+    case "KICK":
+      return { ...base, type: "KICK" };
+    case "BAN":
+      return { ...base, type: "BAN" };
+    case "UNBAN":
+      return { ...base, type: "UNBAN" };
+    default:
+      return null;
+  }
 }

@@ -102,7 +102,12 @@ export interface AdminCommandSpec {
   readonly autocomplete?: AdminAutocompleteHandler;
 }
 
-/** Resolves the invoking staffer's platform role for tier + rank gating. */
+/**
+ * Resolves the invoking staffer's platform role for tier + rank gating.
+ *
+ * Null means they are not a member of this guild, which every gate treats as
+ * "denied" rather than as the bottom of the ladder.
+ */
 export interface RoleResolver {
-  getRole(guildId: string, discordId: string): Promise<MemberRole>;
+  getRole(guildId: string, discordId: string): Promise<MemberRole | null>;
 }

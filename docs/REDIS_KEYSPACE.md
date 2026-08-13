@@ -21,6 +21,7 @@ The canonical Redis key layout for the platform. Redis is the shared coordinatio
 | Event dispatch & queues | `bull:` / `chan:` / `buf:` | workers / all (pub) | queue-managed / n/a / trimmed | BullMQ / pub-sub / stream |
 | Rate-limit buckets | `rl:` | hypixel client / workers | rolling window | hash / int |
 | Bridge flood counters | `flood:` / `cd:relay:` | bridge-bot | seconds | int |
+| Automod windows | `am:` | bridge-bot (automod) | = rule window | int |
 | Temp mutes / suspensions | `mute:` / `ban:` / `suspend:` | admin-bot / panel (`moderation`) | = action duration | JSON / int |
 | Cached Hypixel responses | `cache:` | hypixel client / workers | seconds–hours | JSON(+meta) |
 | Worker locks | `lock:` | workers | short (auto-expire) | token string |
@@ -74,7 +75,7 @@ oauth:state:Xk92...     "pending"   EX 300  (deleted on callback)
 Three distinct mechanisms:
 
 - **Job queues — `bull:{queueName}:*`:** owned/encoded by **BullMQ**; contains job data, delayed/repeatable schedules, and state. Do not hand-edit. TTL is queue-managed (completed/failed retention configured per queue).
-- **Pub/sub channels — `chan:{topic}:{scope}`:** fire-and-forget domain events for cross-instance fan-out. No TTL (transient messages, not stored). Topics: `chan:bridge:{guildId}` (relay fan-out), `chan:config:{guildId}` (config reload), `chan:mod:{guildId}` (enforcement changes), `chan:events` (global refresh signals).
+- **Pub/sub channels — `chan:{topic}:{scope}`:** fire-and-forget domain events for cross-instance fan-out. No TTL (transient messages, not stored). Topics: `chan:bridge:{guildId}` (relay fan-out), `chan:config:{guildId}` (config reload), `chan:mod:{guildId}` (moderation commands for the bridge to type), `chan:jobs` (manual job triggers, panel → workers), `chan:events` (global refresh signals).
 - **Analytics ingest buffer — `buf:analytics`:** a Redis **Stream** (append-only), drained by the `analytics-ingest` consumer group; trimmed by `MAXLEN` once consumed.
 
 - **Serialization:** BullMQ internal; pub/sub payloads small **JSON**; stream entries field-map JSON.
@@ -115,6 +116,40 @@ rl:discord:webhook:872...   (pacing bucket)
 ```
 flood:user:872...:214...    INCR → 4   EX 10   (drop if > threshold)
 flood:guild:872...          INCR → 57  EX 5    (shed low-priority relays)
+```
+
+---
+
+## 5b. Automod Windows (`am:`)
+
+The two automod triggers that ask a question about *time* rather than about the
+message in hand — `spam` ("N messages in W seconds") and `repeat` ("the same
+line N times in W seconds") — need somewhere to keep the count. That somewhere
+is here, and nowhere else: the automod evaluator itself is pure, and receives
+these numbers as an argument.
+
+- **Naming:** `am:spam:{guildId}:{ruleId}:{author}` and `am:rep:{guildId}:{ruleId}:{author}:{textHash}`.
+  `{author}` is the Discord id on the Discord surface and the IGN on the guild-chat
+  surface — automod counts a person on the surface they are speaking on, so a
+  member is not muted for talking in both places at once. `{textHash}` is an
+  FNV-1a of the message, case- and whitespace-normalised, so "STOP", "stop" and
+  "stop " are one repeat rather than three.
+- **Keyed by rule id, deliberately.** Two spam rules with different windows are
+  two independent counts of the same messages; a shared key would let the tighter
+  window decide for both.
+- **TTL:** exactly the rule's own `windowSeconds`, set with `EXPIRE` on the
+  bump. Editing a rule's window therefore takes effect within one old window
+  rather than needing a flush.
+- **Serialization:** **int** via `INCR` + `EXPIRE`.
+- **Ownership:** `RedisAutomodCounters` in `packages/redis/src/adapters.ts`,
+  called only from `AutomodRunner`.
+- **Invalidation:** windows self-expire. A failed read returns **0, never a
+  match** — a Redis outage must degrade automod into inaction, not into muting
+  people on a count it could not verify.
+
+```
+am:spam:872...:r-flood:214...            INCR → 6   EX 10
+am:rep:872...:r-parrot:214...:9f2c1a08   INCR → 3   EX 30
 ```
 
 ---
@@ -223,6 +258,7 @@ fun:tally:872...:cringe:aria    INCR ; EXPIRE 7776000   (bump, then re-arm)
 | `bull:`/`buf:`/`chan:` | Queue/stream: operational | Partially (BullMQ persistence) | BullMQ recovers; pub/sub is transient |
 | `rl:` buckets | No | No | Rebuilt from next response headers |
 | `flood:` counters | No | No (acceptable) | Windows reset |
+| `am:` automod windows | No | No (acceptable) | Windows reset — a flush forgives, it never punishes |
 | `mute:`/`ban:`/`suspend:` | No (mirror of Postgres) | No → **rehydrated** | Re-seeded from active `ModerationAction`/`GuildConfig` on boot |
 | `cache:hypixel/pricing/ah` | No | No | Repopulated on demand + by workers |
 | `lock:` | No | No | Auto-expire; jobs idempotent |
@@ -235,3 +271,45 @@ fun:tally:872...:cringe:aria    INCR ; EXPIRE 7776000   (bump, then re-arm)
 - **Every ephemeral key has a TTL**; only worker-owned indexes/queues are refreshed instead of expired.
 - **Invalidation is event-driven + self-healing:** config/permission/wordlist writes publish on `chan:config:*` and bump version-stamped cache keys; a periodic reconcile pass repairs missed invalidations (see `WORKERS.md` §2.11).
 - **Category prefixes enable safe, scoped operations:** `SCAN sbr:cache:*` to clear caches without touching `sess:`, `bull:`, or `mute:`.
+
+## `chan:mod` — the enforcement bus
+
+The panel and the admin bot publish; **bridge-bot alone subscribes**. The payload
+is `{guildId, kind: "GAME_COMMAND", command, correlationId}` and nothing else is
+accepted — `parseModBusMessage` validates every field and drops the message
+otherwise, because what arrives here is typed verbatim by an account holding
+guild-officer permissions in the Hypixel guild. "It parsed as JSON" is not a
+sufficient reason to run something with that authority.
+
+Subscription follows the config bus exactly: publish on the shared client,
+pattern-subscribe (`chan:mod:*`) on a **duplicate** connection, since a node-redis
+client in subscriber mode will not serve ordinary commands.
+
+Delivery is fire-and-forget by design. A command published while the bridge is
+down is dropped rather than persisted: a mute that arrives an hour late lands
+against a punishment that may already have expired, and a queue that survives a
+restart would deliver an evening's moderation at breakfast. Once accepted, the
+bridge paces commands through its own bounded, ageing queue — see BRIDGE_BOT.md.
+
+## `chan:jobs` — the manual-run bus
+
+The panel publishes; **the worker fleet subscribes**. Payload:
+`{jobName, guildId, actorDiscordId, at}`, validated by `parseJobTriggerMessage`,
+and `jobName` is additionally checked against `RUNNABLE_JOBS` on the *publishing*
+side before it is sent — the panel offers a button per name, so a name it would
+not accept means the two halves disagree and the operator is the one who has to
+find out.
+
+**Not per guild, unlike every other channel here.** The subscriber is the worker
+fleet, which is not scoped to a guild; the guild a run is *for* travels in the
+payload where the job handler reads it. That makes this a plain `SUBSCRIBE`
+rather than the `PSUBSCRIBE` the config and mod buses use, still on a duplicate
+connection for the same reason.
+
+**Why a bus at all**, rather than the panel calling `queue.add` itself: BullMQ
+would then be a dependency of the panel process and a second writer to the
+queue. One writer means one place where lane priority is decided, and the panel
+keeps no queue library. The cost is that a publish is not a promise the job ran
+— the workers may be down — which is why the panel's success note says
+*requested* and the Health page's last-run column is what confirms it.
+
