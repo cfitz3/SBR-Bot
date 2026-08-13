@@ -13,8 +13,10 @@ import {
   APPS, NPM, ROOT, c, has, isConfigured, parseEnv, readEnv, run, say,
 } from "./lib.mjs";
 
-const problems = [];
-const note = (msg) => problems.push(msg);
+// A Set, because two dead datastores are one instruction ("start Docker"), and
+// printing it twice makes the fix list look longer than the problem is.
+const problems = new Set();
+const note = (msg) => problems.add(msg);
 
 const PASS = () => c.green("✓");
 const FAIL = () => c.red("✗");
@@ -131,20 +133,29 @@ if (!isConfigured(env.get("INTERNAL_API_TOKEN"))) {
 // later copy below it is running on a value they did not choose — and nothing
 // anywhere reports it. Only divergent values are worth an operator's attention;
 // three identical copies of the same URL are noise.
+/** Keys `.env` sets more than once with differing values; read by the live-credential checks. */
+const duplicated = new Set();
 if (envExists) {
   const seen = new Map();
-  for (const raw of readFileSync(join(ROOT, ".env"), "utf8").split(/\r?\n/)) {
-    const parsed = parseEnv(raw);
-    for (const [key, value] of parsed) {
+  readFileSync(join(ROOT, ".env"), "utf8").split(/\r?\n/).forEach((raw, i) => {
+    for (const [key, value] of parseEnv(raw)) {
       if (!seen.has(key)) seen.set(key, []);
-      seen.get(key).push(value);
+      seen.get(key).push({ value, line: i + 1 });
     }
-  }
-  const divergent = [...seen].filter(([, vs]) => vs.length > 1 && new Set(vs).size > 1);
+  });
+  const divergent = [...seen].filter(([, vs]) => vs.length > 1 && new Set(vs.map((v) => v.value)).size > 1);
   const repeated = [...seen].filter(([, vs]) => vs.length > 1);
+  for (const [key] of divergent) duplicated.add(key);
   if (divergent.length > 0) {
-    line(FAIL(), "duplicate keys", `${divergent.map(([k]) => k).join(", ")} set more than once, with different values`);
-    note("Delete the earlier copies in .env — dotenv keeps the last one, which may not be the line you edited");
+    line(FAIL(), "duplicate keys", `${divergent.length} key(s) set more than once, with different values`);
+    // Naming the line that wins is the whole point: "HYPIXEL_API_KEY is
+    // duplicated" sends an operator to the copy they can already see, which is
+    // usually the one they just fixed. "using line 116, you edited line 31"
+    // ends the search.
+    for (const [key, vs] of divergent) {
+      say(`      ${c.gray(`${key}: lines ${vs.map((v) => v.line).join(", ")} — using line ${vs.at(-1).line}`)}`);
+    }
+    note("Delete the losing copies in .env — dotenv keeps the last one, which may not be the line you edited");
   } else if (repeated.length > 0) {
     line(SKIP(), "duplicate keys", `${repeated.length} key(s) repeated, all agreeing`);
   } else line(PASS(), "duplicate keys", "none");
@@ -186,15 +197,27 @@ if (isConfigured(redirect)) {
 //
 // The key travels in the `API-Key` header and is never printed — not the value,
 // not a prefix. The only thing this reports is what Hypixel said about it.
+//
+// `/v2/counts`, not `/v2/key`: the key-info endpoint was removed from v2, so a
+// perfectly good key gets `404 Unknown endpoint` there and this check reported
+// "unexpected status 404" at the operator — a health check that cries wolf
+// about the one credential it exists to vouch for. `/v2/counts` is the cheapest
+// key-authed endpoint that is still real: no path parameters, no player lookup,
+// one line of JSON, and it answers the only question being asked — does
+// Hypixel accept this key.
 const hypixelKey = env.get("HYPIXEL_API_KEY");
 if (isConfigured(hypixelKey)) {
   heading("Live credentials");
-  const status = await httpStatus("https://api.hypixel.net/v2/key", { "API-Key": hypixelKey.trim() });
+  const status = await httpStatus("https://api.hypixel.net/v2/counts", { "API-Key": hypixelKey.trim() });
   if (status === null) line(SKIP(), "hypixel api key", "could not reach api.hypixel.net — offline?");
   else if (status >= 200 && status < 300) line(PASS(), "hypixel api key", "accepted");
   else if (status === 403 || status === 401) {
     line(FAIL(), "hypixel api key", `rejected (${status}) — the guild scan cannot read the roster`);
-    note("Issue a new key at https://developer.hypixel.net and set HYPIXEL_API_KEY in .env");
+    // Order matters: if the key is also duplicated, "issue a new key" is the
+    // wrong advice — the good key may already be in the file, three lines up.
+    if (duplicated.has("HYPIXEL_API_KEY")) {
+      note("HYPIXEL_API_KEY is set more than once and the *last* copy is the one being tested — delete the stale copies before issuing a new key");
+    } else note("Issue a new key at https://developer.hypixel.net and set HYPIXEL_API_KEY in .env");
   } else if (status === 429) {
     line(SKIP(), "hypixel api key", "rate limited — could not check, try again in a minute");
   } else line(SKIP(), "hypixel api key", `unexpected status ${status}`);
@@ -258,10 +281,10 @@ for (const app of APPS) {
 
 // ── verdict ─────────────────────────────────────────────────────────────────
 
-if (problems.length === 0) {
+if (problems.size === 0) {
   say(`\n${c.green(c.bold("Everything checks out."))} ${c.gray("Run `npm start`.")}\n`);
 } else {
-  say(`\n${c.bold(c.yellow(`${problems.length} thing(s) to fix:`))}`);
+  say(`\n${c.bold(c.yellow(`${problems.size} thing(s) to fix:`))}`);
   for (const p of problems) say(`  ${c.gray("→")} ${p}`);
   say("");
   process.exit(1);
