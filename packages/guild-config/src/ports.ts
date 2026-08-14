@@ -12,8 +12,6 @@ export interface GuildConfigRow {
   readonly applicationsOpen: boolean;
   readonly bridgeSuspended: boolean;
   readonly features: Readonly<Record<string, boolean>>;
-  readonly minWeight: number | null;
-  readonly minNetworth: number | null;
   /**
    * Platform level → the Discord role(s) that confer it.
    *

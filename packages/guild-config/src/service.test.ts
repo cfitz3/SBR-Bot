@@ -14,8 +14,6 @@ function row(over: Partial<GuildConfigRow> = {}): GuildConfigRow {
     applicationsOpen: false,
     bridgeSuspended: false,
     features: { events: true, lfg: false },
-    minWeight: null,
-    minNetworth: null,
     roleMappings: {},
     ...over,
   };
@@ -186,15 +184,18 @@ test("opening recruitment leaves an unspecified threshold alone", async () => {
   assert.deepEqual(patches[0], { applicationsOpen: true });
 });
 
-test("recruitment thresholds distinguish 'clear it' from 'don't touch it'", async () => {
+test("recruitment writes the switch and nothing else", async () => {
+  // The tri-state weight and networth bars were tested here. They are not
+  // requirements any more, so the write is one field and the assertion is that
+  // no stale threshold rides along with it.
   const patches: Record<string, unknown>[] = [];
   const svc = new GuildConfigServiceImpl({
     repo: repo({ async update(_g, patch) { patches.push(patch); } }),
     logger: silent,
   });
 
-  await svc.setRecruitment("g1", { open: true, minWeight: 1_200, minNetworth: null });
-  assert.deepEqual(patches[0], { applicationsOpen: true, minWeight: 1_200, minNetworth: null });
+  await svc.setRecruitment("g1", { open: false });
+  assert.deepEqual(patches[0], { applicationsOpen: false });
 });
 
 test("every write announces the guild so other processes drop their copy", async () => {

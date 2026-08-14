@@ -35,18 +35,16 @@ export type ScreeningReason =
   | "PRIOR_DENIAL"
   | "REPEAT_ATTEMPTS"
   // The account itself
-  | "NEW_ACCOUNT"
-  | "INACTIVE"
   | "STATS_UNREADABLE"
   | "API_DISABLED"
-  // Requirement bars
-  | "BELOW_SKYBLOCK_LEVEL"
-  | "BELOW_SKILL_AVERAGE"
-  | "BELOW_CATACOMBS"
-  | "BELOW_WEIGHT"
-  | "BELOW_NETWORTH"
   // Everything passed
   | "MEETS_REQUIREMENTS";
+
+// `NEW_ACCOUNT`, `INACTIVE` and the five `BELOW_*` bars were reasons here and
+// are gone. The guild's only entry requirement is the scam check, so a stat
+// threshold had become a hold nobody wanted and an accusation the applicant
+// could not answer. The *numbers* are still read and still recorded on
+// `GuildJoinScreening` for staff to look at — they simply no longer decide.
 
 /**
  * A scammer-list finding. `CLEAR` means the list was asked and had nothing;
@@ -148,16 +146,6 @@ export interface ScreeningPolicy {
   /** An unreadable account holds for a human rather than passing. */
   readonly reviewOnUnreadable: boolean;
 
-  readonly minSkyblockLevel: number | null;
-  readonly minSkillAverage: number | null;
-  readonly minCatacombs: number | null;
-  readonly minSenitherWeight: number | null;
-  /** Coins. Serialized as a string in settings JSON; parsed to bigint here. */
-  readonly minNetworth: bigint | null;
-  readonly minAccountAgeDays: number | null;
-  /** Last login older than this holds for review. */
-  readonly maxInactiveDays: number | null;
-
   /** How far back `recentAttempts` looks. */
   readonly repeatWindowDays: number;
   /** Attempts inside the window, beyond which the request holds for review. */
@@ -170,17 +158,15 @@ export interface ScreeningPolicy {
 }
 
 /**
- * The policy as it travels over JSON — identical to `ScreeningPolicy` except
- * that the coin threshold is a decimal string, because JSON has no bigint and
- * ten billion coins is past the point where a double is still exact.
+ * The policy as it travels over JSON.
  *
- * Named as a distinct type rather than left as `Record<string, unknown>` so the
- * panel's edit form and its read of the current values are checked against the
- * same field list the evaluator uses.
+ * Identical to `ScreeningPolicy` now that the coin threshold is gone — it was
+ * the one field JSON could not carry, being a bigint. The alias is kept rather
+ * than collapsed because the panel's form and its read are written against
+ * *this* name, and a later field that JSON cannot express should have somewhere
+ * to be declared other than the evaluator's own type.
  */
-export type ScreeningPolicyView = Omit<ScreeningPolicy, "minNetworth"> & {
-  readonly minNetworth: string | null;
-};
+export type ScreeningPolicyView = ScreeningPolicy;
 
 /**
  * The `GuildSetting` key the policy lives under. Declared here, beside the
@@ -202,13 +188,6 @@ export const DEFAULT_POLICY: ScreeningPolicy = {
   reviewOnScammerUnknown: true,
   denyOnPriorExpulsion: true,
   reviewOnUnreadable: true,
-  minSkyblockLevel: null,
-  minSkillAverage: null,
-  minCatacombs: null,
-  minSenitherWeight: null,
-  minNetworth: null,
-  minAccountAgeDays: null,
-  maxInactiveDays: null,
   repeatWindowDays: 30,
   maxAttemptsInWindow: 3,
   reviewAtRisk: 50,

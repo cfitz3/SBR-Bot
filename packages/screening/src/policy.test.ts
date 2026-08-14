@@ -55,7 +55,6 @@ function run(over: {
     scammer: over.scammer ?? CLEAR,
     stats: { ...GOOD, ...over.stats },
     history: { ...NO_HISTORY, ...over.history },
-    now: NOW,
   });
 }
 
@@ -120,7 +119,7 @@ test("hammering the join button is a hold once it passes the guild's limit", () 
 // ── the account ──
 
 test("an unreadable account is held, not accepted", () => {
-  const d = evaluate({ policy: policy(), scammer: CLEAR, stats: UNREADABLE_STATS, now: NOW });
+  const d = evaluate({ policy: policy(), scammer: CLEAR, stats: UNREADABLE_STATS });
   assert.equal(d.verdict, "REVIEW");
   assert.ok(d.reasons.includes("STATS_UNREADABLE"));
 });
@@ -132,64 +131,47 @@ test("a partly-hidden API is its own, milder reason", () => {
   assert.ok(!d.reasons.includes("STATS_UNREADABLE"));
 });
 
-test("a fresh account is held when the guild sets a minimum age", () => {
-  const d = run({ policy: { minAccountAgeDays: 30 }, stats: { firstLoginAt: daysAgo(3) } });
-  assert.equal(d.verdict, "REVIEW");
-  assert.ok(d.reasons.includes("NEW_ACCOUNT"));
-});
+// ── no stat is a gate any more ──
 
-test("a long-dormant account is held when the guild cares about activity", () => {
-  const d = run({ policy: { maxInactiveDays: 30 }, stats: { lastLoginAt: daysAgo(120) } });
-  assert.ok(d.reasons.includes("INACTIVE"));
-});
-
-test("an unknown first login is not treated as a new account", () => {
-  const d = run({ policy: { minAccountAgeDays: 365 }, stats: { firstLoginAt: null } });
-  assert.ok(!d.reasons.includes("NEW_ACCOUNT"));
-});
-
-// ── requirement bars ──
-
-test("each bar the applicant misses is named", () => {
+test("a beginner account with the worst stats in the game is still accepted", () => {
+  // The whole of the old requirement ladder in one case. A fresh, dormant,
+  // near-empty account clears screening now, because the scam check is the only
+  // entry requirement and none of these numbers decides anything.
   const d = run({
-    policy: { minSkyblockLevel: 300, minSkillAverage: 50, minCatacombs: 40, minSenitherWeight: 12000, minNetworth: 10_000_000_000n },
-    stats: {},
+    stats: {
+      skyblockLevel: 4,
+      skillAverage: 1,
+      catacombsLevel: 0,
+      senitherWeight: 3,
+      networth: 0n,
+      firstLoginAt: daysAgo(1),
+      lastLoginAt: daysAgo(400),
+    },
   });
-  assert.equal(d.verdict, "REVIEW");
-  assert.deepEqual(
-    [...d.reasons].sort(),
-    ["BELOW_CATACOMBS", "BELOW_NETWORTH", "BELOW_SKILL_AVERAGE", "BELOW_SKYBLOCK_LEVEL", "BELOW_WEIGHT"],
-  );
-});
-
-test("a stat we could not read is never reported as a bar the applicant missed", () => {
-  // The distinction matters: "catacombs below requirement" is a claim about the
-  // player, and we have no basis for it when their dungeon API is off.
-  const d = run({ policy: { minCatacombs: 40 }, stats: { catacombsLevel: null, apiDisabled: true } });
-  assert.ok(!d.reasons.includes("BELOW_CATACOMBS"));
-  assert.ok(d.reasons.includes("API_DISABLED"));
-});
-
-test("a bar exactly met is met", () => {
-  const d = run({ policy: { minCatacombs: 34 } });
   assert.equal(d.verdict, "ACCEPT");
+  assert.deepEqual(d.reasons, ["MEETS_REQUIREMENTS"]);
 });
 
-test("a guild that sets no bars checks none of them", () => {
-  const d = run({ stats: { skyblockLevel: 4, skillAverage: 1, catacombsLevel: 0, senitherWeight: 3, networth: 0n } });
-  assert.equal(d.verdict, "ACCEPT");
+test("the stats are still read, so staff can see what they are looking at", () => {
+  // Screening reports rather than grades: an unreadable account still holds,
+  // because "we could not check" is a different answer from "they are small".
+  const d = evaluate({ policy: policy(), scammer: CLEAR, stats: UNREADABLE_STATS });
+  assert.ok(d.reasons.includes("STATS_UNREADABLE"));
 });
 
 // ── scoring ──
 
 test("the score escalates an otherwise-passing request but never rescues a failing one", () => {
   const lenient = policy({ reviewOnScammerUnknown: false, reviewAtRisk: 20 });
-  const d = evaluate({ policy: lenient, scammer: { status: "UNKNOWN", detail: null }, stats: GOOD, now: NOW });
+  const d = evaluate({ policy: lenient, scammer: { status: "UNKNOWN", detail: null }, stats: GOOD });
   assert.equal(d.verdict, "REVIEW"); // 25 ≥ 20, though no rule held it
 
   // And a rule-driven hold stands even when the score is trivially low.
   const strict = policy({ reviewAtRisk: 100 });
-  assert.equal(evaluate({ policy: strict, scammer: CLEAR, stats: GOOD, history: { ...NO_HISTORY, priorDenial: true }, now: NOW }).verdict, "REVIEW");
+  assert.equal(
+    evaluate({ policy: strict, scammer: CLEAR, stats: GOOD, history: { ...NO_HISTORY, priorDenial: true } }).verdict,
+    "REVIEW",
+  );
 });
 
 test("risk is capped at 100 however many reasons pile up", () => {
@@ -204,10 +186,10 @@ test("risk is capped at 100 however many reasons pile up", () => {
 // ── parsing ──
 
 test("a missing or malformed policy falls back to the defaults", () => {
-  for (const junk of [null, undefined, "nope", 42, [], { minCatacombs: "twelve" }]) {
+  for (const junk of [null, undefined, "nope", 42, [], { reviewAtRisk: "twelve" }]) {
     const p = parsePolicy(junk);
     assert.equal(p.repeatWindowDays, DEFAULT_POLICY.repeatWindowDays);
-    assert.equal(p.minCatacombs, null);
+    assert.equal(p.reviewAtRisk, DEFAULT_POLICY.reviewAtRisk);
   }
 });
 
@@ -215,14 +197,15 @@ test("the defaults record and report but admit nobody on their own", () => {
   assert.equal(DEFAULT_POLICY.autoAccept, false);
 });
 
-test("networth survives the JSON round trip past 2^53", () => {
-  const big = "9007199254740993"; // 2^53 + 1: not representable as a double
-  assert.equal(parsePolicy({ minNetworth: big }).minNetworth, BigInt(big));
-  assert.equal(serializePolicy(policy({ minNetworth: BigInt(big) }))["minNetworth"], big);
+test("a stored policy still carrying the retired stat bars is read without them", () => {
+  // Every guild that configured a threshold before they were removed still has
+  // one in its settings row. Parsing must drop it, not choke on it.
+  const p = parsePolicy({ enabled: false, minCatacombs: 40, minNetworth: "10000000000", somethingWeRenamed: true });
+  assert.equal(p.enabled, false);
+  assert.equal("minCatacombs" in p, false);
+  assert.equal("minNetworth" in p, false);
 });
 
-test("an unknown key in a stored policy is ignored rather than fatal", () => {
-  const p = parsePolicy({ enabled: false, minCatacombs: 12, somethingWeRenamed: true });
-  assert.equal(p.enabled, false);
-  assert.equal(p.minCatacombs, 12);
+test("serializing is JSON-safe", () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(serializePolicy(DEFAULT_POLICY))), { ...DEFAULT_POLICY });
 });

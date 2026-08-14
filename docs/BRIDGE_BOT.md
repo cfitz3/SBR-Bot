@@ -118,13 +118,16 @@ match therefore costs one answer in Discord rather than reintroducing the
 duplicate, which is the cheaper of the two failures by a wide margin.
 
 ### 3.3 Role-gated speaking
-- Default: any **non-muted** member of the server with `RELAY_MESSAGE` may talk across the bridge. Linking is not a prerequisite for speaking; it is what makes a punishment follow someone between the two surfaces.
+- Default: **membership of the in-game guild** is what buys a seat in guild chat. Being in the Discord server is not enough, and neither is `RELAY_MESSAGE` on its own — see the Discord→game rule below for why.
 - `RUN_COMMAND`, `MENTION`, `BYPASS_FILTER`, `BYPASS_COOLDOWN` are separate capabilities granted per Discord role / guild rank via `BridgePermission`.
-- **The two directions are asked different questions**, because their authors are different kinds of thing:
-  - *Discord → game*: the author is a snowflake, so the stored permission stack answers directly. If it says no, a **gateway-confirmed** server member gets a second reading against the role floor using the roles the gateway can see right now. This is what stops the gate closing on the entire server — owner included — during the window before `discord-member-sync` has written its first `GuildMember` row. A deny row survives that second reading; an absent scan does not get to act like one.
+- **The two directions are asked different questions**, because they are not symmetric requests. Game→Discord asks *"may this line be repeated?"*; Discord→game asks *"may this person write into our guild chat?"*, which is a much stronger thing to grant.
+  - *Discord → game*, in order: a **deny** row refuses outright; an explicit **allow** row (`RELAY_MESSAGE` or `ADMIN`) permits — this is the escape hatch for a guest or an ally's officer; **staff** (`MODERATOR` and up, read from the stored role *or* from a mapped Discord role the gateway can see right now) may speak without playing; otherwise the author must hold a **verified link to somebody on the in-game roster** (`GuildMemberCache`). Any verified link counts, not just the primary one — an alt on the roster is the same human, and Hypixel would let them talk.
   - *Game → Discord*: the author is an IGN, which is not a snowflake and resolves to no member, no grants and no role. An **unlinked** player is therefore relayed on Hypixel's authority — guild chat is itself the credential, since Hypixel already decided who may write in it. A **linked** player is resolved to their Discord id first, so their platform permissions (and any deny) follow them into guild chat.
-- With no `BridgePermission` rows written, capabilities fall back to a **`GuildMember.role` floor** so an unconfigured guild is still usable — `RELAY_MESSAGE`/`RUN_COMMAND` from `MEMBER` up, `MENTION` from `MODERATOR`, `BYPASS_COOLDOWN` from `OFFICER`, `BYPASS_FILTER`/`ADMIN` from `ADMIN`. A row still wins over the floor, and a deny row wins over everything (see `DOMAIN_MODEL.md` → BridgePermission).
-- The gate lives in `BridgeGuardImpl.canRelay` (`apps/bridge-bot/src/adapters.ts`) and has its own test file. It has been wrong twice in opposite directions — once open to everyone, once closed to everyone — and both failures were silent, so its database reads are injected rather than imported.
+- **Before the first `guild-scan`** there is no roster to check against, so the older, permissive posture stands — the stored stack, or the gateway's word that the author is at least in the server — and the fallback is logged. A gate must never close because a *scan* has not happened; it closes by itself once the roster arrives.
+- Linking is therefore a prerequisite for a plain member to speak **into** the game, and it remains what makes a punishment follow someone between the two surfaces.
+- Because that makes `NO_PERMISSION` the ordinary answer for a guild member who has not linked yet, it is the **one drop reason the bridge explains**: a self-deleting reply pointing at `/link`, throttled to once per author per 30 minutes. Every other reason stays silent — a shadow-mute that announced itself would not be one, and a muted member already knows.
+- With no `BridgePermission` rows written, capabilities fall back to a **`GuildMember.role` floor** so an unconfigured guild is still usable — `RELAY_MESSAGE`/`RUN_COMMAND` from `MEMBER` up, `MENTION` from `MODERATOR`, `BYPASS_COOLDOWN` from `OFFICER`, `BYPASS_FILTER`/`ADMIN` from `ADMIN`. A row still wins over the floor, and a deny row wins over everything (see `DOMAIN_MODEL.md` → BridgePermission). **This floor no longer decides Discord→game relay on its own**: `discord-member-sync` writes a `GuildMember` row for every account in the server and `GuildMember.role` defaults to `MEMBER`, which is exactly `RELAY_MESSAGE`'s floor — so joining the Discord cleared it. The floor still governs every other capability.
+- The gate lives in `BridgeGuardImpl.canRelay` (`apps/bridge-bot/src/adapters.ts`) and has its own test file. It has been wrong three times — open to everyone, closed to everyone, then open to the whole Discord server — and all three failures were silent, so its database reads are injected rather than imported. The third was the subtlest: the capability check was not bypassed, it was *satisfied*, which is why no amount of fixing the permission stack reached it.
 
 ### 3.4 Announcements, reminders & news (F9–F10)
 - **Milestones (F9):** the `profile-snapshot` worker detects crossings (skill/cata/slayer/networth thresholds) and publishes an event; the bot announces to the configured channel (`🎉 Steve just hit Catacombs 45!`) and optionally to guild chat. Deduped via `Milestone.announced`.
@@ -261,16 +264,26 @@ staff change on a Friday night without wanting a redeploy.
 | `reviewOnScammerUnknown` | An unreachable list holds the request for a human. |
 | `denyOnPriorExpulsion` | A previous kick or ban from this guild is refused outright. |
 | `reviewOnUnreadable` | An account whose stats we cannot read holds for a human. |
-| `minSkyblockLevel`, `minSkillAverage`, `minCatacombs`, `minSenitherWeight`, `minNetworth` | Entry bars. `null` means "do not check this" — which is not the same as `0`. |
-| `minAccountAgeDays`, `maxInactiveDays` | Account age and inactivity holds. |
 | `repeatWindowDays`, `maxAttemptsInWindow` | How far back repeat attempts count, and how many are tolerated. |
 | `reviewAtRisk` | Risk score (0–100) at or above which an otherwise-passing request still waits for a human. |
+
+**There are no stat requirements, by design.** `minSkyblockLevel`,
+`minSkillAverage`, `minCatacombs`, `minSenitherWeight`, `minNetworth`,
+`minAccountAgeDays` and `maxInactiveDays` were fields here and are gone. The scam
+check is the guild's only entry requirement: a stat bar had become a hold nobody
+wanted and an accusation the applicant could not answer. Every one of those
+numbers is still read from Hypixel and still recorded on `GuildJoinScreening`, so
+the staff card shows the whole account — screening reports it rather than grading
+it.
 
 The read path (`parsePolicy`) is deliberately **tolerant** — a malformed or
 years-old field degrades to its default rather than taking screening offline. The
 write path (`config.screening`) is deliberately **strict**, and rejects unknown
-keys: a typo'd `minCatacomb` accepted silently would read back as "no dungeon
-requirement" and look identical to a working setting.
+keys: a mistyped switch accepted silently would read back as its default and look
+identical to a working setting. The one exception is the retired bars above,
+which are accepted and discarded: a panel tab opened before they were removed
+still posts them, and answering "unknown field" there would read as a bug rather
+than as a setting that no longer exists.
 
 `SKYKINGS_API_KEY` is the one `.env` value this feature needs — a credential, not
 a behaviour switch. Without it the scammer check returns `UNKNOWN` and, by
@@ -434,9 +447,9 @@ rather than inventing a target.
 ### 7.1 Discord → in-game relay (happy path)
 ```
 Discord #guild-bridge:  Aria: gg everyone, cata 40!
-  → identify: Aria → member of the server, role Member (RELAY_MESSAGE ✓)
-       (stored stack first; if it has no row yet, the gateway's own view of her
-        membership and roles answers instead — see §3.3)
+  → identify: Aria → linked to Aria_MC, who is on the in-game roster ✓
+       (no deny row, no explicit grant, not staff — so the roster is what
+        answers. A server member with no roster link stops here — see §3.3)
   → not suspended, not muted ✓
   → wordlist: clean ✓
   → anti-spam: under rate ✓

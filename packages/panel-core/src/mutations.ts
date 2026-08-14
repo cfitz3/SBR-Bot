@@ -15,7 +15,6 @@ import {
   isUpstreamUnavailable,
   MILESTONE_METRICS,
   MilestoneType as MILESTONE_TYPES,
-  TicketCategory as TICKET_CATEGORIES,
 } from "@sbr/shared-types";
 import type {
   AnalyticsService,
@@ -31,10 +30,16 @@ import type {
   MilestoneDefinitionService,
   MilestoneType,
   ModActionType,
-  TicketCategory,
+  TicketActor,
+  TicketCategoryInput,
   TicketConfigService,
-  TicketPanelConfigInput,
-  TicketTypeInput,
+  TicketPanelInput,
+  TicketPanelStyle,
+  TicketQuestionDTO,
+  TicketSettingsInput,
+  TicketTagInput,
+  TicketWorkingHoursDTO,
+  ViewColor,
   ModerationService,
   RecruitmentSettings,
   XpService,
@@ -128,14 +133,29 @@ export const MUTATION_TIERS = {
   "milestone.upsert": "ADMIN",
   "milestone.remove": "ADMIN",
   /**
-   * The ticket menu and the panel advertising it. Admin because a type names
-   * the staff roles pulled into a ticket and the category channel it opens
-   * under — reachable at a lower tier, it would be a way to route reports and
-   * appeals somewhere the people they are about can read them.
+   * The ticket menu and the panels advertising it. Admin because a category
+   * names the staff roles pulled into a ticket and the Discord category it
+   * opens under — reachable at a lower tier, it would be a way to route reports
+   * and appeals somewhere the people they are about can read them.
    */
-  "ticket.type.upsert": "ADMIN",
-  "ticket.type.remove": "ADMIN",
-  "ticket.panel.save": "ADMIN",
+  "ticket.category.upsert": "ADMIN",
+  "ticket.category.remove": "ADMIN",
+  "ticket.panel.upsert": "ADMIN",
+  "ticket.panel.remove": "ADMIN",
+  /**
+   * Posting a panel is its own mutation rather than a side effect of saving
+   * one: an admin editing wording should not push a message into a channel by
+   * accident, and a re-publish edits the message it already posted.
+   */
+  "ticket.panel.publish": "ADMIN",
+  "ticket.tag.upsert": "ADMIN",
+  "ticket.tag.remove": "ADMIN",
+  /**
+   * Ticket behaviour: colours, the archive switch, the auto-close clock and the
+   * blocklist. Admin because switching archiving off stops transcripts being
+   * captured at all, which is a decision about evidence, not presentation.
+   */
+  "ticket.settings.save": "ADMIN",
   /**
    * The chat filter's rules and the escalation ladder. Admin because both act
    * on members with nobody in the loop: a filter rule blocks or shadow-mutes at
@@ -214,6 +234,14 @@ export const MUTATION_TIERS = {
   "moderation.action": "MODERATOR",
   /** Tickets are explicitly Staff work in §3.7, unlike application decisions. */
   "ticket.close": "MODERATOR",
+  "ticket.claim": "MODERATOR",
+  "ticket.transfer": "MODERATOR",
+  /**
+   * Re-sending a transcript is Staff work because it DMs a member a full copy
+   * of a conversation. It is here at all because the first DM can fail against
+   * a closed DM channel, and swallowing that would lose the transcript.
+   */
+  "ticket.transcript.resend": "MODERATOR",
   "application.decide": "OFFICER",
   /** Events are Officer work in §3.8, both scheduling and calling one off. */
   "event.create": "OFFICER",
@@ -341,6 +369,20 @@ export interface JobTrigger {
   }): Promise<void>;
 }
 
+/**
+ * Port: the Discord side of a ticket mutation.
+ *
+ * The panel process has no gateway connection and no Mineflayer socket, so
+ * anything that has to reach Discord is asked for here and carried out by a bot.
+ * Implemented over Redis in `apps/web-panel`; a plain object in tests.
+ */
+export interface TicketEffects {
+  /** Post a panel into its channel, or edit the message it posted before. */
+  publishPanel(guildId: string, panelId: string, actorDiscordId: string): Promise<void>;
+  /** DM a closed ticket's opener their transcript again. */
+  resendTranscript(guildId: string, ticketId: string, actorDiscordId: string): Promise<void>;
+}
+
 export interface PanelMutationsDeps {
   readonly roles: RoleResolver;
   readonly config: GuildConfigService;
@@ -357,6 +399,13 @@ export interface PanelMutationsDeps {
   readonly milestones?: MilestoneDefinitionService;
   /** Optional like XP: absent refuses the write instead of crashing. */
   readonly tickets?: TicketConfigService;
+  /**
+   * The Discord-side work a ticket mutation asks for, done by whichever process
+   * holds a gateway connection. Optional because the panel can run without a
+   * bot; absent, the two mutations that need one refuse rather than reporting
+   * success for something that never happened.
+   */
+  readonly ticketEffects?: TicketEffects;
   /** Optional like XP: absent refuses the write instead of crashing. */
   readonly wordlist?: WordlistService;
   /**
@@ -430,20 +479,54 @@ const MILESTONE_DESC_MAX = 500;
 const MAX_MILESTONE_REWARD = 1_000_000;
 
 /**
- * Ticket type keys share the milestone shape: lowercase and hyphenated. They
- * are what a member types into `/ticket type:`, so they stay short and typable.
+ * Category keys share the milestone shape: lowercase and hyphenated. The key is
+ * what a panel button carries in its custom id, so it stays short, typable and
+ * stable — a guild renames the `name` beside it instead.
  */
 const TICKET_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
-const TICKET_LABEL_MAX = 80;
-/** Long enough for a real question, short enough to fit an ephemeral reply. */
-const TICKET_PROMPT_MAX = 500;
+const TICKET_NAME_MAX = 80;
+/** Discord truncates a select-menu option description at 100 characters. */
+const TICKET_DESCRIPTION_MAX = 100;
 /** Emoji come from Discord's picker; the cap only stops someone pasting a novel. */
 const TICKET_EMOJI_MAX = 64;
-/** More staff roles than this on one type means the ping is no longer a ping. */
-const MAX_TICKET_STAFF_ROLES = 10;
+/** More roles than this on one category means the ping is no longer a ping. */
+const MAX_TICKET_ROLE_IDS = 25;
 /** Menu positions are a small ordering hint, not an index into anything. */
 const MAX_TICKET_POSITION = 999;
+/** Discord's own channel-name cap, before placeholder expansion. */
+const TICKET_TEMPLATE_MAX = 100;
+const TICKET_OPENING_MESSAGE_MAX = 2_000;
+/** Discord modals take five inputs, which is why the model caps at five. */
+const MAX_TICKET_QUESTIONS = 5;
+const TICKET_QUESTION_LABEL_MAX = 45;
+const TICKET_QUESTION_PLACEHOLDER_MAX = 100;
+const TICKET_QUESTION_MAX_LENGTH = 4_000;
+const MAX_TICKET_MEMBER_LIMIT = 25;
+/** Discord allows 50 channels in a category; a higher total limit is a lie. */
+const MAX_TICKET_TOTAL_LIMIT = 50;
+/** Discord's slow-mode ceiling, six hours. */
+const MAX_TICKET_SLOWMODE_SECONDS = 21_600;
+const MAX_TICKET_COOLDOWN_SECONDS = 7 * 24 * 60 * 60;
+const TICKET_PANEL_NAME_MAX = 80;
 const TICKET_PANEL_TITLE_MAX = 120;
+/** A select menu takes 25 options; a button row takes five. Both are Discord's. */
+const MAX_PANEL_SELECT_CATEGORIES = 25;
+const MAX_PANEL_BUTTON_CATEGORIES = 5;
+const TICKET_TAG_NAME_MAX = 40;
+const TICKET_TAG_CONTENT_MAX = 2_000;
+/** Discord's embed footer cap. */
+const TICKET_FOOTER_MAX = 2_048;
+/** A month of silence is already far past "stale"; beyond it the clock is noise. */
+const MAX_TICKET_MINUTES = 60 * 24 * 30;
+const VIEW_COLOR_NAMES: readonly ViewColor[] = ["NEUTRAL", "INFO", "SUCCESS", "WARNING", "DANGER"];
+const PANEL_STYLES: readonly TicketPanelStyle[] = ["BUTTONS", "SELECT"];
+/**
+ * Images are rendered by Discord's client from a URL we hand it. https only, so
+ * a stored panel can never turn into a cleartext fetch on a member's machine.
+ */
+const HTTPS_URL = /^https:\/\/\S{1,480}$/;
+/** `HH:MM`, 24-hour, which is what the working-hours editor writes. */
+const CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /**
  * Filter-rule bounds. The pattern cap is generous for a word and mean for a
@@ -764,21 +847,13 @@ export class PanelMutations {
       const body = input as Record<string, unknown>;
 
       if (typeof body["open"] !== "boolean") return invalid("open must be a boolean");
-      // Tri-state, as RecruitmentSettings documents: absent leaves the bar
-      // alone, null clears it, a number sets it. Collapsing absent into null
-      // here would wipe a guild's entry bar every time someone toggled
-      // applications open.
-      const minWeight = threshold(body, "minWeight");
-      const minNetworth = threshold(body, "minNetworth");
-      if (minWeight === INVALID || minNetworth === INVALID) {
-        return invalid("minWeight and minNetworth must be a non-negative number or null");
-      }
-
-      const settings: RecruitmentSettings = {
-        open: body["open"],
-        ...(minWeight === ABSENT ? {} : { minWeight }),
-        ...(minNetworth === ABSENT ? {} : { minNetworth }),
-      };
+      // `minWeight` and `minNetworth` were read here, as a tri-state so that
+      // toggling applications open would not wipe a guild's entry bar. Neither
+      // is a bar any more — the scam check is the only entry requirement — so
+      // recruitment is now the single switch it reads as. Both are still
+      // accepted in the body and ignored, because an older panel tab left open
+      // will keep sending them and a rejection there helps nobody.
+      const settings: RecruitmentSettings = { open: body["open"] };
       const result = await this.d.config.setRecruitment(guildId, settings);
       return { result, change: { ...settings } };
     });
@@ -1048,16 +1123,92 @@ export class PanelMutations {
   // ───────────────────────────── tickets ─────────────────────────────
 
   /**
-   * Create or update one ticket type.
+   * Per-guild ticket behaviour: colours, archiving, the auto-close clock.
    *
-   * Layered over the built-ins by key, exactly as milestone definitions are:
-   * editing a built-in stores a row that shadows it, and switching one off is a
-   * store with `enabled: false`. The panel never writes the other four to
-   * change one, and a built-in added by a later release still reaches a guild
-   * that has customised something else.
+   * Saved whole rather than field by field because the fields interact — a
+   * stale clock with no auto-close never closes anything, and an auto-close
+   * with no stale clock only ever fires off a close request. Reading them
+   * together is the only way the page can say which of those a guild has.
    */
-  async upsertTicketType(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
-    return this.run(session, guildId, "ticket.type.upsert", async () => {
+  async saveTicketSettings(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.settings.save", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      if (typeof body["archiveEnabled"] !== "boolean") return invalid("archiveEnabled must be a boolean");
+      if (typeof body["closeButton"] !== "boolean") return invalid("closeButton must be a boolean");
+      if (typeof body["claimButton"] !== "boolean") return invalid("claimButton must be a boolean");
+
+      const logChannelId = body["logChannelId"] ?? null;
+      if (logChannelId !== null && (typeof logChannelId !== "string" || !SNOWFLAKE.test(logChannelId))) {
+        return invalid("logChannelId must be a Discord channel id, or null");
+      }
+      const blocklistRoleIds = roleIdList(body["blocklistRoleIds"]);
+      if (blocklistRoleIds === null) {
+        return invalid(`blocklistRoleIds must be up to ${MAX_TICKET_ROLE_IDS} Discord role ids`);
+      }
+      const primaryColor = viewColor(body["primaryColor"]);
+      const successColor = viewColor(body["successColor"]);
+      const errorColor = viewColor(body["errorColor"]);
+      if (primaryColor === null || successColor === null || errorColor === null) {
+        return invalid(`colours must be one of ${VIEW_COLOR_NAMES.join(", ")}`);
+      }
+      const footer = body["footer"] ?? null;
+      if (footer !== null && (typeof footer !== "string" || footer.length > TICKET_FOOTER_MAX)) {
+        return invalid(`footer must be under ${TICKET_FOOTER_MAX} characters, or null`);
+      }
+      // Null is a real value here and means "no clock", which is why it is not
+      // folded into zero: a zero-minute stale window would mark every ticket
+      // stale the moment it was opened.
+      const staleAfterMinutes = body["staleAfterMinutes"] ?? null;
+      if (staleAfterMinutes !== null && !isCount(staleAfterMinutes, MAX_TICKET_MINUTES)) {
+        return invalid(`staleAfterMinutes must be a whole number up to ${MAX_TICKET_MINUTES}, or null`);
+      }
+      if (!isCount(body["autoCloseAfterMinutes"], MAX_TICKET_MINUTES)) {
+        return invalid(`autoCloseAfterMinutes must be a whole number up to ${MAX_TICKET_MINUTES}`);
+      }
+      const workingHours = parseWorkingHours(body["workingHours"]);
+      if (workingHours === null) {
+        return invalid('workingHours must map "0"–"6" to {open, close} times as HH:MM');
+      }
+
+      const settings: TicketSettingsInput = {
+        archiveEnabled: body["archiveEnabled"],
+        logChannelId: logChannelId as string | null,
+        blocklistRoleIds,
+        primaryColor,
+        successColor,
+        errorColor,
+        footer: footer as string | null,
+        staleAfterMinutes: staleAfterMinutes as number | null,
+        autoCloseAfterMinutes: body["autoCloseAfterMinutes"],
+        closeButton: body["closeButton"],
+        claimButton: body["claimButton"],
+        workingHours,
+      };
+      try {
+        await tickets.saveSettings(guildId, settings);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      // Recorded in full: none of it is private, and "who turned archiving off"
+      // is precisely the question an audit trail is kept for.
+      return { result: { ok: true }, change: { ...settings, blocklistRoleIds: [...blocklistRoleIds] } };
+    });
+  }
+
+  /**
+   * Create or update one ticket category, by key.
+   *
+   * There are no built-ins layered underneath, unlike milestones: the five
+   * former enum values are seeded as ordinary rows at install, so a guild that
+   * deleted one has deleted it and a guild that renamed one has renamed it. A
+   * later release adding a category is a seed, not a shadow.
+   */
+  async upsertTicketCategory(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.category.upsert", async () => {
       const tickets = this.d.tickets;
       if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
       if (typeof input !== "object" || input === null) return invalid("body must be an object");
@@ -1065,103 +1216,166 @@ export class PanelMutations {
 
       const key = body["key"];
       if (typeof key !== "string" || !TICKET_KEY.test(key)) {
-        return invalid("key must be a short lowercase name, e.g. staff-app");
+        return invalid("key must be lowercase words joined by - . or :");
       }
-      const label = body["label"];
-      if (typeof label !== "string" || label.trim().length === 0 || label.length > TICKET_LABEL_MAX) {
-        return invalid(`label must be 1–${TICKET_LABEL_MAX} characters`);
+      const name = body["name"];
+      if (typeof name !== "string" || name.trim().length === 0 || name.length > TICKET_NAME_MAX) {
+        return invalid(`name must be 1–${TICKET_NAME_MAX} characters`);
+      }
+      const description = body["description"];
+      if (typeof description !== "string" || description.length > TICKET_DESCRIPTION_MAX) {
+        return invalid(`description must be under ${TICKET_DESCRIPTION_MAX} characters`);
       }
       const emoji = body["emoji"] ?? null;
       if (emoji !== null && (typeof emoji !== "string" || emoji.length > TICKET_EMOJI_MAX)) {
-        return invalid("emoji must be a short string, or null");
-      }
-      // The category is the fixed enum a ticket is filed under; the type is what
-      // a member picks. Anything outside the enum would store a row the bot
-      // could read but never open a ticket with.
-      const category = body["category"];
-      if (typeof category !== "string" || !(category in TICKET_CATEGORIES)) {
-        return invalid(`category must be one of ${Object.keys(TICKET_CATEGORIES).join(", ")}`);
-      }
-      const parentChannelId = body["parentChannelId"] ?? null;
-      if (parentChannelId !== null && (typeof parentChannelId !== "string" || !SNOWFLAKE.test(parentChannelId))) {
-        return invalid("parentChannelId must be a Discord channel id, or null");
-      }
-      const staffRoleIds = body["staffRoleIds"];
-      if (
-        !Array.isArray(staffRoleIds) ||
-        staffRoleIds.length > MAX_TICKET_STAFF_ROLES ||
-        !staffRoleIds.every((r): r is string => typeof r === "string" && SNOWFLAKE.test(r))
-      ) {
-        return invalid(`staffRoleIds must be up to ${MAX_TICKET_STAFF_ROLES} Discord role ids`);
-      }
-      const prompt = body["prompt"] ?? null;
-      if (prompt !== null && (typeof prompt !== "string" || prompt.length > TICKET_PROMPT_MAX)) {
-        return invalid(`prompt must be under ${TICKET_PROMPT_MAX} characters, or null`);
+        return invalid(`emoji must be under ${TICKET_EMOJI_MAX} characters, or null`);
       }
       if (!isCount(body["position"], MAX_TICKET_POSITION)) {
         return invalid(`position must be a whole number up to ${MAX_TICKET_POSITION}`);
       }
       if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+      if (typeof body["claiming"] !== "boolean") return invalid("claiming must be a boolean");
+      if (typeof body["requireTopic"] !== "boolean") return invalid("requireTopic must be a boolean");
 
-      const type: TicketTypeInput = {
+      const template = body["channelNameTemplate"];
+      if (typeof template !== "string" || template.trim().length === 0 || template.length > TICKET_TEMPLATE_MAX) {
+        return invalid(`channelNameTemplate must be 1–${TICKET_TEMPLATE_MAX} characters`);
+      }
+      const parentChannelId = body["parentChannelId"] ?? null;
+      if (parentChannelId !== null && (typeof parentChannelId !== "string" || !SNOWFLAKE.test(parentChannelId))) {
+        return invalid("parentChannelId must be a Discord channel id, or null");
+      }
+      const staffRoleIds = roleIdList(body["staffRoleIds"]);
+      const requiredRoleIds = roleIdList(body["requiredRoleIds"]);
+      const pingRoleIds = roleIdList(body["pingRoleIds"]);
+      if (staffRoleIds === null || requiredRoleIds === null || pingRoleIds === null) {
+        return invalid(`role lists must each hold up to ${MAX_TICKET_ROLE_IDS} Discord role ids`);
+      }
+      const openingMessage = body["openingMessage"];
+      if (typeof openingMessage !== "string" || openingMessage.length > TICKET_OPENING_MESSAGE_MAX) {
+        return invalid(`openingMessage must be under ${TICKET_OPENING_MESSAGE_MAX} characters`);
+      }
+      const image = body["image"] ?? null;
+      if (image !== null && (typeof image !== "string" || !HTTPS_URL.test(image))) {
+        return invalid("image must be an https URL, or null");
+      }
+      const cooldownSeconds = body["cooldownSeconds"] ?? null;
+      if (cooldownSeconds !== null && !isCount(cooldownSeconds, MAX_TICKET_COOLDOWN_SECONDS)) {
+        return invalid(`cooldownSeconds must be a whole number up to ${MAX_TICKET_COOLDOWN_SECONDS}, or null`);
+      }
+      const slowModeSeconds = body["slowModeSeconds"] ?? null;
+      if (slowModeSeconds !== null && !isCount(slowModeSeconds, MAX_TICKET_SLOWMODE_SECONDS)) {
+        return invalid(`slowModeSeconds must be a whole number up to ${MAX_TICKET_SLOWMODE_SECONDS}, or null`);
+      }
+      // Both limits are floored at one: a category nobody may open a ticket in
+      // is a disabled category, and `enabled` already says that out loud.
+      const memberLimit = body["memberLimit"];
+      if (!isCount(memberLimit, MAX_TICKET_MEMBER_LIMIT) || memberLimit < 1) {
+        return invalid(`memberLimit must be 1–${MAX_TICKET_MEMBER_LIMIT}`);
+      }
+      const totalLimit = body["totalLimit"];
+      if (!isCount(totalLimit, MAX_TICKET_TOTAL_LIMIT) || totalLimit < 1) {
+        // Discord's own ceiling, not ours: a category holds 50 channels.
+        return invalid(`totalLimit must be 1–${MAX_TICKET_TOTAL_LIMIT}`);
+      }
+      const questions = parseQuestions(body["questions"]);
+      if (questions === null) {
+        return invalid(`questions must be up to ${MAX_TICKET_QUESTIONS} well-formed modal inputs`);
+      }
+
+      const category: TicketCategoryInput = {
         key,
-        label: label.trim(),
+        name: name.trim(),
+        description,
         emoji: emoji as string | null,
-        category: category as TicketCategory,
+        position: body["position"],
+        enabled: body["enabled"],
+        channelNameTemplate: template.trim(),
         parentChannelId: parentChannelId as string | null,
         // Duplicate role ids would ping the same people twice; deduped here
         // rather than at the repository, so the audit records what was stored.
         staffRoleIds: [...new Set(staffRoleIds)],
-        prompt: prompt as string | null,
-        position: body["position"],
-        enabled: body["enabled"],
+        requiredRoleIds: [...new Set(requiredRoleIds)],
+        pingRoleIds: [...new Set(pingRoleIds)],
+        openingMessage,
+        image: image as string | null,
+        claiming: body["claiming"],
+        cooldownSeconds: cooldownSeconds as number | null,
+        memberLimit,
+        totalLimit,
+        slowModeSeconds: slowModeSeconds as number | null,
+        requireTopic: body["requireTopic"],
+        questions,
       };
       try {
-        await tickets.upsertType(guildId, type);
+        await tickets.upsertCategory(guildId, category);
       } catch (error) {
         return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
       }
-      // Recorded in full: a type is a label, a category and a list of role ids
-      // meant for public display — nothing private in it, and "who pointed
-      // appeals at this channel" is the question the trail is for.
-      return { result: { ok: true }, change: { ...type, staffRoleIds: [...type.staffRoleIds] } };
+      // Recorded in full: a category is a name, some role ids and the wording
+      // members see — nothing private in it, and "who pointed appeals at this
+      // channel" is the question the trail is for.
+      return {
+        result: { ok: true },
+        change: {
+          ...category,
+          staffRoleIds: [...category.staffRoleIds],
+          requiredRoleIds: [...category.requiredRoleIds],
+          pingRoleIds: [...category.pingRoleIds],
+          questions: category.questions.map((question) => ({ ...question })),
+        },
+      };
     });
   }
 
   /**
-   * Drop a guild's ticket-type row.
+   * Drop a category.
    *
-   * A shadowed built-in reverts to the default rather than disappearing — to
-   * stop offering one of those, store it disabled instead. Tickets already
-   * opened under it are untouched: their category is recorded on the ticket,
-   * not looked up through this row.
+   * Tickets already opened under it keep their history: their `categoryId` goes
+   * null rather than the rows going with it, so a closed appeal is still
+   * readable after the appeal category is retired. To stop offering one without
+   * losing the menu entry, store it with `enabled: false` instead.
    */
-  async removeTicketType(session: PanelSession | null, guildId: string, key: unknown): Promise<MutationResult> {
-    return this.run(session, guildId, "ticket.type.remove", async () => {
+  async removeTicketCategory(session: PanelSession | null, guildId: string, key: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.category.remove", async () => {
       const tickets = this.d.tickets;
       if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
-      if (typeof key !== "string" || !TICKET_KEY.test(key)) return invalid("key must be a ticket type key");
+      if (typeof key !== "string" || !TICKET_KEY.test(key)) return invalid("key must be a ticket category key");
 
       let removed: boolean;
       try {
-        removed = await tickets.removeType(guildId, key);
+        removed = await tickets.removeCategory(guildId, key);
       } catch (error) {
         return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
       }
-      // A key with no row is not an error, for the same reason as milestones:
-      // the page may have been showing a built-in.
+      // A key with no row is not an error: two admins on the same page is the
+      // ordinary case, and the second one deserves the same "it's gone".
       return { result: { ok: true }, change: { key, removed } };
     });
   }
 
-  /** Save the ticket panel's channel and wording. */
-  async saveTicketPanel(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
-    return this.run(session, guildId, "ticket.panel.save", async () => {
+  /**
+   * Compose a panel, or edit one that already exists.
+   *
+   * The category count decides the style Discord will accept, so it is checked
+   * here rather than at publish time: a panel that cannot be rendered should
+   * fail while the admin is looking at the form, not silently later.
+   */
+  async upsertTicketPanel(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.panel.upsert", async () => {
       const tickets = this.d.tickets;
       if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
       if (typeof input !== "object" || input === null) return invalid("body must be an object");
       const body = input as Record<string, unknown>;
 
+      const id = body["id"] ?? null;
+      if (id !== null && (typeof id !== "string" || !ENTITY_ID.test(id))) {
+        return invalid("id must be a panel id, or null to create one");
+      }
+      const name = body["name"];
+      if (typeof name !== "string" || name.trim().length === 0 || name.length > TICKET_PANEL_NAME_MAX) {
+        return invalid(`name must be 1–${TICKET_PANEL_NAME_MAX} characters`);
+      }
       const channelId = body["channelId"] ?? null;
       if (channelId !== null && (typeof channelId !== "string" || !SNOWFLAKE.test(channelId))) {
         return invalid("channelId must be a Discord channel id, or null");
@@ -1174,18 +1388,169 @@ export class PanelMutations {
       if (description !== null && (typeof description !== "string" || description.length > DESCRIPTION_MAX)) {
         return invalid(`description must be under ${DESCRIPTION_MAX} characters, or null`);
       }
+      const image = body["image"] ?? null;
+      if (image !== null && (typeof image !== "string" || !HTTPS_URL.test(image))) {
+        return invalid("image must be an https URL, or null");
+      }
+      const thumbnail = body["thumbnail"] ?? null;
+      if (thumbnail !== null && (typeof thumbnail !== "string" || !HTTPS_URL.test(thumbnail))) {
+        return invalid("thumbnail must be an https URL, or null");
+      }
+      const style = body["style"];
+      if (typeof style !== "string" || !PANEL_STYLES.includes(style as TicketPanelStyle)) {
+        return invalid(`style must be one of ${PANEL_STYLES.join(", ")}`);
+      }
+      const categoryKeys = body["categoryKeys"];
+      if (
+        !Array.isArray(categoryKeys) ||
+        categoryKeys.length === 0 ||
+        categoryKeys.some((entry) => typeof entry !== "string" || !TICKET_KEY.test(entry))
+      ) {
+        return invalid("categoryKeys must be a non-empty list of category keys");
+      }
+      // Order is content, not presentation — the buttons appear in the order
+      // given — so duplicates are rejected rather than deduped behind the
+      // admin's back, which would silently reorder what they typed.
+      const keys = categoryKeys as readonly string[];
+      if (new Set(keys).size !== keys.length) return invalid("categoryKeys must not repeat a category");
+      const cap = style === "BUTTONS" ? MAX_PANEL_BUTTON_CATEGORIES : MAX_PANEL_SELECT_CATEGORIES;
+      if (keys.length > cap) {
+        // Discord's caps, stated as Discord's: five buttons to a row, 25
+        // options to a select. Truncating instead would drop a category the
+        // admin chose and never say which.
+        return invalid(`a ${style === "BUTTONS" ? "button" : "select"} panel holds at most ${cap} categories`);
+      }
 
-      const panel: TicketPanelConfigInput = {
+      const panel: TicketPanelInput = {
+        name: name.trim(),
         channelId: channelId as string | null,
         title: title.trim(),
         description: description as string | null,
+        image: image as string | null,
+        thumbnail: thumbnail as string | null,
+        style: style as TicketPanelStyle,
+        categoryKeys: keys,
       };
       try {
-        await tickets.savePanel(guildId, panel);
+        await tickets.upsertPanel(guildId, panel, (id as string | null) ?? undefined);
       } catch (error) {
         return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
       }
-      return { result: { ok: true }, change: { ...panel } };
+      return { result: { ok: true }, change: { id, ...panel, categoryKeys: [...panel.categoryKeys] } };
+    });
+  }
+
+  /** Delete a panel. The message it posted is left in the channel to be tidied by hand. */
+  async removeTicketPanel(session: PanelSession | null, guildId: string, id: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.panel.remove", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof id !== "string" || !ENTITY_ID.test(id)) return invalid("id must be a panel id");
+
+      let removed: boolean;
+      try {
+        removed = await tickets.removePanel(guildId, id);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { id, removed } };
+    });
+  }
+
+  /**
+   * Post a panel into its channel, or edit the message it posted before.
+   *
+   * The panel process has no gateway connection, so this hands the work to the
+   * bridge rather than doing it here. With no bridge wired it refuses: a panel
+   * that reports "published" without a message in the channel is the exact
+   * failure this rebuild exists to remove.
+   */
+  async publishTicketPanel(session: PanelSession | null, guildId: string, id: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.panel.publish", async (actorDiscordId) => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      const effects = this.d.ticketEffects;
+      if (effects === undefined) return unavailable("No bot is connected to post the panel");
+      if (typeof id !== "string" || !ENTITY_ID.test(id)) return invalid("id must be a panel id");
+
+      // Checked here rather than in the bridge because this is where a human is
+      // waiting for an answer: a panel with no channel would otherwise fail
+      // somewhere nobody is looking.
+      const panels = await tickets.listPanels(guildId);
+      const panel = panels.find((row) => row.id === id);
+      if (panel === undefined) return invalid("no such panel");
+      if (panel.channelId === null) return invalid("give the panel a channel before publishing it");
+
+      try {
+        await effects.publishPanel(guildId, id, actorDiscordId);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { id, channelId: panel.channelId } };
+    });
+  }
+
+  /** Add a canned reply, or edit one. Identified by name, which is never edited. */
+  async upsertTicketTag(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.tag.upsert", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const name = body["name"];
+      if (typeof name !== "string" || !TICKET_KEY.test(name) || name.length > TICKET_TAG_NAME_MAX) {
+        return invalid(`name must be lowercase words joined by - . or :, under ${TICKET_TAG_NAME_MAX} characters`);
+      }
+      const content = body["content"];
+      if (typeof content !== "string" || content.trim().length === 0 || content.length > TICKET_TAG_CONTENT_MAX) {
+        return invalid(`content must be 1–${TICKET_TAG_CONTENT_MAX} characters`);
+      }
+      if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
+
+      const autoPattern = body["autoPattern"] ?? null;
+      if (autoPattern !== null) {
+        if (typeof autoPattern !== "string" || autoPattern.length > WORDLIST_PATTERN_MAX) {
+          return invalid(`autoPattern must be under ${WORDLIST_PATTERN_MAX} characters, or null`);
+        }
+        // Compiled here so a broken pattern is a form error rather than a
+        // ticket channel where every message throws.
+        try {
+          new RegExp(autoPattern, "mi");
+        } catch {
+          return invalid("autoPattern must be a valid regular expression");
+        }
+      }
+
+      const tag: TicketTagInput = {
+        name,
+        content,
+        autoPattern: autoPattern as string | null,
+        enabled: body["enabled"],
+      };
+      try {
+        await tickets.upsertTag(guildId, tag);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { ...tag } };
+    });
+  }
+
+  /** Drop a canned reply. */
+  async removeTicketTag(session: PanelSession | null, guildId: string, name: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.tag.remove", async () => {
+      const tickets = this.d.tickets;
+      if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
+      if (typeof name !== "string" || !TICKET_KEY.test(name)) return invalid("name must be a tag name");
+
+      let removed: boolean;
+      try {
+        removed = await tickets.removeTag(guildId, name);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { name, removed } };
     });
   }
 
@@ -2113,8 +2478,82 @@ export class PanelMutations {
       const note = typeof reason === "string" ? reason.trim() : "";
       if (note.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
 
-      const result = await this.d.community.closeTicket(ticketId, actorDiscordId, note.length === 0 ? null : note);
+      const result = await this.d.community.closeTicket(
+        ticketId,
+        staffActor(actorDiscordId),
+        note.length === 0 ? null : note,
+      );
       return { result, change: { ticketId, reason: note || null } };
+    });
+  }
+
+  /**
+   * Take a ticket, so the queue shows who is answering it.
+   *
+   * The service refuses a second claimant and a category with claiming switched
+   * off; neither is re-checked here, because a rule enforced in two places
+   * drifts and the one in `@sbr/tickets` is the one the Discord buttons use too.
+   */
+  async claimTicket(session: PanelSession | null, guildId: string, ticketId: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.claim", async (actorDiscordId) => {
+      if (typeof ticketId !== "string" || !ENTITY_ID.test(ticketId)) {
+        return invalid("ticketId must be a ticket id");
+      }
+      const result = await this.d.community.claimTicket(ticketId, staffActor(actorDiscordId));
+      return { result, change: { ticketId } };
+    });
+  }
+
+  /** Hand a ticket to another staffer. */
+  async transferTicket(
+    session: PanelSession | null,
+    guildId: string,
+    ticketId: unknown,
+    toDiscordId: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.transfer", async (actorDiscordId) => {
+      if (typeof ticketId !== "string" || !ENTITY_ID.test(ticketId)) {
+        return invalid("ticketId must be a ticket id");
+      }
+      if (typeof toDiscordId !== "string" || !SNOWFLAKE.test(toDiscordId)) {
+        return invalid("toDiscordId must be a Discord user id");
+      }
+      const result = await this.d.community.transferTicket(ticketId, staffActor(actorDiscordId), toDiscordId);
+      return { result, change: { ticketId, toDiscordId } };
+    });
+  }
+
+  /**
+   * Send a closed ticket's transcript to its opener again.
+   *
+   * Exists because the first DM can fail against a closed DM channel, and the
+   * panel shows that failure rather than swallowing it. Refuses on a ticket
+   * whose transcript was never rendered — there is nothing to send, and saying
+   * so beats a DM that silently never arrives.
+   */
+  async resendTicketTranscript(
+    session: PanelSession | null,
+    guildId: string,
+    ticketId: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "ticket.transcript.resend", async (actorDiscordId) => {
+      const effects = this.d.ticketEffects;
+      if (effects === undefined) return unavailable("No bot is connected to send the transcript");
+      if (typeof ticketId !== "string" || !ENTITY_ID.test(ticketId)) {
+        return invalid("ticketId must be a ticket id");
+      }
+      const found = await this.d.community.getTicket(ticketId);
+      if (!found.ok) return { result: found, change: { ticketId } };
+      const ticket = found.value;
+      if (ticket === null || ticket.guildId !== guildId) return invalid("no such ticket");
+      if (!ticket.transcriptReady) return invalid("this ticket has no transcript yet");
+
+      try {
+        await effects.resendTranscript(guildId, ticketId, actorDiscordId);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { ticketId, number: ticket.number } };
     });
   }
 
@@ -2693,6 +3132,105 @@ function isCount(value: unknown, max: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= max;
 }
 
+/**
+ * A list of Discord role ids, or null when it is not one.
+ *
+ * Null rather than an exception because every caller turns it straight into the
+ * same `invalid(...)`, and null keeps that decision at the call site where the
+ * field name is still in scope.
+ */
+function roleIdList(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value)) return null;
+  if (value.length > MAX_TICKET_ROLE_IDS) return null;
+  if (value.some((entry) => typeof entry !== "string" || !SNOWFLAKE.test(entry))) return null;
+  return value as readonly string[];
+}
+
+/**
+ * The actor a ticket transition is carried out as.
+ *
+ * `isStaff` is unconditionally true here and that is not a shortcut: every
+ * mutation reaching this function is gated at MODERATOR or above by
+ * `MUTATION_TIERS`, so anyone whose call got this far *is* staff. The flag
+ * exists for the Discord side, where a member clicking a button on their own
+ * ticket is not.
+ */
+function staffActor(discordId: string): TicketActor {
+  return { discordId, isStaff: true };
+}
+
+function viewColor(value: unknown): ViewColor | null {
+  return typeof value === "string" && VIEW_COLOR_NAMES.includes(value as ViewColor) ? (value as ViewColor) : null;
+}
+
+/**
+ * Working hours as the editor writes them: `"0"`–`"6"`, Sunday first, each an
+ * open and a close time.
+ *
+ * An absent day means closed all day, which is why a missing key is accepted
+ * and an empty object is a valid answer rather than an error — "closed all
+ * week" is a real configuration, distinct from "never configured".
+ */
+function parseWorkingHours(value: unknown): TicketWorkingHoursDTO | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const out: Record<string, { open: string; close: string }> = {};
+  for (const [day, window] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[0-6]$/.test(day)) return null;
+    if (typeof window !== "object" || window === null) return null;
+    const { open, close } = window as Record<string, unknown>;
+    if (typeof open !== "string" || !CLOCK_TIME.test(open)) return null;
+    if (typeof close !== "string" || !CLOCK_TIME.test(close)) return null;
+    out[day] = { open, close };
+  }
+  return out;
+}
+
+/**
+ * The questions a category asks before the ticket opens.
+ *
+ * Capped at five because a Discord modal takes five inputs; a sixth would be
+ * silently dropped at render time, which is the kind of quiet loss this layer
+ * exists to turn into a visible refusal.
+ */
+function parseQuestions(value: unknown): readonly TicketQuestionDTO[] | null {
+  if (!Array.isArray(value)) return null;
+  if (value.length > MAX_TICKET_QUESTIONS) return null;
+  const out: TicketQuestionDTO[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const row = entry as Record<string, unknown>;
+    const id = row["id"];
+    if (typeof id !== "string" || !TICKET_KEY.test(id) || seen.has(id)) return null;
+    seen.add(id);
+    const label = row["label"];
+    if (typeof label !== "string" || label.trim().length === 0 || label.length > TICKET_QUESTION_LABEL_MAX) {
+      return null;
+    }
+    const placeholder = row["placeholder"] ?? null;
+    if (
+      placeholder !== null &&
+      (typeof placeholder !== "string" || placeholder.length > TICKET_QUESTION_PLACEHOLDER_MAX)
+    ) {
+      return null;
+    }
+    const style = row["style"];
+    if (style !== "SHORT" && style !== "PARAGRAPH") return null;
+    if (typeof row["required"] !== "boolean") return null;
+    const maxLength = row["maxLength"] ?? null;
+    if (maxLength !== null && (!isCount(maxLength, TICKET_QUESTION_MAX_LENGTH) || maxLength < 1)) return null;
+    out.push({
+      id,
+      label: label.trim(),
+      placeholder: placeholder as string | null,
+      style,
+      required: row["required"],
+      maxLength: maxLength as number | null,
+    });
+  }
+  return out;
+}
+
 /** Domain errors are tagged unions or Errors; either way the audit wants a word. */
 function describe(error: unknown): string {
   if (error && typeof error === "object" && "kind" in error && typeof error.kind === "string") {
@@ -2702,8 +3240,6 @@ function describe(error: unknown): string {
   return "unknown";
 }
 
-// Sentinels for the tri-state thresholds. Distinct objects rather than
-// undefined/null, because both of those are meaningful *values* here.
 // ── screening policy validation ─────────────────────────────────────────────
 
 const SCREENING_FLAGS = [
@@ -2715,26 +3251,13 @@ const SCREENING_FLAGS = [
   "reviewOnUnreadable",
 ] as const;
 
-/** Nullable bars. Null means "do not check this", which is not the same as 0. */
-const SCREENING_BARS = [
-  "minSkyblockLevel",
-  "minSkillAverage",
-  "minCatacombs",
-  "minSenitherWeight",
-  "minAccountAgeDays",
-  "maxInactiveDays",
-] as const;
-
 /**
- * Upper bound on any bar.
- *
- * Deliberately one loose ceiling rather than a per-stat one. A table saying
- * "skill average tops out at 60" is a piece of game trivia that goes stale with
- * the next Skyblock update, and a stale ceiling rejects a policy that is
- * perfectly reasonable. What this actually needs to catch is Infinity, NaN and
- * a slipped decimal point, and one bound does that.
+ * The stat bars this used to validate — `minSkyblockLevel`, `minSkillAverage`,
+ * `minCatacombs`, `minSenitherWeight`, `minAccountAgeDays`, `maxInactiveDays`
+ * and the `minNetworth` coin string — are gone, along with their shared ceiling
+ * and their digit-string parser. Screening reports the account rather than
+ * grading it, so the only things left to validate are the switches and counts.
  */
-const BAR_MAX = 1e9;
 
 const SCREENING_COUNTS = {
   repeatWindowDays: { min: 1, max: 365 },
@@ -2743,15 +3266,26 @@ const SCREENING_COUNTS = {
   reviewAtRisk: { min: 0, max: 100 },
 } as const;
 
-const SCREENING_KEYS: readonly string[] = [
-  ...SCREENING_FLAGS,
-  ...SCREENING_BARS,
-  ...Object.keys(SCREENING_COUNTS),
+const SCREENING_KEYS: readonly string[] = [...SCREENING_FLAGS, ...Object.keys(SCREENING_COUNTS)];
+
+/**
+ * The retired bars, still accepted and discarded.
+ *
+ * The strict-write rule below rejects an unknown key, which is right for a typo
+ * but wrong for a field we removed: a panel tab opened before the deploy still
+ * posts the old shape, and answering that with "unknown field" reads as a bug
+ * rather than as a setting that no longer exists. Named explicitly so the list
+ * is a record of what was removed rather than a hole in the validation.
+ */
+const RETIRED_KEYS: readonly string[] = [
+  "minSkyblockLevel",
+  "minSkillAverage",
+  "minCatacombs",
+  "minSenitherWeight",
+  "minAccountAgeDays",
+  "maxInactiveDays",
   "minNetworth",
 ];
-
-/** Coins, as the form sends them: digits in a string, so 10b survives JSON. */
-const COINS = /^\d{1,30}$/;
 
 /**
  * Validate a screening policy payload. Returns the policy, or the message to
@@ -2761,7 +3295,7 @@ function readScreeningPolicy(input: unknown): ScreeningPolicy | string {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return "body must be an object";
   const body = input as Record<string, unknown>;
 
-  const unknownKeys = Object.keys(body).filter((k) => !SCREENING_KEYS.includes(k));
+  const unknownKeys = Object.keys(body).filter((k) => !SCREENING_KEYS.includes(k) && !RETIRED_KEYS.includes(k));
   if (unknownKeys.length > 0) return `unknown field(s): ${unknownKeys.join(", ")}`;
 
   const flags: Record<string, boolean> = {};
@@ -2771,19 +3305,6 @@ function readScreeningPolicy(input: unknown): ScreeningPolicy | string {
     flags[key] = value;
   }
 
-  const bars: Record<string, number | null> = {};
-  for (const key of SCREENING_BARS) {
-    const value = body[key];
-    if (value === null || value === undefined) {
-      bars[key] = null;
-      continue;
-    }
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > BAR_MAX) {
-      return `${key} must be a number between 0 and ${BAR_MAX}, or null for no requirement`;
-    }
-    bars[key] = value;
-  }
-
   const counts: Record<string, number> = {};
   for (const [key, range] of Object.entries(SCREENING_COUNTS)) {
     const value = body[key];
@@ -2791,24 +3312,6 @@ function readScreeningPolicy(input: unknown): ScreeningPolicy | string {
       return `${key} must be a whole number between ${range.min} and ${range.max}`;
     }
     counts[key] = value;
-  }
-
-  const raw = body["minNetworth"];
-  let minNetworth: bigint | null = null;
-  if (raw !== null && raw !== undefined) {
-    // A number is accepted because a small threshold typed into a number field
-    // is a reasonable thing to send; anything past 2^53 has to arrive as a
-    // string, because by then a double has already lost the digits.
-    if (typeof raw === "number") {
-      if (!Number.isFinite(raw) || raw < 0 || !Number.isSafeInteger(raw)) {
-        return "minNetworth must be a whole number of coins, or a digit string for large values";
-      }
-      minNetworth = BigInt(raw);
-    } else if (typeof raw === "string" && COINS.test(raw.trim())) {
-      minNetworth = BigInt(raw.trim());
-    } else {
-      return "minNetworth must be a string of digits, a whole number, or null";
-    }
   }
 
   // `autoAccept` is the switch that admits a stranger with nobody watching, so
@@ -2825,26 +3328,12 @@ function readScreeningPolicy(input: unknown): ScreeningPolicy | string {
     reviewOnScammerUnknown: flags["reviewOnScammerUnknown"]!,
     denyOnPriorExpulsion: flags["denyOnPriorExpulsion"]!,
     reviewOnUnreadable: flags["reviewOnUnreadable"]!,
-    minSkyblockLevel: bars["minSkyblockLevel"]!,
-    minSkillAverage: bars["minSkillAverage"]!,
-    minCatacombs: bars["minCatacombs"]!,
-    minSenitherWeight: bars["minSenitherWeight"]!,
-    minNetworth,
-    minAccountAgeDays: bars["minAccountAgeDays"]!,
-    maxInactiveDays: bars["maxInactiveDays"]!,
     repeatWindowDays: counts["repeatWindowDays"]!,
     maxAttemptsInWindow: counts["maxAttemptsInWindow"]!,
     reviewAtRisk: counts["reviewAtRisk"]!,
   };
 }
 
-const ABSENT = Symbol("absent");
-const INVALID = Symbol("invalid");
-
-function threshold(body: Record<string, unknown>, key: string): number | null | typeof ABSENT | typeof INVALID {
-  if (!(key in body) || body[key] === undefined) return ABSENT;
-  const value = body[key];
-  if (value === null) return null;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return INVALID;
-  return value;
-}
+// `threshold()` and its ABSENT/INVALID sentinels lived here, reading the
+// tri-state recruitment bars. Recruitment is one boolean now, so there is no
+// tri-state left to read.

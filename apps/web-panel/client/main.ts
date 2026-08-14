@@ -7,6 +7,7 @@
  */
 import type { GuildCard, SelectorVM } from "@sbr/panel-core";
 import { loadPage } from "./api.js";
+import { installCopy, nav as navCopy, shell, type PanelCopy } from "./copy.js";
 import { frag, h, replace } from "./dom.js";
 import { count } from "./format.js";
 import { icon, initials, type IconName } from "./icons.js";
@@ -31,34 +32,38 @@ interface GuildRoute {
  * Page order runs from watching to acting: what's happening, then the queues
  * that need a person, then the settings that change how the platform behaves.
  * The three groups are the headings the sidebar prints above each run.
+ *
+ * Ids and groups are keys, not words: the label each one prints comes from
+ * `panel.nav` in the brand layer, so renaming a page in the sidebar never
+ * touches this table, its routes or its bookmarks.
  */
-type NavGroup = "Monitor" | "Queues" | "Configure";
+type NavGroup = keyof PanelCopy["nav"]["group"];
+type NavId = Exclude<keyof PanelCopy["nav"], "group">;
 
 interface GuildPage {
-  readonly id: string;
-  readonly label: string;
+  readonly id: NavId;
   readonly group: NavGroup;
   readonly icon: IconName;
   readonly render: (host: HTMLElement, guildId: string) => Promise<void> | void;
 }
 
 const GUILD_PAGES: readonly GuildPage[] = [
-  { id: "overview", label: "Overview", group: "Monitor", icon: "overview", render: renderOverview },
-  { id: "analytics", label: "Analytics", group: "Monitor", icon: "analytics", render: renderAnalytics },
-  { id: "health", label: "Health", group: "Monitor", icon: "health", render: renderHealth },
-  { id: "events", label: "Events", group: "Monitor", icon: "events", render: renderEvents },
-  { id: "moderation", label: "Moderation", group: "Queues", icon: "moderation", render: renderModeration },
-  { id: "members", label: "Members", group: "Queues", icon: "members", render: renderMembers },
-  { id: "tickets", label: "Tickets", group: "Queues", icon: "tickets", render: renderTickets },
-  { id: "settings", label: "Settings", group: "Configure", icon: "settings", render: renderSettings },
-  { id: "milestones", label: "Milestones", group: "Configure", icon: "milestones", render: renderMilestones },
-  { id: "permissions", label: "Permissions", group: "Configure", icon: "permissions", render: renderPermissions },
+  { id: "overview", group: "monitor", icon: "overview", render: renderOverview },
+  { id: "analytics", group: "monitor", icon: "analytics", render: renderAnalytics },
+  { id: "health", group: "monitor", icon: "health", render: renderHealth },
+  { id: "events", group: "monitor", icon: "events", render: renderEvents },
+  { id: "moderation", group: "queues", icon: "moderation", render: renderModeration },
+  { id: "members", group: "queues", icon: "members", render: renderMembers },
+  { id: "tickets", group: "queues", icon: "tickets", render: renderTickets },
+  { id: "settings", group: "configure", icon: "settings", render: renderSettings },
+  { id: "milestones", group: "configure", icon: "milestones", render: renderMilestones },
+  { id: "permissions", group: "configure", icon: "permissions", render: renderPermissions },
   // The filter has no entry of its own: it is a section of Moderation, next to
   // the automod rules that read the same wordlist. A stale `#/…/wordlist` link
   // falls through to the guild's front page like any other unknown id.
 ];
 
-const NAV_GROUPS: readonly NavGroup[] = ["Monitor", "Queues", "Configure"];
+const NAV_GROUPS: readonly NavGroup[] = ["monitor", "queues", "configure"];
 
 const viewEl = document.getElementById("view");
 const navEl = document.getElementById("nav");
@@ -92,7 +97,7 @@ async function guildCard(guildId: string): Promise<GuildCard | null> {
 function guildSwitch(name: string, note: string | null): HTMLElement {
   return h(
     "a",
-    { class: "guild-switch", href: "#/", title: "Switch guild" },
+    { class: "guild-switch", href: "#/", title: shell().switchGuild },
     h("span", { class: "guild-switch-avatar", "aria-hidden": "true" }, initials(name)),
     h(
       "span",
@@ -114,37 +119,42 @@ function navLink(route: GuildRoute, page: GuildPage): HTMLElement {
       "aria-current": active ? "page" : false,
     },
     icon(page.icon, "nav-icon"),
-    page.label,
+    navCopy()[page.id],
   );
 }
 
 function renderNav(route: GuildRoute | null, card: GuildCard | null): void {
   if (!route) {
-    replace(nav, h("span", { class: "nav-title" }, "Your guilds"));
+    replace(nav, h("span", { class: "nav-title" }, shell().guildsTitle));
     return;
   }
   // A missing card means the selector call failed or the id isn't one of yours;
   // the page itself will say so, so the switcher just drops the member count
   // rather than inventing a number.
-  const name = card?.name ?? "Guild";
-  const note = card === null ? null : card.memberCount === 1 ? "1 member" : `${count(card.memberCount)} members`;
+  const name = card?.name ?? shell().unknownGuild;
+  const note =
+    card === null
+      ? null
+      : card.memberCount === 1
+        ? shell().memberOne
+        : shell().memberMany.replace("{count}", count(card.memberCount));
   replace(
     nav,
     frag([
       guildSwitch(name, note),
       h(
         "nav",
-        { class: "nav", "aria-label": "Guild pages" },
+        { class: "nav", "aria-label": shell().navLabel },
         ...NAV_GROUPS.map((group) =>
           h(
             "div",
             { class: "nav-group" },
-            h("span", { class: "nav-group-label" }, group),
+            h("span", { class: "nav-group-label" }, navCopy().group[group]),
             ...GUILD_PAGES.filter((page) => page.group === group).map((page) => navLink(route, page)),
           ),
         ),
       ),
-      h("a", { class: "nav-back", href: "#/" }, icon("back", "nav-icon"), "All guilds"),
+      h("a", { class: "nav-back", href: "#/" }, icon("back", "nav-icon"), shell().allGuilds),
     ]),
   );
 }
@@ -154,7 +164,7 @@ async function render(): Promise<void> {
 
   if (!route) {
     renderNav(null, null);
-    document.title = "SBR Panel";
+    document.title = shell().title;
     await renderSelector(view);
     return;
   }
@@ -169,9 +179,45 @@ async function render(): Promise<void> {
 
   const card = await guildCard(route.guildId);
   renderNav(route, card);
-  document.title = card ? `${card.name} — ${page.label}` : `SBR Panel — ${page.label}`;
+  const label = navCopy()[page.id];
+  document.title = card ? `${card.name} — ${label}` : `${shell().title} — ${label}`;
   await page.render(view, route.guildId);
 }
 
-window.addEventListener("hashchange", () => void render());
-void render();
+/**
+ * Boot: fetch the panel's own words, then render.
+ *
+ * One blocking request before the first paint, because every screen — including
+ * the error screens — is written in copy that lives on the server. The failure
+ * branch is the one place in the client with an English literal: there is no
+ * copy to say it with.
+ */
+async function boot(): Promise<void> {
+  const result = await loadCopy();
+  if (!result) {
+    replace(
+      view,
+      h(
+        "div",
+        { class: "state state-error", role: "alert" },
+        "The panel couldn't load its own text. Reload, or check the server logs.",
+      ),
+    );
+    return;
+  }
+  installCopy(result);
+  window.addEventListener("hashchange", () => void render());
+  await render();
+}
+
+async function loadCopy(): Promise<Parameters<typeof installCopy>[0] | null> {
+  try {
+    const res = await fetch("/api/copy", { headers: { accept: "application/json" }, credentials: "same-origin" });
+    if (!res.ok) return null;
+    return (await res.json()) as Parameters<typeof installCopy>[0];
+  } catch {
+    return null;
+  }
+}
+
+void boot();

@@ -7,23 +7,32 @@
   The sidebar's frame is static because it never changes: the brand and the sign
   out link are the same on every route, so only the guild switcher and the page
   list are worth re-rendering.
+
+  A template, not a served file: the double-brace slots below are filled from
+  `brand/theme.ts`'s chrome block by `src/chrome.ts` on the way out. They are
+  rendered server-side rather than set by main.js because the tab title and the
+  theme colour have to be right before any script runs — otherwise every load
+  flashes the wrong name.
 -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#161826" />
-    <title>SBR Panel</title>
+    <meta name="theme-color" content="{{themeColor}}" />
+    <title>{{title}}</title>
     <link rel="stylesheet" href="/app.css" />
+    <!-- After app.css so the brand layer's tokens win by cascade. Same-origin,
+         so `default-src 'self'` already allows it and the CSP is untouched. -->
+    <link rel="stylesheet" href="/theme.css" />
     <link rel="icon" href="data:," />
     <script type="module" src="/app/main.js"></script>
   </head>
   <body>
     <aside class="shell-side">
-      <a class="brand" href="#/">
-        <span class="brand-mark" aria-hidden="true">S</span>
-        SBR Guild Platform
+      <a class="brand" href="#/" title="{{tagline}}">
+        <span class="brand-mark" aria-hidden="true">{{mark}}</span>
+        {{name}}
       </a>
 
       <div id="nav" class="nav"></div>
@@ -47,19 +56,16 @@
             <path d="M15 16l4-4-4-4" />
             <path d="M19 12H9.5" />
           </svg>
-          Sign out
+          {{signOut}}
         </a>
       </div>
     </aside>
 
     <main id="view" class="view">
       <noscript>
-        <p class="state state-error">
-          The control panel needs JavaScript. The underlying data is also available as JSON under
-          <code>/api/guilds</code>.
-        </p>
+        <p class="state state-error">{{noscript}}</p>
       </noscript>
-      <div class="state state-loading">Loading…</div>
+      <div class="state state-loading">{{loading}}</div>
     </main>
   </body>
 </html>

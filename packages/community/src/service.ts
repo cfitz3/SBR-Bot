@@ -29,12 +29,23 @@ import {
   type RSVPState,
   type Result,
   type RsvpOutcome,
+  type TicketActor,
+  type TicketCategoryDTO,
   type TicketDTO,
   type TicketError,
-  type TicketTypeDTO,
 } from "@sbr/shared-types";
+import {
+  canAct,
+  categoryById,
+  claim,
+  close,
+  release,
+  requestClose,
+  transfer,
+  type LifecycleResult,
+} from "@sbr/tickets";
 import type { Logger } from "@sbr/observability";
-import type { CommunityRepository, LfgPatch, PermRoster, PermRosterLookup } from "./ports.js";
+import type { CommunityRepository, LfgPatch, PermRoster, PermRosterLookup, TicketPatch } from "./ports.js";
 
 /** Retained for the pre-Stage-5 call sites; `EventError` is the current union. */
 export type RsvpError = EventError;
@@ -311,21 +322,116 @@ export class CommunityServiceImpl implements CommunityService {
 
   // ─────────────────────────────── Tickets ───────────────────────────────
 
-  async openTicket(input: NewTicket): Promise<Result<TicketDTO>> {
+  async openTicket(input: NewTicket): Promise<Result<TicketDTO, TicketError>> {
     const ticket = await this.repo.createTicket(input);
-    this.log.info("ticket opened", { ticketId: ticket.id, category: input.category });
+    this.log.info("ticket opened", { ticketId: ticket.id, number: ticket.number, categoryId: input.categoryId });
     return ok(ticket);
   }
 
-  async closeTicket(ticketId: string, actorDiscordId: string, reason: string | null): Promise<Result<TicketDTO, TicketError>> {
+  /**
+   * Every mutating call funnels through here: load the ticket, ask
+   * `@sbr/tickets` whether this actor may do this, and only then write.
+   *
+   * The old surface took a bare ticket id and asked nobody's permission, so any
+   * member who could read an id could close anyone's ticket. Routing all six
+   * transitions through one gate is what makes that unrepeatable — a new
+   * transition cannot forget the check, because it cannot reach the repository
+   * without passing one.
+   */
+  private async transition(
+    ticketId: string,
+    actor: TicketActor,
+    decide: (ticket: TicketDTO, category: TicketCategoryDTO | null) => LifecycleResult<TicketPatch>,
+  ): Promise<Result<TicketDTO, TicketError>> {
     const ticket = await this.repo.getTicket(ticketId);
     if (!ticket) return err({ kind: "NOT_FOUND" });
-    if (ticket.status === "CLOSED" || ticket.status === "RESOLVED") return err({ kind: "ALREADY_CLOSED" });
 
-    const closed = await this.repo.closeTicket(ticketId, actorDiscordId, reason);
-    if (!closed) return err({ kind: "NOT_FOUND" });
-    this.log.info("ticket closed", { ticketId, actorDiscordId });
-    return ok(closed);
+    const categories = await this.repo.listTicketCategories(ticket.guildId);
+    const category = categoryById(categories, ticket.categoryId);
+
+    const decision = decide(ticket, category);
+    if (!decision.ok) {
+      return err(decision.reason === "ALREADY_CLOSED" ? { kind: "ALREADY_CLOSED" } : { kind: "FORBIDDEN" });
+    }
+
+    const updated = await this.repo.patchTicket(ticketId, decision.value);
+    if (!updated) return err({ kind: "NOT_FOUND" });
+    return ok(updated);
+  }
+
+  async closeTicket(ticketId: string, actor: TicketActor, reason: string | null): Promise<Result<TicketDTO, TicketError>> {
+    const result = await this.transition(ticketId, actor, (ticket) => {
+      const decision = close(ticket, actor);
+      if (!decision.ok) return decision;
+      return {
+        ok: true,
+        value: { status: "CLOSED", closeReason: reason, closedAt: this.now(), assigneeDiscordId: actor.discordId },
+      };
+    });
+    if (result.ok) this.log.info("ticket closed", { ticketId, actor: actor.discordId });
+    return result;
+  }
+
+  async requestTicketClose(ticketId: string, actor: TicketActor): Promise<Result<TicketDTO, TicketError>> {
+    return this.transition(ticketId, actor, (ticket) => {
+      const decision = requestClose(ticket, actor, this.now());
+      if (!decision.ok) return decision;
+      return {
+        ok: true,
+        value: {
+          closeRequestedByDiscordId: decision.value.closeRequestedByDiscordId,
+          closeRequestedAt: decision.value.closeRequestedAt,
+        },
+      };
+    });
+  }
+
+  async claimTicket(ticketId: string, actor: TicketActor): Promise<Result<TicketDTO, TicketError>> {
+    return this.transition(ticketId, actor, (ticket, category) => {
+      // A category that has since been deleted is treated as claimable: the
+      // ticket still needs an owner, and refusing here would strand it.
+      const decision = claim(ticket, actor, category?.claiming ?? true, this.now());
+      if (!decision.ok) return decision;
+      return {
+        ok: true,
+        value: { claimedByDiscordId: decision.value.claimedByDiscordId, claimedAt: decision.value.claimedAt },
+      };
+    });
+  }
+
+  async releaseTicket(ticketId: string, actor: TicketActor): Promise<Result<TicketDTO, TicketError>> {
+    return this.transition(ticketId, actor, (ticket) => {
+      const decision = release(ticket, actor);
+      if (!decision.ok) return decision;
+      return { ok: true, value: { claimedByDiscordId: null, claimedAt: null } };
+    });
+  }
+
+  async transferTicket(ticketId: string, actor: TicketActor, toDiscordId: string): Promise<Result<TicketDTO, TicketError>> {
+    return this.transition(ticketId, actor, (ticket) => {
+      const decision = transfer(ticket, actor, toDiscordId, this.now());
+      if (!decision.ok) return decision;
+      return {
+        ok: true,
+        value: { claimedByDiscordId: decision.value.claimedByDiscordId, claimedAt: decision.value.claimedAt },
+      };
+    });
+  }
+
+  async setTicketTopic(ticketId: string, actor: TicketActor, topic: string): Promise<Result<TicketDTO, TicketError>> {
+    return this.transition(ticketId, actor, (ticket) => {
+      if (ticket.status === "CLOSED") return { ok: false, reason: "ALREADY_CLOSED" };
+      if (!canAct(ticket, actor)) return { ok: false, reason: "FORBIDDEN" };
+      return { ok: true, value: { topic } };
+    });
+  }
+
+  async getTicket(ticketId: string): Promise<Result<TicketDTO | null>> {
+    return ok(await this.repo.getTicket(ticketId));
+  }
+
+  async getTicketByChannel(channelId: string): Promise<Result<TicketDTO | null>> {
+    return ok(await this.repo.getTicketByChannel(channelId));
   }
 
   async listTickets(guildId: string, openerDiscordId?: string): Promise<Result<readonly TicketDTO[]>> {
@@ -333,11 +439,11 @@ export class CommunityServiceImpl implements CommunityService {
   }
 
   /**
-   * Every type in effect, built-ins included. Disabled ones are kept and
-   * flagged; `openableTicketTypes` is what narrows the list to a member's menu.
+   * Every category in menu order. Disabled ones are kept and flagged;
+   * `openableCategories` is what narrows the list to a member's menu.
    */
-  async listTicketTypes(guildId: string): Promise<Result<readonly TicketTypeDTO[]>> {
-    return ok(await this.repo.listTicketTypes(guildId));
+  async listTicketCategories(guildId: string): Promise<Result<readonly TicketCategoryDTO[]>> {
+    return ok(await this.repo.listTicketCategories(guildId));
   }
 
   // ───────────────────────────── Applications ─────────────────────────────

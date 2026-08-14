@@ -40,7 +40,13 @@ test("flattenEmbed collapses title, description and fields to one line", () => {
       { name: "NW", value: "8.2b" },
     ],
   };
-  assert.equal(flattenEmbed(embed), "Aria | Ironman | Cata 42 | NW 8.2b");
+  assert.equal(flattenEmbed(embed), "Aria · Ironman · Cata 42 · NW 8.2b");
+});
+
+test("flattenEmbed takes the separator the caller was given", () => {
+  // Renderers with the resolved theme in scope pass the operator's choice; the
+  // default above is only what a caller without one falls back to.
+  assert.equal(flattenEmbed({ title: "Aria", description: "Ironman" }, 256, " — "), "Aria — Ironman");
 });
 
 test("flattenEmbed truncates to the guild-chat cap with an ellipsis", () => {

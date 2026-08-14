@@ -194,6 +194,8 @@ Scheduler enqueues `stats-sync` / `pricing-refresh` jobs on Redis (BullMQ). `wor
 | `packages/moderation` | Mod actions + audit trail in one auditable place, callable from both the admin-bot and panel. |
 | `packages/community` | The "who is who" registry (Discord ↔ in-game linking, roles) every other domain depends on. |
 | `packages/analytics` | Centralized event ingestion + reporting so the panel's dashboards match reality. |
+| `packages/brand-defaults` | Every user-facing word and visual token, as data with a type. Depends on `shared-types` alone, so the browser half, both bots, the workers and the CLI scripts can all read the same copy. |
+| `brand/` (the `@sbr/brand` package) | The operator's override layer, merged over the defaults and frozen at import. It sits *above* `brand-defaults` and below everything that renders, which is what makes a reworded sentence a data change rather than a code change. See [`BRANDING.md`](BRANDING.md). |
 
 ---
 

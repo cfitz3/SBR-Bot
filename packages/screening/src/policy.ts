@@ -10,8 +10,8 @@
  *
  *   1. **Hard refusals** are reason-driven, not score-driven. A listed scammer
  *      is refused because they are listed, at any score.
- *   2. **Holds** are reason-driven too. Anything we could not find out, or any
- *      bar the applicant missed, holds the request for a human.
+ *   2. **Holds** are reason-driven too. Anything we could not find out holds the
+ *      request for a human.
  *   3. **The score** exists to rank the staff queue and to escalate a request
  *      that collected several small concerns into a REVIEW. It never turns a
  *      REVIEW into an ACCEPT.
@@ -31,8 +31,6 @@ import {
   type ScreeningVerdict,
 } from "./types.js";
 
-const DAY_MS = 24 * 60 * 60_000;
-
 /** Risk contributed by each reason. Bounded to 0–100 after summing. */
 const WEIGHTS: Readonly<Record<ScreeningReason, number>> = {
   SCAMMER_FLAGGED: 100,
@@ -40,15 +38,8 @@ const WEIGHTS: Readonly<Record<ScreeningReason, number>> = {
   PRIOR_EXPULSION: 100,
   PRIOR_DENIAL: 40,
   REPEAT_ATTEMPTS: 20,
-  NEW_ACCOUNT: 30,
-  INACTIVE: 15,
   STATS_UNREADABLE: 35,
   API_DISABLED: 20,
-  BELOW_SKYBLOCK_LEVEL: 20,
-  BELOW_SKILL_AVERAGE: 20,
-  BELOW_CATACOMBS: 20,
-  BELOW_WEIGHT: 20,
-  BELOW_NETWORTH: 20,
   MEETS_REQUIREMENTS: 0,
 };
 
@@ -57,9 +48,11 @@ export interface PolicyInput {
   readonly scammer: ScammerFinding;
   readonly stats: ApplicantStats;
   readonly history?: ApplicantHistory;
-  /** Injected so tests are not at the mercy of the clock. */
-  readonly now?: Date;
 }
+
+// The clock used to be injected here, for the account-age and inactivity rules.
+// Neither survives, and nothing else the policy decides depends on the time.
+
 
 export interface PolicyDecision {
   readonly verdict: ScreeningVerdict;
@@ -67,23 +60,9 @@ export interface PolicyDecision {
   readonly reasons: readonly ScreeningReason[];
 }
 
-/**
- * A missing stat is not a failed bar.
- *
- * When a guild requires catacombs 20 and the applicant's dungeon API is off, we
- * do not know that they failed — we know we cannot tell. That is
- * `STATS_UNREADABLE`/`API_DISABLED` (a hold), not `BELOW_CATACOMBS` (a bar they
- * missed). Conflating the two would let a guild's requirements read as
- * accusations against people whose only offence is a privacy setting.
- */
-function below(value: number | null, min: number | null): boolean {
-  return min !== null && value !== null && value < min;
-}
-
 export function evaluate(input: PolicyInput): PolicyDecision {
   const { policy, scammer, stats } = input;
   const history = input.history ?? NO_HISTORY;
-  const now = input.now ?? new Date();
 
   const reasons: ScreeningReason[] = [];
   let deny = false;
@@ -123,32 +102,10 @@ export function evaluate(input: PolicyInput): PolicyDecision {
     if (policy.reviewOnUnreadable) hold = true;
   }
 
-  if (policy.minAccountAgeDays !== null && stats.firstLoginAt) {
-    const ageDays = (now.getTime() - stats.firstLoginAt.getTime()) / DAY_MS;
-    if (ageDays < policy.minAccountAgeDays) {
-      reasons.push("NEW_ACCOUNT");
-      hold = true;
-    }
-  }
-
-  if (policy.maxInactiveDays !== null && stats.lastLoginAt) {
-    const idleDays = (now.getTime() - stats.lastLoginAt.getTime()) / DAY_MS;
-    if (idleDays > policy.maxInactiveDays) {
-      reasons.push("INACTIVE");
-      hold = true;
-    }
-  }
-
-  // ── requirement bars ──
-  if (below(stats.skyblockLevel, policy.minSkyblockLevel)) reasons.push("BELOW_SKYBLOCK_LEVEL");
-  if (below(stats.skillAverage, policy.minSkillAverage)) reasons.push("BELOW_SKILL_AVERAGE");
-  if (below(stats.catacombsLevel, policy.minCatacombs)) reasons.push("BELOW_CATACOMBS");
-  if (below(stats.senitherWeight, policy.minSenitherWeight)) reasons.push("BELOW_WEIGHT");
-  if (policy.minNetworth !== null && stats.networth !== null && stats.networth < policy.minNetworth) {
-    reasons.push("BELOW_NETWORTH");
-  }
-  const missedBar = reasons.some((r) => r.startsWith("BELOW_"));
-  if (missedBar) hold = true;
+  // Account age, inactivity and the five stat bars used to hold a request here.
+  // They are gone: the scam check is the only entry requirement, and screening's
+  // job is now to *report* the account rather than to grade it. `stats` is still
+  // read in full and still recorded, which is what the staff card renders.
 
   const riskScore = Math.min(
     100,
@@ -190,18 +147,6 @@ function positiveInt(v: unknown, fallback: number): number {
 }
 
 /**
- * Coins, from settings JSON. Accepted as a number or a string because JSON has
- * no bigint and 10 billion coins is past the point where a double stops being
- * exact — a guild typing `"10000000000"` deserves to get that number back.
- */
-function coins(v: unknown): bigint | null {
-  if (typeof v === "bigint") return v;
-  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return BigInt(Math.floor(v));
-  if (typeof v === "string" && /^\d+$/.test(v.trim())) return BigInt(v.trim());
-  return null;
-}
-
-/**
  * Read a stored policy, filling anything absent or malformed from the defaults.
  *
  * Tolerant by design: this value is edited through the panel and could be years
@@ -220,23 +165,19 @@ export function parsePolicy(raw: unknown): ScreeningPolicy {
     reviewOnScammerUnknown: bool(r["reviewOnScammerUnknown"], d.reviewOnScammerUnknown),
     denyOnPriorExpulsion: bool(r["denyOnPriorExpulsion"], d.denyOnPriorExpulsion),
     reviewOnUnreadable: bool(r["reviewOnUnreadable"], d.reviewOnUnreadable),
-    minSkyblockLevel: num(r["minSkyblockLevel"]),
-    minSkillAverage: num(r["minSkillAverage"]),
-    minCatacombs: num(r["minCatacombs"]),
-    minSenitherWeight: num(r["minSenitherWeight"]),
-    minNetworth: coins(r["minNetworth"]),
-    minAccountAgeDays: num(r["minAccountAgeDays"]),
-    maxInactiveDays: num(r["maxInactiveDays"]),
     repeatWindowDays: positiveInt(r["repeatWindowDays"], d.repeatWindowDays),
     maxAttemptsInWindow: positiveInt(r["maxAttemptsInWindow"], d.maxAttemptsInWindow),
     reviewAtRisk: positiveInt(r["reviewAtRisk"], d.reviewAtRisk),
   };
 }
 
-/** The inverse, for the panel's read of the current policy. */
+/**
+ * The inverse, for the panel's read of the current policy.
+ *
+ * A copy rather than the value itself, and a function rather than a cast: the
+ * two types are the same shape today only because the coin threshold is gone,
+ * and the seam is where the next JSON-hostile field would be handled.
+ */
 export function serializePolicy(policy: ScreeningPolicy): ScreeningPolicyView {
-  return {
-    ...policy,
-    minNetworth: policy.minNetworth === null ? null : policy.minNetworth.toString(),
-  };
+  return { ...policy };
 }

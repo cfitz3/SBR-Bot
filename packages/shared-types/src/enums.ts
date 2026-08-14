@@ -150,14 +150,11 @@ export const LFGActivity = {
 } as const;
 export type LFGActivity = (typeof LFGActivity)[keyof typeof LFGActivity];
 
-export const TicketCategory = {
-  SUPPORT: "SUPPORT",
-  REPORT: "REPORT",
-  APPEAL: "APPEAL",
-  APPLICATION: "APPLICATION",
-  OTHER: "OTHER",
-} as const;
-export type TicketCategory = (typeof TicketCategory)[keyof typeof TicketCategory];
+// `TicketCategory` was an enum here, with the five values a guild was stuck
+// with. It is a model now — `TicketCategoryDTO` in `dtos.ts` — and those five
+// are seeded as ordinary rows a guild can rename, reorder or delete. Nothing in
+// code names them any more; `SEED_CATEGORIES` in `@sbr/tickets` is the only
+// place the original wording survives, and only as a starting point.
 
 export const TicketStatus = {
   OPEN: "OPEN",
@@ -186,6 +183,7 @@ export const PermStatus = {
 export type PermStatus = (typeof PermStatus)[keyof typeof PermStatus];
 
 export const MilestoneType = {
+  SKYBLOCK_LEVEL: "SKYBLOCK_LEVEL",
   SKILL_LEVEL: "SKILL_LEVEL",
   CATACOMBS_LEVEL: "CATACOMBS_LEVEL",
   SLAYER_TIER: "SLAYER_TIER",
@@ -204,6 +202,7 @@ export type MilestoneType = (typeof MilestoneType)[keyof typeof MilestoneType];
  * control that saves into a rejection.
  */
 export const MILESTONE_METRICS = [
+  "skyblockLevel",
   "networth",
   "skillAverage",
   "catacombsLevel",

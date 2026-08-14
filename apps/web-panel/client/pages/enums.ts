@@ -19,6 +19,7 @@
 
 /** Metrics a milestone can be measured against (`MILESTONE_METRICS`). */
 export const MILESTONE_METRICS = [
+  "skyblockLevel",
   "networth",
   "skillAverage",
   "catacombsLevel",
@@ -29,6 +30,7 @@ export type MilestoneMetric = (typeof MILESTONE_METRICS)[number];
 
 /** What kind of thing a milestone recognises. */
 export const MilestoneType = {
+  SKYBLOCK_LEVEL: "SKYBLOCK_LEVEL",
   SKILL_LEVEL: "SKILL_LEVEL",
   CATACOMBS_LEVEL: "CATACOMBS_LEVEL",
   SLAYER_TIER: "SLAYER_TIER",
@@ -38,15 +40,10 @@ export const MilestoneType = {
 } as const;
 export type MilestoneType = (typeof MilestoneType)[keyof typeof MilestoneType];
 
-/** The fixed category a ticket type is filed under for reporting. */
-export const TicketCategory = {
-  SUPPORT: "SUPPORT",
-  REPORT: "REPORT",
-  APPEAL: "APPEAL",
-  APPLICATION: "APPLICATION",
-  OTHER: "OTHER",
-} as const;
-export type TicketCategory = (typeof TicketCategory)[keyof typeof TicketCategory];
+// `TicketCategory` used to be a fixed five-value enum copied here. Categories
+// are guild-owned rows now, so the tickets page reads them from its view model
+// rather than from a list baked into the browser bundle — which is the point:
+// a guild that renames "Appeal" to "Ban appeal" sees its own word everywhere.
 
 /**
  * What a member is allowed to do through the bridge. The panel offers this list

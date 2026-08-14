@@ -9,6 +9,7 @@
   "references": [
     { "path": "../shared-types" },
     { "path": "../observability" },
-    { "path": "../moderation" }
+    { "path": "../moderation" },
+    { "path": "../../brand" }
   ]
 }

@@ -11,7 +11,7 @@
  * Ephemeral controls (pagination) deliberately do *not* go through here; see
  * `respond.ts`.
  */
-import type { ButtonInteraction } from "discord.js";
+import type { MessageComponentInteraction } from "discord.js";
 
 export const CUSTOM_ID_SEPARATOR = ":";
 
@@ -35,9 +35,16 @@ export function customId(namespace: string, ...segments: string[]): string {
   return id;
 }
 
-/** Handles one namespace. `segments` excludes the namespace itself. */
+/**
+ * Handles one namespace. `segments` excludes the namespace itself.
+ *
+ * Typed to the whole component family rather than to buttons, because a ticket
+ * panel offering more than five categories has to be a select menu — the same
+ * namespace, the same stateless-id contract, a different control. A handler
+ * that needs the chosen values narrows with `isStringSelectMenu()`.
+ */
 export type ComponentHandler = (
-  interaction: ButtonInteraction,
+  interaction: MessageComponentInteraction,
   segments: readonly string[],
 ) => Promise<void>;
 
@@ -63,10 +70,11 @@ export class ComponentRouter {
   }
 
   /**
-   * Route a button press. Returns false when nothing claims the namespace — the
-   * caller decides whether that is a stale button worth telling the user about.
+   * Route a component interaction. Returns false when nothing claims the
+   * namespace — the caller decides whether that is a stale control worth
+   * telling the user about.
    */
-  async handle(interaction: ButtonInteraction): Promise<boolean> {
+  async handle(interaction: MessageComponentInteraction): Promise<boolean> {
     const [namespace, ...segments] = interaction.customId.split(CUSTOM_ID_SEPARATOR);
     if (!namespace) return false;
     const handler = this.handlers.get(namespace);

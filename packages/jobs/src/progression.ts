@@ -26,6 +26,8 @@ export interface TrackedAccount {
 
 /** The metrics a snapshot records. Absent data is null, never zero. */
 export interface SnapshotMetrics {
+  /** Fractional SkyBlock Level. The headline metric (Part III decision 1). */
+  readonly skyblockLevel: number | null;
   readonly networth: number | null;
   readonly skillAverage: number | null;
   readonly catacombsLevel: number | null;
@@ -117,6 +119,7 @@ export async function snapshotProfiles(deps: ProfileSnapshotDeps): Promise<numbe
 // ─────────────────────────────── milestones ───────────────────────────────
 
 export type MilestoneType =
+  | "SKYBLOCK_LEVEL"
   | "SKILL_LEVEL"
   | "CATACOMBS_LEVEL"
   | "SLAYER_TIER"
@@ -174,6 +177,18 @@ function def(
  * guild opts into paying for progress rather than opting out.
  */
 export const DEFAULT_MILESTONE_DEFINITIONS: readonly MilestoneDefinition[] = [
+  // SkyBlock Level leads, because it is the one track that advances for anyone
+  // who plays at all: skills plateau, dungeons are a sub-community, and networth
+  // swings with the market. Every 25 up to 100 and every 50 after, which is
+  // roughly how the milestones feel in-game rather than uniformly spaced.
+  def("level:50", "SkyBlock Level 50", "SKYBLOCK_LEVEL", "skyblockLevel", 50),
+  def("level:100", "SkyBlock Level 100", "SKYBLOCK_LEVEL", "skyblockLevel", 100),
+  def("level:150", "SkyBlock Level 150", "SKYBLOCK_LEVEL", "skyblockLevel", 150),
+  def("level:200", "SkyBlock Level 200", "SKYBLOCK_LEVEL", "skyblockLevel", 200),
+  def("level:250", "SkyBlock Level 250", "SKYBLOCK_LEVEL", "skyblockLevel", 250),
+  def("level:300", "SkyBlock Level 300", "SKYBLOCK_LEVEL", "skyblockLevel", 300),
+  def("level:350", "SkyBlock Level 350", "SKYBLOCK_LEVEL", "skyblockLevel", 350),
+  def("level:400", "SkyBlock Level 400", "SKYBLOCK_LEVEL", "skyblockLevel", 400),
   def("networth:1b", "1b networth", "NETWORTH_THRESHOLD", "networth", 1e9),
   def("networth:5b", "5b networth", "NETWORTH_THRESHOLD", "networth", 5e9),
   def("networth:10b", "10b networth", "NETWORTH_THRESHOLD", "networth", 1e10),
@@ -195,11 +210,13 @@ export const DEFAULT_MILESTONE_DEFINITIONS: readonly MilestoneDefinition[] = [
   def("skill-average:50", "Skill average 50", "SKILL_LEVEL", "skillAverage", 50),
   def("skill-average:55", "Skill average 55", "SKILL_LEVEL", "skillAverage", 55),
   def("skill-average:60", "Skill average 60", "SKILL_LEVEL", "skillAverage", 60),
-  def("weight:5000", "5,000 weight", "CUSTOM", "senitherWeight", 5_000),
-  def("weight:10000", "10,000 weight", "CUSTOM", "senitherWeight", 10_000),
-  def("weight:15000", "15,000 weight", "CUSTOM", "senitherWeight", 15_000),
-  def("weight:20000", "20,000 weight", "CUSTOM", "senitherWeight", 20_000),
-  def("weight:25000", "25,000 weight", "CUSTOM", "senitherWeight", 25_000),
+  // The five `weight:*` defaults were here and are gone (Part III decision 1).
+  // Senither weight is frozen at v1 and does not score newer skills or slayers,
+  // so a member who spends a month on Hunting sees the number barely move — a
+  // recognition system built on it quietly stops recognising current gameplay.
+  // The metric stays queryable, on the snapshot and on `/stats`; it just no
+  // longer decides what the guild celebrates. A guild that disagrees can add
+  // its own definitions back, on `senitherWeight`, which is still a valid metric.
   def("slayer:1m", "1m slayer XP", "SLAYER_TIER", "slayerXp", 1e6),
   def("slayer:5m", "5m slayer XP", "SLAYER_TIER", "slayerXp", 5e6),
   def("slayer:10m", "10m slayer XP", "SLAYER_TIER", "slayerXp", 1e7),

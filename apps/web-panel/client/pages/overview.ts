@@ -32,16 +32,16 @@ import {
   table,
   type BadgeTone,
 } from "../components.js";
+import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
 import { compactNumber, count, dateTime, ratio, relativeTime } from "../format.js";
 
+const t = scope("overview");
+const c = scope("common");
+
 type Tab = "membership" | "activity" | "joins";
 
-const TABS: readonly (readonly [Tab, string])[] = [
-  ["membership", "Membership"],
-  ["activity", "Activity log"],
-  ["joins", "Join attempts"],
-];
+const TABS = ["membership", "activity", "joins"] as const satisfies readonly Tab[];
 
 /**
  * Module-level so switching tabs does not re-fetch. The whole view model arrives
@@ -50,7 +50,7 @@ const TABS: readonly (readonly [Tab, string])[] = [
 let tab: Tab = "membership";
 
 export async function renderOverview(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading overview…"));
+  replace(host, spinner("overview"));
 
   const result = await loadPage<OverviewVM>(`/api/guilds/${encodeURIComponent(guildId)}/overview`);
   if (result.kind === "denied") return replace(host, deniedState(result.reason));
@@ -65,9 +65,9 @@ export async function renderOverview(host: HTMLElement, guildId: string): Promis
       h(
         "div",
         {},
-        pageTitle("Overview", `Signed in as ${result.access.role.toLowerCase()}`),
+        pageTitle(t("title"), t("subtitle").replace("{role}", result.access.role.toLowerCase())),
         vm.bridgeSuspended ? bridgeBanner() : null,
-        card("Waiting on a human", queueTiles(vm)),
+        card(t("cardQueue"), queueTiles(vm)),
         tabStrip(draw),
         ...tabBody(vm),
       ),
@@ -84,8 +84,8 @@ function bridgeBanner(): HTMLElement {
   return h(
     "div",
     { class: "banner banner-warn", role: "status" },
-    h("strong", {}, "Bridge suspended. "),
-    "Guild chat is not being relayed in either direction.",
+    h("strong", {}, t("bannerSuspendedLead")),
+    t("bannerSuspendedBody"),
   );
 }
 
@@ -93,10 +93,10 @@ function queueTiles(vm: OverviewVM): HTMLElement {
   return h(
     "div",
     { class: "tiles" },
-    statTile("Open tickets", count(vm.openTicketCount)),
-    statTile("Open infractions", count(vm.openInfractionCount)),
-    statTile("Active punishments", count(vm.activeActionCount)),
-    statTile("Upcoming events", count(vm.upcomingEventCount)),
+    statTile(t("tileOpenTickets"), count(vm.openTicketCount)),
+    statTile(t("tileOpenInfractions"), count(vm.openInfractionCount)),
+    statTile(t("tileActivePunishments"), count(vm.activeActionCount)),
+    statTile(t("tileUpcomingEvents"), count(vm.upcomingEventCount)),
   );
 }
 
@@ -104,8 +104,8 @@ function queueTiles(vm: OverviewVM): HTMLElement {
 function tabStrip(rerender: () => void): HTMLElement {
   return h(
     "div",
-    { class: "tabs", role: "tablist", "aria-label": "Overview sections" },
-    ...TABS.map(([id, label]) =>
+    { class: "tabs", role: "tablist", "aria-label": t("tabsLabel") },
+    ...TABS.map((id) =>
       h(
         "button",
         {
@@ -118,19 +118,19 @@ function tabStrip(rerender: () => void): HTMLElement {
             rerender();
           },
         },
-        label,
+        t("tab")[id],
       ),
     ),
   );
 }
 
 function tabBody(vm: OverviewVM): readonly HTMLElement[] {
-  if (tab === "activity") return [card("Activity log", activityBody(vm.activity))];
-  if (tab === "joins") return [card("Recent join attempts", joinsBody(vm.joinAttempts))];
+  if (tab === "activity") return [card(t("cardActivity"), activityBody(vm.activity))];
+  if (tab === "joins") return [card(t("cardJoins"), joinsBody(vm.joinAttempts))];
   return [
-    card("Discord server", discordTiles(vm)),
-    card("In-game guild", gameTiles(vm.membership)),
-    card("Linked accounts", linkTiles(vm)),
+    card(t("cardDiscord"), discordTiles(vm)),
+    card(t("cardGame"), gameTiles(vm.membership)),
+    card(t("cardLinks"), linkTiles(vm)),
   ];
 }
 
@@ -149,12 +149,16 @@ function discordTiles(vm: OverviewVM): HTMLElement {
     h(
       "div",
       { class: "tiles" },
-      statTile("Members", count(m.discordMemberCount), `${count(vm.memberCount)} rows including those who left`),
-      statTile(`Joined (${m.windowDays}d)`, count(m.discordJoins)),
-      statTile(`Left (${m.windowDays}d)`, count(m.discordLeaves)),
-      statTile("Last profile snapshot", relativeTime(vm.lastSnapshotAt)),
+      statTile(
+        t("tileDiscordMembers"),
+        count(m.discordMemberCount),
+        t("discordMembersNote").replace("{count}", count(vm.memberCount)),
+      ),
+      statTile(joinedLabel(m.windowDays), count(m.discordJoins)),
+      statTile(leftLabel(m.windowDays), count(m.discordLeaves)),
+      statTile(t("tileLastSnapshot"), relativeTime(vm.lastSnapshotAt)),
     ),
-    scanNote("Discord roster", m.scannedAt.discord, "every 2 hours"),
+    scanNote(t("scanDiscord"), m.scannedAt.discord, t("cadenceDiscord")),
   );
 }
 
@@ -165,18 +169,22 @@ function gameTiles(m: MembershipStats): HTMLElement {
     h(
       "div",
       { class: "tiles" },
-      statTile("In guild", count(m.guildMemberCount)),
-      statTile(`Joined (${m.windowDays}d)`, count(m.gameJoins)),
-      statTile(`Left (${m.windowDays}d)`, count(m.gameLeaves)),
+      statTile(t("tileInGuild"), count(m.guildMemberCount)),
+      statTile(joinedLabel(m.windowDays), count(m.gameJoins)),
+      statTile(leftLabel(m.windowDays), count(m.gameLeaves)),
     ),
     h(
       "p",
       { class: "page-note" },
-      "Movement here is counted from the guild scans themselves, so somebody who joined and left inside the window shows in both figures rather than cancelling out.",
+      t("gameNote"),
     ),
-    scanNote("Guild roster", m.scannedAt.hypixel, "every 6 hours"),
+    scanNote(t("scanGame"), m.scannedAt.hypixel, t("cadenceGame")),
   );
 }
+
+/** `Joined (7d)` / `Left (7d)` — both cards use the same two labels. */
+const joinedLabel = (days: number): string => t("tileJoined").replace("{days}", String(days));
+const leftLabel = (days: number): string => t("tileLeft").replace("{days}", String(days));
 
 function linkTiles(vm: OverviewVM): HTMLElement {
   const m = vm.membership;
@@ -186,13 +194,13 @@ function linkTiles(vm: OverviewVM): HTMLElement {
     h(
       "div",
       { class: "tiles" },
-      statTile("Linked to Discord", ratio(m.linkedCount, m.discordMemberCount)),
-      statTile("Linked of the guild", ratio(m.linkedCount, m.guildMemberCount)),
+      statTile(t("tileLinkedToDiscord"), ratio(m.linkedCount, m.discordMemberCount)),
+      statTile(t("tileLinkedOfGuild"), ratio(m.linkedCount, m.guildMemberCount)),
     ),
     h(
       "p",
       { class: "page-note" },
-      "A link is verified or it does not exist — there is no waiting state. Members shows exactly who is on each side.",
+      t("linkNote"),
     ),
   );
 }
@@ -206,20 +214,12 @@ function scanNote(what: string, at: string | null, cadence: string): HTMLElement
   return h(
     "p",
     { class: "page-note" },
-    `${what} last updated ${relativeTime(at)}`,
-    at === null ? " — this scan has not run yet, so the counts above may be from an older write." : ` · runs ${cadence}.`,
+    t("scanNote").replace("{what}", what).replace("{when}", relativeTime(at)),
+    at === null ? t("scanNeverRun") : t("scanCadence").replace("{cadence}", cadence),
   );
 }
 
 // ─────────────────────────── activity ───────────────────────────
-
-const KIND_LABEL: Readonly<Record<ActivityEntry["kind"], string>> = {
-  MODERATION: "Moderation",
-  SCREENING: "Join",
-  MILESTONE: "Milestone",
-  EVENT: "Event",
-  ROSTER: "Roster",
-};
 
 const TONE: Readonly<Record<ActivityEntry["tone"], BadgeTone>> = {
   info: "neutral",
@@ -230,23 +230,23 @@ const TONE: Readonly<Record<ActivityEntry["tone"], BadgeTone>> = {
 
 function activityBody(entries: readonly ActivityEntry[]): HTMLElement {
   if (entries.length === 0) {
-    return emptyState("Nothing has happened in this guild yet — no moderation, joins, milestones or events on record.");
+    return emptyState("overviewActivity");
   }
   return h(
     "div",
     {},
     table(
-      ["When", "What", "Detail"],
+      [t("colWhen"), t("colWhat"), t("colDetail")],
       entries.map((e) => [
         h("span", { title: dateTime(e.at) }, relativeTime(e.at)),
-        h("div", { class: "job-cell" }, badge(KIND_LABEL[e.kind], TONE[e.tone]), h("span", {}, e.title)),
-        e.detail ?? "—",
+        h("div", { class: "job-cell" }, badge(t("activityKind")[e.kind], TONE[e.tone]), h("span", {}, e.title)),
+        e.detail ?? c("dash"),
       ]),
     ),
     h(
       "p",
       { class: "page-note" },
-      "The newest of each kind, interleaved. Configuration changes are not here — they are in the audit trail, which records who changed what rather than what the platform did on its own.",
+      t("activityNote"),
     ),
   );
 }
@@ -255,13 +255,13 @@ function activityBody(entries: readonly ActivityEntry[]): HTMLElement {
 
 function joinsBody(rows: readonly JoinAttempt[]): HTMLElement {
   if (rows.length === 0) {
-    return emptyState("No join attempts have been screened yet.");
+    return emptyState("overviewJoinAttempts");
   }
   return h(
     "div",
     {},
     table(
-      ["Player", "Scam check", "Verdict", "Stats", "When"],
+      [t("colPlayer"), t("colScamCheck"), t("colVerdict"), t("colStats"), t("colWhen")],
       rows.map((r) => [
         person(r.ign, r.discordId === null ? r.uuid : `${r.uuid} · ${r.discordId}`),
         scamBadge(r),
@@ -270,7 +270,7 @@ function joinsBody(rows: readonly JoinAttempt[]): HTMLElement {
           { class: "job-cell" },
           badge(r.verdict.toLowerCase(), r.verdict === "ACCEPT" ? "ok" : r.verdict === "DENY" ? "bad" : "warn"),
           badge(r.outcome.toLowerCase()),
-          h("span", { class: "muted" }, `risk ${r.riskScore}`),
+          h("span", { class: "muted" }, t("riskScore").replace("{score}", String(r.riskScore))),
         ),
         statLine(r),
         h("span", { title: dateTime(r.requestedAt) }, relativeTime(r.requestedAt)),
@@ -279,7 +279,7 @@ function joinsBody(rows: readonly JoinAttempt[]): HTMLElement {
     h(
       "p",
       { class: "page-note" },
-      "Stats are what the player's profile said at the moment they asked, not what it says now — and a dash means their API was unreadable, not that the number is zero. Nothing here is a membership gate any more: the scam check is the only bar.",
+      t("joinsNote"),
     ),
   );
 }
@@ -290,18 +290,24 @@ function joinsBody(rows: readonly JoinAttempt[]): HTMLElement {
  * themselves rather than trust the row.
  */
 function scamBadge(r: JoinAttempt): HTMLElement {
-  if (r.scammer === true) return badge(r.scammerReason ?? "listed", "bad");
-  if (r.scammer === false) return badge("clear", "ok");
-  return badge("not checked", "warn");
+  if (r.scammer === true) return badge(r.scammerReason ?? t("scamListed"), "bad");
+  if (r.scammer === false) return badge(t("scamClear"), "ok");
+  return badge(t("scamUnchecked"), "warn");
 }
 
 function statLine(r: JoinAttempt): HTMLElement {
   const parts: string[] = [];
-  if (r.skyblockLevel !== null) parts.push(`sb ${Math.floor(r.skyblockLevel)}`);
-  if (r.skillAverage !== null) parts.push(`sa ${r.skillAverage.toFixed(1)}`);
-  if (r.catacombsLevel !== null) parts.push(`cata ${r.catacombsLevel.toFixed(1)}`);
-  if (r.senitherWeight !== null) parts.push(`weight ${compactNumber(r.senitherWeight)}`);
-  if (r.networth !== null) parts.push(`nw ${compactNumber(r.networth)}`);
-  if (parts.length === 0) return h("span", { class: "muted" }, "profile unreadable");
+  const stat = (
+    key: "statSkyblock" | "statSkillAverage" | "statCatacombs" | "statWeight" | "statNetworth",
+    value: string,
+  ): void => {
+    parts.push(t(key).replace("{value}", value));
+  };
+  if (r.skyblockLevel !== null) stat("statSkyblock", String(Math.floor(r.skyblockLevel)));
+  if (r.skillAverage !== null) stat("statSkillAverage", r.skillAverage.toFixed(1));
+  if (r.catacombsLevel !== null) stat("statCatacombs", r.catacombsLevel.toFixed(1));
+  if (r.senitherWeight !== null) stat("statWeight", compactNumber(r.senitherWeight));
+  if (r.networth !== null) stat("statNetworth", compactNumber(r.networth));
+  if (parts.length === 0) return h("span", { class: "muted" }, t("profileUnreadable"));
   return h("span", {}, parts.join(" · "));
 }

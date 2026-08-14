@@ -5,6 +5,7 @@
  * a database dependency and each page can be tested against a plain object.
  * `panelRepository` satisfies this structurally.
  */
+import type { TicketDTO } from "@sbr/shared-types";
 
 export interface GuildCard {
   readonly id: string;
@@ -224,15 +225,10 @@ export interface PanelEvent {
   readonly declined: number;
 }
 
-export interface PanelTicket {
-  readonly id: string;
-  readonly openerDiscordId: string;
-  readonly assigneeDiscordId: string | null;
-  readonly category: string;
-  readonly status: string;
-  readonly subject: string | null;
-  readonly createdAt: string;
-}
+// The ticket row used to be flattened into a `PanelTicket` shape declared here.
+// It is `TicketDTO` from `@sbr/shared-types` now: the queue, the Discord side
+// and the transcript viewer all need the same row, and a second shape meant the
+// panel silently lost `number`, `claimedBy` and the close-request state.
 
 export interface JobHealth {
   readonly type: string;
@@ -354,6 +350,6 @@ export interface PanelReads {
   /** One member's row, for the individual view. Null when they have no rows. */
   memberActivity(guildId: string, discordId: string, since: Date): Promise<ActiveMember | null>;
   listEvents(guildId: string, limit?: number): Promise<readonly PanelEvent[]>;
-  listTickets(guildId: string, limit?: number): Promise<readonly PanelTicket[]>;
+  listTickets(guildId: string, limit?: number): Promise<readonly TicketDTO[]>;
   listJobHealth(): Promise<readonly JobHealth[]>;
 }

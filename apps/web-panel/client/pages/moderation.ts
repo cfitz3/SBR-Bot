@@ -33,6 +33,7 @@ import {
   table,
   type BadgeTone,
 } from "../components.js";
+import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
 import {
   actionButton,
@@ -50,28 +51,44 @@ import { count, describeSpan, parseDurationSeconds, relativeTime } from "../form
 import { BridgeCapability } from "./enums.js";
 import { filterCards } from "./wordlist.js";
 
-/** The actions the panel is allowed to issue — mirrors `PANEL_ACTIONS`. */
-const ACTIONS: readonly (readonly [string, string, string])[] = [
-  ["NOTE", "Note", "A private record. Nothing is enforced and the member is not told."],
-  ["WARN", "Warn", "A logged warning the member is notified about."],
-  ["MUTE", "Mute", "Silences the member on Discord and in guild chat."],
-  ["UNMUTE", "Unmute", "Lifts an active mute early."],
-  ["KICK", "Kick", "Removes the member; they can rejoin with an invite."],
-  ["BAN", "Ban", "Removes the member and blocks their return."],
-  ["UNBAN", "Unban", "Lifts a ban."],
-];
+const t = scope("moderation");
+const c = scope("common");
+
+/** A copy table read by a value the platform owns, falling back to the value. */
+const lookup = (table: unknown, key: string, fallback: string): string =>
+  (table as Readonly<Record<string, string>>)[key] ?? fallback;
+
+/**
+ * The actions the panel is allowed to issue — mirrors `PANEL_ACTIONS`.
+ *
+ * Which actions exist and in what order is structure; what each is called and
+ * what it does to a member is copy, so an action the platform gains before copy
+ * names it is still offered, under its own key.
+ */
+const ACTIONS: readonly string[] = ["NOTE", "WARN", "MUTE", "UNMUTE", "KICK", "BAN", "UNBAN"];
+
+const actionName = (value: string): string => lookup(t("actionName"), value, value);
+const actionHint = (value: string): string => lookup(t("actionHint"), value, "");
 
 /** Only these two carry a duration; the rest are instantaneous. */
 const TIMED = new Set(["MUTE", "BAN"]);
 
 type Section = "history" | "automod" | "filter" | "cooldowns";
 
-const SECTIONS: readonly (readonly [Section, string])[] = [
-  ["history", "History"],
-  ["automod", "Automod"],
-  ["filter", "Filter"],
-  ["cooldowns", "Cooldowns"],
-];
+const SECTIONS: readonly Section[] = ["history", "automod", "filter", "cooldowns"];
+
+const sectionLabel = (id: Section): string => {
+  switch (id) {
+    case "automod":
+      return t("tabAutomod");
+    case "filter":
+      return t("tabFilter");
+    case "cooldowns":
+      return t("tabCooldowns");
+    default:
+      return t("tabHistory");
+  }
+};
 
 /**
  * Survives a tab switch so coming back to the page keeps your place — including
@@ -94,48 +111,37 @@ const MUTE_MAX = 86_400;
 const COOLDOWN_MAX = 600;
 const ALLOWLIST_MAX = 50;
 
-const TRIGGER_OPTIONS: readonly (readonly [string, string])[] = [
-  ["wordlist", "a word on the chat filter"],
-  ["regex", "a pattern"],
-  ["spam", "too many messages"],
-  ["repeat", "the same message repeated"],
-  ["mentions", "too many mentions"],
-  ["caps", "shouting"],
-  ["links", "a link"],
-  ["invites", "a Discord invite"],
+/** The trigger kinds `evaluateAutomod` understands, in the order they are offered. */
+const TRIGGER_KINDS: readonly string[] = [
+  "wordlist",
+  "regex",
+  "spam",
+  "repeat",
+  "mentions",
+  "caps",
+  "links",
+  "invites",
 ];
 
-/** What each trigger actually watches, in the guild's terms. */
-const TRIGGER_HINT: Readonly<Record<string, string>> = {
-  wordlist: "Runs the guild's chat filter over the message. One list, both features.",
-  regex: "A regular expression, compiled as written. Refused at save time if it doesn't compile.",
-  spam: "Counts one author's messages in a rolling window.",
-  repeat: "Counts how often one author sent this exact text in a rolling window.",
-  mentions: "Counts the mentions in a single message.",
-  caps: "The share of letters in upper case, over a minimum length so “OK” doesn't trip it.",
-  links: "Any link whose host is not on the allowlist. An empty allowlist catches every link.",
-  invites: "A discord.gg (or equivalent) invite anywhere in the message.",
-};
+const triggerLabel = (kind: string): string => lookup(t("trigger"), kind, kind);
+const triggerHint = (kind: string): string => lookup(t("triggerHint"), kind, "");
 
-const ACTION_OPTIONS: readonly (readonly [string, string])[] = [
-  ["FLAG", "record it"],
-  ["WARN", "warn them"],
-  ["MUTE", "mute them"],
-];
+const triggerOptions = (): readonly (readonly [string, string])[] =>
+  TRIGGER_KINDS.map((kind) => [kind, triggerLabel(kind)] as const);
 
-const ACTION_HINT: Readonly<Record<string, string>> = {
-  FLAG: "Recorded and shown to staff. Nothing happens to the member — start new rules here.",
-  WARN: "A warning, which counts towards the escalation ladder on the Filter section.",
-  MUTE: "A mute, carried into guild chat by the sync rows on the Filter section.",
-};
+/** What a fired rule does. FLAG first: it is the honest place to start a rule. */
+const AUTOMOD_ACTIONS: readonly string[] = ["FLAG", "WARN", "MUTE"];
 
-const CAPABILITY_OPTIONS: readonly (readonly [string, string])[] = [
-  ["", "nobody"],
+const automodActionOptions = (): readonly (readonly [string, string])[] =>
+  AUTOMOD_ACTIONS.map((v) => [v, lookup(t("automodAction"), v, v.toLowerCase())] as const);
+
+const capabilityOptions = (): readonly (readonly [string, string])[] => [
+  ["", t("exemptNobody")] as const,
   ...Object.keys(BridgeCapability).map((v) => [v, v.toLowerCase().replace(/_/g, " ")] as const),
 ];
 
 export async function renderModeration(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading moderation…"));
+  replace(host, spinner("moderation"));
 
   const query = state.target ? `?target=${encodeURIComponent(state.target)}` : "";
   const result = await loadPage<ModerationVM>(
@@ -158,7 +164,7 @@ export async function renderModeration(host: HTMLElement, guildId: string): Prom
     h(
       "div",
       {},
-      pageTitle("Moderation", subtitle(data)),
+      pageTitle(t("title"), subtitle(data)),
       sections.length > 1 ? sectionTabs(sections, rerender) : null,
       ...sectionBody(guildId, data, rerender),
     ),
@@ -170,31 +176,33 @@ function subtitle(data: ModerationVM): string {
     case "automod": {
       const live = data.automod.rules.filter((r) => r.enabled).length;
       return data.automod.enabled
-        ? `${count(live)} of ${count(data.automod.rules.length)} rules live`
-        : "Switched off — rules are kept but nothing fires";
+        ? t("subtitleAutomod")
+            .replace("{live}", count(live))
+            .replace("{total}", count(data.automod.rules.length))
+        : t("subtitleAutomodOff");
     }
     case "filter":
-      return "The chat filter, the warning ladder, and what a punishment does in guild chat";
+      return t("subtitleFilter");
     case "cooldowns":
-      return "How long a member waits between commands, and between relayed messages";
+      return t("subtitleCooldowns");
     default:
       return data.target
-        ? `${count(data.infractionCount)} infraction(s) on record for this member`
-        : "Guild-wide audit trail — pick a member to narrow it";
+        ? t("subtitleMember").replace("{count}", count(data.infractionCount))
+        : t("subtitleGuild");
   }
 }
 
-function sectionTabs(sections: readonly (readonly [Section, string])[], rerender: () => void): HTMLElement {
+function sectionTabs(sections: readonly Section[], rerender: () => void): HTMLElement {
   return h(
     "div",
-    { class: "tabs", role: "tablist", "aria-label": "Moderation section" },
-    ...sections.map(([id, label]) => {
+    { class: "tabs", role: "tablist", "aria-label": t("tabsAria") },
+    ...sections.map((id) => {
       const button = h("button", {
         type: "button",
         class: "tab",
         role: "tab",
         "aria-selected": id === state.section ? "true" : "false",
-      }, label);
+      }, sectionLabel(id));
       button.addEventListener("click", () => {
         if (id === state.section) return;
         state.section = id;
@@ -212,7 +220,7 @@ function sectionBody(guildId: string, data: ModerationVM, rerender: () => void):
     case "filter":
       return filterCards(guildId, data.filter, rerender);
     case "cooldowns":
-      return [card("Cooldowns", cooldownsBody(guildId, data))];
+      return [card(t("cardCooldowns"), cooldownsBody(guildId, data))];
     default:
       return historySection(guildId, data, rerender);
   }
@@ -222,14 +230,14 @@ function sectionBody(guildId: string, data: ModerationVM, rerender: () => void):
 
 function historySection(guildId: string, data: ModerationVM, rerender: () => void): readonly (HTMLElement | null)[] {
   return [
-    card("Look up a member", lookupBody(guildId, rerender)),
-    card("Issue an action", actionForm(guildId, rerender)),
-    data.target ? card("Infractions", infractionsBody(data.infractions, true)) : null,
-    card("In force now", inForceBody(data)),
-    card(data.target ? "Actions on this member" : "Recent actions", actionsBody(data)),
+    card(t("cardLookup"), lookupBody(guildId, rerender)),
+    card(t("cardIssue"), actionForm(guildId, rerender)),
+    data.target ? card(t("cardInfractions"), infractionsBody(data.infractions, true)) : null,
+    card(t("cardInForce"), inForceBody(data)),
+    card(data.target ? t("cardActionsMember") : t("cardActionsRecent"), actionsBody(data)),
     // Only worth showing when no target is picked: with one, the card above it
     // is the same list narrowed to the person actually being asked about.
-    data.target ? null : card("Recent infractions", infractionsBody(data.recentInfractions, false)),
+    data.target ? null : card(t("cardRecentInfractions"), infractionsBody(data.recentInfractions, false)),
   ];
 }
 
@@ -246,7 +254,7 @@ function lookupBody(guildId: string, rerender: () => void): HTMLElement {
   function look(): void {
     const raw = chooser.value();
     if (raw.length > 0 && !isSnowflake(raw)) {
-      note.textContent = "No member matched. Pick one from the list, or paste their Discord user id.";
+      note.textContent = t("lookupNoMatch");
       return;
     }
     state.target = raw;
@@ -259,8 +267,8 @@ function lookupBody(guildId: string, rerender: () => void): HTMLElement {
     guildId,
     kind: "member",
     value: state.target,
-    placeholder: "Search by name, IGN, or paste an id",
-    ariaLabel: "Member to look up",
+    placeholder: t("lookupPlaceholder"),
+    ariaLabel: t("lookupAria"),
     onPick: look,
     onCommit: look,
   });
@@ -275,7 +283,7 @@ function lookupBody(guildId: string, rerender: () => void): HTMLElement {
         "div",
         { class: "field-row" },
         chooser.el,
-        h("button", { class: "button button-primary", type: "button", onclick: look }, "Look up"),
+        h("button", { class: "button button-primary", type: "button", onclick: look }, t("lookupGo")),
         state.target
           ? h("button", {
               class: "button",
@@ -284,7 +292,7 @@ function lookupBody(guildId: string, rerender: () => void): HTMLElement {
                 state.target = "";
                 rerender();
               },
-            }, "Clear")
+            }, t("lookupClear"))
           : null,
       ),
       note,
@@ -302,40 +310,39 @@ function lookupBody(guildId: string, rerender: () => void): HTMLElement {
 function actionForm(guildId: string, rerender: () => void): HTMLElement {
   const status = statusSlot();
 
-  const type = h("select", { class: "control control-select", "aria-label": "Action" },
-    ...ACTIONS.map(([value, label]) => h("option", { value }, label)),
+  const type = h("select", { class: "control control-select", "aria-label": t("fieldAction") },
+    ...ACTIONS.map((value) => h("option", { value }, actionName(value))),
   ) as HTMLSelectElement;
 
   const target = idChooser({
     guildId,
     kind: "member",
     value: state.target,
-    placeholder: "Search by name, or paste an id",
-    ariaLabel: "Member to act on",
+    placeholder: t("targetPlaceholder"),
+    ariaLabel: t("targetAria"),
   });
 
   const duration = h("input", {
     class: "control control-text control-short",
     type: "text",
-    placeholder: "e.g. 30m, 2h, 7d",
+    placeholder: t("durationPlaceholder"),
     autocomplete: "off",
-    "aria-label": "Duration",
+    "aria-label": t("fieldDuration"),
   }) as HTMLInputElement;
 
   const durationRow = h(
     "div",
     { class: "field" },
-    h("label", { class: "field-label" }, "Duration"),
+    h("label", { class: "field-label" }, t("fieldDuration")),
     h("div", { class: "field-row" }, duration),
-    h("p", { class: "field-hint" }, "Leave blank for permanent. Only mutes and bans take a duration."),
+    h("p", { class: "field-hint" }, t("durationHint")),
   );
 
-  const reason = reasonBox("Why this action was taken — this is the audit record", 3);
-  const explain = h("p", { class: "field-hint" }, ACTIONS[0]![2]);
+  const reason = reasonBox(t("reasonPlaceholder"), 3);
+  const explain = h("p", { class: "field-hint" }, actionHint(ACTIONS[0]!));
 
   function syncType(): void {
-    const chosen = ACTIONS.find(([value]) => value === type.value);
-    explain.textContent = chosen ? chosen[2] : "";
+    explain.textContent = actionHint(type.value);
     // Hidden rather than disabled: an untimed action has no duration at all, and
     // a greyed-out box invites the reader to wonder what would unlock it.
     durationRow.hidden = !TIMED.has(type.value);
@@ -344,24 +351,24 @@ function actionForm(guildId: string, rerender: () => void): HTMLElement {
   syncType();
 
   const submit = actionButton({
-    label: "Apply action",
+    label: t("apply"),
     tone: "primary",
     status,
     run: async () => {
       const targetId = target.value();
       if (!isSnowflake(targetId)) {
-        return { kind: "error", message: "Pick the member to act on, or paste their Discord user id." };
+        return { kind: "error", message: t("errNoTarget") };
       }
       const note = reason.value.trim();
       if (note.length === 0) {
-        return { kind: "error", message: "A reason is required — it's what the audit row will say." };
+        return { kind: "error", message: t("errNoReason") };
       }
 
       let durationSeconds: number | null = null;
       if (TIMED.has(type.value)) {
         const parsed = parseDurationSeconds(duration.value);
         if (parsed === "invalid") {
-          return { kind: "error", message: "Duration must look like 30m, 2h or 7d, up to a year." };
+          return { kind: "error", message: t("errDuration") };
         }
         durationSeconds = parsed;
       }
@@ -390,21 +397,21 @@ function actionForm(guildId: string, rerender: () => void): HTMLElement {
     h(
       "div",
       { class: "field" },
-      h("label", { class: "field-label" }, "Action"),
+      h("label", { class: "field-label" }, t("fieldAction")),
       h("div", { class: "field-row" }, type),
       explain,
     ),
     h(
       "div",
       { class: "field" },
-      h("label", { class: "field-label" }, "Member"),
+      h("label", { class: "field-label" }, t("fieldMember")),
       h("div", { class: "field-row" }, target.el),
     ),
     durationRow,
     h(
       "div",
       { class: "field" },
-      h("label", { class: "field-label" }, "Reason"),
+      h("label", { class: "field-label" }, t("fieldReason")),
       h("div", { class: "field-row" }, reason),
     ),
     h("div", { class: "field-row" }, submit, status.el),
@@ -419,13 +426,11 @@ function actionForm(guildId: string, rerender: () => void): HTMLElement {
  */
 function infractionsBody(rows: readonly InfractionDTO[], targeted: boolean): HTMLElement {
   if (rows.length === 0) {
-    return emptyState(
-      targeted ? "No infractions on record for this member." : "No infractions recorded in this guild yet.",
-    );
+    return emptyState(targeted ? "moderationInfractionsMember" : "moderationInfractionsGuild");
   }
   const headers = targeted
-    ? ["Type", "Severity", "Reason", "When"]
-    : ["Member", "Type", "Severity", "Reason", "When"];
+    ? [t("colType"), t("colSeverity"), t("colReason"), t("colWhen")]
+    : [t("colMember"), t("colType"), t("colSeverity"), t("colReason"), t("colWhen")];
   return table(
     headers,
     rows.map((row) => {
@@ -435,7 +440,7 @@ function infractionsBody(rows: readonly InfractionDTO[], targeted: boolean): HTM
         row.reason,
         relativeTime(row.createdAt),
       ];
-      return targeted ? cells : [h("code", {}, row.targetDiscordId ?? "—"), ...cells];
+      return targeted ? cells : [h("code", {}, row.targetDiscordId ?? c("dash")), ...cells];
     }),
   );
 }
@@ -451,20 +456,16 @@ function infractionsBody(rows: readonly InfractionDTO[], targeted: boolean): HTM
  */
 function inForceBody(data: ModerationVM): HTMLElement {
   if (data.inForce.length === 0) {
-    return emptyState(
-      data.target
-        ? "Nothing is currently being enforced against this member."
-        : "Nobody in this guild is muted or banned right now.",
-    );
+    return emptyState(data.target ? "moderationInForceMember" : "moderationInForceGuild");
   }
   return table(
-    ["Action", "Member", "By", "Reason", "Ends", "Since"],
+    [t("colAction"), t("colMember"), t("colBy"), t("colReason"), t("colEnds"), t("colSince")],
     data.inForce.map((row) => [
-      h("div", { class: "job-cell" }, row.type, badge("in force", "warn")),
-      h("code", {}, row.targetDiscordId ?? "—"),
+      h("div", { class: "job-cell" }, row.type, badge(t("badgeInForce"), "warn")),
+      h("code", {}, row.targetDiscordId ?? c("dash")),
       h("code", {}, row.actorDiscordId),
       row.reason,
-      row.expiresAt === null ? "never" : relativeTime(row.expiresAt),
+      row.expiresAt === null ? c("never") : relativeTime(row.expiresAt),
       relativeTime(row.createdAt),
     ]),
   );
@@ -472,16 +473,14 @@ function inForceBody(data: ModerationVM): HTMLElement {
 
 function actionsBody(data: ModerationVM): HTMLElement {
   if (data.actions.length === 0) {
-    return emptyState(
-      data.target ? "No panel or bot actions recorded against this member." : "No moderation actions recorded yet.",
-    );
+    return emptyState(data.target ? "moderationActionsMember" : "moderationActionsGuild");
   }
 
   return table(
-    ["Action", "Member", "By", "Reason", "Duration", "When"],
+    [t("colAction"), t("colMember"), t("colBy"), t("colReason"), t("colDuration"), t("colWhen")],
     data.actions.map((row) => [
       h("div", { class: "job-cell" }, row.type, stateBadge(row)),
-      h("code", {}, row.targetDiscordId ?? "—"),
+      h("code", {}, row.targetDiscordId ?? c("dash")),
       h("code", {}, row.actorDiscordId),
       row.reason,
       describeDuration(row),
@@ -527,14 +526,12 @@ function automodSection(
     h(
       "p",
       { class: "field-hint" },
-      "Automod acts on a message with nobody in the loop, on Discord and in guild chat alike. A rule that fires " +
-        "hands the action to the same pipeline as /warn — so the escalation ladder, the audit trail and the " +
-        "in-game punishment sync all apply to it.",
+      t("automodIntro"),
     ),
     fieldGroup(
       toggleField({
-        label: "Automod on",
-        hint: "Off stops every rule at once and keeps them all. Use this first when something is misfiring.",
+        label: t("automodLabel"),
+        hint: t("automodHint"),
         checked: policy.enabled,
         save: (enabled) => postAction(guildId, "automod.enable", { enabled }),
       }),
@@ -543,7 +540,7 @@ function automodSection(
   );
 
   const add = actionButton({
-    label: "New rule",
+    label: t("newRule"),
     tone: "primary",
     status,
     run: async () => {
@@ -554,12 +551,14 @@ function automodSection(
   });
 
   return [
-    card("Automod", master),
-    card("Test a message", testBox(guildId, policy)),
+    card(t("cardAutomod"), master),
+    card(t("cardTest"), testBox(guildId, policy)),
     card(
-      policy.rules.length === 0 ? "Rules" : `Rules (${count(policy.rules.length)})`,
+      policy.rules.length === 0
+        ? t("cardRules")
+        : t("cardRulesCount").replace("{count}", count(policy.rules.length)),
       policy.rules.length === 0 && state.editing !== "new"
-        ? emptyState("No automod rules yet. Start one on “record it” and watch what it catches before it acts.")
+        ? emptyState("moderationAutomod")
         : h(
             "div",
             {},
@@ -590,8 +589,10 @@ function ruleRow(guildId: string, rule: AutomodRule, rerender: () => void): HTML
       rule.name,
       badge(triggerLabel(rule.trigger.kind), "neutral"),
       badge(describeAction(rule.action), rule.action.type === "FLAG" ? "neutral" : "warn"),
-      ...rule.surfaces.map((s) => badge(s === "DISCORD" ? "discord" : "guild chat", "neutral")),
-      rule.enabled ? badge("live", "ok") : badge("off", "neutral"),
+      ...rule.surfaces.map((s) =>
+        badge(s === "DISCORD" ? t("surfaceDiscord") : t("surfaceGuildChat"), "neutral"),
+      ),
+      rule.enabled ? badge(t("ruleLive"), "ok") : badge(t("ruleOff"), "neutral"),
     ),
     h("button", {
       class: "button",
@@ -601,11 +602,11 @@ function ruleRow(guildId: string, rule: AutomodRule, rerender: () => void): HTML
         state.editing = open ? null : rule.id;
         rerender();
       },
-    }, open ? "Close" : "Edit"),
+    }, open ? t("ruleClose") : t("ruleEdit")),
     actionButton({
-      label: "Remove",
+      label: t("remove"),
       tone: "danger",
-      confirm: "Confirm remove",
+      confirm: t("removeConfirm"),
       status,
       run: () => postAction(guildId, "automod.rule.remove", { id: rule.id }),
       onDone: () => {
@@ -630,7 +631,7 @@ function draftCard(guildId: string, rerender: () => void): HTMLElement {
   const status = statusSlot();
 
   const create = actionButton({
-    label: "Add rule",
+    label: t("addRule"),
     tone: "primary",
     status,
     run: () => {
@@ -647,7 +648,7 @@ function draftCard(guildId: string, rerender: () => void): HTMLElement {
   return h(
     "div",
     { class: "field" },
-    h("p", { class: "field-hint" }, "Nothing here is stored until you press Add rule."),
+    h("p", { class: "field-hint" }, t("draftNote")),
     ruleEditor(guildId, draft, true),
     h("div", { class: "field-row" }, create),
     status.el,
@@ -658,7 +659,7 @@ function draftCard(guildId: string, rerender: () => void): HTMLElement {
         state.editing = null;
         rerender();
       },
-    }, "Cancel")),
+    }, t("cancel"))),
   );
 }
 
@@ -696,11 +697,13 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
       ...(draft.action.type === "MUTE"
         ? [
             textField({
-              label: "Mute for",
-              hint: `Seconds, up to ${count(MUTE_MAX)} (a day). Blank leaves it open-ended.`,
+              label: t("muteForLabel"),
+              hint: t("muteForHint").replace("{max}", count(MUTE_MAX)),
               value: draft.action.durationSeconds === null ? "" : String(draft.action.durationSeconds),
               validate: (raw) =>
-                raw.trim() === "" || whole(raw, 1, MUTE_MAX) ? null : `Enter 1–${MUTE_MAX} seconds, or leave it blank.`,
+                raw.trim() === "" || whole(raw, 1, MUTE_MAX)
+                  ? null
+                  : t("errMuteFor").replace("{max}", String(MUTE_MAX)),
               save: (raw) => {
                 draft.action.durationSeconds = raw.trim() === "" ? null : Number(raw.trim());
                 return save();
@@ -717,12 +720,12 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
     { class: "fields" },
     fieldGroup(
       textField({
-        label: "Name",
-        hint: "What this rule is for. It appears in the audit row when the rule fires.",
+        label: t("nameLabel"),
+        hint: t("nameHint"),
         value: draft.name,
         validate: (raw) =>
           raw.trim().length === 0 || raw.length > RULE_NAME_MAX
-            ? `Enter a name up to ${RULE_NAME_MAX} characters.`
+            ? t("errName").replace("{max}", String(RULE_NAME_MAX))
             : null,
         save: (raw) => {
           draft.name = raw.trim();
@@ -732,8 +735,8 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
       drafting
         ? null
         : toggleField({
-            label: "Live",
-            hint: "Off keeps the rule here and stops it firing.",
+            label: t("liveLabel"),
+            hint: t("liveHint"),
             checked: draft.enabled,
             save: (next) => {
               draft.enabled = next;
@@ -741,7 +744,7 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
             },
           }),
       toggleField({
-        label: "On Discord",
+        label: t("discordLabel"),
         checked: draft.surfaces.includes("DISCORD"),
         save: (next) => {
           setSurface(draft, "DISCORD", next);
@@ -749,8 +752,8 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
         },
       }),
       toggleField({
-        label: "In guild chat",
-        hint: "A member muted on Discord who carries on in guild chat has not been moderated, only redirected.",
+        label: t("guildChatLabel"),
+        hint: t("guildChatHint"),
         checked: draft.surfaces.includes("GUILD_CHAT"),
         save: (next) => {
           setSurface(draft, "GUILD_CHAT", next);
@@ -758,10 +761,10 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
         },
       }),
       selectField({
-        label: "Catches",
-        hint: TRIGGER_HINT[draft.trigger.kind] ?? "",
+        label: t("catchesLabel"),
+        hint: triggerHint(draft.trigger.kind),
         value: draft.trigger.kind,
-        options: TRIGGER_OPTIONS,
+        options: triggerOptions(),
         save: (next) => {
           draft.trigger = defaultTrigger(next);
           drawParams();
@@ -772,10 +775,10 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
     params,
     fieldGroup(
       selectField({
-        label: "Then",
-        hint: ACTION_HINT[draft.action.type] ?? "",
+        label: t("thenLabel"),
+        hint: lookup(t("automodActionHint"), draft.action.type, ""),
         value: draft.action.type,
-        options: ACTION_OPTIONS,
+        options: automodActionOptions(),
         save: (next) => {
           draft.action.type = next;
           // A duration only means something on a mute, and the server refuses
@@ -786,8 +789,8 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
         },
       }),
       toggleField({
-        label: "Delete the message",
-        hint: "Separate from the action above: “delete it and say nothing” and “warn them but leave it up” are both things staff ask for.",
+        label: t("deleteLabel"),
+        hint: t("deleteHint"),
         checked: draft.action.deleteMessage,
         save: (next) => {
           draft.action.deleteMessage = next;
@@ -798,101 +801,106 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
     duration,
     fieldGroup(
       multiPickerField({
-        label: "Roles that skip this rule",
-        hint: "Discord only — guild chat has no roles. Leave empty and the rule applies to everyone.",
+        label: t("exemptRolesLabel"),
+        hint: t("exemptRolesHint"),
         guildId,
         kind: "role",
         values: draft.exempt.roleIds,
-        placeholder: "Search roles",
+        placeholder: t("exemptRolesPlaceholder"),
         save: (ids) => {
           draft.exempt.roleIds = [...ids];
           return save();
         },
       }),
       selectField({
-        label: "Capability that skips this rule",
-        hint: "The guild-chat side's staff check, since there are no roles there to exempt.",
+        label: t("exemptCapabilityLabel"),
+        hint: t("exemptCapabilityHint"),
         value: draft.exempt.capability ?? "",
-        options: CAPABILITY_OPTIONS,
+        options: capabilityOptions(),
         save: (next) => {
           draft.exempt.capability = next === "" ? null : next;
           return save();
         },
       }),
     ),
-    drafting ? null : h("p", { class: "field-hint" }, "Every change here is saved as you make it."),
+    drafting ? null : h("p", { class: "field-hint" }, t("autosaveNote")),
   );
 }
 
 /** The fields one trigger kind needs, and nothing from the other seven. */
 function triggerFields(draft: Draft, save: () => Promise<WriteResult>): readonly HTMLElement[] {
-  const t = draft.trigger;
+  const trig = draft.trigger;
   const num = (key: string, label: string, hint: string, min: number, max: number): HTMLElement =>
     textField({
       label,
       hint,
-      value: String(t[key] ?? ""),
-      validate: (raw) => (whole(raw, min, max) ? null : `Enter a whole number between ${min} and ${max}.`),
+      value: String(trig[key] ?? ""),
+      validate: (raw) =>
+        whole(raw, min, max)
+          ? null
+          : t("errWhole").replace("{min}", String(min)).replace("{max}", String(max)),
       save: (raw) => {
-        t[key] = Number(raw.trim());
+        trig[key] = Number(raw.trim());
         return save();
       },
     });
 
-  switch (t.kind) {
+  switch (trig.kind) {
     case "regex":
       return [
         textField({
-          label: "Pattern",
-          hint: "A regular expression. Refused at save time if it doesn't compile — better than storing one that silently never matches.",
-          value: String(t["pattern"] ?? ""),
+          label: t("patternLabel"),
+          hint: t("patternHint"),
+          value: String(trig["pattern"] ?? ""),
           validate: (raw) =>
             raw.trim().length === 0 || raw.length > PATTERN_MAX
-              ? `Enter a pattern up to ${PATTERN_MAX} characters.`
+              ? t("errPattern").replace("{max}", String(PATTERN_MAX))
               : null,
           save: (raw) => {
-            t["pattern"] = raw.trim();
+            trig["pattern"] = raw.trim();
             return save();
           },
         }),
         textField({
-          label: "Flags",
-          hint: "Regex flags, e.g. i for case-insensitive. Leave blank for none.",
-          value: String(t["flags"] ?? ""),
-          validate: (raw) => (/^[gimsuy]*$/.test(raw.trim()) ? null : "Flags may only be g, i, m, s, u or y."),
+          label: t("flagsLabel"),
+          hint: t("flagsHint"),
+          value: String(trig["flags"] ?? ""),
+          validate: (raw) => (/^[gimsuy]*$/.test(raw.trim()) ? null : t("errFlags")),
           save: (raw) => {
-            t["flags"] = raw.trim();
+            trig["flags"] = raw.trim();
             return save();
           },
         }),
       ];
     case "spam":
       return [
-        num("messages", "Messages", "How many messages from one author trip it.", 2, 100),
-        num("windowSeconds", "Within", `Seconds, up to ${WINDOW_MAX}.`, 1, WINDOW_MAX),
+        num("messages", t("messagesLabel"), t("messagesHint"), 2, 100),
+        num("windowSeconds", t("withinLabel"), within(), 1, WINDOW_MAX),
       ];
     case "repeat":
       return [
-        num("times", "Repeats", "How many times the same text has to be sent.", 2, 100),
-        num("windowSeconds", "Within", `Seconds, up to ${WINDOW_MAX}.`, 1, WINDOW_MAX),
+        num("times", t("repeatsLabel"), t("repeatsHint"), 2, 100),
+        num("windowSeconds", t("withinLabel"), within(), 1, WINDOW_MAX),
       ];
     case "mentions":
-      return [num("max", "Mentions allowed", "The most mentions one message may carry.", 1, 100)];
+      return [num("max", t("mentionsLabel"), t("mentionsHint"), 1, 100)];
     case "caps":
       return [
-        num("percent", "Upper case", "Percent of letters in caps. The floor is 50 — below half, ordinary emphatic typing trips it.", 50, 100),
-        num("minLength", "Only messages at least", "Characters. Short messages are exempt so “OK” doesn't count as shouting.", 4, 500),
+        num("percent", t("capsLabel"), t("capsHint"), 50, 100),
+        num("minLength", t("minLengthLabel"), t("minLengthHint"), 4, 500),
       ];
     case "links":
       return [
         textField({
-          label: "Allowed hosts",
-          hint: `Comma-separated hostnames, up to ${ALLOWLIST_MAX}. Leave empty to catch every link.`,
-          value: (Array.isArray(t["allowlist"]) ? (t["allowlist"] as string[]) : []).join(", "),
+          label: t("allowlistLabel"),
+          hint: t("allowlistHint").replace("{max}", String(ALLOWLIST_MAX)),
+          value: (Array.isArray(trig["allowlist"]) ? (trig["allowlist"] as string[]) : []).join(", "),
           validate: (raw) =>
-            splitList(raw).length > ALLOWLIST_MAX ? `At most ${ALLOWLIST_MAX} hosts.` : null,
+            splitList(raw).length > ALLOWLIST_MAX
+              ? t("errAllowlist").replace("{max}", String(ALLOWLIST_MAX))
+              : null,
           save: (raw) => {
-            t["allowlist"] = splitList(raw);
+            trig["allowlist"] = splitList(raw);
             return save();
           },
         }),
@@ -914,7 +922,7 @@ function triggerFields(draft: Draft, save: () => Promise<WriteResult>): readonly
  */
 function testBox(guildId: string, policy: AutomodPolicy): HTMLElement {
   const status = statusSlot();
-  const text = reasonBox("Paste a message to run the rules against", 3);
+  const text = reasonBox(t("testPlaceholder"), 3);
 
   let surface = "DISCORD";
   let mentions = "0";
@@ -923,7 +931,7 @@ function testBox(guildId: string, policy: AutomodPolicy): HTMLElement {
     type: "text",
     value: "0",
     autocomplete: "off",
-    "aria-label": "Mentions in the message",
+    "aria-label": t("testMentionsAria"),
   }) as HTMLInputElement;
   mentionInput.addEventListener("input", () => {
     mentions = mentionInput.value;
@@ -939,34 +947,34 @@ function testBox(guildId: string, policy: AutomodPolicy): HTMLElement {
       type: "text",
       value: "0",
       autocomplete: "off",
-      "aria-label": `Counter for ${rule.name}`,
+      "aria-label": t("testCounterAria").replace("{rule}", rule.name),
     }) as HTMLInputElement;
     counterInputs.set(rule.id, input);
     return h(
       "div",
       { class: "field" },
-      h("label", { class: "field-label" }, `Already counted for “${rule.name}”`),
+      h("label", { class: "field-label" }, t("testCounterLabel").replace("{rule}", rule.name)),
       h("div", { class: "field-row" }, input),
     );
   });
 
   const run = actionButton({
-    label: "Test it",
+    label: t("testRun"),
     tone: "primary",
     status,
     run: () => {
       const body = text.value;
       if (body.trim().length === 0) {
-        return Promise.resolve<WriteResult>({ kind: "error", message: "Type a message to test." });
+        return Promise.resolve<WriteResult>({ kind: "error", message: t("errNoTestText") });
       }
       if (!whole(mentions, 0, 100)) {
-        return Promise.resolve<WriteResult>({ kind: "error", message: "Mentions must be a whole number from 0 to 100." });
+        return Promise.resolve<WriteResult>({ kind: "error", message: t("errTestMentions") });
       }
       const counters: Record<string, number> = {};
       for (const [id, input] of counterInputs) {
         const raw = input.value.trim() === "" ? "0" : input.value;
         if (!whole(raw, 0, 10_000)) {
-          return Promise.resolve<WriteResult>({ kind: "error", message: "Counters must be whole numbers." });
+          return Promise.resolve<WriteResult>({ kind: "error", message: t("errTestCounters") });
         }
         counters[id] = Number(raw.trim());
       }
@@ -985,21 +993,20 @@ function testBox(guildId: string, policy: AutomodPolicy): HTMLElement {
     h(
       "p",
       { class: "field-hint" },
-      "Nothing is written and nobody is punished — the answer below is what would have happened. The message " +
-        "itself is never recorded, which is the point: testing a slur rule should not file the slur in the audit log.",
+      t("testIntro"),
     ),
     h(
       "div",
       { class: "field" },
-      h("label", { class: "field-label" }, "Message"),
+      h("label", { class: "field-label" }, t("testMessageLabel")),
       h("div", { class: "field-row" }, text),
     ),
     selectField({
-      label: "As if sent",
+      label: t("testAsIfLabel"),
       value: surface,
       options: [
-        ["DISCORD", "in Discord"],
-        ["GUILD_CHAT", "in guild chat"],
+        ["DISCORD", t("testAsIfDiscord")],
+        ["GUILD_CHAT", t("testAsIfGuildChat")],
       ],
       save: async (next) => {
         surface = next;
@@ -1009,7 +1016,7 @@ function testBox(guildId: string, policy: AutomodPolicy): HTMLElement {
     h(
       "div",
       { class: "field" },
-      h("label", { class: "field-label" }, "Mentions in it"),
+      h("label", { class: "field-label" }, t("testMentionsLabel")),
       h("div", { class: "field-row" }, mentionInput),
     ),
     ...counterFields,
@@ -1042,14 +1049,14 @@ function cooldownsBody(guildId: string, data: ModerationVM): HTMLElement {
     const entries = Object.entries(perCommand);
     rows.replaceChildren(
       ...(entries.length === 0
-        ? [h("p", { class: "field-hint" }, "No per-command overrides. Every command uses the default above.")]
+        ? [h("p", { class: "field-hint" }, t("noOverrides"))]
         : entries.map(([command, seconds]) =>
             h(
               "div",
               { class: "field-row" },
               h("span", { class: "job-cell" }, h("code", {}, `/${command}`), describeSeconds(seconds)),
               actionButton({
-                label: "Remove",
+                label: t("remove"),
                 tone: "danger",
                 status,
                 run: () => {
@@ -1067,31 +1074,31 @@ function cooldownsBody(guildId: string, data: ModerationVM): HTMLElement {
   const nameInput = h("input", {
     class: "control control-text",
     type: "text",
-    placeholder: "command name, e.g. networth",
+    placeholder: t("overrideNamePlaceholder"),
     autocomplete: "off",
-    "aria-label": "Command name",
+    "aria-label": t("overrideNameAria"),
   }) as HTMLInputElement;
   const secondsInput = h("input", {
     class: "control control-text control-short",
     type: "text",
-    placeholder: "seconds",
+    placeholder: t("overrideSecondsPlaceholder"),
     autocomplete: "off",
-    "aria-label": "Seconds",
+    "aria-label": t("overrideSecondsAria"),
   }) as HTMLInputElement;
 
   const add = actionButton({
-    label: "Add override",
+    label: t("addOverride"),
     tone: "primary",
     status,
     run: () => {
       const command = nameInput.value.trim().replace(/^\//, "").toLowerCase();
       if (!/^[a-z0-9_-]{1,32}$/.test(command)) {
-        return Promise.resolve<WriteResult>({ kind: "error", message: "That is not a command name." });
+        return Promise.resolve<WriteResult>({ kind: "error", message: t("errCommandName") });
       }
       if (!whole(secondsInput.value, 0, COOLDOWN_MAX)) {
         return Promise.resolve<WriteResult>({
           kind: "error",
-          message: `Enter a whole number of seconds between 0 and ${COOLDOWN_MAX}.`,
+          message: t("errCommandSeconds").replace("{max}", String(COOLDOWN_MAX)),
         });
       }
       perCommand[command] = Number(secondsInput.value.trim());
@@ -1110,18 +1117,17 @@ function cooldownsBody(guildId: string, data: ModerationVM): HTMLElement {
     h(
       "p",
       { class: "field-hint" },
-      "Every command ships with a cooldown its author chose. These override that: a guild-wide default, plus the " +
-        "handful of commands you actually care about.",
+      t("cooldownsIntro"),
     ),
     fieldGroup(
       textField({
-        label: "Default command cooldown",
-        hint: `Seconds, 0–${COOLDOWN_MAX}. Blank leaves each command on the number it shipped with, which is not the same as 0.`,
+        label: t("defaultLabel"),
+        hint: t("defaultHint").replace("{max}", String(COOLDOWN_MAX)),
         value: commandDefaultSeconds === null ? "" : String(commandDefaultSeconds),
         validate: (raw) =>
           raw.trim() === "" || whole(raw, 0, COOLDOWN_MAX)
             ? null
-            : `Enter 0–${COOLDOWN_MAX} seconds, or leave it blank.`,
+            : t("errDefault").replace("{max}", String(COOLDOWN_MAX)),
         save: (raw) => {
           commandDefaultSeconds = raw.trim() === "" ? null : Number(raw.trim());
           return save();
@@ -1132,19 +1138,18 @@ function cooldownsBody(guildId: string, data: ModerationVM): HTMLElement {
         },
       }),
       textField({
-        label: "Between relayed messages",
-        hint:
-          `Seconds one member waits between messages the bridge relays, 0–${COOLDOWN_MAX}. 0 disables it. This sits ` +
-          "on top of flood control, which protects the bridge account from Hypixel's own limit and is deliberately not settable here.",
+        label: t("relayLabel"),
+        hint: t("relayHint").replace("{max}", String(COOLDOWN_MAX)),
         value: String(relaySeconds),
-        validate: (raw) => (whole(raw, 0, COOLDOWN_MAX) ? null : `Enter 0–${COOLDOWN_MAX} seconds.`),
+        validate: (raw) =>
+          whole(raw, 0, COOLDOWN_MAX) ? null : t("errRelay").replace("{max}", String(COOLDOWN_MAX)),
         save: (raw) => {
           relaySeconds = Number(raw.trim());
           return save();
         },
       }),
     ),
-    h("h4", { class: "field-label" }, "Per-command overrides"),
+    h("h4", { class: "field-label" }, t("overridesHeading")),
     rows,
     h("div", { class: "field-row" }, nameInput, secondsInput, add),
     status.el,
@@ -1204,13 +1209,13 @@ function ruleBody(draft: Draft): Record<string, unknown> {
  * whether a regex compiles.
  */
 function validateDraft(draft: Draft): string | null {
-  if (draft.name.trim().length === 0) return "Give the rule a name.";
-  if (draft.surfaces.length === 0) return "Pick at least one surface.";
+  if (draft.name.trim().length === 0) return t("errNoRuleName");
+  if (draft.surfaces.length === 0) return t("errNoSurface");
   if (draft.trigger.kind === "regex" && String(draft.trigger["pattern"] ?? "").trim().length === 0) {
-    return "A pattern rule needs a pattern.";
+    return t("errNoPattern");
   }
   if (draft.action.type === "FLAG" && !draft.action.deleteMessage && draft.trigger.kind === "wordlist") {
-    return "A flag-only wordlist rule duplicates the chat filter — give it an action or delete the message.";
+    return t("errFlagOnlyWordlist");
   }
   return null;
 }
@@ -1240,22 +1245,23 @@ function defaultTrigger(kind: string): Record<string, unknown> & { kind: string 
   }
 }
 
-function triggerLabel(kind: string): string {
-  return TRIGGER_OPTIONS.find(([value]) => value === kind)?.[1] ?? kind;
+/** The seconds cap on a rolling window, said once and used by both trigger kinds. */
+function within(): string {
+  return t("withinHint").replace("{max}", String(WINDOW_MAX));
 }
 
 function describeAction(action: AutomodRule["action"]): string {
   const base =
     action.type === "MUTE"
       ? action.durationSeconds === null
-        ? "mute"
-        : `mute ${describeSpan(action.durationSeconds * 1000)}`
+        ? t("describeMute")
+        : t("describeMuteFor").replace("{span}", describeSpan(action.durationSeconds * 1000))
       : action.type.toLowerCase();
-  return action.deleteMessage ? `${base} + delete` : base;
+  return action.deleteMessage ? t("describeDelete").replace("{action}", base) : base;
 }
 
 function describeSeconds(seconds: number): string {
-  return seconds === 0 ? "no cooldown" : describeSpan(seconds * 1000);
+  return seconds === 0 ? t("noCooldown") : describeSpan(seconds * 1000);
 }
 
 function splitList(raw: string): string[] {
@@ -1279,11 +1285,11 @@ function whole(raw: string, min: number, max: number): boolean {
 function stateBadge(row: ModerationActionVM): HTMLElement | null {
   switch (row.state) {
     case "ACTIVE":
-      return badge("in force", "warn");
+      return badge(t("badgeInForce"), "warn");
     case "EXPIRED":
-      return badge("expired", "neutral");
+      return badge(t("badgeExpired"), "neutral");
     case "LIFTED":
-      return badge("lifted", "ok");
+      return badge(t("badgeLifted"), "ok");
     default:
       // MOMENTARY — a warn or a kick had no duration to run out.
       return null;
@@ -1291,11 +1297,13 @@ function stateBadge(row: ModerationActionVM): HTMLElement | null {
 }
 
 function describeDuration(row: ModerationActionVM): string {
-  if (row.durationSeconds === null) return TIMED.has(row.type) ? "permanent" : "—";
+  if (row.durationSeconds === null) return TIMED.has(row.type) ? t("permanent") : c("dash");
   const span = describeSpan(row.durationSeconds * 1000);
   if (row.expiresAt === null) return span;
   const remaining = Date.parse(row.expiresAt) - Date.now();
-  return remaining > 0 ? `${span} (${describeSpan(remaining)} left)` : span;
+  return remaining > 0
+    ? t("remaining").replace("{span}", span).replace("{left}", describeSpan(remaining))
+    : span;
 }
 
 function severityTone(severity: string): BadgeTone {

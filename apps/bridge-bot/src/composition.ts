@@ -499,7 +499,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   });
 
   const bridge = new BridgeService({
-    guard: new BridgeGuardImpl(redis, identity),
+    guard: new BridgeGuardImpl(redis, identity, undefined, log),
     wordlist: wordlistFilter,
     flood: new FloodControlImpl(redis),
     metrics,

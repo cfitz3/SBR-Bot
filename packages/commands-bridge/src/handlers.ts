@@ -3,6 +3,7 @@
  * render. The registry wires these with capability + cooldown metadata, and the
  * Discord registration payload is derived from the same specs.
  */
+import { withCommandCopy } from "@sbr/brand";
 import { categoryFor, flattenEmbed, LEADERBOARD_CATEGORIES, LEADERBOARD_LABELS } from "@sbr/shared-types";
 import type { AdviceDTO, AuctionsDTO, HypixelResult, LinkActor, ProgressMetric } from "@sbr/shared-types";
 import type {
@@ -478,10 +479,10 @@ const whatnext: CommandHandler = async (ctx, deps) => {
 };
 
 const METRICS: readonly ProgressMetric[] = [
+  "skyblockLevel",
   "networth",
   "skillAverage",
   "catacombsLevel",
-  "senitherWeight",
 ];
 
 const progress: CommandHandler = async (ctx, deps) => {
@@ -889,10 +890,10 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
           description: "What to chart",
           type: "string",
           choices: [
+            { name: "SkyBlock Level", value: "skyblockLevel" },
             { name: "Networth", value: "networth" },
             { name: "Skill average", value: "skillAverage" },
             { name: "Catacombs", value: "catacombsLevel" },
-            { name: "Weight", value: "senitherWeight" },
           ],
         },
         {
@@ -1003,5 +1004,9 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     ...permSpecs(),
     ...funSpecs(),
   ];
-  return new Map(specs.map((s) => [s.name, s]));
+  // The descriptions below are the fallback, not the answer: `withCommandCopy`
+  // replaces them with whatever `brand/copy.ts` resolves to. This is the only
+  // place the registry is built, so slash registration, `/help`, in-game `!help`
+  // and the panel's command docs cannot end up quoting different words.
+  return withCommandCopy(new Map(specs.map((s) => [s.name, s])));
 }

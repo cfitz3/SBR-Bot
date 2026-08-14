@@ -19,6 +19,7 @@
  * `npm run embeds` CLI, and could run in the panel, none of which want a gateway
  * client in scope.
  */
+import { theme } from "@sbr/brand";
 import type { EmbedFieldView, EmbedView, ViewColor } from "@sbr/shared-types";
 
 /**
@@ -26,14 +27,12 @@ import type { EmbedFieldView, EmbedView, ViewColor } from "@sbr/shared-types";
  * an imported specimen's raw hex can be matched back to a name — a card whose
  * colour is a literal has escaped the palette, which is the drift we are trying
  * to catch.
+ *
+ * Now a re-export of the resolved theme rather than a list of its own. It used to
+ * be a second copy of the same five numbers, with `render.ts` holding a third;
+ * they agreed only because nobody had edited one of them yet.
  */
-export const VIEW_COLORS: Readonly<Record<ViewColor, number>> = {
-  NEUTRAL: 0x2b2d31,
-  INFO: 0x5865f2,
-  SUCCESS: 0x57f287,
-  WARNING: 0xfee75c,
-  DANGER: 0xed4245,
-};
+export const VIEW_COLORS: Readonly<Record<ViewColor, number>> = theme.embed.colors;
 
 /** Discord's own caps. Exceeding one is a rejected message, not a style opinion. */
 export const EMBED_LIMITS = {
@@ -49,22 +48,25 @@ export const EMBED_LIMITS = {
 
 /**
  * The house style. These are the numbers to argue about — each one is a taste
- * judgement, not a platform constraint.
+ * judgement, not a platform constraint, which is exactly why they are overridable
+ * from `brand/theme.ts` while `EMBED_LIMITS` above is not.
  */
-export const EMBED_STYLE = {
+export const EMBED_STYLE: EmbedStyle = theme.embed.style;
+
+export interface EmbedStyle {
   /** Past this the description is an essay; move it into fields or a page. */
-  descriptionLines: 12,
+  readonly descriptionLines: number;
   /** Past this the card is a wall; paginate with `paginate()` instead. */
-  fields: 12,
+  readonly fields: number;
   /** Discord packs inline fields three to a row. */
-  inlineRow: 3,
+  readonly inlineRow: number;
   /** A footer is a caption, not a second description. */
-  footer: 120,
+  readonly footer: number;
   /** The separator between facts on one line: `cata 42 · sa 51.3`. */
-  separator: " · ",
+  readonly separator: string;
   /** What an unknown value prints as. Never "N/A", never a silent zero. */
-  unknown: "—",
-} as const;
+  readonly unknown: string;
+}
 
 export type StyleSeverity = "error" | "warning";
 

@@ -9,7 +9,9 @@
  * Analytics reads come from `MetricRollup` and never from `AnalyticsEvent` —
  * the raw fact table grows without bound and a chart must not scan it.
  */
+import type { TicketDTO } from "@sbr/shared-types";
 import { prisma } from "../client.js";
+import { TICKET_SELECT, toTicketDTO } from "./tickets.js";
 
 export interface GuildCardRow {
   readonly id: string;
@@ -137,16 +139,6 @@ export interface EventRow {
   readonly going: number;
   readonly maybe: number;
   readonly declined: number;
-}
-
-export interface TicketRow {
-  readonly id: string;
-  readonly openerDiscordId: string;
-  readonly assigneeDiscordId: string | null;
-  readonly category: string;
-  readonly status: string;
-  readonly subject: string | null;
-  readonly createdAt: string;
 }
 
 export interface JobHealthRow {
@@ -1002,30 +994,21 @@ export const panelRepository = {
     });
   },
 
-  async listTickets(guildId: string, limit = 100): Promise<readonly TicketRow[]> {
+  /**
+   * The ticket queue, newest first, closed ones included.
+   *
+   * Delegated to `ticketRepository` for the row shape — the panel showing a
+   * different set of fields from the bots is how the two ended up disagreeing
+   * about ticket state in the first place.
+   */
+  async listTickets(guildId: string, limit = 100): Promise<readonly TicketDTO[]> {
     const rows = await prisma.ticket.findMany({
       where: { guildId },
       take: limit,
       orderBy: [{ status: "asc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        openerDiscordId: true,
-        assigneeDiscordId: true,
-        category: true,
-        status: true,
-        subject: true,
-        createdAt: true,
-      },
+      select: TICKET_SELECT,
     });
-    return rows.map((r) => ({
-      id: r.id,
-      openerDiscordId: r.openerDiscordId,
-      assigneeDiscordId: r.assigneeDiscordId,
-      category: r.category,
-      status: r.status,
-      subject: r.subject,
-      createdAt: r.createdAt.toISOString(),
-    }));
+    return rows.map(toTicketDTO);
   },
 
   // ─────────────────────────── health ───────────────────────────

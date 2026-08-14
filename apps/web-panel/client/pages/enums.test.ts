@@ -14,11 +14,10 @@ import {
   BridgeCapability as PlatformBridgeCapability,
   MILESTONE_METRICS as PLATFORM_MILESTONE_METRICS,
   MilestoneType as PlatformMilestoneType,
-  TicketCategory as PlatformTicketCategory,
   WordAction as PlatformWordAction,
   WordMatchType as PlatformWordMatchType,
 } from "@sbr/shared-types";
-import { BridgeCapability, MILESTONE_METRICS, MilestoneType, TicketCategory, WordAction, WordMatchType } from "./enums.js";
+import { BridgeCapability, MILESTONE_METRICS, MilestoneType, WordAction, WordMatchType } from "./enums.js";
 
 test("the milestone metrics the page offers are the ones the platform defines", () => {
   assert.deepEqual([...MILESTONE_METRICS], [...PLATFORM_MILESTONE_METRICS]);
@@ -27,7 +26,6 @@ test("the milestone metrics the page offers are the ones the platform defines", 
 test("every enum copy matches the platform's, in declaration order", () => {
   const cases = [
     ["MilestoneType", MilestoneType, PlatformMilestoneType],
-    ["TicketCategory", TicketCategory, PlatformTicketCategory],
     ["WordMatchType", WordMatchType, PlatformWordMatchType],
     ["WordAction", WordAction, PlatformWordAction],
     ["BridgeCapability", BridgeCapability, PlatformBridgeCapability],

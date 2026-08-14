@@ -19,10 +19,8 @@ export function isUpstreamUnavailable(error: unknown): boolean {
   return error instanceof Error && UNAVAILABLE_NAMES.has(error.name);
 }
 
-/**
- * What a user sees when a lookup could not be answered at all. Deliberately
- * distinct from the generic failure text: "try again shortly" is actionable,
- * whereas an invented number or a silent empty result is not.
- */
-export const UPSTREAM_UNAVAILABLE_MESSAGE =
-  "Hypixel isn't reachable right now and there's nothing cached to fall back on — try again in a minute.";
+// What a user *sees* when this predicate is true used to be a constant here.
+// It now lives at `error.generic.upstreamDown` in the brand layer, with every
+// other sentence the platform says, so a guild can reword it. The predicate
+// stays: recognising the condition is shared-types' job, wording it is not —
+// and this package cannot import the brand layer, which depends on it.

@@ -3,7 +3,8 @@
  * Order: resolve spec → capability → cooldown → run handler → capture usage.
  * Never throws: every path returns a CommandReply so the adapter can respond.
  */
-import { isUpstreamUnavailable, UPSTREAM_UNAVAILABLE_MESSAGE } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+import { isUpstreamUnavailable } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type {
   AutocompleteContext,
@@ -16,6 +17,13 @@ import type {
   HandlerDeps,
   UsageSink,
 } from "./types.js";
+
+/**
+ * Read at module scope, which is safe here and is not in the panel: the brand
+ * layer resolves at import and is frozen, while the panel's copy arrives over
+ * HTTP after boot and so has to be read inside the function that uses it.
+ */
+const E = copy.error;
 
 export interface CommandDispatcherDeps {
   readonly registry: ReadonlyMap<string, CommandSpec>;
@@ -72,11 +80,11 @@ export class CommandDispatcher {
 
   async dispatch(name: string, ctx: CommandContext): Promise<CommandReply> {
     const spec = this.d.registry.get(name);
-    if (!spec) return { ephemeral: true, text: `Unknown command: ${name}` };
+    if (!spec) return { ephemeral: true, text: E.command.unknown.replace("{name}", name) };
 
     if (spec.capability) {
       const allowed = await this.d.capabilities.can(ctx.guildId, ctx.userId, spec.capability);
-      if (!allowed) return { ephemeral: true, text: "You don't have permission to use that command." };
+      if (!allowed) return { ephemeral: true, text: E.generic.noPermission };
     }
 
     // A guild may lengthen or shorten this; an unreadable policy leaves the
@@ -96,7 +104,7 @@ export class CommandDispatcher {
       const cd = await this.d.cooldowns.consume(cdKey, cooldownMs);
       if (!cd.allowed) {
         const secs = Math.ceil((cd.retryAfterMs ?? cooldownMs) / 1000);
-        return { ephemeral: true, text: `Slow down — try that again in ${secs}s.` };
+        return { ephemeral: true, text: E.command.cooldown.replace("{n}", String(secs)) };
       }
     }
 
@@ -115,9 +123,7 @@ export class CommandDispatcher {
       // from a bug, and the user can act on the difference.
       reply = {
         ephemeral: true,
-        text: isUpstreamUnavailable(error)
-          ? UPSTREAM_UNAVAILABLE_MESSAGE
-          : "Something went wrong fetching that — try again shortly.",
+        text: isUpstreamUnavailable(error) ? E.generic.upstreamDown : E.generic.unknown,
       };
     }
 
@@ -126,7 +132,8 @@ export class CommandDispatcher {
     // new name in front of the answer — telling someone their command is gone
     // and then not answering it teaches them nothing and costs them the lookup.
     if (spec.deprecatedBy !== undefined) {
-      return { ...reply, text: `\`/${name}\` is now \`/${spec.deprecatedBy}\`.\n${reply.text}` };
+      const notice = E.command.renamed.replace("{old}", name).replace("{new}", spec.deprecatedBy);
+      return { ...reply, text: `${notice}\n${reply.text}` };
     }
     return reply;
   }

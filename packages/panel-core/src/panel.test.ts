@@ -10,7 +10,7 @@ import {
   type MilestoneDefinitionDTO,
   type MilestoneDefinitionService,
   type TicketConfigService,
-  type TicketTypeDTO,
+  type TicketCategoryDTO,
   type WordlistService,
   type ModerationService,
   type XpService,
@@ -237,8 +237,7 @@ const configService = (over: Partial<GuildRuntimeConfig> = {}): GuildConfigServi
     async get() {
       return ok({
         guildId: "g1", channels: {}, prefixes: ["!"], timezone: "UTC",
-        applicationsOpen: true, bridgeSuspended: false, features: {}, minWeight: null,
-        minNetworth: null, roleMappings: {}, ...over,
+        applicationsOpen: true, bridgeSuspended: false, features: {}, roleMappings: {}, ...over,
       });
     },
     // No stored settings: the Settings page has to work for a guild that has
@@ -493,7 +492,7 @@ test("settings shows the screening policy in force, not an empty form", async ()
   assert.equal(r.access.allowed, true);
   assert.equal(r.data?.screening.enabled, true);
   assert.equal(r.data?.screening.autoAccept, false, "nobody is admitted automatically until someone opts in");
-  assert.equal(r.data?.screening.minNetworth, null);
+  assert.equal(r.data?.screening.reviewOnUnreadable, true, "an account we cannot read is held, not admitted");
 });
 
 // ── events + attendance ──
@@ -720,59 +719,88 @@ test("an officer cannot open the milestones page", async () => {
 
 // ── tickets ──
 
-/** One built-in and one of the guild's own — the two states the page renders. */
+/** One offered category and one switched off — the two states the page renders. */
 const ticketService = (): TicketConfigService =>
   ({
-    async listTypes(guildId: string): Promise<readonly TicketTypeDTO[]> {
+    async getSettings(guildId: string) {
+      return {
+        guildId,
+        archiveEnabled: true,
+        logChannelId: null,
+        blocklistRoleIds: [],
+        primaryColor: "INFO",
+        successColor: "SUCCESS",
+        errorColor: "DANGER",
+        footer: null,
+        staleAfterMinutes: null,
+        autoCloseAfterMinutes: 720,
+        closeButton: true,
+        claimButton: true,
+        workingHours: {},
+        updatedAt: null,
+      };
+    },
+    async listCategories(guildId: string): Promise<readonly TicketCategoryDTO[]> {
+      const base = {
+        guildId, description: "", emoji: null, channelNameTemplate: "ticket-{num}", parentChannelId: null,
+        staffRoleIds: [], requiredRoleIds: [], pingRoleIds: [], openingMessage: "", image: null,
+        claiming: true, cooldownSeconds: null, memberLimit: 1, totalLimit: 50, slowModeSeconds: null,
+        requireTopic: false, questions: [],
+      };
+      return [
+        { ...base, id: "c1", key: "support", name: "Support", position: 0, enabled: true },
+        { ...base, id: "c2", key: "appeal", name: "Appeal", position: 1, enabled: false },
+      ];
+    },
+    async listPanels(guildId: string) {
       return [
         {
-          id: null, guildId, key: "support", label: "Support", emoji: null, category: "SUPPORT",
-          parentChannelId: null, staffRoleIds: [], prompt: null, position: 0, enabled: true,
-          source: "DEFAULT",
-        },
-        {
-          id: "t2", guildId, key: "appeal", label: "Appeal", emoji: null, category: "APPEAL",
-          parentChannelId: null, staffRoleIds: [], prompt: null, position: 1, enabled: false,
-          source: "GUILD",
+          id: "p1", guildId, name: "Support", channelId: null, messageId: null, title: "Support",
+          description: null, image: null, thumbnail: null, style: "BUTTONS" as const,
+          categoryKeys: ["support"], updatedAt: null,
         },
       ];
     },
-    async getPanel(guildId: string) {
-      return { guildId, channelId: null, messageId: null, title: "Support", description: null, updatedAt: null };
+    async listTags(guildId: string) {
+      return [{ id: "tag1", guildId, name: "refund", content: "Refunds take 3 days.", autoPattern: null, enabled: true }];
     },
   }) as unknown as TicketConfigService;
 
-test("the tickets page shows built-ins and the guild's own rows together", async () => {
+test("the tickets page lists every category, switched off ones included", async () => {
   const r = await svc({ roles: roles({ "111": "ADMIN" }), tickets: ticketService() })
     .loadTickets(session(), "g1");
 
   assert.equal(r.access.allowed, true);
   assert.equal(r.data?.installed, true);
-  assert.deepEqual(r.data?.types.map((t) => t.source), ["DEFAULT", "GUILD"]);
-  // A switched-off type is listed, not filtered: the page has to render the
+  assert.deepEqual(r.data?.categories.map((c) => c.key), ["support", "appeal"]);
+  // A switched-off category is listed, not filtered: the page has to render the
   // control that turns it back on.
-  assert.equal(r.data?.types.find((t) => t.key === "appeal")?.enabled, false);
-  assert.equal(r.data?.panel?.title, "Support");
+  assert.equal(r.data?.categories.find((c) => c.key === "appeal")?.enabled, false);
+  assert.equal(r.data?.panels[0]?.title, "Support");
+  assert.equal(r.data?.tags[0]?.name, "refund");
+  assert.equal(r.data?.settings?.autoCloseAfterMinutes, 720);
 });
 
 test("with tickets unwired the page says so rather than showing an empty menu", async () => {
   const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadTickets(session(), "g1");
   assert.equal(r.access.allowed, true);
   assert.equal(r.data?.installed, false);
-  assert.deepEqual(r.data?.types, []);
-  assert.equal(r.data?.panel, null);
+  assert.deepEqual(r.data?.categories, []);
+  assert.deepEqual(r.data?.panels, []);
+  assert.equal(r.data?.settings, null);
 });
 
 test("a non-admin gets the queue but not the menu behind it", async () => {
-  // The page is Moderator-tier because closing a ticket is: shutting the people
-  // who answer tickets out of the queue was the old behaviour and it was wrong.
-  // Configuring which types are offered is still Admin, so the same load says
-  // allowed but not configurable, and returns no menu to render.
+  // The page is Moderator-tier because working the queue is: shutting the people
+  // who answer tickets out of it was the old behaviour and it was wrong.
+  // Configuring which categories are offered is still Admin, so the same load
+  // says allowed but not configurable, and returns no menu to render.
   const r = await svc({ tickets: ticketService() }).loadTickets(session(), "g1");
   assert.equal(r.access.allowed, true);
   assert.equal(r.data?.canConfigure, false);
-  assert.deepEqual(r.data?.types, []);
-  assert.equal(r.data?.panel, null);
+  assert.deepEqual(r.data?.categories, []);
+  assert.deepEqual(r.data?.tags, []);
+  assert.equal(r.data?.settings, null);
   assert.equal(r.data?.installed, true, "the reader is told ticketing exists, just not theirs to configure");
 });
 
@@ -782,7 +810,7 @@ test("an admin gets the queue and the menu", async () => {
     "g1",
   );
   assert.equal(r.data?.canConfigure, true);
-  assert.ok((r.data?.types.length ?? 0) > 0);
+  assert.ok((r.data?.categories.length ?? 0) > 0);
 });
 
 // ── the chat filter ──
@@ -844,8 +872,8 @@ function permissionConfig(policy: unknown, roleMappings: Record<string, unknown>
     async get() {
       return ok({
         guildId: "g1", channels: {}, prefixes: ["!"], timezone: "UTC",
-        applicationsOpen: true, bridgeSuspended: false, features: {}, minWeight: null,
-        minNetworth: null, roleMappings: roleMappings as Record<string, string>,
+        applicationsOpen: true, bridgeSuspended: false, features: {},
+        roleMappings: roleMappings as Record<string, string>,
       });
     },
     async getSetting(_g: string, key: string) {

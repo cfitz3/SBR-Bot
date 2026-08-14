@@ -41,19 +41,19 @@ export const progressionRepository: ProgressionRepository = {
       orderBy: [{ captureDate: "asc" }, { seq: "asc" }],
       select: {
         captureDate: true,
+        skyblockLevel: true,
         networth: true,
         skillAverage: true,
         catacombsLevel: true,
-        senitherWeight: true,
       },
     });
     return rows.map((r) => ({
       // Date-only column: the ISO day is the whole meaning of the bucket.
       captureDate: r.captureDate.toISOString().slice(0, 10),
+      skyblockLevel: r.skyblockLevel,
       networth: toNumber(r.networth),
       skillAverage: r.skillAverage,
       catacombsLevel: r.catacombsLevel,
-      senitherWeight: r.senitherWeight,
     }));
   },
 
@@ -65,6 +65,7 @@ export const progressionRepository: ProgressionRepository = {
       orderBy: { capturedAt: "desc" },
       select: {
         capturedAt: true,
+        skyblockLevel: true,
         networth: true,
         skillAverage: true,
         catacombsLevel: true,
@@ -75,6 +76,7 @@ export const progressionRepository: ProgressionRepository = {
     if (!row) return null;
     return {
       capturedAt: row.capturedAt.toISOString(),
+      skyblockLevel: row.skyblockLevel,
       networth: toNumber(row.networth),
       skillAverage: row.skillAverage,
       catacombsLevel: row.catacombsLevel,

@@ -38,6 +38,14 @@ export type LeaderboardPage = LeaderboardPageDTO;
  * - `XP` — the denormalized `XpBalance`, rebuilt by `xp-aggregate`.
  */
 export const CATEGORY_SPECS: Readonly<Record<LeaderboardCategory, CategorySpec>> = {
+  level: {
+    id: "level",
+    label: LEADERBOARD_LABELS["level"],
+    format: "level",
+    source: "SNAPSHOT",
+    description: "SkyBlock Level on the member's selected profile",
+    windowed: false,
+  },
   wealth: {
     id: "wealth",
     label: LEADERBOARD_LABELS["wealth"],

@@ -1,5 +1,16 @@
+/**
+ * These run under `node --test`, never in a browser, which is why this file may
+ * import `@sbr/brand` when `format.ts` itself may not — the panel has no
+ * bundler, so the modules the browser loads take their copy over HTTP instead.
+ *
+ * Installing the *resolved* copy rather than a stub is deliberate: the
+ * assertions below then read the English the panel actually ships, so a broken
+ * placeholder in `brand/copy.ts` fails here rather than in front of an operator.
+ */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { copy } from "@sbr/brand";
+import { installCopy } from "./copy.js";
 import {
   compactNumber,
   count,
@@ -12,6 +23,8 @@ import {
   ratio,
   relativeTime,
 } from "./format.js";
+
+installCopy({ panel: copy.panel, error: copy.error });
 
 const NOW = Date.parse("2026-08-07T12:00:00.000Z");
 

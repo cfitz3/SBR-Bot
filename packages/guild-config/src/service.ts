@@ -128,14 +128,9 @@ export class GuildConfigServiceImpl implements GuildConfigService {
   }
 
   async setRecruitment(guildId: string, input: RecruitmentSettings): Promise<Result<void>> {
-    // Only write the thresholds that were actually named. An omitted `minWeight`
-    // means "leave the bar alone", not "clear it" — collapsing the two would
-    // erase a guild's entry requirements every time someone reopened
-    // applications.
-    const patch: Record<string, string | number | boolean | null> = { applicationsOpen: input.open };
-    if (input.minWeight !== undefined) patch.minWeight = input.minWeight;
-    if (input.minNetworth !== undefined) patch.minNetworth = input.minNetworth;
-    return this.write(guildId, () => this.repo.update(guildId, patch));
+    // The tri-state weight and networth bars were resolved here. They are no
+    // longer requirements, so recruitment writes the one field it still has.
+    return this.write(guildId, () => this.repo.update(guildId, { applicationsOpen: input.open }));
   }
 
   async setRoleMapping(guildId: string, role: MemberRole, discordRoleId: string | null): Promise<Result<void>> {

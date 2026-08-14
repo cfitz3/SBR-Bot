@@ -1,7 +1,12 @@
 /**
- * Pure display formatting. No DOM, so it can be unit-tested like any other
- * module in the repo.
+ * Display formatting. No DOM, so it can be unit-tested like any other module in
+ * the repo — `format.test.ts` installs the resolved copy first, the way
+ * `main.ts` does for the browser.
  */
+import { scope } from "./copy.js";
+
+const t = scope("format");
+const c = scope("common");
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -9,8 +14,8 @@ const DAY = 24 * HOUR;
 
 /** Thousands-separated, with a dash for "no value" so a column stays scannable. */
 export function count(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
-  return value.toLocaleString("en-US");
+  if (value === null || value === undefined || !Number.isFinite(value)) return c("dash");
+  return value.toLocaleString(t("numberLocale"));
 }
 
 /**
@@ -21,29 +26,31 @@ export function count(value: number | null | undefined): string {
  * precision the underlying `lastSuccessAt` doesn't have.
  */
 export function relativeTime(iso: string | null | undefined, now: number = Date.now()): string {
-  if (!iso) return "never";
+  if (!iso) return c("never");
   const then = Date.parse(iso);
-  if (Number.isNaN(then)) return "unknown";
+  if (Number.isNaN(then)) return c("unknown");
 
   const delta = now - then;
-  if (delta < 0) return "in the future";
-  return `${describeSpan(delta)} ago`;
+  if (delta < 0) return t("future");
+  return t("ago").replace("{span}", describeSpan(delta));
 }
 
 /** A span of milliseconds as a rounded phrase — "3 minutes", "2 days". */
 export function describeSpan(ms: number): string {
-  if (ms < MINUTE) return "less than a minute";
-  if (ms < HOUR) return plural(Math.floor(ms / MINUTE), "minute");
-  if (ms < DAY) return plural(Math.floor(ms / HOUR), "hour");
-  return plural(Math.floor(ms / DAY), "day");
+  if (ms < MINUTE) return t("lessThanAMinute");
+  if (ms < HOUR) return plural(Math.floor(ms / MINUTE), "minuteOne", "minuteMany");
+  if (ms < DAY) return plural(Math.floor(ms / HOUR), "hourOne", "hourMany");
+  return plural(Math.floor(ms / DAY), "dayOne", "dayMany");
 }
 
 /** Job durations, which are milliseconds up to a few minutes. */
 export function duration(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "—";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return c("dash");
+  if (ms < 1000) return t("durationMs").replace("{n}", String(Math.round(ms)));
+  if (ms < 60_000) return t("durationSeconds").replace("{n}", (ms / 1000).toFixed(1));
+  return t("durationMinutes")
+    .replace("{m}", String(Math.floor(ms / 60_000)))
+    .replace("{s}", String(Math.round((ms % 60_000) / 1000)));
 }
 
 /**
@@ -55,11 +62,16 @@ export function duration(ms: number | null | undefined): string {
  * the record for anyone who needs it.
  */
 export function compactNumber(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === null || value === undefined || !Number.isFinite(value)) return c("dash");
   const sign = value < 0 ? "-" : "";
   const n = Math.abs(value);
   if (n < 1000) return `${sign}${Math.round(n)}`;
-  for (const [size, suffix] of [[1e9, "b"], [1e6, "m"], [1e3, "k"]] as const) {
+  const suffixes = [
+    [1e9, t("suffixBillion")],
+    [1e6, t("suffixMillion")],
+    [1e3, t("suffixThousand")],
+  ] as const;
+  for (const [size, suffix] of suffixes) {
     if (n >= size) {
       const scaled = n / size;
       // One decimal below ten, none above: "9.4b" and "340m" are both three
@@ -73,11 +85,18 @@ export function compactNumber(value: number | null | undefined): string {
 /** "12 of 40 (30%)" — the shape most of the Overview's ratios take. */
 export function ratio(part: number, whole: number): string {
   if (whole <= 0) return count(part);
-  return `${count(part)} of ${count(whole)} (${Math.round((part / whole) * 100)}%)`;
+  return t("ratio")
+    .replace("{part}", count(part))
+    .replace("{whole}", count(whole))
+    .replace("{percent}", String(Math.round((part / whole) * 100)));
 }
 
-function plural(n: number, unit: string): string {
-  return `${n} ${unit}${n === 1 ? "" : "s"}`;
+/**
+ * One and many are separate keys, not an "s" appended by code: English gets away
+ * with that and most languages do not.
+ */
+function plural(n: number, one: "minuteOne" | "hourOne" | "dayOne", many: "minuteMany" | "hourMany" | "dayMany"): string {
+  return t(n === 1 ? one : many).replace("{n}", String(n));
 }
 
 /**
@@ -112,9 +131,9 @@ export function parseDurationSeconds(raw: string): number | null | "invalid" {
  * something you can put in a Discord announcement.
  */
 export function dateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return c("dash");
   const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "unknown";
+  if (Number.isNaN(at.getTime())) return c("unknown");
   return at.toLocaleString(undefined, {
     weekday: "short",
     month: "short",
@@ -126,13 +145,15 @@ export function dateTime(iso: string | null | undefined): string {
 
 /** How far off something is, in either direction — "in 3 hours", "2 days ago". */
 export function countdown(iso: string | null | undefined, now: number = Date.now()): string {
-  if (!iso) return "—";
+  if (!iso) return c("dash");
   const then = Date.parse(iso);
-  if (Number.isNaN(then)) return "unknown";
+  if (Number.isNaN(then)) return c("unknown");
 
   const delta = then - now;
-  if (Math.abs(delta) < MINUTE) return "now";
-  return delta > 0 ? `in ${describeSpan(delta)}` : `${describeSpan(-delta)} ago`;
+  if (Math.abs(delta) < MINUTE) return t("now");
+  return delta > 0
+    ? t("inSpan").replace("{span}", describeSpan(delta))
+    : t("ago").replace("{span}", describeSpan(-delta));
 }
 
 /**

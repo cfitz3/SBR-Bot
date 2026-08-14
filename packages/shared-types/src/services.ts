@@ -14,7 +14,6 @@ import type {
   ModActionType,
   RaidSensitivity,
   RSVPState,
-  TicketCategory,
   WordAction,
   WordMatchType,
 } from "./enums.js";
@@ -56,11 +55,15 @@ import type {
   SkillsDTO,
   SlayersDTO,
   SnapshotMetricsDTO,
+  TicketCategoryDTO,
+  TicketCategoryInput,
   TicketDTO,
-  TicketPanelConfigDTO,
-  TicketPanelConfigInput,
-  TicketTypeDTO,
-  TicketTypeInput,
+  TicketPanelDTO,
+  TicketPanelInput,
+  TicketSettingsDTO,
+  TicketSettingsInput,
+  TicketTagDTO,
+  TicketTagInput,
   WordlistRuleDTO,
 } from "./dtos.js";
 
@@ -249,22 +252,41 @@ export interface MilestoneDefinitionService extends MilestoneDefinitionReader {
  * the same line the milestone page draws between rules and standings.
  */
 export interface TicketConfigService {
+  /** Per-guild behaviour, filled in with defaults when never configured. */
+  getSettings(guildId: string): Promise<TicketSettingsDTO>;
+  saveSettings(guildId: string, input: TicketSettingsInput): Promise<TicketSettingsDTO>;
+
   /**
-   * Every type in effect: the built-ins with the guild's own rows layered over
-   * them by key. Disabled rows are included and flagged, because the panel has
-   * to render the switch it can turn back on.
+   * Every category the guild has, in menu order.
+   *
+   * Disabled rows are included and flagged, because the panel has to render the
+   * switch it can turn back on. There are no built-ins layered underneath: the
+   * five former enum values are seeded as ordinary rows, so a guild that deletes
+   * one has deleted it.
    */
-  listTypes(guildId: string): Promise<readonly TicketTypeDTO[]>;
-  /** Create or update by `(guildId, key)`. Editing a built-in shadows it. */
-  upsertType(guildId: string, input: TicketTypeInput): Promise<TicketTypeDTO>;
+  listCategories(guildId: string): Promise<readonly TicketCategoryDTO[]>;
+  /** Create or update by `(guildId, key)`. */
+  upsertCategory(guildId: string, input: TicketCategoryInput): Promise<TicketCategoryDTO>;
   /**
-   * Remove a guild's row. A shadowed built-in reverts to its default; a custom
-   * type disappears from the menu. Tickets already opened keep their category.
+   * Remove a category. Tickets already opened under it keep their history —
+   * their `categoryId` goes null rather than the rows going with it.
    */
-  removeType(guildId: string, key: string): Promise<boolean>;
-  /** The panel's content, filled in with defaults when never configured. */
-  getPanel(guildId: string): Promise<TicketPanelConfigDTO>;
-  savePanel(guildId: string, input: TicketPanelConfigInput): Promise<TicketPanelConfigDTO>;
+  removeCategory(guildId: string, key: string): Promise<boolean>;
+
+  /** Every panel, whether published or not. */
+  listPanels(guildId: string): Promise<readonly TicketPanelDTO[]>;
+  upsertPanel(guildId: string, input: TicketPanelInput, id?: string): Promise<TicketPanelDTO>;
+  removePanel(guildId: string, id: string): Promise<boolean>;
+  /**
+   * Record where a panel was posted, so a re-publish edits that message rather
+   * than leaving a stale panel behind. Changing the channel clears the message.
+   */
+  setPostedMessage(guildId: string, id: string, channelId: string, messageId: string | null): Promise<void>;
+
+  /** Canned replies and their auto-response patterns. */
+  listTags(guildId: string): Promise<readonly TicketTagDTO[]>;
+  upsertTag(guildId: string, input: TicketTagInput): Promise<TicketTagDTO>;
+  removeTag(guildId: string, name: string): Promise<boolean>;
 }
 
 /**
@@ -295,10 +317,10 @@ export interface ProgressionRepository {
     since: Date,
   ): Promise<readonly {
     readonly captureDate: string;
+    readonly skyblockLevel: number | null;
     readonly networth: number | null;
     readonly skillAverage: number | null;
     readonly catacombsLevel: number | null;
-    readonly senitherWeight: number | null;
   }[]>;
   /**
    * The most recent snapshot's metrics, or null if the member has never been
@@ -478,15 +500,15 @@ export interface GuildConfigService {
 }
 
 /**
- * `/set-recruitment` input. The thresholds are tri-state on purpose: omitted
- * leaves the current bar alone, `null` clears it, a number sets it. Collapsing
- * "unspecified" and "no requirement" would silently wipe a guild's entry bar
- * every time someone toggled applications open.
+ * `/set-recruitment` input.
+ *
+ * One switch, where it used to carry tri-state weight and networth bars. The
+ * guild's only entry requirement is now the scam check, so there is no stat to
+ * set: applications are open or they are not. The columns behind the old bars
+ * are still in the schema, marked deprecated rather than dropped.
  */
 export interface RecruitmentSettings {
   readonly open: boolean;
-  readonly minWeight?: number | null;
-  readonly minNetworth?: number | null;
 }
 
 /**
@@ -549,9 +571,6 @@ export interface GuildRuntimeConfig {
   readonly applicationsOpen: boolean;
   readonly bridgeSuspended: boolean;
   readonly features: Readonly<Record<string, boolean>>;
-  /** Recruitment bar; null means the guild sets no requirement on that axis. */
-  readonly minWeight: number | null;
-  readonly minNetworth: number | null;
   /**
    * Platform role → the Discord role(s) that confer it: one id as
    * `/set-role type:mapping` records it, a list as the panel's Permissions page
@@ -605,16 +624,26 @@ export interface CommunityService {
    */
   bindLfgMessage(postId: string, channelId: string, messageId: string): Promise<Result<LFGPostDTO, LfgError>>;
 
-  // ── Tickets (`/ticket`) ──
-  openTicket(input: NewTicket): Promise<Result<TicketDTO>>;
-  closeTicket(ticketId: string, actorDiscordId: string, reason: string | null): Promise<Result<TicketDTO, TicketError>>;
+  // ── Tickets ──
+  //
+  // Every mutating call takes the actor, not just the ticket id. That is the
+  // fix for the old surface, where `closeTicket(id)` asked nobody's permission.
+  openTicket(input: NewTicket): Promise<Result<TicketDTO, TicketError>>;
+  closeTicket(ticketId: string, actor: TicketActor, reason: string | null): Promise<Result<TicketDTO, TicketError>>;
+  requestTicketClose(ticketId: string, actor: TicketActor): Promise<Result<TicketDTO, TicketError>>;
+  claimTicket(ticketId: string, actor: TicketActor): Promise<Result<TicketDTO, TicketError>>;
+  releaseTicket(ticketId: string, actor: TicketActor): Promise<Result<TicketDTO, TicketError>>;
+  transferTicket(ticketId: string, actor: TicketActor, toDiscordId: string): Promise<Result<TicketDTO, TicketError>>;
+  setTicketTopic(ticketId: string, actor: TicketActor, topic: string): Promise<Result<TicketDTO, TicketError>>;
+  getTicket(ticketId: string): Promise<Result<TicketDTO | null>>;
+  /** The ticket a channel belongs to, or null — how the in-channel commands resolve. */
+  getTicketByChannel(channelId: string): Promise<Result<TicketDTO | null>>;
   listTickets(guildId: string, openerDiscordId?: string): Promise<Result<readonly TicketDTO[]>>;
   /**
-   * The guild's ticket menu, built-ins included and in menu order. Disabled
-   * types are present and flagged, so a caller can tell "not offered here" from
-   * "never existed".
+   * The guild's ticket menu, in menu order. Disabled categories are present and
+   * flagged, so a caller can tell "not offered here" from "never existed".
    */
-  listTicketTypes(guildId: string): Promise<Result<readonly TicketTypeDTO[]>>;
+  listTicketCategories(guildId: string): Promise<Result<readonly TicketCategoryDTO[]>>;
 
   // ── Applications (`/application-review`, `/accept-member`, `/deny-member`) ──
   getApplication(applicationId: string): Promise<Result<ApplicationDTO | null>>;
@@ -756,15 +785,39 @@ export type PermError =
   | { readonly kind: "INVALID_NAME"; readonly detail: string }
   | { readonly kind: "INVALID_IGN" };
 
+/**
+ * Who is asking, for every ticket operation.
+ *
+ * `isStaff` is the resolved `TICKET_MANAGE` capability, not a role list — the
+ * caller does the lookup once and the service never re-derives it.
+ */
+export interface TicketActor {
+  readonly discordId: string;
+  readonly isStaff: boolean;
+}
+
 export interface NewTicket {
   readonly guildId: string;
   readonly openerDiscordId: string;
-  readonly category: TicketCategory;
-  readonly subject?: string | null;
+  /** The category row's id. Null when the guild has deleted it since. */
+  readonly categoryId: string | null;
+  readonly topic?: string | null;
+  /** Answers to the category's questions, keyed by question id. */
+  readonly answers?: Readonly<Record<string, string>>;
   readonly channelId?: string | null;
 }
 
-export type TicketError = { readonly kind: "NOT_FOUND" } | { readonly kind: "ALREADY_CLOSED" };
+/**
+ * Why a ticket operation was refused.
+ *
+ * `FORBIDDEN` is the one that matters: the old command took an id and checked
+ * neither ownership nor rank, so any member could close anyone's ticket.
+ */
+export type TicketError =
+  | { readonly kind: "NOT_FOUND" }
+  | { readonly kind: "ALREADY_CLOSED" }
+  | { readonly kind: "FORBIDDEN" }
+  | { readonly kind: "NOT_ELIGIBLE"; readonly reason: string; readonly detail: string };
 
 export interface ApplicationDecision {
   readonly applicationId: string;
@@ -1027,6 +1080,7 @@ export interface XpSourcePolicyDTO {
  * something the guild does, not something staff administers.
  */
 export const LEADERBOARD_CATEGORIES = [
+  "level",
   "wealth",
   "tenure",
   "skill-average",
@@ -1049,6 +1103,7 @@ export type LeaderboardCategory = (typeof LEADERBOARD_CATEGORIES)[number];
  * map, so the two can't drift.
  */
 export const LEADERBOARD_LABELS: Readonly<Record<LeaderboardCategory, string>> = {
+  level: "SkyBlock Level",
   wealth: "Wealth",
   tenure: "Tenure",
   "skill-average": "Skill average",
@@ -1065,6 +1120,10 @@ export const LEADERBOARD_LABELS: Readonly<Record<LeaderboardCategory, string>> =
  * in guild chat, and answering "unknown category" to it would be pedantry.
  */
 const LEADERBOARD_ALIASES: Readonly<Record<string, LeaderboardCategory>> = {
+  sb: "level",
+  sblevel: "level",
+  skyblocklevel: "level",
+  lvl: "level",
   nw: "wealth",
   networth: "wealth",
   money: "wealth",
@@ -1084,8 +1143,11 @@ const LEADERBOARD_ALIASES: Readonly<Record<string, LeaderboardCategory>> = {
   activity: "discord-activity",
   chat: "guild-chat",
   gc: "guild-chat",
-  level: "xp",
+  // `level` used to alias to guild XP. It is now a category of its own — the
+  // SkyBlock one, which is what someone typing it in guild chat means — and the
+  // direct match wins here anyway. `standing` still reaches guild XP.
   standing: "xp",
+  guildxp: "xp",
 };
 
 /** Canonical category for anything a member might type, or null. */

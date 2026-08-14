@@ -17,28 +17,35 @@ import { MILESTONE_METRICS, MilestoneType } from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
 import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";
+import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
+
+const t = scope("milestones");
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
 const MAX_REWARD = 1_000_000;
 const KEY_SHAPE = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
 
-/** What each metric measures, in the admin's terms rather than the field name. */
-const METRIC_COPY: Readonly<Record<string, string>> = {
-  networth: "Networth, in coins",
-  skillAverage: "Skill average",
-  catacombsLevel: "Catacombs level",
-  slayerXp: "Total slayer XP",
-  senitherWeight: "Senither weight",
-};
+/**
+ * What each metric measures, in the admin's terms rather than the field name.
+ *
+ * The fallback to the raw metric name is deliberate: a metric the platform gains
+ * before the copy layer names it should still be selectable, reading as its own
+ * key rather than vanishing from the dropdown.
+ */
+const metricLabel = (metric: string): string =>
+  (t("metric") as Readonly<Record<string, string>>)[metric] ?? metric;
 
-const METRIC_OPTIONS = MILESTONE_METRICS.map(
-  (metric) => [metric, METRIC_COPY[metric] ?? metric] as const,
-);
+const metricOptions = (): readonly (readonly [string, string])[] =>
+  MILESTONE_METRICS.map((metric) => [metric, metricLabel(metric)] as const);
+
+// Kinds are grouping labels derived from the enum itself, not prose: they exist
+// to sort the list, and inventing separate copy for each would be five keys
+// nobody would ever change independently.
 const TYPE_OPTIONS = Object.keys(MilestoneType).map((type) => [type, type.toLowerCase().replace(/_/g, " ")] as const);
 
 export async function renderMilestones(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading milestones…"));
+  replace(host, spinner("milestones"));
 
   const result = await loadPage<MilestonesVM>(`/api/guilds/${encodeURIComponent(guildId)}/milestones`);
   if (result.kind === "denied") return replace(host, deniedState(result.reason));
@@ -53,8 +60,8 @@ export async function renderMilestones(host: HTMLElement, guildId: string): Prom
       h(
         "div",
         {},
-        pageTitle("Milestones", "Not enabled"),
-        emptyState("Milestone tracking isn't switched on for this deployment, so there is nothing to configure."),
+        pageTitle(t("title"), t("notEnabled")),
+        emptyState("milestonesDisabled"),
       ),
     );
   }
@@ -67,14 +74,16 @@ export async function renderMilestones(host: HTMLElement, guildId: string): Prom
     h(
       "div",
       {},
-      pageTitle("Milestones", `${active} of ${definitions.length} being recognised`),
+      pageTitle(
+        t("title"),
+        t("subtitle").replace("{active}", String(active)).replace("{total}", String(definitions.length)),
+      ),
       h(
         "p",
         { class: "page-note" },
-        "Detection compares each new snapshot against the one before it, so a threshold only fires when somebody " +
-          "crosses it. Adding one now will not fire for members who are already past it.",
+        t("note"),
       ),
-      card("Add a milestone", createForm(guildId, reload)),
+      card(t("cardAdd"), createForm(guildId, reload)),
       ...definitions.map((definition) => definitionCard(guildId, definition, reload)),
     ),
   );
@@ -115,9 +124,9 @@ function definitionCard(
   const remove =
     definition.source === "GUILD"
       ? actionButton({
-          label: "Remove",
+          label: t("remove"),
           tone: "danger",
-          confirm: "Confirm remove",
+          confirm: t("removeConfirm"),
           status,
           run: () => postAction(guildId, "milestone.remove", { key: definition.key }),
           onDone: reload,
@@ -132,38 +141,38 @@ function definitionCard(
       h(
         "p",
         { class: "field-hint" },
-        `${METRIC_COPY[definition.metric] ?? definition.metric} • key ${definition.key}`,
+        t("rowSummary").replace("{metric}", metricLabel(definition.metric)).replace("{key}", definition.key),
       ),
       fieldGroup(
         toggleField({
-          label: "Recognised",
-          hint: "Off stops this threshold firing for anybody from now on. Milestones already reached are kept.",
+          label: t("recognisedLabel"),
+          hint: t("recognisedHint"),
           checked: definition.enabled,
           save: (enabled) => write({ enabled }),
         }),
         toggleField({
-          label: "Announced",
-          hint: "Off still records and still pays the reward — it just doesn't post in the milestones channel.",
+          label: t("announcedLabel"),
+          hint: t("announcedHint"),
           checked: definition.announce,
           save: (announce) => write({ announce }),
         }),
         textField({
-          label: "Name",
-          hint: "How this reads in the announcement, e.g. \"1b networth\".",
+          label: t("nameLabel"),
+          hint: t("nameHint"),
           value: definition.label,
-          validate: (raw) => (raw.trim().length === 0 || raw.length > 80 ? "Enter a name up to 80 characters." : null),
+          validate: (raw) => (raw.trim().length === 0 || raw.length > 80 ? t("nameError") : null),
           save: (raw) => write({ label: raw.trim() }),
         }),
         textField({
-          label: "Threshold",
-          hint: "The value that has to be crossed. Coins for networth, levels for catacombs.",
+          label: t("thresholdLabel"),
+          hint: t("thresholdHint"),
           value: String(definition.threshold),
           validate: validatePositive,
           save: (raw) => write({ threshold: Number(raw.trim()) }),
         }),
         textField({
-          label: "XP reward",
-          hint: "Credited once, when the milestone is recorded. 0 recognises it without paying for it.",
+          label: t("rewardLabel"),
+          hint: t("rewardHint"),
           value: String(definition.xpReward),
           validate: (raw) => validateWholeReward(raw),
           save: (raw) => write({ xpReward: Number(raw.trim()) }),
@@ -172,7 +181,10 @@ function definitionCard(
       remove === null ? null : h("div", { class: "field-row" }, remove),
       status.el,
     ),
-    badge(definition.source === "DEFAULT" ? "built-in" : "custom", definition.source === "DEFAULT" ? "neutral" : "ok"),
+    badge(
+      definition.source === "DEFAULT" ? t("sourceBuiltIn") : t("sourceCustom"),
+      definition.source === "DEFAULT" ? "neutral" : "ok",
+    ),
   );
 }
 
@@ -197,24 +209,24 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
       spellcheck: "false",
     }) as HTMLInputElement;
 
-  const key = field("e.g. networth:250b", "Definition key");
-  const label = field("e.g. 250b networth", "Milestone name");
-  const threshold = field("e.g. 250000000000", "Threshold value");
-  const reward = field("0", "XP reward");
+  const key = field(t("keyPlaceholder"), t("keyLabel"));
+  const label = field(t("labelPlaceholder"), t("labelLabel"));
+  const threshold = field(t("thresholdPlaceholder"), t("thresholdValueLabel"));
+  const reward = field(t("rewardPlaceholder"), t("rewardLabel"));
 
   let metric: string = MILESTONE_METRICS[0];
   let type: string = "CUSTOM";
 
   const button = actionButton({
-    label: "Add milestone",
+    label: t("addButton"),
     tone: "primary",
     status,
     run: async () => {
       const keyText = key.value.trim();
       if (!KEY_SHAPE.test(keyText)) {
-        return { kind: "error", message: "Keys are lowercase, e.g. networth:250b." };
+        return { kind: "error", message: t("keyError") };
       }
-      if (label.value.trim().length === 0) return { kind: "error", message: "Give it a name." };
+      if (label.value.trim().length === 0) return { kind: "error", message: t("labelError") };
       const thresholdError = validatePositive(threshold.value);
       if (thresholdError !== null) return { kind: "error", message: thresholdError };
       const rewardText = reward.value.trim() === "" ? "0" : reward.value;
@@ -244,14 +256,14 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
     h(
       "p",
       { class: "field-hint" },
-      "Reusing an existing key edits that milestone instead of adding another one.",
+      t("addNote"),
     ),
     h("div", { class: "field-row" }, key, label),
     h("div", { class: "field-row" }, threshold, reward),
     selectField({
-      label: "Measured against",
+      label: t("measuredLabel"),
       value: metric,
-      options: METRIC_OPTIONS.map(([v, l]) => [v, l] as const),
+      options: metricOptions(),
       // Nothing is stored until "Add milestone" — the dropdown only records the
       // choice, so the save reports success without a write.
       save: async (next) => {
@@ -260,8 +272,8 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
       },
     }),
     selectField({
-      label: "Kind",
-      hint: "Grouping only — it does not affect when the milestone fires.",
+      label: t("kindLabel"),
+      hint: t("kindHint"),
       value: type,
       options: TYPE_OPTIONS.map(([v, l]) => [v, l] as const),
       save: async (next) => {
@@ -277,7 +289,7 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
 function validatePositive(raw: string): string | null {
   const value = Number(raw.trim());
   if (raw.trim().length === 0 || !Number.isFinite(value) || value <= 0) {
-    return "Enter a number greater than zero.";
+    return t("positiveError");
   }
   return null;
 }
@@ -285,7 +297,7 @@ function validatePositive(raw: string): string | null {
 function validateWholeReward(raw: string): string | null {
   const value = Number(raw.trim());
   if (raw.trim().length === 0 || !Number.isInteger(value) || value < 0 || value > MAX_REWARD) {
-    return `Enter a whole number between 0 and ${MAX_REWARD}.`;
+    return t("rewardError").replace("{max}", String(MAX_REWARD));
   }
   return null;
 }

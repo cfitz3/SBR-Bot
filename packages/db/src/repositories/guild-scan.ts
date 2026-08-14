@@ -49,6 +49,30 @@ export const guildScanRepository = {
   },
 
   /**
+   * Does this Discord account hold a verified link to somebody on the in-game
+   * roster? The bridge's Discord→game gate asks this, because membership of the
+   * *Discord server* says nothing about membership of the *guild* — and the
+   * relay writes into guild chat.
+   *
+   * Any verified link counts, not just the primary one: an alt on the roster is
+   * still the same human, and Hypixel would let them talk.
+   *
+   * Cache-only, like every read in this file. It runs on each relayed message,
+   * so a Hypixel round trip here would put the API in the relay's hot path.
+   */
+  async hasRosterLink(guildId: string, discordId: string): Promise<boolean> {
+    const links = await prisma.linkedAccount.findMany({
+      where: { status: "VERIFIED", discordUser: { discordId } },
+      select: { minecraftAccount: { select: { uuid: true } } },
+    });
+    if (links.length === 0) return false;
+    // The cache stores undashed lowercase uuids; links may carry either form.
+    const uuids = links.map((l) => l.minecraftAccount.uuid.replace(/-/g, "").toLowerCase());
+    const hits = await prisma.guildMemberCache.count({ where: { guildId, uuid: { in: uuids } } });
+    return hits > 0;
+  },
+
+  /**
    * Upsert the roster.
    *
    * Written as raw SQL with a multi-row `ON CONFLICT` rather than a loop of

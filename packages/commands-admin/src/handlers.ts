@@ -15,6 +15,7 @@ import type {
   WordAction,
   WordMatchType,
 } from "@sbr/shared-types";
+import { withCommandCopy } from "@sbr/brand";
 import { isEscalation } from "@sbr/moderation";
 import type { AdminHandler, AdminCommandSpec } from "./types.js";
 import { parseDurationSeconds, renderModError } from "./util.js";
@@ -380,34 +381,20 @@ const featureToggle: AdminHandler = async (ctx, deps) => {
 };
 
 /**
- * `/set-recruitment`. The thresholds are tri-state: an option the staffer didn't
- * type is left alone rather than cleared, so reopening applications can't wipe
- * the entry bar by accident. `clear_requirements:true` is the explicit wipe.
+ * `/set-recruitment`. One switch.
+ *
+ * It used to carry tri-state `min_weight` and `min_networth` options and a
+ * `clear_requirements` wipe. The guild's only entry requirement is the scam
+ * check now, so there is no bar to set and nothing to clear.
  */
 const setRecruitment: AdminHandler = async (ctx, deps) => {
   const open = ctx.args.getBoolean("open");
   if (open === null) return { ephemeral: true, text: "Usage: /set-recruitment open:<true|false>" };
 
-  const clear = ctx.args.getBoolean("clear_requirements") === true;
-  const minWeight = ctx.args.getNumber("min_weight");
-  const minNetworth = ctx.args.getNumber("min_networth");
-
-  const result = await deps.config.setRecruitment(ctx.guildId, {
-    open,
-    ...(clear ? { minWeight: null } : minWeight !== null ? { minWeight } : {}),
-    ...(clear ? { minNetworth: null } : minNetworth !== null ? { minNetworth } : {}),
-  });
+  const result = await deps.config.setRecruitment(ctx.guildId, { open });
   if (!result.ok) return { ephemeral: true, text: "Couldn't save the recruitment settings." };
 
-  const bar = clear
-    ? " Requirements cleared."
-    : [minWeight !== null ? `weight ≥ ${minWeight}` : null, minNetworth !== null ? `networth ≥ ${minNetworth}` : null]
-        .filter((s): s is string => s !== null)
-        .join(", ");
-  return {
-    ephemeral: false,
-    text: `Applications are now ${open ? "open" : "closed"}.${bar ? ` ${bar}.` : ""}`,
-  };
+  return { ephemeral: false, text: `Applications are now ${open ? "open" : "closed"}.` };
 };
 
 const ROLES: readonly MemberRole[] = ["MEMBER", "MODERATOR", "OFFICER", "ADMIN", "OWNER"];
@@ -789,13 +776,8 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
     },
     {
       name: "set-recruitment",
-      description: "Open or close applications and set the entry bar",
-      options: [
-        { name: "open", description: "Accept applications?", type: "boolean", required: true },
-        { name: "min_weight", description: "Minimum Senither weight", type: "integer", minValue: 0 },
-        { name: "min_networth", description: "Minimum networth in coins", type: "integer", minValue: 0 },
-        { name: "clear_requirements", description: "Remove both thresholds", type: "boolean" },
-      ],
+      description: "Open or close applications",
+      options: [{ name: "open", description: "Accept applications?", type: "boolean", required: true }],
       minRole: "OFFICER",
       handler: setRecruitment,
     },
@@ -865,5 +847,7 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       handler: bridgeUnsuspend,
     },
   ];
-  return new Map(specs.map((s) => [s.name, s]));
+  // See the note on the bridge registry: the literals above are the fallback and
+  // `withCommandCopy` supplies the resolved wording.
+  return withCommandCopy(new Map(specs.map((s) => [s.name, s])));
 }

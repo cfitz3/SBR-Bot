@@ -34,6 +34,7 @@
     "@sbr/leaderboards": "*",
     "@sbr/perms": "*",
     "@sbr/screening": "*",
+    "@sbr/tickets": "*",
     "@sbr/xp": "*",
     "@sbr/shared-types": "*",
     "dotenv": "^17.4.2",

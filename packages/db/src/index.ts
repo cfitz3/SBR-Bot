@@ -44,7 +44,6 @@ export {
   type RollupPoint,
   type CommandUsageRow,
   type EventRow,
-  type TicketRow,
   type JobHealthRow,
 } from "./repositories/panel.js";
 export { guildScanRepository, type CachedGuildMemberRow } from "./repositories/guild-scan.js";
@@ -65,6 +64,11 @@ export { xpRepository, activitySink } from "./repositories/xp.js";
 export { leaderboardSource } from "./repositories/leaderboards.js";
 export { milestoneDefinitionRepository, milestoneAnnouncementRepository } from "./repositories/milestones.js";
 export { ticketConfigRepository } from "./repositories/ticket-config.js";
+export {
+  ticketRepository,
+  type TicketInsert,
+  type TicketMessageInsert,
+} from "./repositories/tickets.js";
 export {
   wordlistRepository,
   guildConfigRepository,

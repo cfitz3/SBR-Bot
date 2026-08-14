@@ -36,6 +36,7 @@ function earnedRow(over: Partial<MilestoneDTO> = {}): MilestoneDTO {
 
 const snapshot: SnapshotMetricsDTO = {
   capturedAt: "2026-02-01T00:00:00Z",
+  skyblockLevel: 275.4,
   networth: 8_000_000_000,
   skillAverage: 42,
   catacombsLevel: 30,

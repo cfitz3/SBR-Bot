@@ -99,7 +99,7 @@ export class ScreeningService {
       this.readHistory(req.guildId, req.uuid, discordId, policy.repeatWindowDays, errors),
     ]);
 
-    const decision = evaluate({ policy, scammer, stats, history, now });
+    const decision = evaluate({ policy, scammer, stats, history });
 
     const screening: Screening = {
       uuid: req.uuid,

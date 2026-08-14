@@ -10,6 +10,8 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 **Permission tiers** (resolved by `packages/identity` / `BridgePermission`): `Public` (any linked member), `Linked` (requires verified link), `Subscriber` (opt-in), `Staff` (`MODERATOR`+), `Officer` (`OFFICER`+), `Admin` (`ADMIN`/`OWNER`).
 
+**Descriptions are copy, not code.** Every sentence Discord shows for a command or an option comes from `command.<name>.description` / `command.<name>.option.<opt>` in the brand layer, applied inside `buildBridgeRegistry()` and `buildAdminRegistry()` — the one place each registry is assembled — so slash registration, `/help`, in-game `!help` and the panel's command docs cannot disagree. Change a word in [`brand/copy.ts`](../brand/README.md), rebuild, restart ([`BRANDING.md`](BRANDING.md) covers the whole loop, including what `npm run brand check` catches before Discord rejects an over-long description); the spec keeps its name, cooldown, capability and handler. The *Purpose* column below is documentation prose and is written independently of it.
+
 **Common error states** (assumed for all commands, not repeated per row): rate-limited/cooldown (Redis `cd:*`), missing permission, guild not configured, Discord API failure, internal error. Command-specific errors are listed.
 
 ---
@@ -210,7 +212,7 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 | `/application-review` | Open an application to review | Officer | `application_id?` (or next in queue) | Embed: applicant answers + accept/deny buttons | Queue empty; app not found | DB (`Application`) + Cache→Live (applicant stats) |
 | `/accept-member` | Accept an applicant | Officer | `application_id`, `note?` | Confirmation; role grant; DM applicant | Already decided; not linked | DB (`Application`, `GuildMember`) |
 | `/deny-member` | Reject an applicant | Officer | `application_id`, `reason` | Confirmation; DM applicant | Already decided | DB |
-| `/set-recruitment` | Open/close applications & set requirements | Admin | `state` (open/closed), `min_weight?`, `min_networth?` | Confirmation of new recruitment config | Invalid thresholds | DB (`GuildConfig`) + Cache |
+| `/set-recruitment` | Open or close applications | Admin | `open` (true/false) | Confirmation of new recruitment config | — | DB (`GuildConfig`) + Cache |
 
 ---
 
@@ -381,7 +383,7 @@ how old its numbers are.
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/leaderboard` | Guild rankings across eight categories | Member | `category?` (choice, default `xp`), `page?`, `days?` (1–365, activity boards only) | Embed: ranked page with 🥇🥈🥉, the viewer's own row appended, footer with page, total ranked, window and staleness | Leaderboards not enabled; unknown category (lists the real ones) | DB (`ProfileSnapshot`, `GuildMember`, `ActivityDaily`, `XpBalance`) |
+| `/leaderboard` | Guild rankings across nine categories (SkyBlock Level leads) | Member | `category?` (choice, default `xp`), `page?`, `days?` (1–365, activity boards only) | Embed: ranked page with 🥇🥈🥉, the viewer's own row appended, footer with page, total ranked, window and staleness | Leaderboards not enabled; unknown category (lists the real ones) | DB (`ProfileSnapshot`, `GuildMember`, `ActivityDaily`, `XpBalance`) |
 
 **The catalog is closed.** `wealth`, `tenure`, `skill-average`, `catacombs`,
 `slayer`, `discord-activity`, `guild-chat`, `xp`. A leaderboard is a claim about

@@ -274,7 +274,7 @@ destructive command requiring `confirm:true`.
 |---|---|---|---|---|
 | `/set-channel` | ADMIN | `slot*` (bridge/staff/log/applications/events) `channel?` | Bind a platform channel; **empty clears the slot** | Confirmation |
 | `/feature-toggle` | ADMIN | `feature*` `enabled*` | Turn a named feature on or off | Confirmation + effective flags |
-| `/set-recruitment` | OFFICER | `open*` `min_weight?` `min_networth?` `clear_requirements?` | Open/close applications and set the bar. Thresholds are tri-state — absent leaves them alone, `clear_requirements` is the explicit wipe | Confirmation of the new config |
+| `/set-recruitment` | OFFICER | `open*` | Open or close applications. The `min_weight`, `min_networth` and `clear_requirements` options were removed with the entry bars — the scam check is the only requirement | Confirmation of the new config |
 | `/set-role` | ADMIN | `role*` `type?` (member/mapping) `target?` `discord_role?` | `type:member` changes a member's rank and writes a `ROLE_CHANGE` action; `type:mapping` binds a rank to a Discord role (empty clears) | Confirmation |
 
 ### 4.5 Applications & bridge

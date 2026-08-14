@@ -2,7 +2,7 @@
  * User-facing rendering. Maps typed fallback states to honest messages and
  * formats networth respecting exact-vs-estimate and staleness.
  */
-import { describeAge, stalenessFooter } from "@sbr/shared-types";
+import { describeAge, padInlineRow, stalenessFooter } from "@sbr/shared-types";
 import type {
   AccessoryReportDTO,
   AccessorySuggestionDTO,
@@ -149,7 +149,9 @@ export function renderNetworthEmbed(ign: string, result: HypixelResult<NetworthD
       data.total === null
         ? "Unknown — the profile's API settings hide the data this needs."
         : `**${formatCoins(data.total)}**${data.exact ? "" : " (estimate — some data is hidden)"}`,
-    ...(fields.length > 0 ? { fields } : {}),
+    // Padded because the category count is data — a profile with four scoring
+    // categories would otherwise leave the fourth stretched alone on its own row.
+    ...(fields.length > 0 ? { fields: padInlineRow(fields) } : {}),
     // Missing sections are named rather than silently folded into the total.
     ...(data.missing.length > 0
       ? { footer: `${stalenessFooter(result.value)} • hidden: ${data.missing.join(", ")}` }
@@ -195,11 +197,15 @@ export function renderProfileEmbed(
 ): EmbedView {
   return statEmbed(`${ign} — profile`, result, (p) => ({
     description: `**${profileLabel(p)}**`,
-    fields: [
+    // SkyBlock Level leads: it is the number a member quotes about themselves,
+    // and the one that moves whatever they happen to be playing. Weight stays,
+    // one column over, as a figure rather than as the headline.
+    fields: padInlineRow([
+      { name: "SkyBlock Level", value: formatLevel(p.skyblockLevel), inline: true },
       { name: "Skill average", value: formatLevel(p.skillAverage), inline: true },
       { name: "Catacombs", value: formatLevel(p.catacombsLevel), inline: true },
       { name: "Weight", value: weightText(p.senitherWeight), inline: true },
-    ],
+    ]),
     color: "INFO",
   }));
 }
@@ -416,7 +422,11 @@ export function renderStatsEmbed(
   return {
     title: `${ign} — stats`,
     description: `Profile **${profileLabel(p)}**`,
-    fields: [
+    // Padded: how many fields this card carries depends on whether standing and
+    // a staff record were available, so the row can end short in three different
+    // ways and none of them is a reason to leave a field stranded.
+    fields: padInlineRow([
+      { name: "SkyBlock Level", value: formatLevel(p.skyblockLevel), inline: true },
       { name: "Skill average", value: formatLevel(p.skillAverage), inline: true },
       {
         name: "Catacombs",
@@ -450,7 +460,7 @@ export function renderStatsEmbed(
           ]
         : []),
       ...(recordField === null ? [] : [recordField]),
-    ],
+    ]),
     footer: stalenessFooter(profile.value),
     color: "INFO",
   };
@@ -1022,11 +1032,17 @@ export function renderRosterEmbed(roster: GuildRosterDTO, now: number = Date.now
   return {
     title: rosterTitle(roster),
     description: headline,
-    fields: roster.ranks.map((rank) => ({
-      name: `${rank.rank} — ${rank.members.length}`,
-      value: truncateField(rank.members.join(", ")),
-      inline: false,
-    })),
+    // Ranks with nobody online are dropped rather than rendered as a rank with
+    // an empty list: Discord rejects an embed field with an empty value and
+    // fails the *whole* message, so one quiet rank would take `/online` down
+    // for the entire guild. The rank still exists; nothing is claimed about it.
+    fields: roster.ranks
+      .filter((rank) => rank.members.length > 0)
+      .map((rank) => ({
+        name: `${rank.rank} — ${rank.members.length}`,
+        value: truncateField(rank.members.join(", ")),
+        inline: false,
+      })),
     color: "SUCCESS",
     footer: `as of ${describeAge(roster.fetchedAt, now)}`,
   };

@@ -7,6 +7,9 @@
  * to re-derive "am I logged out or just not allowed here".
  */
 import type { AccessDecision, DenyReason, MutationResult, PageResult } from "@sbr/panel-core";
+import { err, scope } from "./copy.js";
+
+const t = scope("request");
 
 export type ApiResult<T> =
   | { readonly kind: "ok"; readonly data: T; readonly access: Extract<AccessDecision, { allowed: true }> }
@@ -19,7 +22,7 @@ export async function loadPage<T>(path: string): Promise<ApiResult<T>> {
     res = await fetch(path, { headers: { accept: "application/json" }, credentials: "same-origin" });
   } catch {
     // Offline, DNS, or a dropped connection — distinct from the server saying no.
-    return { kind: "error", message: "Couldn't reach the panel server." };
+    return { kind: "error", message: t("unreachable") };
   }
 
   let body: unknown;
@@ -81,7 +84,7 @@ export async function postAction(
       body: JSON.stringify(body),
     });
   } catch {
-    return { kind: "error", message: "Couldn't reach the panel server." };
+    return { kind: "error", message: t("unreachable") };
   }
 
   let payload: unknown;
@@ -120,29 +123,27 @@ function describeWriteError(error: Exclude<MutationResult["error"], null>): stri
   switch (error.kind) {
     case "RATE_LIMITED": {
       const seconds = Math.max(1, Math.ceil((error.retryAfterMs ?? 0) / 1000));
-      return `Too many changes at once — try again in ${seconds}s.`;
+      return t("rateLimited").replace("{n}", String(seconds));
     }
     case "INVALID_INPUT":
-      return error.detail ? `That value isn't valid: ${error.detail}.` : "That value isn't valid.";
+      return error.detail ? t("invalidInputDetail").replace("{detail}", error.detail) : t("invalidInput");
     case "SERVICE_ERROR":
-      return error.detail ? `The change was refused (${error.detail}).` : "The change was refused.";
+      return error.detail ? t("refusedDetail").replace("{detail}", error.detail) : t("refused");
   }
 }
 
 function describeError(status: number, code: string | undefined): string {
-  if (code === "oauth_not_configured") return "Discord login isn't configured on this deployment.";
-  if (status === 404) return "That page doesn't exist.";
-  if (status >= 500) return "The panel server hit an error. Try again in a moment.";
-  return code ? `Request failed (${code}).` : `Request failed (HTTP ${status}).`;
+  if (code === "oauth_not_configured") return t("oauthMissing");
+  if (status === 404) return t("notFound");
+  if (status >= 500) return t("serverError");
+  return code ? t("failedWithCode").replace("{code}", code) : t("failedWithStatus").replace("{status}", String(status));
 }
 
+/**
+ * A denial reads the same here as it does in a slash command reply, because both
+ * read `error.deny.<reason>` — the panel adds a sign-in button on top rather
+ * than a second wording.
+ */
 export function denialMessage(reason: DenyReason): string {
-  switch (reason) {
-    case "NOT_AUTHENTICATED":
-      return "Sign in with Discord to continue.";
-    case "NOT_MANAGEABLE":
-      return "You don't have Manage Server on this Discord guild, or the platform doesn't know about it yet.";
-    case "INSUFFICIENT_ROLE":
-      return "Your role in this guild doesn't reach the tier this page requires.";
-  }
+  return err().deny[reason];
 }

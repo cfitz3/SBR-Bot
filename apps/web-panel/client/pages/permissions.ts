@@ -18,30 +18,34 @@
 import type { PermissionsVM } from "@sbr/panel-core";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner, table } from "../components.js";
+import { scope } from "../copy.js";
 import { actionButton, fieldGroup, idChooser, multiPickerField, selectField, statusSlot } from "../forms.js";
 import { h, replace } from "../dom.js";
+
+const t = scope("permissions");
 
 /** Mirrors `MAX_RANK_NAME` in the mutation layer; see forms.ts on why both exist. */
 const RANK_MAX = 64;
 
-/** What holding a capability actually lets someone do, in the guild's terms. */
-const CAPABILITY_COPY: Readonly<Record<string, string>> = {
-  RELAY_MESSAGE: "Speak through the bridge — their Discord messages reach guild chat.",
-  RUN_COMMAND: "Run bot commands from guild chat.",
-  MENTION: "Have @mentions survive the relay instead of being flattened.",
-  BYPASS_FILTER: "Skip the chat filter entirely, in both directions.",
-  BYPASS_COOLDOWN: "Skip relay and command cooldowns.",
-  ADMIN: "Administrative bridge control. Only ever an Admin.",
-};
+/**
+ * The subject kinds an exception can name, in the order the dropdown offers
+ * them. The values are schema; the words for them are copy, and a capability the
+ * platform gains before copy names it falls back to its own key rather than
+ * rendering blank.
+ */
+const SUBJECTS = ["DISCORD_USER", "DISCORD_ROLE", "GUILD_RANK"] as const;
 
-const SUBJECT_COPY: readonly (readonly [string, string])[] = [
-  ["DISCORD_USER", "one person"],
-  ["DISCORD_ROLE", "a Discord role"],
-  ["GUILD_RANK", "an in-game rank"],
-];
+const subjectOptions = (): readonly (readonly [string, string])[] =>
+  SUBJECTS.map((value) => [value, t("subject")[value]] as const);
+
+/** What holding a capability lets someone do; unnamed capabilities say nothing. */
+function capabilityHint(capability: string): string {
+  const table = t("capability") as Readonly<Record<string, string>>;
+  return table[capability] ?? "";
+}
 
 export async function renderPermissions(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading permissions…"));
+  replace(host, spinner("permissions"));
 
   const result = await loadPage<PermissionsVM>(`/api/guilds/${encodeURIComponent(guildId)}/permissions`);
   if (result.kind === "denied") return replace(host, deniedState(result.reason));
@@ -57,19 +61,13 @@ export async function renderPermissions(host: HTMLElement, guildId: string): Pro
     h(
       "div",
       {},
-      pageTitle("Permissions", "Who is staff, and what staff means"),
-      h(
-        "p",
-        { class: "page-note" },
-        "A member's level is the highest of what their Discord roles and their in-game rank give them. " +
-          "Levels grant capabilities; an exception overrides a level for one subject, and a denial there beats " +
-          "every grant and every level.",
-      ),
-      card("Levels", levelsSection(guildId, vm, reload)),
-      card("In-game ranks", ranksSection(guildId, vm, reload)),
-      card("Bridge capabilities", capabilitiesSection(guildId, vm)),
-      card("Command access", commandsSection(guildId, vm)),
-      card("Exceptions", exceptionsSection(guildId, vm, reload)),
+      pageTitle(t("title"), t("subtitle")),
+      h("p", { class: "page-note" }, t("intro")),
+      card(t("cardLevels"), levelsSection(guildId, vm, reload)),
+      card(t("cardRanks"), ranksSection(guildId, vm, reload)),
+      card(t("cardCapabilities"), capabilitiesSection(guildId, vm)),
+      card(t("cardCommands"), commandsSection(guildId, vm)),
+      card(t("cardExceptions"), exceptionsSection(guildId, vm, reload)),
     ),
   );
 }
@@ -85,16 +83,11 @@ function levelsSection(guildId: string, vm: PermissionsVM, reload: () => void): 
   return h(
     "div",
     {},
-    h(
-      "p",
-      { class: "field-hint" },
-      "Holding any of a level's roles puts a member at that level. Someone with roles at two levels gets the " +
-        "higher one. Members with none of these roles are at the base level.",
-    ),
+    h("p", { class: "field-hint" }, t("levelsHint")),
     ...vm.roles.map((role) =>
       multiPickerField({
         label: titleCase(role),
-        hint: `Discord roles that make someone ${article(role)} ${titleCase(role)}.`,
+        hint: t("levelHint").replace("{article}", article(role)).replace("{level}", titleCase(role)),
         guildId,
         kind: "role",
         values: vm.bindings[role] ?? [],
@@ -124,8 +117,8 @@ function ranksSection(guildId: string, vm: PermissionsVM, reload: () => void): H
   const rankInput = h("input", {
     class: "control control-text",
     type: "text",
-    placeholder: "the rank's name in game",
-    "aria-label": "In-game rank",
+    placeholder: t("rankPlaceholder"),
+    "aria-label": t("rankLabel"),
     autocomplete: "off",
     spellcheck: "false",
     maxlength: String(RANK_MAX),
@@ -134,13 +127,13 @@ function ranksSection(guildId: string, vm: PermissionsVM, reload: () => void): H
   let newRole = vm.roles[0] ?? "MEMBER";
 
   const add = actionButton({
-    label: "Map rank",
+    label: t("rankAdd"),
     tone: "primary",
     status,
     run: async () => {
       const rank = rankInput.value.trim();
       if (rank.length === 0 || rank.length > RANK_MAX) {
-        return { kind: "error", message: `Enter a rank name of up to ${RANK_MAX} characters.` };
+        return { kind: "error", message: t("errRankName").replace("{max}", String(RANK_MAX)) };
       }
       return postAction(guildId, "roles.rank", { rank, role: newRole });
     },
@@ -153,15 +146,15 @@ function ranksSection(guildId: string, vm: PermissionsVM, reload: () => void): H
       { class: "field-row" },
       h("span", { class: "job-cell" }, row.rank),
       selectField({
-        label: "Level",
+        label: t("rankLevel"),
         value: row.role,
         options: vm.roles.map((r) => [r, titleCase(r)] as const),
         save: (next) => postAction(guildId, "roles.rank", { rank: row.rank, role: next }),
       }),
       actionButton({
-        label: "Unmap",
+        label: t("rankUnmap"),
         tone: "danger",
-        confirm: "Confirm unmap",
+        confirm: t("rankUnmapConfirm"),
         status,
         // null is the clear: the rank stops conferring anything rather than
         // dropping to the base level by way of a stored mapping.
@@ -174,15 +167,11 @@ function ranksSection(guildId: string, vm: PermissionsVM, reload: () => void): H
   return h(
     "div",
     {},
-    h(
-      "p",
-      { class: "field-hint" },
-      "Ranks are matched case-insensitively against the guild scan. A rank that isn't mapped confers nothing.",
-    ),
-    ...(rows.length === 0 ? [emptyState("No in-game rank confers a level in this guild.")] : rows),
+    h("p", { class: "field-hint" }, t("ranksHint")),
+    ...(rows.length === 0 ? [emptyState("permissionsRanks")] : rows),
     h("div", { class: "field-row" }, rankInput),
     selectField({
-      label: "Gives",
+      label: t("rankGives"),
       value: newRole,
       options: vm.roles.map((r) => [r, titleCase(r)] as const),
       // Nothing is stored until "Map rank"; the dropdown only records a choice.
@@ -201,17 +190,12 @@ function capabilitiesSection(guildId: string, vm: PermissionsVM): HTMLElement {
   return h(
     "div",
     {},
-    h(
-      "p",
-      { class: "field-hint" },
-      "Every level at or above the floor holds the capability. ADMIN cannot be lowered below Admin, which is what " +
-        "stops this page from being used to give it away.",
-    ),
+    h("p", { class: "field-hint" }, t("capabilitiesHint")),
     fieldGroup(
       ...vm.capabilities.map((row) =>
         selectField({
           label: titleCase(row.capability),
-          hint: `${CAPABILITY_COPY[row.capability] ?? ""} Platform default: ${titleCase(row.defaultRole)}.`,
+          hint: `${capabilityHint(row.capability)} ${t("platformDefault").replace("{default}", titleCase(row.defaultRole))}`,
           value: row.role,
           options: vm.roles.map((r) => [r, titleCase(r)] as const),
           save: (next) => postAction(guildId, "roles.capability", { capability: row.capability, role: next }),
@@ -230,27 +214,24 @@ function capabilitiesSection(guildId: string, vm: PermissionsVM): HTMLElement {
  */
 function commandsSection(guildId: string, vm: PermissionsVM): HTMLElement {
   if (!vm.commandsAvailable) {
-    return emptyState("The command list isn't available in this deployment, so command floors can't be edited here.");
+    return emptyState("permissionsCommandsUnavailable");
   }
-  if (vm.commands.length === 0) return emptyState("No staff commands are registered.");
+  if (vm.commands.length === 0) return emptyState("permissionsCommandsNone");
 
   return h(
     "div",
     {},
-    h(
-      "p",
-      { class: "field-hint" },
-      "Leave a command on its default unless you have a reason — the defaults are what the handlers were written " +
-        "against, and lowering one is how a destructive command reaches someone it wasn't meant for.",
-    ),
+    h("p", { class: "field-hint" }, t("commandsHint")),
     fieldGroup(
       ...vm.commands.map((row) =>
         selectField({
           label: `/${row.name}`,
-          hint: `${row.description} Default: ${titleCase(row.defaultRole)}.`,
+          hint: t("commandHint")
+            .replace("{description}", row.description)
+            .replace("{default}", titleCase(row.defaultRole)),
           value: row.overridden ? row.role : "",
           options: [
-            ["", `default — ${titleCase(row.defaultRole)}`] as const,
+            ["", t("commandDefaultOption").replace("{default}", titleCase(row.defaultRole))] as const,
             ...vm.roles.map((r) => [r, titleCase(r)] as const),
           ],
           save: (next) =>
@@ -271,7 +252,7 @@ function commandsSection(guildId: string, vm: PermissionsVM): HTMLElement {
  */
 function exceptionsSection(guildId: string, vm: PermissionsVM, reload: () => void): HTMLElement {
   if (!vm.exceptionsAvailable) {
-    return emptyState("Per-person exceptions aren't available in this deployment.");
+    return emptyState("permissionsExceptionsUnavailable");
   }
 
   const status = statusSlot();
@@ -286,26 +267,26 @@ function exceptionsSection(guildId: string, vm: PermissionsVM, reload: () => voi
   const chooser = idChooser({
     guildId,
     kind: "member",
-    ariaLabel: "Member or role",
-    placeholder: "search members",
+    ariaLabel: t("subjectAria"),
+    placeholder: t("subjectPlaceholder"),
   });
   const rankInput = h("input", {
     class: "control control-text",
     type: "text",
-    placeholder: "the rank's name in game",
-    "aria-label": "In-game rank",
+    placeholder: t("rankPlaceholder"),
+    "aria-label": t("rankLabel"),
     autocomplete: "off",
     spellcheck: "false",
     maxlength: String(RANK_MAX),
   }) as HTMLInputElement;
 
   const add = actionButton({
-    label: "Add exception",
+    label: t("exceptionAdd"),
     tone: "primary",
     status,
     run: async () => {
       const subjectId = subjectType === "GUILD_RANK" ? rankInput.value.trim() : chooser.value();
-      if (subjectId.length === 0) return { kind: "error", message: "Choose who this applies to." };
+      if (subjectId.length === 0) return { kind: "error", message: t("errNoSubject") };
       return postAction(guildId, "roles.exception", {
         subjectType,
         subjectId,
@@ -320,11 +301,11 @@ function exceptionsSection(guildId: string, vm: PermissionsVM, reload: () => voi
     describeSubject(row.subjectType),
     row.subjectId,
     titleCase(row.capability),
-    badge(row.allow ? "granted" : "denied", row.allow ? "ok" : "bad"),
+    badge(row.allow ? t("granted") : t("denied"), row.allow ? "ok" : "bad"),
     actionButton({
-      label: "Remove",
+      label: t("remove"),
       tone: "danger",
-      confirm: "Confirm remove",
+      confirm: t("removeConfirm"),
       status,
       run: () => postAction(guildId, "roles.exception.remove", { id: row.id }),
       onDone: reload,
@@ -334,32 +315,23 @@ function exceptionsSection(guildId: string, vm: PermissionsVM, reload: () => voi
   return h(
     "div",
     {},
-    h(
-      "p",
-      { class: "field-hint" },
-      "An exception overrides the level for one subject. A denial wins over every grant and every level — removing " +
-        "a row is not the same as denying it, and restores whatever the level said.",
-    ),
+    h("p", { class: "field-hint" }, t("exceptionsHint")),
     rows.length === 0
-      ? emptyState("Nobody is an exception in this guild.")
-      : table(["Applies to", "Subject", "Capability", "Effect", ""], rows),
+      ? emptyState("permissionsExceptionsNone")
+      : table([t("colAppliesTo"), t("colSubject"), t("colCapability"), t("colEffect"), ""], rows),
     selectField({
-      label: "Applies to",
+      label: t("subjectLabel"),
       value: subjectType,
-      options: SUBJECT_COPY.map(([v, l]) => [v, l] as const),
+      options: subjectOptions(),
       save: async (next) => {
         subjectType = next;
         return { kind: "ok" };
       },
     }),
     h("div", { class: "field-row" }, chooser.el, rankInput),
-    h(
-      "p",
-      { class: "field-hint" },
-      "Search picks a member; a Discord role or in-game rank can be typed in by hand.",
-    ),
+    h("p", { class: "field-hint" }, t("subjectHint")),
     selectField({
-      label: "Capability",
+      label: t("capabilityLabel"),
       value: capability,
       options: vm.capabilities.map((c) => [c.capability, titleCase(c.capability)] as const),
       save: async (next) => {
@@ -368,11 +340,11 @@ function exceptionsSection(guildId: string, vm: PermissionsVM, reload: () => voi
       },
     }),
     selectField({
-      label: "Effect",
+      label: t("effectLabel"),
       value: allow,
       options: [
-        ["true", "grant it"],
-        ["false", "deny it"],
+        ["true", t("effectGrant")],
+        ["false", t("effectDeny")],
       ],
       save: async (next) => {
         allow = next;
@@ -385,7 +357,8 @@ function exceptionsSection(guildId: string, vm: PermissionsVM, reload: () => voi
 }
 
 function describeSubject(kind: string): string {
-  return SUBJECT_COPY.find(([v]) => v === kind)?.[1] ?? kind;
+  const table = t("subject") as Readonly<Record<string, string>>;
+  return table[kind] ?? kind;
 }
 
 function titleCase(value: string): string {

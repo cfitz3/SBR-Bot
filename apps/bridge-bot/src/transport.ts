@@ -1055,5 +1055,56 @@ async function relayDiscordToGame(
       roleIds: msg.member?.roles.cache.map((role) => role.id) ?? [],
     },
   });
-  if (decision.action === "DELIVER") send(decision.formatted);
+  if (decision.action === "DELIVER") {
+    send(decision.formatted);
+    return;
+  }
+  // Every other drop reason is deliberately silent — a shadow-mute that
+  // announced itself would not be one, and a muted member already knows. But
+  // `NO_PERMISSION` is now the common answer for a guild member who simply has
+  // not linked yet, and a message that vanishes with no explanation reads as
+  // the bridge being broken.
+  if (decision.reason === "NO_PERMISSION") await hintUnlinked(app, msg);
+}
+
+/** How long a hint stays before deleting itself, and how long until the next one. */
+const HINT_TTL_MS = 20_000;
+const HINT_COOLDOWN_MS = 30 * 60_000;
+
+/** Last hint per author. In memory on purpose: a restart re-showing it is free. */
+const lastHintAt = new Map<string, number>();
+
+/**
+ * Tell somebody why their message did not cross, once every half hour at most.
+ *
+ * Throttled and self-deleting because the alternative is a bridge channel full
+ * of bot replies the moment a non-member starts talking — which is the same
+ * noise the drop was avoiding, just louder.
+ */
+async function hintUnlinked(app: BridgeApp, msg: Message): Promise<void> {
+  const now = Date.now();
+  const previous = lastHintAt.get(msg.author.id);
+  if (previous !== undefined && now - previous < HINT_COOLDOWN_MS) return;
+  lastHintAt.set(msg.author.id, now);
+  // Bounded: the map would otherwise grow by one entry per person who ever
+  // spoke here and never shrink.
+  if (lastHintAt.size > 500) {
+    for (const [id, at] of lastHintAt) if (now - at >= HINT_COOLDOWN_MS) lastHintAt.delete(id);
+  }
+
+  const sent = await msg
+    .reply({
+      content:
+        "That did not reach guild chat — the bridge only carries messages from guild members. " +
+        "Run `/link` to connect your Minecraft account, then try again.",
+      allowedMentions: { repliedUser: false },
+    })
+    .catch(() => null);
+  if (sent === null) {
+    // Missing Send Messages in the bridge channel is the usual cause, and it is
+    // worth saying out loud: from the member's side the bridge just eats input.
+    app.log.warn("could not explain a refused relay", { channelId: msg.channelId });
+    return;
+  }
+  setTimeout(() => void sent.delete().catch(() => {}), HINT_TTL_MS).unref();
 }

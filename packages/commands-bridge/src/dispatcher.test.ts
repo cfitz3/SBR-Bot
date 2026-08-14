@@ -41,10 +41,12 @@ import {
   type SkillsDTO,
   type SlayersDTO,
   type XpService,
+  type TicketCategoryDTO,
   type XpStandingDTO,
 } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
 import type { Logger } from "@sbr/observability";
-import { resolveTicketTypes } from "@sbr/community";
+import { SEED_CATEGORIES } from "@sbr/tickets";
 import { CommandDispatcher } from "./dispatcher.js";
 import { buildBridgeRegistry } from "./handlers.js";
 import { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
@@ -81,6 +83,7 @@ const summary: ProfileSummaryDTO = {
   profileId: "prof-1",
   cuteName: "Mango",
   gameMode: "NORMAL",
+  skyblockLevel: 312.4,
   skillAverage: 42.5,
   catacombsLevel: 36,
   slayerXp: 2_400_000,
@@ -344,10 +347,48 @@ const aPost: LFGPostDTO = {
 };
 
 const aTicket: TicketDTO = {
-  id: "t1", guildId: "g1", openerDiscordId: "111", assigneeDiscordId: null, category: "SUPPORT",
-  status: "OPEN", subject: "can't link", closeReason: null,
-  createdAt: "2026-08-01T00:00:00.000Z", closedAt: null,
+  id: "t1", guildId: "g1", number: 1, openerDiscordId: "111", assigneeDiscordId: null,
+  categoryId: "cat-support", categoryKey: "SUPPORT", categoryName: "Support",
+  status: "OPEN", channelId: null, subject: null, topic: "can't link",
+  claimedByDiscordId: null, claimedAt: null,
+  closeRequestedByDiscordId: null, closeRequestedAt: null,
+  lastMessageAt: null, firstStaffReplyAt: null, feedbackRating: null, transcriptReady: false,
+  closeReason: null, createdAt: "2026-08-01T00:00:00.000Z", closedAt: null,
 };
+
+/**
+ * The five seeded categories as full rows, which is what a guild that has
+ * configured nothing actually has after the migration. Built from
+ * `SEED_CATEGORIES` rather than retyped so the fixture cannot drift from the
+ * seed the migration writes.
+ */
+function seededCategories(guildId: string, over: readonly Partial<TicketCategoryDTO>[] = []): TicketCategoryDTO[] {
+  const rows = SEED_CATEGORIES.map((c) => ({
+    id: `cat-${c.key.toLowerCase()}`,
+    guildId,
+    key: c.key,
+    name: c.name,
+    description: c.description,
+    emoji: null,
+    position: c.position,
+    enabled: true,
+    channelNameTemplate: "ticket-{num}",
+    parentChannelId: null,
+    staffRoleIds: [],
+    requiredRoleIds: [],
+    pingRoleIds: [],
+    openingMessage: "",
+    image: null,
+    claiming: true,
+    cooldownSeconds: null,
+    memberLimit: 1,
+    totalLimit: 50,
+    slowModeSeconds: null,
+    requireTopic: false,
+    questions: [],
+  }));
+  return [...rows, ...over.map((o) => ({ ...rows[0]!, ...o }))];
+}
 
 function community(over: Partial<CommunityService> = {}): CommunityService {
   const base: Partial<CommunityService> = {
@@ -372,10 +413,10 @@ function community(over: Partial<CommunityService> = {}): CommunityService {
     async listLfg() { return ok([aPost]); },
     async joinLfg() { return ok({ ...aPost, slotsFilled: 3, members: [...aPost.members, "333"] }); },
     async leaveLfg() { return ok({ ...aPost, slotsFilled: 1, members: ["111"] }); },
-    async openTicket(input) { return ok({ ...aTicket, category: input.category }); },
+    async openTicket(input) { return ok({ ...aTicket, categoryId: input.categoryId }); },
     async closeTicket() { return ok({ ...aTicket, status: "CLOSED", closeReason: "sorted" }); },
     async listTickets() { return ok([aTicket]); },
-    async listTicketTypes(guildId) { return ok(resolveTicketTypes(guildId, [])); },
+    async listTicketCategories(guildId) { return ok(seededCategories(guildId)); },
     async getApplication() { return ok(null); },
     async decideApplication() { return err({ kind: "NOT_FOUND" }); },
     ...over,
@@ -566,8 +607,11 @@ test("an unreachable upstream degrades with its own message, not the generic one
     },
   });
   const r = await makeDispatcher({ progression: down }).dispatch("networth", ctx());
-  assert.match(r.text, /nothing cached to fall back on/);
-  assert.doesNotMatch(r.text, /Something went wrong/);
+  // Asserted against the keys rather than the English: the words are the
+  // operator's to change now, and a guild rewording them must not fail a test
+  // about which of the two situations the dispatcher decided it was in.
+  assert.equal(r.text, copy.error.generic.upstreamDown);
+  assert.notEqual(r.text, copy.error.generic.unknown);
 });
 
 test("networth carries an embed with the staleness footer", async () => {
@@ -578,8 +622,12 @@ test("networth carries an embed with the staleness footer", async () => {
 
 test("networth breaks the total down by category, largest share first", async () => {
   const fields = (await makeDispatcher().dispatch("networth", ctx())).embed?.fields ?? [];
+  // Named categories only: two of them do not fill Discord's three-to-a-row, so
+  // `padInlineRow` completes the row with a zero-width spacer rather than leave
+  // the second category stretched across the width. The spacer is chrome, and a
+  // test about ordering should not have an opinion about it.
   assert.deepEqual(
-    fields.map((f) => f.name),
+    fields.map((f) => f.name).filter((n) => n !== "​"),
     ["Bank — 50%", "Personal Vault — 25%"],
   );
 });
@@ -1294,52 +1342,70 @@ test("the close button closes the run the presser owns", async () => {
 test("/ticket opens a ticket privately", async () => {
   const r = await makeDispatcher().dispatch("ticket", ctx({ args: recordArgs({ category: "APPEAL" }) }));
   assert.equal(r.ephemeral, true);
-  assert.match(r.text, /Opened appeal a punishment ticket t1/);
-  assert.match(r.embed?.fields?.[0]?.value ?? "", /appeal/);
+  // The ticket is called by its per-guild number, which is what staff and the
+  // member both say out loud — the id is a database detail.
+  assert.match(r.text, /Opened appeal ticket #1/);
+  assert.match(r.embed?.fields?.[0]?.value ?? "", /Support/);
 });
 
-test("/ticket type: picks a guild's own type and files it under its category", async () => {
-  const seen: string[] = [];
+test("/ticket type: picks a guild's own category and opens under its id", async () => {
+  const seen: Array<string | null> = [];
   const configured = community({
-    async listTicketTypes(guildId) {
+    async listTicketCategories(guildId) {
       return ok(
-        resolveTicketTypes(guildId, [
+        seededCategories(guildId, [
           {
-            id: "tt1",
+            id: "cat-staff-app",
             key: "staff-app",
-            label: "Staff application",
-            emoji: null,
-            category: "APPLICATION",
-            parentChannelId: null,
-            staffRoleIds: [],
-            prompt: "Tell us why you'd be good at it.",
+            name: "Staff application",
             position: 9,
-            enabled: true,
+            openingMessage: "Tell us why you'd be good at it.",
           },
         ]),
       );
     },
-    async openTicket(input) { seen.push(input.category); return ok({ ...aTicket, category: input.category }); },
+    async openTicket(input) {
+      seen.push(input.categoryId);
+      return ok({ ...aTicket, categoryId: input.categoryId, categoryName: "Staff application" });
+    },
   });
   const r = await makeDispatcher({ community: configured }).dispatch(
     "ticket",
     ctx({ args: recordArgs({ type: "staff-app" }) }),
   );
-  assert.deepEqual(seen, ["APPLICATION"]);
-  // The guild's own prompt replaces the generic "staff will pick it up".
+  // The category's own id, not its key: the row is what the ticket points at,
+  // so renaming a category never orphans a ticket.
+  assert.deepEqual(seen, ["cat-staff-app"]);
+  // The category's own opening message replaces the generic "staff will pick it up".
   assert.match(r.text, /Tell us why you'd be good at it\./);
 });
 
-test("/ticket names the types on offer when the one asked for doesn't exist", async () => {
+test("/ticket names the categories on offer when the one asked for doesn't exist", async () => {
   const r = await makeDispatcher().dispatch("ticket", ctx({ args: recordArgs({ type: "refund" }) }));
   assert.match(r.text, /don't have a ticket type/);
-  assert.match(r.text, /`support`/);
+  assert.match(r.text, /`SUPPORT`/);
 });
 
-test("/ticket says so plainly when a guild has switched every type off", async () => {
-  const closed = community({ async listTicketTypes() { return ok([]); } });
+test("/ticket says so plainly when a guild has switched every category off", async () => {
+  const closed = community({ async listTicketCategories() { return ok([]); } });
   const r = await makeDispatcher({ community: closed }).dispatch("ticket", ctx({ args: recordArgs({}) }));
   assert.match(r.text, /aren't open here/);
+});
+
+test("a disabled category is invisible to a member, not an error", async () => {
+  // Switched off reads as "not offered here", never as "you typed it wrong":
+  // the category still exists, the guild just isn't taking those right now.
+  const partly = community({
+    async listTicketCategories(guildId) {
+      return ok(seededCategories(guildId).map((c) => (c.key === "APPEAL" ? { ...c, enabled: false } : c)));
+    },
+  });
+  const r = await makeDispatcher({ community: partly }).dispatch(
+    "ticket",
+    ctx({ args: recordArgs({ type: "appeal" }) }),
+  );
+  assert.match(r.text, /don't have a ticket type/);
+  assert.doesNotMatch(r.text, /`APPEAL`/);
 });
 
 test("/ticket type autocomplete offers the guild's menu by key", async () => {
@@ -1350,7 +1416,7 @@ test("/ticket type autocomplete offers the guild's menu by key", async () => {
   );
   assert.deepEqual(
     choices.map((c) => c.value),
-    ["appeal", "application"],
+    ["APPEAL", "APPLICATION"],
   );
 });
 
@@ -1364,6 +1430,25 @@ test("/ticket action:list only ever shows the caller their own tickets", async (
   assert.equal(r.ephemeral, true);
 });
 
+test("/ticket action:close never closes someone else's ticket", async () => {
+  // The hole this rebuild exists to shut: the old command took an id and
+  // checked neither ownership nor rank, so any member could close anything.
+  // This surface is never staff, so a stranger's ticket is refused outright.
+  const seen: Array<{ isStaff: boolean }> = [];
+  const spy = community({
+    async closeTicket(_id, actor) {
+      seen.push({ isStaff: actor.isStaff });
+      return err({ kind: "FORBIDDEN" });
+    },
+  });
+  const r = await makeDispatcher({ community: spy }).dispatch(
+    "ticket",
+    ctx({ args: recordArgs({ action: "close", id: "someone-elses" }) }),
+  );
+  assert.deepEqual(seen, [{ isStaff: false }]);
+  assert.match(r.text, /isn't your ticket/);
+});
+
 test("/ticket action:close without an id asks for one", async () => {
   const r = await makeDispatcher().dispatch("ticket", ctx({ args: recordArgs({ action: "close" }) }));
   assert.match(r.text, /Which ticket/);
@@ -1371,7 +1456,7 @@ test("/ticket action:close without an id asks for one", async () => {
 
 test("/ticket action:close confirms and shows the reason", async () => {
   const r = await makeDispatcher().dispatch("ticket", ctx({ args: recordArgs({ action: "close", id: "t1", reason: "sorted" }) }));
-  assert.match(r.text, /Closed ticket t1/);
+  assert.match(r.text, /Closed ticket #1/);
   assert.match((r.embed?.fields ?? []).map((f) => f.value).join(" "), /sorted/);
 });
 

@@ -155,8 +155,6 @@ export interface GuildConfigRow {
   applicationsOpen: boolean;
   bridgeSuspended: boolean;
   features: Record<string, boolean>;
-  minWeight: number | null;
-  minNetworth: number | null;
   roleMappings: Record<string, string | string[]>;
 }
 
@@ -223,10 +221,9 @@ export const guildConfigRepository = {
       applicationsOpen: cfg.applicationsOpen,
       bridgeSuspended: cfg.bridgeSuspended,
       features: toFeatureMap(cfg.features),
-      minWeight: cfg.minWeight,
-      // BigInt in Postgres, plain number here: guild networth bars are billions
-      // of coins, comfortably inside the safe-integer range.
-      minNetworth: cfg.minNetworth === null ? null : Number(cfg.minNetworth),
+      // `minWeight` and `minNetworth` were read here. The columns are still
+      // there — deprecated, not dropped — but nothing decides on them any more,
+      // so nothing carries them into the runtime config.
       roleMappings: toRoleMap(cfg.roleMappings),
     };
   },

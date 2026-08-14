@@ -169,13 +169,19 @@ export function renderLfgListEmbed(posts: readonly LFGPostDTO[]): EmbedView {
 }
 
 export function renderTicketEmbed(ticket: TicketDTO): EmbedView {
+  const topic = ticket.topic ?? ticket.subject;
   return {
-    title: `Ticket ${ticket.id}`,
+    title: `Ticket #${ticket.number}`,
     fields: [
-      { name: "Category", value: ticket.category.toLowerCase(), inline: true },
+      // Null when the guild has deleted the category since. "—" rather than a
+      // guess: the ticket really has no category any more.
+      { name: "Category", value: ticket.categoryName ?? "—", inline: true },
       { name: "Status", value: ticket.status.toLowerCase(), inline: true },
       { name: "Opened by", value: `<@${ticket.openerDiscordId}>`, inline: true },
-      ...(ticket.subject === null ? [] : [{ name: "Subject", value: ticket.subject, inline: false }]),
+      ...(ticket.claimedByDiscordId === null
+        ? []
+        : [{ name: "Claimed by", value: `<@${ticket.claimedByDiscordId}>`, inline: true }]),
+      ...(topic === null ? [] : [{ name: "Topic", value: topic, inline: false }]),
       ...(ticket.closeReason === null ? [] : [{ name: "Closed because", value: ticket.closeReason, inline: false }]),
     ],
     color: ticket.status === "OPEN" || ticket.status === "PENDING" ? "INFO" : "NEUTRAL",
@@ -189,8 +195,8 @@ export function renderTicketListEmbed(tickets: readonly TicketDTO[]): EmbedView 
   return {
     title: "Open tickets",
     fields: tickets.slice(0, 10).map((t) => ({
-      name: `${t.category.toLowerCase()} — ${t.status.toLowerCase()}`,
-      value: `<@${t.openerDiscordId}>${t.subject === null ? "" : ` — ${t.subject}`} • \`${t.id}\``,
+      name: `#${t.number} ${t.categoryName ?? "—"} — ${t.status.toLowerCase()}`,
+      value: `<@${t.openerDiscordId}>${(t.topic ?? t.subject) === null ? "" : ` — ${t.topic ?? t.subject}`} • \`${t.id}\``,
       inline: false,
     })),
     color: "INFO",

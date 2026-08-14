@@ -162,6 +162,7 @@ export const snapshotJobRepository = {
       capturedAt: new Date(snapshot.capturedAt),
       source: snapshot.source,
       eventId: snapshot.eventId,
+      skyblockLevel: snapshot.skyblockLevel,
       networth: toBigInt(snapshot.networth),
       skillAverage: snapshot.skillAverage,
       catacombsLevel: snapshot.catacombsLevel,
@@ -182,6 +183,7 @@ export const snapshotJobRepository = {
       orderBy: { capturedAt: "desc" },
       take: 2,
       select: {
+        skyblockLevel: true,
         networth: true,
         skillAverage: true,
         catacombsLevel: true,
@@ -190,6 +192,7 @@ export const snapshotJobRepository = {
       },
     });
     return rows.map((r) => ({
+      skyblockLevel: r.skyblockLevel,
       networth: toNumber(r.networth),
       skillAverage: r.skillAverage,
       catacombsLevel: r.catacombsLevel,

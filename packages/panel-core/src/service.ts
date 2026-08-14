@@ -28,9 +28,12 @@ import type {
   InfractionDTO,
   MilestoneDefinitionDTO,
   MilestoneDefinitionService,
+  TicketCategoryDTO,
   TicketConfigService,
-  TicketPanelConfigDTO,
-  TicketTypeDTO,
+  TicketDTO,
+  TicketPanelDTO,
+  TicketSettingsDTO,
+  TicketTagDTO,
   WordlistRuleDTO,
   WordlistService,
   ModerationActionDTO,
@@ -81,7 +84,6 @@ import type {
   MembershipStats,
   PanelEvent,
   PanelReads,
-  PanelTicket,
   RollupPeriod,
   RollupPoint,
   ServiceHeartbeat,
@@ -381,13 +383,21 @@ export interface TicketsVM {
   /** False when no ticket-config service is wired; the page then says so. */
   readonly installed: boolean;
   /**
-   * Every type in effect — the built-ins with the guild's own rows layered over
-   * them, each flagged with which it is, so the client knows an edit to a
-   * built-in is a create rather than an update.
+   * Per-guild behaviour — colours, archiving, the auto-close clock. Filled in
+   * with defaults when it has never been configured; null for a reader who may
+   * work the queue but not configure it.
    */
-  readonly types: readonly TicketTypeDTO[];
-  /** Panel content, filled in with defaults when it has never been configured. */
-  readonly panel: TicketPanelConfigDTO | null;
+  readonly settings: TicketSettingsDTO | null;
+  /**
+   * Every category the guild has, in menu order, disabled ones included and
+   * flagged. There are no built-ins underneath: the five former enum values are
+   * seeded as ordinary rows, so a guild that deleted one has deleted it.
+   */
+  readonly categories: readonly TicketCategoryDTO[];
+  /** Every panel, published or not. Publishing is an explicit action. */
+  readonly panels: readonly TicketPanelDTO[];
+  /** Canned replies and their auto-response patterns. */
+  readonly tags: readonly TicketTagDTO[];
   /**
    * Tickets still waiting on a human, newest first.
    *
@@ -395,7 +405,7 @@ export interface TicketsVM {
    * guild's own rows, and a deployment that stopped offering new ticket types
    * still has the open ones somebody has to answer.
    */
-  readonly open: readonly PanelTicket[];
+  readonly open: readonly TicketDTO[];
   /**
    * Whether this reader may edit the menu, as opposed to work the queue.
    *
@@ -928,11 +938,27 @@ export class PanelService {
     const canConfigure = rankOfRole(access.role) >= rankOfRole("ADMIN");
 
     if (tickets === undefined || !canConfigure) {
-      return { access, data: { installed: tickets !== undefined, types: [], panel: null, open, canConfigure } };
+      return {
+        access,
+        data: {
+          installed: tickets !== undefined,
+          settings: null,
+          categories: [],
+          panels: [],
+          tags: [],
+          open,
+          canConfigure,
+        },
+      };
     }
 
-    const [types, panel] = await Promise.all([tickets.listTypes(guildId), tickets.getPanel(guildId)]);
-    return { access, data: { installed: true, types, panel, open, canConfigure } };
+    const [settings, categories, panels, tags] = await Promise.all([
+      tickets.getSettings(guildId),
+      tickets.listCategories(guildId),
+      tickets.listPanels(guildId),
+      tickets.listTags(guildId),
+    ]);
+    return { access, data: { installed: true, settings, categories, panels, tags, open, canConfigure } };
   }
 
   /**

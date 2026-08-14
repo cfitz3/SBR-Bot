@@ -16,6 +16,7 @@ Discord-OAuth web control panel all sharing one typed domain core.
 [Web panel](./docs/WEB_PANEL.md) ·
 [Workers](./docs/WORKERS.md) ·
 [Analytics](./docs/ANALYTICS.md) ·
+[Embed style](./docs/EMBED_STYLE.md) ·
 [Redis keyspace](./docs/REDIS_KEYSPACE.md) ·
 [Integrations](./docs/INTEGRATIONS.md)
 

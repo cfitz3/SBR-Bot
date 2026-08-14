@@ -3,8 +3,9 @@
  * gate → destructive-confirmation gate → handler. Role/rank and per-action
  * guards are enforced here and (authoritatively) in the ModerationService.
  */
+import { copy } from "@sbr/brand";
 import { rankOf } from "@sbr/moderation";
-import { isUpstreamUnavailable, UPSTREAM_UNAVAILABLE_MESSAGE, type MemberRole } from "@sbr/shared-types";
+import { isUpstreamUnavailable, type MemberRole } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type {
   AdminAutocompleteContext,
@@ -14,6 +15,9 @@ import type {
   AdminReply,
   RoleResolver,
 } from "./types.js";
+
+/** Resolved and frozen at import, so a module-level read is safe. */
+const E = copy.error;
 
 /**
  * Reads the guild's configured floor for one command.
@@ -77,7 +81,7 @@ export class AdminDispatcher {
 
   async dispatch(name: string, ctx: AdminContext): Promise<AdminReply> {
     const spec = this.d.registry.get(name);
-    if (!spec) return { ephemeral: true, text: `Unknown command: ${name}` };
+    if (!spec) return { ephemeral: true, text: E.command.unknown.replace("{name}", name) };
 
     // The floor is the handler's own unless the guild has raised or lowered it
     // on the panel. Resolved before the actor's role so a denial message quotes
@@ -89,16 +93,14 @@ export class AdminDispatcher {
       return {
         ephemeral: true,
         text:
-          actorRole === null
-            ? "You are not recorded as a member of this guild."
-            : `That command requires ${need} or higher.`,
+          actorRole === null ? E.command.notAMember : E.command.roleTooLow.replace("{role}", need),
       };
     }
 
     if (spec.destructive && ctx.args.getBoolean("confirm") !== true) {
       return {
         ephemeral: true,
-        text: `⚠️ /${name} is destructive. Re-run with confirm:true to proceed.`,
+        text: E.command.confirmRequired.replace("{name}", name),
       };
     }
 
@@ -113,9 +115,7 @@ export class AdminDispatcher {
       // unreachable lookup never got as far as writing anything either way.
       return {
         ephemeral: true,
-        text: isUpstreamUnavailable(error)
-          ? UPSTREAM_UNAVAILABLE_MESSAGE
-          : "That action failed unexpectedly — nothing was changed.",
+        text: isUpstreamUnavailable(error) ? E.generic.upstreamDown : E.command.adminFailed,
       };
     }
   }

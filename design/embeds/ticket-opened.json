@@ -1,0 +1,32 @@
+{
+  "content": "<@&847362519384756221>",
+  "embeds": [
+    {
+      "title": "Your ticket has been opened.",
+      "description": "Thanks for getting in touch! A member of staff will be with you shortly.\n\nPlease describe your issue in as much detail as you can — screenshots help.\nThis channel is private: only you and the staff team can see it.",
+      "color": 10181046,
+      "author": {
+        "name": "SBR Support",
+        "icon_url": "https://cdn.discordapp.com/embed/avatars/0.png"
+      },
+      "thumbnail": {
+        "url": "https://crafatar.com/avatars/00000000-0000-0000-0000-000000000000"
+      },
+      "image": {
+        "url": "https://example.invalid/banner.png"
+      },
+      "fields": [
+        { "name": "Ticket", "value": "#0142", "inline": true },
+        { "name": "Category", "value": "Application", "inline": true },
+        { "name": "Opened by", "value": "847362519384756000", "inline": true },
+        { "name": "Waiting since", "value": "Just now", "inline": true },
+        { "name": "What happens next", "value": "Staff claim | reply | close", "inline": false }
+      ],
+      "footer": {
+        "text": "Tickets are archived when closed and a transcript is sent to you by DM. If your DMs are closed the transcript stays available in the panel.",
+        "icon_url": "https://cdn.discordapp.com/embed/avatars/1.png"
+      },
+      "timestamp": "2026-08-13T18:00:00.000Z"
+    }
+  ]
+}

@@ -8,19 +8,21 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { copy } from "@sbr/brand";
 import { CONFIG_CHANNEL_SLOTS } from "@sbr/shared-types";
-import { CHANNEL_SLOT_COPY } from "./channel-slots.js";
+import { CHANNEL_SLOT_ORDER } from "./channel-slots.js";
 
 test("the page renders exactly the slots the platform defines, in registry order", () => {
-  assert.deepEqual(
-    CHANNEL_SLOT_COPY.map((s) => s.slot),
-    [...CONFIG_CHANNEL_SLOTS],
-  );
+  assert.deepEqual([...CHANNEL_SLOT_ORDER], [...CONFIG_CHANNEL_SLOTS]);
 });
 
 test("every slot carries copy someone can act on", () => {
-  for (const { slot, label, hint } of CHANNEL_SLOT_COPY) {
-    assert.ok(label.length > 0, `${slot} has no label`);
-    assert.ok(hint.length > 20, `${slot}'s hint says too little`);
+  // The words come from the brand layer now, so this reads the resolved table
+  // rather than the page: an override that empties a hint is as broken as a
+  // default that never had one.
+  for (const slot of CHANNEL_SLOT_ORDER) {
+    const entry = copy.panel.channelSlot[slot];
+    assert.ok(entry.label.length > 0, `${slot} has no label`);
+    assert.ok(entry.hint.length > 20, `${slot}'s hint says too little`);
   }
 });

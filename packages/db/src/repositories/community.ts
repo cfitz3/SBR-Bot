@@ -17,11 +17,11 @@ import type {
   NewTicket,
   RSVPState,
   RsvpEntryDTO,
-  TicketDTO,
 } from "@sbr/shared-types";
-import type { LfgInsert, LfgPatch } from "@sbr/community";
+import type { LfgInsert, LfgPatch, TicketPatch } from "@sbr/community";
 import { prisma } from "../client.js";
 import { ticketConfigRepository } from "./ticket-config.js";
+import { ticketRepository } from "./tickets.js";
 
 interface EventRsvpInfo {
   status: EventStatus;
@@ -96,32 +96,6 @@ function toLfgDTO(r: {
     permGroupId: r.permGroupId,
     closedAt: r.closedAt ? r.closedAt.toISOString() : null,
     closedByDiscordId: r.closedByDiscordId,
-  };
-}
-
-function toTicketDTO(r: {
-  id: string;
-  guildId: string;
-  openerDiscordId: string;
-  assigneeDiscordId: string | null;
-  category: string;
-  status: string;
-  subject: string | null;
-  closeReason: string | null;
-  createdAt: Date;
-  closedAt: Date | null;
-}): TicketDTO {
-  return {
-    id: r.id,
-    guildId: r.guildId,
-    openerDiscordId: r.openerDiscordId,
-    assigneeDiscordId: r.assigneeDiscordId,
-    category: r.category as TicketDTO["category"],
-    status: r.status as TicketDTO["status"],
-    subject: r.subject,
-    closeReason: r.closeReason,
-    createdAt: r.createdAt.toISOString(),
-    closedAt: r.closedAt ? r.closedAt.toISOString() : null,
   };
 }
 
@@ -354,53 +328,33 @@ export const communityRepository = {
     return row ? toLfgDTO(row) : null;
   },
 
-  // ─────────────────────────────── Tickets ───────────────────────────────
+  // Tickets are delegated wholesale to `ticketRepository`, which owns the
+  // per-guild number allocation and the transcript store. Two mappers for one
+  // table would let the panel and the bots disagree about what a ticket is.
 
-  async createTicket(input: NewTicket): Promise<TicketDTO> {
-    const row = await prisma.ticket.create({
-      data: {
-        guildId: input.guildId,
-        openerDiscordId: input.openerDiscordId,
-        category: input.category,
-        subject: input.subject ?? null,
-        channelId: input.channelId ?? null,
-      },
-    });
-    return toTicketDTO(row);
-  },
+  createTicket: (input: NewTicket) =>
+    ticketRepository.create({
+      guildId: input.guildId,
+      openerDiscordId: input.openerDiscordId,
+      categoryId: input.categoryId,
+      topic: input.topic ?? null,
+      answers: input.answers ?? {},
+      channelId: input.channelId ?? null,
+    }),
 
-  async getTicket(ticketId: string): Promise<TicketDTO | null> {
-    const row = await prisma.ticket.findUnique({ where: { id: ticketId } });
-    return row ? toTicketDTO(row) : null;
-  },
+  getTicket: (ticketId: string) => ticketRepository.byId(ticketId),
 
-  async closeTicket(ticketId: string, actorDiscordId: string, reason: string | null): Promise<TicketDTO | null> {
-    const row = await prisma.ticket
-      .update({
-        where: { id: ticketId },
-        data: { status: "CLOSED", closeReason: reason, closedAt: new Date(), assigneeDiscordId: actorDiscordId },
-      })
-      .catch(() => null);
-    return row ? toTicketDTO(row) : null;
-  },
+  getTicketByChannel: (channelId: string) => ticketRepository.byChannel(channelId),
 
-  async listTickets(guildId: string, openerDiscordId?: string): Promise<readonly TicketDTO[]> {
-    const rows = await prisma.ticket.findMany({
-      where: {
-        guildId,
-        status: { in: ["OPEN", "PENDING"] },
-        ...(openerDiscordId === undefined ? {} : { openerDiscordId }),
-      },
-      orderBy: { createdAt: "desc" },
-      take: 25,
-    });
-    return rows.map(toTicketDTO);
-  },
+  patchTicket: (ticketId: string, patch: TicketPatch) => ticketRepository.patch(ticketId, patch),
 
-  // Delegated rather than inlined: the same list backs the panel editor, and
-  // two queries that merged the built-ins differently would let a member open a
-  // type the editor says is switched off.
-  listTicketTypes: (guildId: string) => ticketConfigRepository.listTypes(guildId),
+  listTickets: (guildId: string, openerDiscordId?: string) =>
+    ticketRepository.listOpen(guildId, openerDiscordId),
+
+  // Delegated rather than inlined: the same list backs the panel editor and the
+  // member's menu, and two queries that ordered or filtered differently would
+  // let a member open a category the editor says is switched off.
+  listTicketCategories: (guildId: string) => ticketConfigRepository.listCategories(guildId),
 
   // ───────────────────────────── Applications ─────────────────────────────
 

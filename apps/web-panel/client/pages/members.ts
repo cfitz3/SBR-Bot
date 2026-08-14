@@ -29,25 +29,29 @@ import {
   person,
   spinner,
   statTile,
+  type EmptyContext,
 } from "../components.js";
+import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
 import { actionButton, selectField, statusSlot } from "../forms.js";
 import { count, relativeTime } from "../format.js";
 
-/** Assignable tiers, mirroring `ASSIGNABLE_ROLES` in the mutation layer. */
-const ROLES: readonly (readonly [string, string])[] = [
-  ["MEMBER", "Member"],
-  ["MODERATOR", "Moderator"],
-  ["OFFICER", "Officer"],
-  ["ADMIN", "Admin"],
-];
+const t = scope("members");
+const c = scope("common");
 
-const TABS: readonly (readonly [DirectorySide, string])[] = [
-  ["all", "All"],
-  ["discord", "Discord only"],
-  ["game", "In-game only"],
-  ["unlinked", "Unlinked"],
-];
+/**
+ * Assignable tiers, mirroring `ASSIGNABLE_ROLES` in the mutation layer.
+ *
+ * The list is structure — which tiers may be handed out — and the words come
+ * from the copy layer, so a guild that calls officers something else changes one
+ * key rather than the dropdown's meaning.
+ */
+const ROLES = ["MEMBER", "MODERATOR", "OFFICER", "ADMIN"] as const;
+
+const TABS = ["all", "discord", "game", "unlinked"] as const satisfies readonly DirectorySide[];
+
+const roleOptions = (): readonly (readonly [string, string])[] =>
+  ROLES.map((value) => [value, t("role")[value]] as const);
 
 /** Kept across tab switches, like the analytics window. */
 const state: { q: string; side: DirectorySide } = { q: "", side: "all" };
@@ -56,7 +60,7 @@ const state: { q: string; side: DirectorySide } = { q: "", side: "all" };
 const SEARCH_DEBOUNCE_MS = 250;
 
 export async function renderMembers(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading members…"));
+  replace(host, spinner("members"));
 
   const query = new URLSearchParams({ q: state.q, side: state.side });
   const result = await loadPage<MembersVM>(
@@ -74,9 +78,9 @@ export async function renderMembers(host: HTMLElement, guildId: string): Promise
     class: "control control-text",
     type: "search",
     value: state.q,
-    placeholder: "Search by name, IGN, rank, Discord id or uuid",
+    placeholder: t("searchPlaceholder"),
     autocomplete: "off",
-    "aria-label": "Search members",
+    "aria-label": t("searchLabel"),
   }) as HTMLInputElement;
   let timer = 0;
   search.addEventListener("input", () => {
@@ -87,14 +91,14 @@ export async function renderMembers(host: HTMLElement, guildId: string): Promise
 
   const tabs = h(
     "div",
-    { class: "tabs", role: "tablist", "aria-label": "Member filter" },
-    ...TABS.map(([side, label]) => {
+    { class: "tabs", role: "tablist", "aria-label": t("filterLabel") },
+    ...TABS.map((side) => {
       const button = h("button", {
         type: "button",
         class: "tab",
         role: "tab",
         "aria-selected": side === state.side ? "true" : "false",
-      }, label);
+      }, t("tab")[side]);
       button.addEventListener("click", () => {
         if (side === state.side) return;
         state.side = side;
@@ -109,26 +113,27 @@ export async function renderMembers(host: HTMLElement, guildId: string): Promise
   // actually left to chase.
   const linkedNote =
     data.discordCount === 0
-      ? "No Discord roster yet"
-      : `${Math.round((data.linkedCount / data.discordCount) * 100)}% of the server · ${count(
-          data.linkedCount,
-        )}/${count(data.discordCount)}`;
+      ? t("noDiscordRoster")
+      : t("linkedNote")
+          .replace("{pct}", String(Math.round((data.linkedCount / data.discordCount) * 100)))
+          .replace("{linked}", count(data.linkedCount))
+          .replace("{total}", count(data.discordCount));
 
   replace(
     host,
     h(
       "div",
       {},
-      pageTitle("Members", `${count(data.rows.length)} shown`),
+      pageTitle(t("title"), t("subtitle").replace("{count}", count(data.rows.length))),
       h(
         "div",
         { class: "tiles" },
-        statTile("Discord members", count(data.discordCount), scanNote(data.scannedAt.discord)),
-        statTile("Guild members", count(data.guildCount), scanNote(data.scannedAt.hypixel)),
-        statTile("Linked", count(data.linkedCount), linkedNote),
+        statTile(t("tileDiscord"), count(data.discordCount), scanNote(data.scannedAt.discord)),
+        statTile(t("tileGuild"), count(data.guildCount), scanNote(data.scannedAt.hypixel)),
+        statTile(t("tileLinked"), count(data.linkedCount), linkedNote),
       ),
       card(
-        "Roster",
+        t("cardRoster"),
         h(
           "div",
           {},
@@ -143,7 +148,7 @@ export async function renderMembers(host: HTMLElement, guildId: string): Promise
                   ? h(
                       "p",
                       { class: "note" },
-                      "More members matched than fit on one page. Narrow the search to see the rest.",
+                      t("truncated"),
                     )
                   : null,
               ),
@@ -158,20 +163,20 @@ export async function renderMembers(host: HTMLElement, guildId: string): Promise
  * rather than presenting a stale count as current.
  */
 function scanNote(at: string | null): string {
-  return at === null ? "Never scanned" : `Scanned ${relativeTime(at)}`;
+  return at === null ? t("neverScanned") : t("scanned").replace("{when}", relativeTime(at));
 }
 
-function emptyMessage(data: MembersVM): string {
-  if (data.q.length > 0) return "Nobody matches that search.";
+function emptyMessage(data: MembersVM): EmptyContext {
+  if (data.q.length > 0) return "membersSearch";
   switch (data.side) {
     case "discord":
-      return "Everyone in the server has a linked account.";
+      return "membersDiscord";
     case "game":
-      return "Everyone in the guild is linked to somebody in the server.";
+      return "membersGame";
     case "unlinked":
-      return "Everyone on both rosters is linked.";
+      return "membersUnlinked";
     default:
-      return "No members on record yet. They appear as the roster scans run.";
+      return "membersNone";
   }
 }
 
@@ -194,7 +199,15 @@ function membersTable(
         h(
           "tr",
           {},
-          ...["Member", "Minecraft", "Link", "Guild rank", "Weekly GEXP", "Platform role", ""].map(
+          ...[
+            t("colMember"),
+            t("colMinecraft"),
+            t("colLink"),
+            t("colGuildRank"),
+            t("colWeeklyGexp"),
+            t("colRole"),
+            "",
+          ].map(
             (label) => h("th", { scope: "col" }, label),
           ),
         ),
@@ -214,13 +227,13 @@ function memberRow(guildId: string, member: DirectoryMemberRow, rerender: () => 
   // precisely what someone came to this tab to find.
   const role =
     discordId === null
-      ? h("span", { class: "muted" }, "—")
+      ? h("span", { class: "muted" }, c("dash"))
       : member.role === "OWNER"
-        ? badge("owner", "neutral")
+        ? badge(t("role").OWNER, "neutral")
         : selectField({
-            ariaLabel: `Platform role for ${member.username ?? discordId}`,
-            value: ROLES.some(([value]) => value === member.role) ? (member.role ?? "MEMBER") : "MEMBER",
-            options: ROLES,
+            ariaLabel: t("roleLabel").replace("{name}", member.username ?? discordId),
+            value: ROLES.some((value) => value === member.role) ? (member.role ?? "MEMBER") : "MEMBER",
+            options: roleOptions(),
             save: (next) => postAction(guildId, "member.role", { discordId, role: next }),
           });
 
@@ -228,9 +241,9 @@ function memberRow(guildId: string, member: DirectoryMemberRow, rerender: () => 
     discordId === null || member.uuid === null
       ? null
       : actionButton({
-          label: "Unlink",
+          label: t("unlink"),
           tone: "danger",
-          confirm: "Confirm unlink",
+          confirm: t("unlinkConfirm"),
           // Only a real link can be detached; an unlinked row's uuid, if it has
           // one, belongs to the in-game side and nothing joins them.
           ...(member.linked ? {} : { disabled: true }),
@@ -247,18 +260,18 @@ function memberRow(guildId: string, member: DirectoryMemberRow, rerender: () => 
       "td",
       {},
       discordId === null
-        ? h("span", { class: "muted" }, "Not in Discord")
-        : person(member.nickname ?? member.username ?? "unknown", h("code", {}, discordId)),
+        ? h("span", { class: "muted" }, t("notInDiscord"))
+        : person(member.nickname ?? member.username ?? t("unknownName"), h("code", {}, discordId)),
     ),
     h(
       "td",
       {},
-      member.ign ?? (member.uuid === null ? "—" : "unknown name"),
+      member.ign ?? (member.uuid === null ? c("dash") : t("unknownIgn")),
       member.uuid ? h("div", {}, h("code", { class: "muted" }, member.uuid)) : null,
     ),
-    h("td", {}, member.linked ? badge("linked", "ok") : badge("unlinked", "warn")),
-    h("td", {}, member.guildRank ?? "—"),
-    h("td", {}, member.weeklyGexp === null ? "—" : count(member.weeklyGexp)),
+    h("td", {}, member.linked ? badge(t("linked"), "ok") : badge(t("unlinked"), "warn")),
+    h("td", {}, member.guildRank ?? c("dash")),
+    h("td", {}, member.weeklyGexp === null ? c("dash") : count(member.weeklyGexp)),
     h("td", {}, role),
     h("td", {}, h("div", { class: "row-actions" }, unlink, status.el)),
   );

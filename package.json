@@ -3,20 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "SBR Guild Platform \u2014 Hypixel Skyblock community bots + web control panel (monorepo)",
+  "description": "SBR Guild Platform — Hypixel Skyblock community bots + web control panel (monorepo)",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=20"
   },
   "workspaces": [
     "packages/*",
-    "apps/*"
+    "apps/*",
+    "brand"
   ],
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "start": "node scripts/start.mjs",
     "dev": "node scripts/start.mjs --watch",
     "doctor": "node scripts/doctor.mjs",
+    "embeds": "node scripts/embeds.mjs",
     "skykings:probe": "node scripts/skykings-probe.mjs",
     "start:workers": "node scripts/start.mjs workers",
     "start:web-panel": "node scripts/start.mjs web-panel",
@@ -38,7 +40,8 @@
     "clean": "tsc -b --clean && node -e \"require('fs').rmSync('node_modules/.cache',{recursive:true,force:true})\"",
     "test": "npm run build && npm run test --workspaces --if-present && npm run test:scripts",
     "test:scripts": "node --test \"scripts/*.test.mjs\"",
-    "healthcheck": "npm run healthcheck -w @sbr/app-workers --if-present"
+    "healthcheck": "npm run healthcheck -w @sbr/app-workers --if-present",
+    "brand": "node scripts/brand.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

@@ -14,6 +14,7 @@ import type {
   SafetyStatusDTO,
   WordlistRuleDTO,
 } from "@sbr/shared-types";
+import { padInlineRow } from "@sbr/shared-types";
 import { describeState, punishmentState } from "@sbr/moderation";
 
 /** Discord renders `<t:…:R>` as a live relative timestamp in the reader's locale. */
@@ -203,7 +204,10 @@ export function renderSafetyStatusEmbed(status: SafetyStatusDTO): EmbedView {
 export function renderApplicationEmbed(app: ApplicationDTO): EmbedView {
   return {
     title: `Application ${app.id}`,
-    fields: [
+    // Padded: a reviewed application carries a fourth inline field and an
+    // unreviewed one does not, so the row ends short exactly when somebody has
+    // acted on it — the card most likely to be read.
+    fields: padInlineRow([
       { name: "Applicant", value: `<@${app.applicantDiscordId}>`, inline: true },
       { name: "Status", value: app.status.toLowerCase(), inline: true },
       { name: "Submitted", value: app.submittedAt === null ? "—" : relativeTs(app.submittedAt), inline: true },
@@ -211,7 +215,7 @@ export function renderApplicationEmbed(app: ApplicationDTO): EmbedView {
         ? []
         : [{ name: "Reviewer", value: `<@${app.reviewerDiscordId}>`, inline: true }]),
       ...(app.decisionReason == null ? [] : [{ name: "Reason", value: app.decisionReason, inline: false }]),
-    ],
+    ]),
     color: app.status === "ACCEPTED" ? "SUCCESS" : app.status === "REJECTED" ? "DANGER" : "INFO",
   };
 }

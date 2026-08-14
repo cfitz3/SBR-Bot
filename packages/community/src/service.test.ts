@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ApplicationDTO, EventDTO, LFGPostDTO, MemberSummaryDTO, RSVPState, TicketDTO } from "@sbr/shared-types";
+import type { ApplicationDTO, EventDTO, LFGPostDTO, MemberSummaryDTO, RSVPState, TicketActor, TicketDTO } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { CommunityServiceImpl } from "./service.js";
 import type { CommunityRepository, EventRsvpInfo, LfgInsert, LfgPatch, PermRosterLookup } from "./ports.js";
@@ -28,11 +28,19 @@ function aPost(over: Partial<LFGPostDTO> = {}): LFGPostDTO {
 
 function aTicket(over: Partial<TicketDTO> = {}): TicketDTO {
   return {
-    id: "t1", guildId: "g1", openerDiscordId: "111", assigneeDiscordId: null, category: "SUPPORT",
-    status: "OPEN", subject: null, closeReason: null, createdAt: "2026-08-01T00:00:00.000Z", closedAt: null,
+    id: "t1", guildId: "g1", number: 1, openerDiscordId: "111", assigneeDiscordId: null,
+    categoryId: "cat1", categoryKey: "support", categoryName: "Support",
+    status: "OPEN", channelId: null, subject: null, topic: null,
+    claimedByDiscordId: null, claimedAt: null,
+    closeRequestedByDiscordId: null, closeRequestedAt: null,
+    lastMessageAt: null, firstStaffReplyAt: null, feedbackRating: null, transcriptReady: false,
+    closeReason: null, createdAt: "2026-08-01T00:00:00.000Z", closedAt: null,
     ...over,
   };
 }
+
+/** Staff, unless a test says otherwise — the close/claim paths are staff paths. */
+const staff = (discordId = "111"): TicketActor => ({ discordId, isStaff: true });
 
 function anApplication(over: Partial<ApplicationDTO> = {}): ApplicationDTO {
   return {
@@ -97,11 +105,33 @@ function repo(over: Partial<CommunityRepository> = {}): Fake {
         return aPost({ status: "CLOSED", closedByDiscordId, closedAt: closedAt.toISOString() });
       },
       async bindLfgMessage(_postId, channelId, messageId) { return aPost({ channelId, messageId }); },
-      async createTicket(input) { return aTicket({ ...input, subject: input.subject ?? null }); },
+      async createTicket(input) { return aTicket({ ...input, topic: input.topic ?? null }); },
       async getTicket() { return null; },
-      async closeTicket() { return aTicket({ status: "CLOSED" }); },
+      async getTicketByChannel() { return null; },
+      async patchTicket(_id, patch) {
+        // The patch carries `Date`s where the DTO carries ISO strings — the same
+        // conversion the real repository does, so the stub answers in the shape
+        // callers actually see.
+        const iso = (d: Date | null | undefined): string | null => (d == null ? null : d.toISOString());
+        return aTicket({
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+          ...(patch.assigneeDiscordId !== undefined ? { assigneeDiscordId: patch.assigneeDiscordId } : {}),
+          ...(patch.claimedByDiscordId !== undefined ? { claimedByDiscordId: patch.claimedByDiscordId } : {}),
+          ...(patch.claimedAt !== undefined ? { claimedAt: iso(patch.claimedAt) } : {}),
+          ...(patch.closeRequestedByDiscordId !== undefined
+            ? { closeRequestedByDiscordId: patch.closeRequestedByDiscordId }
+            : {}),
+          ...(patch.closeRequestedAt !== undefined ? { closeRequestedAt: iso(patch.closeRequestedAt) } : {}),
+          ...(patch.topic !== undefined ? { topic: patch.topic } : {}),
+          ...(patch.closeReason !== undefined ? { closeReason: patch.closeReason } : {}),
+          ...(patch.closedAt !== undefined ? { closedAt: iso(patch.closedAt) } : {}),
+          ...(patch.lastMessageAt !== undefined ? { lastMessageAt: iso(patch.lastMessageAt) } : {}),
+          ...(patch.firstStaffReplyAt !== undefined ? { firstStaffReplyAt: iso(patch.firstStaffReplyAt) } : {}),
+          ...(patch.transcriptReady !== undefined ? { transcriptReady: patch.transcriptReady } : {}),
+        });
+      },
       async listTickets() { return []; },
-      async listTicketTypes() { return []; },
+      async listTicketCategories() { return []; },
       async getApplication() { return null; },
       async decideApplication(_id, status, reviewer, reason) {
         return anApplication({ status, reviewerDiscordId: reviewer, decisionReason: reason });
@@ -467,19 +497,19 @@ test("binding a post that no longer exists is not found", async () => {
 
 test("closing an open ticket succeeds", async () => {
   const f = repo({ async getTicket() { return aTicket(); } });
-  const r = await svcOf(f).closeTicket("t1", "111", "sorted");
+  const r = await svcOf(f).closeTicket("t1", staff(), "sorted");
   assert.equal(r.ok && r.value.status, "CLOSED");
 });
 
 test("closing an already-closed ticket fails", async () => {
   const f = repo({ async getTicket() { return aTicket({ status: "CLOSED" }); } });
-  const r = await svcOf(f).closeTicket("t1", "111", null);
+  const r = await svcOf(f).closeTicket("t1", staff(), null);
   assert.equal(r.ok, false);
   if (!r.ok) assert.equal(r.error.kind, "ALREADY_CLOSED");
 });
 
 test("closing a missing ticket fails", async () => {
-  const r = await svcOf(repo()).closeTicket("nope", "111", null);
+  const r = await svcOf(repo()).closeTicket("nope", staff(), null);
   assert.equal(r.ok, false);
   if (!r.ok) assert.equal(r.error.kind, "NOT_FOUND");
 });

@@ -68,28 +68,18 @@ export interface StatsSourceDeps {
   readonly skykings?: SkykingsClient;
 }
 
-/**
- * Skyblock level, from the profile's leveling XP. 100 XP to a level, and the
- * section is absent whenever the applicant hides it.
- */
-function skyblockLevel(rawMember: unknown): number | null {
-  if (rawMember === null || typeof rawMember !== "object") return null;
-  const leveling = (rawMember as Record<string, unknown>)["leveling"];
-  if (leveling === null || typeof leveling !== "object") return null;
-  const xp = (leveling as Record<string, unknown>)["experience"];
-  return typeof xp === "number" && Number.isFinite(xp) ? Math.floor(xp / 100) : null;
-}
-
 export function applicantStatsSource(deps: StatsSourceDeps): ApplicantStatsSource {
   const log = deps.logger.child({ component: "screening-stats" });
 
   return {
     async read(uuid: string): Promise<ApplicantStats> {
-      const [player, summary, networth, profiles, tracked] = await Promise.all([
+      // Four calls, not five: SkyBlock Level used to cost a dedicated
+      // `getSkyblockProfiles` fetch here purely to reach `leveling.experience`.
+      // It is on the summary now, parsed from the blob that call already had.
+      const [player, summary, networth, tracked] = await Promise.all([
         deps.hypixel.getPlayer(uuid),
         deps.progression.getProfileSummary(uuid),
         deps.progression.getNetworth(uuid),
-        deps.hypixel.getSkyblockProfiles(uuid),
         deps.skykings ? deps.skykings.getPlayer(uuid) : Promise.resolve(null),
       ]);
 
@@ -97,13 +87,12 @@ export function applicantStatsSource(deps: StatsSourceDeps): ApplicantStatsSourc
 
       // Hypixel first.
       const profile = summary.ok ? summary.value.data : null;
-      const selected = profiles.ok ? (profiles.value.data.find((p) => p.selected) ?? profiles.value.data[0]) : null;
 
       let skillAverage = profile?.skillAverage ?? null;
       let catacombsLevel = profile?.catacombsLevel ?? null;
       let senitherWeight = profile?.senitherWeight ?? null;
       let coins = networth.ok && networth.value.data.total !== null ? BigInt(Math.round(networth.value.data.total)) : null;
-      const level = selected ? skyblockLevel(selected.member) : null;
+      const level = profile?.skyblockLevel ?? null;
 
       // A section Hypixel refused is recorded as such: it is the difference
       // between "they have no dungeon progress" and "we cannot see it".

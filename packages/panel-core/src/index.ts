@@ -96,7 +96,6 @@ export type {
   RollupPeriod,
   CommandUsageStat,
   PanelEvent,
-  PanelTicket,
   JobHealth,
   HeartbeatReader,
   ServiceHeartbeat,

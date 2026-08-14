@@ -18,7 +18,7 @@ import {
   type MilestoneDefinitionDTO,
   type MilestoneDefinitionService,
   type TicketConfigService,
-  type TicketTypeDTO,
+  type TicketSettingsDTO,
   type WordlistError,
   type WordlistRuleDTO,
   type WordlistService,
@@ -33,6 +33,7 @@ import { ROLE_POLICY_SETTING_KEY } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import type { PanelSession, RoleResolver } from "./access.js";
 import type { PermissionExceptionStore } from "./reads.js";
+import type { TicketEffects } from "./mutations.js";
 import {
   MANUAL_JOB_COOLDOWN_MS,
   MUTATION_COOLDOWN_MS,
@@ -183,22 +184,102 @@ function milestoneRecorder(recorded: Recorded, removed = true): MilestoneDefinit
 
 /** Ticket configuration, recorded the same way as milestone definitions. */
 function ticketRecorder(recorded: Recorded, removed = true): TicketConfigService {
+  const settings: TicketSettingsDTO = {
+    guildId: "g1",
+    archiveEnabled: true,
+    logChannelId: null,
+    blocklistRoleIds: [],
+    primaryColor: "INFO",
+    successColor: "SUCCESS",
+    errorColor: "DANGER",
+    footer: null,
+    staleAfterMinutes: null,
+    autoCloseAfterMinutes: 720,
+    closeButton: true,
+    claimButton: true,
+    workingHours: {},
+    updatedAt: null,
+  };
   return {
-    async listTypes() { return []; },
-    async upsertType(guildId, input) {
-      recorded.calls.push({ method: "upsertTicketType", args: [guildId, input] });
-      return { ...input, id: "t1", guildId, source: "GUILD" } as TicketTypeDTO;
+    async getSettings() { return settings; },
+    async saveSettings(guildId, input) {
+      recorded.calls.push({ method: "saveTicketSettings", args: [guildId, input] });
+      return { ...settings, ...input, guildId, updatedAt: "2026-08-14T12:00:00.000Z" };
     },
-    async removeType(guildId, key) {
-      recorded.calls.push({ method: "removeTicketType", args: [guildId, key] });
+    async listCategories() { return []; },
+    async upsertCategory(guildId, input) {
+      recorded.calls.push({ method: "upsertTicketCategory", args: [guildId, input] });
+      return { ...input, id: "c1", guildId };
+    },
+    async removeCategory(guildId, key) {
+      recorded.calls.push({ method: "removeTicketCategory", args: [guildId, key] });
       return removed;
     },
-    async getPanel(guildId) {
-      return { guildId, channelId: null, messageId: null, title: "Support", description: null, updatedAt: null };
+    async listPanels(guildId) {
+      return [
+        {
+          id: "p1",
+          guildId,
+          name: "Support",
+          channelId: "123456789012345678",
+          messageId: null,
+          title: "Need a hand?",
+          description: null,
+          image: null,
+          thumbnail: null,
+          style: "BUTTONS",
+          categoryKeys: ["support"],
+          updatedAt: null,
+        },
+        // The second panel has never been given a channel, which is what
+        // `publish` has to refuse.
+        {
+          id: "p2",
+          guildId,
+          name: "Appeals",
+          channelId: null,
+          messageId: null,
+          title: "Appeal a punishment",
+          description: null,
+          image: null,
+          thumbnail: null,
+          style: "SELECT",
+          categoryKeys: ["appeal"],
+          updatedAt: null,
+        },
+      ];
     },
-    async savePanel(guildId, input) {
-      recorded.calls.push({ method: "saveTicketPanel", args: [guildId, input] });
-      return { guildId, messageId: null, updatedAt: "2026-08-07T12:00:00.000Z", ...input };
+    async upsertPanel(guildId, input, id) {
+      recorded.calls.push({ method: "upsertTicketPanel", args: [guildId, input, id ?? null] });
+      return { ...input, id: id ?? "p1", guildId, messageId: null, updatedAt: null };
+    },
+    async removePanel(guildId, id) {
+      recorded.calls.push({ method: "removeTicketPanel", args: [guildId, id] });
+      return removed;
+    },
+    async setPostedMessage() {},
+    async listTags() { return []; },
+    async upsertTag(guildId, input) {
+      recorded.calls.push({ method: "upsertTicketTag", args: [guildId, input] });
+      return { ...input, id: "tag1", guildId };
+    },
+    async removeTag(guildId, name) {
+      recorded.calls.push({ method: "removeTicketTag", args: [guildId, name] });
+      return removed;
+    },
+  };
+}
+
+/** The bot on the other end of a publish or a transcript re-send. */
+function ticketEffectsRecorder(recorded: Recorded, throws = false): TicketEffects {
+  return {
+    async publishPanel(guildId, panelId, actorDiscordId) {
+      if (throws) throw new Error("the bridge is not connected");
+      recorded.calls.push({ method: "publishPanel", args: [guildId, panelId, actorDiscordId] });
+    },
+    async resendTranscript(guildId, ticketId, actorDiscordId) {
+      if (throws) throw new Error("the bridge is not connected");
+      recorded.calls.push({ method: "resendTranscript", args: [guildId, ticketId, actorDiscordId] });
     },
   };
 }
@@ -285,7 +366,11 @@ function make(
     milestoneRemoved?: boolean;
     /** Same, for a deployment without ticketing. */
     noTickets?: boolean;
-    ticketTypeRemoved?: boolean;
+    ticketRemoved?: boolean;
+    /** Same, for a panel process with no bot on the other end of the bus. */
+    noTicketEffects?: boolean;
+    /** The bot refused the publish. */
+    ticketEffectsThrow?: boolean;
     /** Same, for a deployment without the chat filter. */
     noWordlist?: boolean;
     /** What the filter service refuses with, when it refuses. */
@@ -323,7 +408,10 @@ function make(
       : { milestones: milestoneRecorder(recorded, over.milestoneRemoved ?? true) }),
     ...(over.noTickets === true
       ? {}
-      : { tickets: ticketRecorder(recorded, over.ticketTypeRemoved ?? true) }),
+      : { tickets: ticketRecorder(recorded, over.ticketRemoved ?? true) }),
+    ...(over.noTicketEffects === true
+      ? {}
+      : { ticketEffects: ticketEffectsRecorder(recorded, over.ticketEffectsThrow === true) }),
     ...(over.noWordlist === true
       ? {}
       : {
@@ -612,7 +700,6 @@ test("junk input is refused before the config service or the audit sees it", asy
     await mutations.setFeature(session(), "g1", "lfg", "yes"),
     await mutations.setBridgeSuspended(session(), "g1", "true"),
     await mutations.setRecruitment(session(), "g1", { open: "yes" }),
-    await mutations.setRecruitment(session(), "g1", { open: true, minWeight: -1 }),
     await mutations.setSetting(session(), "g1", "Tickets Panel", {}),
     await mutations.setSetting(session(), "g1", "tickets..panel", {}),
     // A member roster's worth of JSON — a setting is a template, not a table.
@@ -628,22 +715,20 @@ test("junk input is refused before the config service or the audit sees it", asy
 });
 
 /**
- * The tri-state that RecruitmentSettings documents: omitting a threshold has to
- * leave it alone, because collapsing "unspecified" into null would wipe a
- * guild's entry bar every time someone toggled applications open.
+ * Recruitment is one switch now. The tri-state weight and networth bars this
+ * test used to guard are no longer requirements, so what matters is that a
+ * threshold arriving from a panel tab opened before the deploy is dropped
+ * rather than forwarded into the config write.
  */
-test("an omitted recruitment threshold is not sent as null", async () => {
+test("recruitment sends the switch alone, ignoring a retired threshold", async () => {
   const { mutations, recorded } = make();
 
   assert.equal((await mutations.setRecruitment(session(), "g1", { open: true })).ok, true);
   assert.deepEqual(recorded.calls[0]?.args, ["g1", { open: true }]);
 
-  const cleared = make();
-  await cleared.mutations.setRecruitment(session(), "g1", { open: false, minWeight: null, minNetworth: 5 });
-  assert.deepEqual(cleared.recorded.calls[0]?.args, [
-    "g1",
-    { open: false, minWeight: null, minNetworth: 5 },
-  ]);
+  const stale = make();
+  await stale.mutations.setRecruitment(session(), "g1", { open: false, minWeight: 1_200, minNetworth: 5 });
+  assert.deepEqual(stale.recorded.calls[0]?.args, ["g1", { open: false }]);
 });
 
 // ── moderation, recruitment, members ──
@@ -879,62 +964,48 @@ function policyBody(over: Record<string, unknown> = {}): Record<string, unknown>
 test("a complete policy is stored under the screening key", async () => {
   const { mutations, recorded } = make();
 
-  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minSkillAverage: 30 }));
+  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ reviewAtRisk: 30 }));
 
   assert.equal(result.ok, true);
   assert.deepEqual(recorded.calls, [
     {
       method: "setSetting",
-      args: ["g1", SCREENING_POLICY_KEY, { ...serializePolicy(DEFAULT_POLICY), minSkillAverage: 30 }],
+      args: ["g1", SCREENING_POLICY_KEY, { ...serializePolicy(DEFAULT_POLICY), reviewAtRisk: 30 }],
     },
   ]);
 });
 
-test("an unknown screening field is refused rather than ignored", async () => {
-  // The whole point of the strict write surface: `minCatacomb` accepted here
-  // would read back as "no dungeon requirement", and nothing on the page would
-  // tell the admin that apart from a working setting.
+test("a genuinely unknown screening field is refused rather than ignored", async () => {
+  // The whole point of the strict write surface: a mistyped switch accepted
+  // here would read back as its default, and nothing on the page would tell the
+  // admin that apart from a working setting.
   const { mutations, recorded } = make();
 
-  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minCatacomb: 30 }));
+  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ denyOnScamer: true }));
 
   assert.equal(result.ok, false);
   assert.equal(result.error?.kind, "INVALID_INPUT");
-  assert.match(result.error?.detail ?? "", /minCatacomb/);
+  assert.match(result.error?.detail ?? "", /denyOnScamer/);
   assert.deepEqual(recorded.calls, [], "nothing may be written when part of the payload is rejected");
 });
 
-test("a coin threshold past 2^53 keeps every digit", async () => {
-  const huge = "123456789012345678";
+test("a retired stat bar is accepted and dropped, not refused", async () => {
+  // The other half of that rule. A panel tab opened before the bars were
+  // removed still posts them; answering "unknown field: minCatacombs" would
+  // read as a bug rather than as a setting that no longer exists — so the
+  // field is discarded and the rest of the policy saves.
   const { mutations, recorded } = make();
 
-  const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minNetworth: huge }));
+  const result = await mutations.setScreeningPolicy(
+    session(),
+    "g1",
+    policyBody({ minCatacombs: 40, minNetworth: "10000000000" }),
+  );
 
   assert.equal(result.ok, true);
-  assert.equal((recorded.calls[0]?.args[2] as Record<string, unknown>)["minNetworth"], huge);
-});
-
-test("a coin threshold that is not digits is refused", async () => {
-  const { mutations, recorded } = make();
-
-  for (const bad of ["10b", "1e9", "-5", "1.5", " ", "abc", 1.5, -1]) {
-    const result = await mutations.setScreeningPolicy(session(), "g1", policyBody({ minNetworth: bad }));
-    assert.equal(result.ok, false, String(bad));
-  }
-  assert.deepEqual(recorded.calls, []);
-});
-
-test("a blank screening bar is null, not zero", async () => {
-  // Null means "do not check this". Zero is a bar everybody clears — the same
-  // outcome today, but a different instruction, and it reads differently in a
-  // report about why somebody was let in.
-  const { mutations, recorded } = make();
-
-  await mutations.setScreeningPolicy(session(), "g1", policyBody({ minSkillAverage: null, minCatacombs: 0 }));
-
   const stored = recorded.calls[0]?.args[2] as Record<string, unknown>;
-  assert.equal(stored["minSkillAverage"], null);
-  assert.equal(stored["minCatacombs"], 0);
+  assert.equal("minCatacombs" in stored, false);
+  assert.equal("minNetworth" in stored, false);
 });
 
 test("auto-accept cannot be left on with screening disabled", async () => {
@@ -993,13 +1064,13 @@ test("the screening audit records the policy in full", async () => {
   // is the question this audit exists to answer.
   const { mutations, recorded } = make();
 
-  await mutations.setScreeningPolicy(session(), "g1", policyBody({ autoAccept: true, minSkillAverage: 35 }));
+  await mutations.setScreeningPolicy(session(), "g1", policyBody({ autoAccept: true, reviewAtRisk: 35 }));
 
   assert.equal(recorded.audits.length, 1);
   assert.equal(recorded.audits[0]?.mutation, "config.screening");
   assert.equal(recorded.audits[0]?.actorDiscordId, "111");
   assert.equal(recorded.audits[0]?.change["autoAccept"], true);
-  assert.equal(recorded.audits[0]?.change["minSkillAverage"], 35);
+  assert.equal(recorded.audits[0]?.change["reviewAtRisk"], 35);
 });
 
 test("an officer cannot change the entry bar", async () => {
@@ -1288,69 +1359,113 @@ test("an officer cannot change what the guild recognises", async () => {
 
 // ── tickets ──
 
-const ticketTypeBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+const categoryBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   key: "staff-app",
-  label: "Staff application",
+  name: "Staff application",
+  description: "Apply to join the staff team.",
   emoji: null,
-  category: "APPLICATION",
-  parentChannelId: null,
-  staffRoleIds: [],
-  prompt: "Tell us why.",
   position: 3,
   enabled: true,
+  channelNameTemplate: "app-{num}",
+  parentChannelId: null,
+  staffRoleIds: [],
+  requiredRoleIds: [],
+  pingRoleIds: [],
+  openingMessage: "Thanks for applying, {name}.",
+  image: null,
+  claiming: true,
+  cooldownSeconds: null,
+  memberLimit: 1,
+  totalLimit: 50,
+  slowModeSeconds: null,
+  requireTopic: false,
+  questions: [],
   ...over,
 });
 
-test("a ticket type reaches the service whole, and the audit records it in full", async () => {
+const panelBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: null,
+  name: "Support",
+  channelId: null,
+  title: "Need a hand?",
+  description: null,
+  image: null,
+  thumbnail: null,
+  style: "BUTTONS",
+  categoryKeys: ["support"],
+  ...over,
+});
+
+const settingsBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  archiveEnabled: true,
+  logChannelId: null,
+  blocklistRoleIds: [],
+  primaryColor: "INFO",
+  successColor: "SUCCESS",
+  errorColor: "DANGER",
+  footer: null,
+  staleAfterMinutes: null,
+  autoCloseAfterMinutes: 720,
+  closeButton: true,
+  claimButton: true,
+  workingHours: {},
+  ...over,
+});
+
+test("a ticket category reaches the service whole, and the audit records it in full", async () => {
   const { mutations, recorded } = make();
 
-  const result = await mutations.upsertTicketType(session(), "g1", ticketTypeBody());
+  const result = await mutations.upsertTicketCategory(session(), "g1", categoryBody());
 
   assert.equal(result.ok, true);
-  assert.deepEqual(recorded.calls, [
-    {
-      method: "upsertTicketType",
-      args: [
-        "g1",
-        {
-          key: "staff-app",
-          label: "Staff application",
-          emoji: null,
-          category: "APPLICATION",
-          parentChannelId: null,
-          staffRoleIds: [],
-          prompt: "Tell us why.",
-          position: 3,
-          enabled: true,
-        },
-      ],
-    },
-  ]);
-  assert.equal(recorded.audits[0]?.mutation, "ticket.type.upsert");
+  assert.equal(recorded.calls.length, 1);
+  assert.equal(recorded.calls[0]?.method, "upsertTicketCategory");
+  const sent = recorded.calls[0]?.args[1] as Record<string, unknown>;
+  assert.equal(sent["key"], "staff-app");
+  assert.equal(sent["channelNameTemplate"], "app-{num}");
+  assert.equal(sent["totalLimit"], 50);
+  assert.equal(recorded.audits[0]?.mutation, "ticket.category.upsert");
   assert.equal((recorded.audits[0]?.change as Record<string, unknown>)["key"], "staff-app");
 });
 
-test("a ticket type that could never be opened is refused before it reaches the store", async () => {
+test("a category that could never be opened is refused before it reaches the store", async () => {
   const { mutations, recorded } = make();
 
   const cases: Record<string, unknown>[] = [
     { key: "Staff App" },                       // keys are lowercase and typable
     { key: "" },
-    { label: "   " },
-    { label: "x".repeat(81) },
-    { category: "BILLING" },                    // not one of the fixed categories
+    { name: "   " },
+    { name: "x".repeat(81) },
+    { description: "x".repeat(101) },           // Discord truncates a select option at 100
+    { channelNameTemplate: "  " },
     { parentChannelId: "not-a-channel" },
     { staffRoleIds: "123456789012345678" },     // a list, not one id
     { staffRoleIds: ["nope"] },
-    { staffRoleIds: Array.from({ length: 11 }, (_, i) => String(100000000000000000 + i)) },
-    { prompt: "x".repeat(501) },
+    { staffRoleIds: Array.from({ length: 26 }, (_, i) => String(100000000000000000 + i)) },
+    { openingMessage: "x".repeat(2001) },
+    { image: "http://example.com/a.png" },      // https only
     { position: -1 },
     { position: 1.5 },
     { enabled: "yes" },
+    { memberLimit: 0 },                         // "nobody may open one" is `enabled: false`
+    { totalLimit: 51 },                         // Discord holds 50 channels in a category
+    { slowModeSeconds: 21_601 },                // Discord's slow-mode ceiling is six hours
+    { questions: [{ id: "why", label: "Why?", placeholder: null, style: "ESSAY", required: true, maxLength: null }] },
+    {
+      // Six inputs; a Discord modal takes five, so the sixth would vanish.
+      questions: Array.from({ length: 6 }, (_, i) => ({
+        id: `q${i}`,
+        label: "Why?",
+        placeholder: null,
+        style: "SHORT",
+        required: true,
+        maxLength: null,
+      })),
+    },
   ];
 
   for (const [i, over] of cases.entries()) {
-    const result = await mutations.upsertTicketType(session(), "g1", ticketTypeBody(over));
+    const result = await mutations.upsertTicketCategory(session(), "g1", categoryBody(over));
     assert.equal(result.ok, false, `case ${i}`);
     assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
   }
@@ -1361,60 +1476,159 @@ test("a ticket type that could never be opened is refused before it reaches the 
 test("duplicate staff roles are stored once, so nobody is pinged twice", async () => {
   const { mutations, recorded } = make();
 
-  await mutations.upsertTicketType(
+  await mutations.upsertTicketCategory(
     session(),
     "g1",
-    ticketTypeBody({ staffRoleIds: ["123456789012345678", "123456789012345678"] }),
+    categoryBody({ staffRoleIds: ["123456789012345678", "123456789012345678"] }),
   );
 
   const input = recorded.calls[0]?.args[1] as { staffRoleIds: readonly string[] };
   assert.deepEqual(input.staffRoleIds, ["123456789012345678"]);
 });
 
-test("removing a ticket type nobody stored is a success, reported as nothing removed", async () => {
-  // The page lists built-ins next to stored rows, so "remove" on a built-in is
-  // a reasonable thing to click; the end state is already true.
-  const { mutations, recorded } = make({ ticketTypeRemoved: false });
+test("removing a category nobody stored is a success, reported as nothing removed", async () => {
+  // Two admins on the same page is the ordinary case, and the second one
+  // deserves the same "it's gone" as the first.
+  const { mutations, recorded } = make({ ticketRemoved: false });
 
-  const result = await mutations.removeTicketType(session(), "g1", "support");
+  const result = await mutations.removeTicketCategory(session(), "g1", "support");
 
   assert.equal(result.ok, true);
-  assert.deepEqual(recorded.calls, [{ method: "removeTicketType", args: ["g1", "support"] }]);
+  assert.deepEqual(recorded.calls, [{ method: "removeTicketCategory", args: ["g1", "support"] }]);
   assert.deepEqual(recorded.audits[0]?.change, { key: "support", removed: false });
 });
 
-test("the panel needs a title and a channel that could exist", async () => {
+test("a panel is held to the shape Discord will actually render", async () => {
   const { mutations, recorded } = make();
 
+  assert.equal((await mutations.upsertTicketPanel(session(), "g1", panelBody())).ok, true);
+
+  const cases: Record<string, unknown>[] = [
+    { title: " " },
+    { name: "" },
+    { channelId: "here" },
+    { style: "DROPDOWN" },
+    { categoryKeys: [] },                                     // a panel with nothing on it
+    { categoryKeys: ["support", "support"] },                 // order is content; no silent dedupe
+    // Six buttons will not fit a Discord action row.
+    { style: "BUTTONS", categoryKeys: ["a", "b", "c", "d", "e", "f"] },
+    // 26 options will not fit a Discord select menu.
+    { style: "SELECT", categoryKeys: Array.from({ length: 26 }, (_, i) => `c${i}`) },
+    { image: "ftp://example.com/a.png" },
+  ];
+  for (const [i, over] of cases.entries()) {
+    const result = await mutations.upsertTicketPanel(session(), "g1", panelBody(over));
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
+  // Five buttons and 25 options are exactly the caps, so both are accepted.
   assert.equal(
-    (await mutations.saveTicketPanel(session(), "g1", { channelId: null, title: "Support", description: null })).ok,
+    (await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: ["a", "b", "c", "d", "e"] }))).ok,
     true,
   );
-  const bad = await mutations.saveTicketPanel(session(), "g1", { channelId: "here", title: "Support", description: null });
+  assert.equal(
+    (
+      await mutations.upsertTicketPanel(
+        session(),
+        "g1",
+        panelBody({ style: "SELECT", categoryKeys: Array.from({ length: 25 }, (_, i) => `c${i}`) }),
+      )
+    ).ok,
+    true,
+  );
+  assert.equal(recorded.calls.length, 3);
+});
+
+test("publishing a panel with no channel is refused rather than reported as posted", async () => {
+  const { mutations, recorded } = make();
+
+  const posted = await mutations.publishTicketPanel(session(), "g1", "p1");
+  assert.equal(posted.ok, true);
+  assert.deepEqual(recorded.calls, [{ method: "publishPanel", args: ["g1", "p1", "111"] }]);
+
+  const unrouted = await mutations.publishTicketPanel(session(), "g1", "p2");
+  assert.equal(unrouted.error?.kind, "INVALID_INPUT");
+  const missing = await mutations.publishTicketPanel(session(), "g1", "p9");
+  assert.equal(missing.error?.kind, "INVALID_INPUT");
+  assert.equal(recorded.calls.length, 1);
+});
+
+test("with no bot connected, publishing refuses instead of claiming success", async () => {
+  // A panel that reports "published" with no message in the channel is the
+  // exact failure this rebuild exists to remove.
+  const { mutations, recorded } = make({ noTicketEffects: true });
+
+  const result = await mutations.publishTicketPanel(session(), "g1", "p1");
+
+  assert.equal(result.error?.kind, "SERVICE_ERROR");
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a tag's auto-response pattern is compiled before it is stored", async () => {
+  const { mutations, recorded } = make();
+
+  const good = await mutations.upsertTicketTag(session(), "g1", {
+    name: "refund",
+    content: "Refunds take 3 days.",
+    autoPattern: "refund|money back",
+    enabled: true,
+  });
+  assert.equal(good.ok, true);
+
+  // Unbalanced, so every message in a ticket channel would throw on it.
+  const bad = await mutations.upsertTicketTag(session(), "g1", {
+    name: "refund",
+    content: "Refunds take 3 days.",
+    autoPattern: "refund(",
+    enabled: true,
+  });
   assert.equal(bad.error?.kind, "INVALID_INPUT");
-  const untitled = await mutations.saveTicketPanel(session(), "g1", { channelId: null, title: " ", description: null });
-  assert.equal(untitled.error?.kind, "INVALID_INPUT");
+  assert.equal(recorded.calls.length, 1);
+});
+
+test("ticket settings keep null as a real answer rather than folding it into zero", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.saveTicketSettings(session(), "g1", settingsBody())).ok, true);
+  const sent = recorded.calls[0]?.args[1] as Record<string, unknown>;
+  // Null means "no stale clock". Zero would mark every ticket stale the moment
+  // it was opened, which is a different thing entirely.
+  assert.equal(sent["staleAfterMinutes"], null);
+
+  const cases: Record<string, unknown>[] = [
+    { primaryColor: "PURPLE" },
+    { autoCloseAfterMinutes: null },            // this one has no "off"
+    { autoCloseAfterMinutes: -1 },
+    { logChannelId: "here" },
+    { workingHours: { "7": { open: "09:00", close: "17:00" } } },   // there is no eighth day
+    { workingHours: { "1": { open: "9am", close: "17:00" } } },
+    { workingHours: [] },
+  ];
+  for (const [i, over] of cases.entries()) {
+    const result = await mutations.saveTicketSettings(session(), "g1", settingsBody(over));
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${i}`);
+  }
   assert.equal(recorded.calls.length, 1);
 });
 
 test("with tickets unwired, every write refuses instead of crashing the request", async () => {
   const { mutations, recorded } = make({ noTickets: true });
 
-  assert.equal((await mutations.upsertTicketType(session(), "g1", ticketTypeBody())).error?.kind, "SERVICE_ERROR");
-  assert.equal((await mutations.removeTicketType(session(), "g1", "support")).error?.kind, "SERVICE_ERROR");
-  assert.equal(
-    (await mutations.saveTicketPanel(session(), "g1", { channelId: null, title: "Support", description: null }))
-      .error?.kind,
-    "SERVICE_ERROR",
-  );
+  assert.equal((await mutations.upsertTicketCategory(session(), "g1", categoryBody())).error?.kind, "SERVICE_ERROR");
+  assert.equal((await mutations.removeTicketCategory(session(), "g1", "support")).error?.kind, "SERVICE_ERROR");
+  assert.equal((await mutations.upsertTicketPanel(session(), "g1", panelBody())).error?.kind, "SERVICE_ERROR");
+  assert.equal((await mutations.removeTicketPanel(session(), "g1", "p1")).error?.kind, "SERVICE_ERROR");
+  assert.equal((await mutations.publishTicketPanel(session(), "g1", "p1")).error?.kind, "SERVICE_ERROR");
+  assert.equal((await mutations.saveTicketSettings(session(), "g1", settingsBody())).error?.kind, "SERVICE_ERROR");
   assert.deepEqual(recorded.audits, []);
 });
 
 test("an officer cannot change what a member may open", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
 
-  assert.equal((await mutations.upsertTicketType(session(), "g1", ticketTypeBody())).access.allowed, false);
-  assert.equal((await mutations.removeTicketType(session(), "g1", "support")).access.allowed, false);
+  assert.equal((await mutations.upsertTicketCategory(session(), "g1", categoryBody())).access.allowed, false);
+  assert.equal((await mutations.removeTicketCategory(session(), "g1", "support")).access.allowed, false);
+  assert.equal((await mutations.upsertTicketPanel(session(), "g1", panelBody())).access.allowed, false);
+  assert.equal((await mutations.publishTicketPanel(session(), "g1", "p1")).access.allowed, false);
   assert.deepEqual(recorded.calls, []);
 });
 

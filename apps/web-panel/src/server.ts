@@ -12,6 +12,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createServer as createTlsServer } from "node:https";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { copy, theme } from "@sbr/brand";
 import { panelOrigin } from "@sbr/config";
 import { pingDb } from "@sbr/db";
 import { getRedis, setJson, getJson, pingRedis } from "@sbr/redis";
@@ -25,8 +26,9 @@ import {
   type RollupPeriod,
 } from "@sbr/panel-core";
 import type { PanelApp } from "./composition.js";
+import { renderShellHtml, renderThemeCss } from "./chrome.js";
 import { canManageGuild } from "./permissions.js";
-import { resolveAsset } from "./static.js";
+import { ASSET_ROOT, resolveAsset } from "./static.js";
 
 const SESSION_COOKIE = "sbr_sess";
 /**
@@ -149,6 +151,33 @@ async function serveAsset(method: string, res: ServerResponse, pathname: string)
   });
   res.end(method === "HEAD" ? undefined : body);
   return true;
+}
+
+/**
+ * The brand layer resolves at import and is frozen, so both of these are
+ * constant for the life of the process — rendered once rather than per request.
+ * Changing `brand/*.ts` needs a rebuild and a restart, which `docs/BRANDING.md`
+ * states plainly rather than pretending to hot-reload.
+ */
+const THEME_CSS = renderThemeCss(theme.panel);
+
+/** `index.html` with its `{{…}}` slots filled. Read once, on first request. */
+let shellHtml: Promise<string> | null = null;
+function loadShell(): Promise<string> {
+  shellHtml ??= readFile(new URL("index.html", ASSET_ROOT), "utf8")
+    .then((template) => renderShellHtml(template, copy.panel, theme.panel));
+  return shellHtml;
+}
+
+function sendText(res: ServerResponse, method: string, contentType: string, body: string): void {
+  const buf = Buffer.from(body, "utf8");
+  res.writeHead(200, {
+    "content-type": contentType,
+    "content-length": buf.byteLength,
+    "cache-control": "no-cache",
+    ...SECURITY_HEADERS,
+  });
+  res.end(method === "HEAD" ? undefined : buf);
 }
 
 function redirect(res: ServerResponse, location: string, cookies: readonly string[] = []): void {
@@ -307,6 +336,19 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
       return send(res, healthy ? 200 : 503, { status: healthy ? "ok" : "down", db, redis });
     }
 
+    /**
+     * The panel's own words.
+     *
+     * The browser half has no bundler, so it cannot import `@sbr/brand` — a bare
+     * specifier resolves to nothing in a page loading raw modules. It fetches
+     * this once at boot instead. Unauthenticated on purpose: these are UI labels,
+     * the sign-in screen needs them before there is a session, and they are the
+     * same for every viewer.
+     */
+    if (path === "/api/copy") {
+      return send(res, 200, { panel: copy.panel, error: copy.error });
+    }
+
     // OAuth start
     if (path === "/login") {
       if (!cfg.oauth.clientId || !cfg.oauth.redirectUri) return send(res, 503, { error: "oauth_not_configured" });
@@ -426,10 +468,35 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
       }
     }
 
+    /**
+     * The panel's own looks, as custom properties.
+     *
+     * Generated rather than a file in `public/` so `brand/theme.ts` is the only
+     * place a colour is written down. Same-origin, so `default-src 'self'`
+     * already covers it — this adds nothing to the CSP, which is the whole
+     * reason the tokens are served instead of inlined into a `<style>` block.
+     */
+    if (path === "/theme.css" && READ_METHODS.has(method)) {
+      return sendText(res, method, "text/css; charset=utf-8", THEME_CSS.css);
+    }
+
+    // The shell is a template, not a static file: its title, brand and the
+    // `noscript` line all come from the brand layer and all have to be right
+    // before any script runs.
+    if ((path === "/" || path === "/index.html") && READ_METHODS.has(method)) {
+      try {
+        return sendText(res, method, "text/html; charset=utf-8", await loadShell());
+      } catch {
+        // A client build that hasn't run yet. 404 rather than a blank 200, so
+        // the cause reads as "missing file" instead of "panel is broken".
+        return send(res, 404, { error: "not_found" });
+      }
+    }
+
     // Anything left that isn't the API is a UI asset. Checked last so a typo'd
     // API path can never be answered with the HTML shell, which would surface as
     // "the panel returns HTML where JSON was expected".
-    if (!path.startsWith("/api/") && (await serveAsset(req.method ?? "GET", res, path))) return;
+    if (!path.startsWith("/api/") && (await serveAsset(method, res, path))) return;
 
     send(res, 404, { error: "not_found" });
   }
@@ -570,12 +637,22 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.upsertMilestone(session, guildId, b));
       case "milestone.remove":
         return sendMutation(res, await m.removeMilestone(session, guildId, b["key"]));
-      case "ticket.type.upsert":
-        return sendMutation(res, await m.upsertTicketType(session, guildId, b));
-      case "ticket.type.remove":
-        return sendMutation(res, await m.removeTicketType(session, guildId, b["key"]));
-      case "ticket.panel.save":
-        return sendMutation(res, await m.saveTicketPanel(session, guildId, b));
+      case "ticket.settings.save":
+        return sendMutation(res, await m.saveTicketSettings(session, guildId, b));
+      case "ticket.category.upsert":
+        return sendMutation(res, await m.upsertTicketCategory(session, guildId, b));
+      case "ticket.category.remove":
+        return sendMutation(res, await m.removeTicketCategory(session, guildId, b["key"]));
+      case "ticket.panel.upsert":
+        return sendMutation(res, await m.upsertTicketPanel(session, guildId, b));
+      case "ticket.panel.remove":
+        return sendMutation(res, await m.removeTicketPanel(session, guildId, b["id"]));
+      case "ticket.panel.publish":
+        return sendMutation(res, await m.publishTicketPanel(session, guildId, b["id"]));
+      case "ticket.tag.upsert":
+        return sendMutation(res, await m.upsertTicketTag(session, guildId, b));
+      case "ticket.tag.remove":
+        return sendMutation(res, await m.removeTicketTag(session, guildId, b["name"]));
       case "wordlist.upsert":
         return sendMutation(res, await m.upsertWordlistRule(session, guildId, b));
       case "wordlist.delete":
@@ -622,6 +699,12 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         );
       case "ticket.close":
         return sendMutation(res, await m.closeTicket(session, guildId, b["ticketId"], b["reason"]));
+      case "ticket.claim":
+        return sendMutation(res, await m.claimTicket(session, guildId, b["ticketId"]));
+      case "ticket.transfer":
+        return sendMutation(res, await m.transferTicket(session, guildId, b["ticketId"], b["toDiscordId"]));
+      case "ticket.transcript.resend":
+        return sendMutation(res, await m.resendTicketTranscript(session, guildId, b["ticketId"]));
       case "event.create":
         return sendMutation(res, await m.createEvent(session, guildId, b));
       case "event.cancel":

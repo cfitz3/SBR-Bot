@@ -6,23 +6,21 @@
  * and as a single ~256-char line in guild chat. This module is the only place
  * that knows about `EmbedBuilder`.
  */
-import type { ActionRowView, ButtonView, EmbedView, ViewColor } from "@sbr/shared-types";
+import type { ActionRowView, ButtonView, EmbedView, SelectMenuView } from "@sbr/shared-types";
 import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle as DiscordButtonStyle,
   EmbedBuilder,
   MessageFlags,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  type MessageActionRowComponentBuilder,
 } from "discord.js";
 
-/** Semantic colour → hex. Central so every embed in the platform agrees. */
-const COLORS: Record<ViewColor, number> = {
-  NEUTRAL: 0x2b2d31,
-  INFO: 0x5865f2,
-  SUCCESS: 0x57f287,
-  WARNING: 0xfee75c,
-  DANGER: 0xed4245,
-};
+// The palette lives in one place — `brand/theme.ts`, re-exported by `style.ts`.
+// This module used to keep its own private copy of the same five numbers.
+import { VIEW_COLORS } from "./style.js";
 
 const STYLES = {
   PRIMARY: DiscordButtonStyle.Primary,
@@ -33,7 +31,7 @@ const STYLES = {
 } as const;
 
 export function toEmbed(view: EmbedView): EmbedBuilder {
-  const embed = new EmbedBuilder().setColor(COLORS[view.color ?? "NEUTRAL"]);
+  const embed = new EmbedBuilder().setColor(VIEW_COLORS[view.color ?? "NEUTRAL"]);
   if (view.title) embed.setTitle(view.title);
   if (view.description) embed.setDescription(view.description);
   if (view.url) embed.setURL(view.url);
@@ -56,8 +54,34 @@ function toButton(view: ButtonView): ButtonBuilder {
   return button;
 }
 
-export function toActionRow(view: ActionRowView): ActionRowBuilder<ButtonBuilder> {
-  return new ActionRowBuilder<ButtonBuilder>().addComponents(...view.buttons.map(toButton));
+function toSelect(view: SelectMenuView): StringSelectMenuBuilder {
+  const menu = new StringSelectMenuBuilder().setCustomId(view.customId);
+  if (view.placeholder) menu.setPlaceholder(view.placeholder);
+  if (view.minValues !== undefined) menu.setMinValues(view.minValues);
+  if (view.maxValues !== undefined) menu.setMaxValues(view.maxValues);
+  if (view.disabled) menu.setDisabled(true);
+  menu.addOptions(
+    view.options.map((o) => {
+      const option = new StringSelectMenuOptionBuilder().setLabel(o.label).setValue(o.value);
+      if (o.description) option.setDescription(o.description);
+      if (o.emoji) option.setEmoji(o.emoji);
+      if (o.default) option.setDefault(true);
+      return option;
+    }),
+  );
+  return menu;
+}
+
+/**
+ * A row of buttons, or a row holding one select menu.
+ *
+ * Discord forbids mixing the two in a row, so the view model's `select` field
+ * decides which this is rather than the two being merged.
+ */
+export function toActionRow(view: ActionRowView): ActionRowBuilder<MessageActionRowComponentBuilder> {
+  const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
+  if (view.select) return row.addComponents(toSelect(view.select));
+  return row.addComponents(...view.buttons.map(toButton));
 }
 
 /** The transport-agnostic reply shape both command packages return. */
@@ -72,7 +96,7 @@ export interface ReplyView {
 export interface DiscordReplyOptions {
   content?: string;
   embeds?: EmbedBuilder[];
-  components?: ActionRowBuilder<ButtonBuilder>[];
+  components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
   flags?: MessageFlags.Ephemeral;
   allowedMentions?: { parse: [] };
 }

@@ -192,8 +192,8 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
         listTracked: () => snapshotJobRepository.listTracked(),
         async capture(account) {
           const profileId = account.profileId ?? undefined;
-          // The profile summary already carries skill average, catacombs level
-          // and Senither weight — the same three numbers `/stats` prints. Only
+          // The profile summary already carries SkyBlock Level, skill average,
+          // catacombs level and Senither weight — the numbers `/stats` prints. Only
           // networth needs a second call, because it requires a priced pass.
           // Both reads hit one cached profile fetch, not two upstream calls.
           const [summary, networth] = await Promise.all([
@@ -207,6 +207,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           return {
             profileId: summary.value.data.profileId,
             metrics: {
+              skyblockLevel: summary.value.data.skyblockLevel,
               networth: networth.ok ? networth.value.data.total : null,
               skillAverage: summary.value.data.skillAverage,
               catacombsLevel: summary.value.data.catacombsLevel,

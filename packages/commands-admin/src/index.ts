@@ -7,6 +7,8 @@ export { parseDurationSeconds, renderModError } from "./util.js";
 export {
   paginate,
   relativeTs,
+  renderApplicationEmbed,
+  renderApplicationListEmbed,
   renderAuditPages,
   renderEffectError,
   renderFilterTestEmbed,

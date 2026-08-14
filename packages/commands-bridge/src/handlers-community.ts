@@ -13,9 +13,8 @@ import type {
   LFGActivity,
   LfgError,
   RSVPState,
-  TicketCategory,
 } from "@sbr/shared-types";
-import { findTicketType, openableTicketTypes } from "@sbr/community";
+import { findCategory, openableCategories } from "@sbr/tickets";
 import type { AutocompleteHandler, CommandHandler, CommandReply, CommandSpec, HandlerDeps } from "./types.js";
 import {
   lfgButtons,
@@ -298,51 +297,62 @@ const ticket: CommandHandler = async (ctx, deps) => {
   if (action === "close") {
     const id = ctx.args.getString("id");
     if (!id) return { ephemeral: true, text: "Which ticket? Pass `id:` — `/ticket action:list` shows yours." };
-    const result = await deps.community.closeTicket(id, ctx.userId, ctx.args.getString("reason"));
+    // Never staff on this path. `/ticket action:close` is the member surface and
+    // it takes an arbitrary id, which is exactly how any member could close
+    // anyone's ticket before this rebuild; with `isStaff: false` the lifecycle
+    // lets a member close only their own. Staff close from the ticket channel
+    // or the panel, both of which are capability-gated.
+    const actor = { discordId: ctx.userId, isStaff: false };
+    const result = await deps.community.closeTicket(id, actor, ctx.args.getString("reason"));
     if (!result.ok) {
       return {
         ephemeral: true,
         text:
           result.error.kind === "NOT_FOUND"
             ? "I couldn't find a ticket with that id."
-            : "That ticket is already closed.",
+            : result.error.kind === "FORBIDDEN"
+              ? "That isn't your ticket. Staff can close it from the ticket channel."
+              : "That ticket is already closed.",
       };
     }
-    return { ephemeral: true, text: `Closed ticket ${result.value.id}.`, embed: renderTicketEmbed(result.value) };
+    return { ephemeral: true, text: `Closed ticket #${result.value.number}.`, embed: renderTicketEmbed(result.value) };
   }
 
   // `type:` is the guild's own menu; `category:` is the old fixed enum, kept
   // working because members have the five old values in their slash-command
-  // history and a guild that configured nothing sees the same list either way.
+  // history and a guild that seeded the defaults matches either way.
   const wanted = ctx.args.getString("type") ?? ctx.args.getString("category");
-  const types = await deps.community.listTicketTypes(ctx.guildId);
-  const chosen = types.ok ? findTicketType(types.value, wanted) : null;
+  const cats = await deps.community.listTicketCategories(ctx.guildId);
+  const chosen = cats.ok ? findCategory(cats.value, wanted) : null;
 
   if (chosen === null) {
-    const open = types.ok ? openableTicketTypes(types.value) : [];
+    const open = cats.ok ? openableCategories(cats.value) : [];
     return {
       ephemeral: true,
       text:
         open.length === 0
           ? "Tickets aren't open here right now."
-          : `I don't have a ticket type called that. Try: ${open.map((t) => `\`${t.key}\``).join(", ")}.`,
+          : `I don't have a ticket type called that. Try: ${open.map((c) => `\`${c.key}\``).join(", ")}.`,
     };
   }
 
-  const subject = ctx.args.getString("subject");
+  // The slash command opens the row only. The channel, the modal and the
+  // opening message belong to the button flow in `apps/bridge-bot/src/tickets.ts`
+  // — this path exists so `/ticket` keeps working, not as a second implementation.
+  const topic = ctx.args.getString("subject");
   const result = await deps.community.openTicket({
     guildId: ctx.guildId,
     openerDiscordId: ctx.userId,
-    category: chosen.category as TicketCategory,
-    ...(subject === null ? {} : { subject }),
+    categoryId: chosen.id,
+    ...(topic === null ? {} : { topic }),
   });
   if (!result.ok) return { ephemeral: true, text: "Couldn't open a ticket right now." };
-  // The guild's prompt replaces the generic line when it has one: it is the
-  // question staff actually want answered, and it is only useful now.
-  const prompt = chosen.prompt ?? "Staff will pick it up.";
+  // The category's own opening message replaces the generic line when it has
+  // one: it is the question staff actually want answered, and only now.
+  const prompt = chosen.openingMessage.trim() === "" ? "Staff will pick it up." : chosen.openingMessage;
   return {
     ephemeral: true,
-    text: `Opened ${chosen.label.toLowerCase()} ticket ${result.value.id}. ${prompt}`,
+    text: `Opened ${chosen.name.toLowerCase()} ticket #${result.value.number}. ${prompt}`,
     embed: renderTicketEmbed(result.value),
   };
 };
@@ -355,14 +365,14 @@ const ticket: CommandHandler = async (ctx, deps) => {
 const ticketTypeAutocomplete: AutocompleteHandler = async (focused, ctx, deps) => {
   if (focused.name !== "type") return [];
 
-  const types = await deps.community.listTicketTypes(ctx.guildId);
-  if (!types.ok) return [];
+  const cats = await deps.community.listTicketCategories(ctx.guildId);
+  if (!cats.ok) return [];
 
   const typed = focused.value.trim().toLowerCase();
-  return openableTicketTypes(types.value)
-    .filter((t) => typed === "" || t.label.toLowerCase().includes(typed) || t.key.includes(typed))
+  return openableCategories(cats.value)
+    .filter((c) => typed === "" || c.name.toLowerCase().includes(typed) || c.key.includes(typed))
     .slice(0, 25)
-    .map((t) => ({ name: t.emoji === null ? t.label : `${t.emoji} ${t.label}`, value: t.key }));
+    .map((c) => ({ name: c.emoji === null ? c.name : `${c.emoji} ${c.name}`, value: c.key }));
 };
 
 // ─────────────────────────── Persistent buttons ───────────────────────────

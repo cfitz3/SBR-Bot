@@ -7,6 +7,7 @@
  */
 import type { DenyReason } from "@sbr/panel-core";
 import { denialMessage } from "./api.js";
+import { err, state } from "./copy.js";
 import { h, type Child } from "./dom.js";
 import { initials } from "./icons.js";
 
@@ -62,12 +63,33 @@ export function card(title: string, body: HTMLElement, action?: HTMLElement | nu
   );
 }
 
-export function spinner(label = "Loading…"): HTMLElement {
-  return h("div", { class: "state state-loading", role: "status", "aria-live": "polite" }, label);
+/** Every context a page can report "nothing here" for. */
+export type EmptyContext = keyof ReturnType<typeof state>["empty"];
+
+/** Every wait a page can name. */
+export type LoadingContext = keyof ReturnType<typeof state>["loadingContext"];
+
+/**
+ * The wait, named where the page knows which wait it is.
+ *
+ * An unnamed spinner is still correct — the generic line covers it — so a
+ * component deep in a page that has no idea what it is waiting for can call
+ * this with nothing.
+ */
+export function spinner(context?: LoadingContext): HTMLElement {
+  const text = context === undefined ? state().loading : state().loadingContext[context];
+  return h("div", { class: "state state-loading", role: "status", "aria-live": "polite" }, text);
 }
 
-export function emptyState(message: string): HTMLElement {
-  return h("div", { class: "state state-empty" }, message);
+/**
+ * "Nothing here" for one context.
+ *
+ * A context rather than a sentence: the words are a brand decision and the page
+ * only knows *which* emptiness it is reporting. An unnamed context falls back to
+ * the generic line rather than rendering blank.
+ */
+export function emptyState(context: EmptyContext = "default"): HTMLElement {
+  return h("div", { class: "state state-empty" }, state().empty[context]);
 }
 
 export function errorState(message: string, retry?: () => void): HTMLElement {
@@ -75,7 +97,7 @@ export function errorState(message: string, retry?: () => void): HTMLElement {
     "div",
     { class: "state state-error", role: "alert" },
     h("p", {}, message),
-    retry ? h("button", { class: "button", onclick: retry }, "Try again") : null,
+    retry ? h("button", { class: "button", onclick: retry }, state().retry) : null,
   );
 }
 
@@ -91,10 +113,10 @@ export function deniedState(reason: DenyReason): HTMLElement {
       "div",
       { class: "state state-denied" },
       body,
-      h("a", { class: "button button-primary", href: "/login" }, "Sign in with Discord"),
+      h("a", { class: "button button-primary", href: "/login" }, state().signIn),
     );
   }
-  return h("div", { class: "state state-denied", role: "alert" }, body, h("p", { class: "muted" }, "Ask a guild admin if you think this is wrong."));
+  return h("div", { class: "state state-denied", role: "alert" }, body, h("p", { class: "muted" }, err().denyHint));
 }
 
 /** A simple data table. Cells are strings or nodes; nothing is interpreted as HTML. */

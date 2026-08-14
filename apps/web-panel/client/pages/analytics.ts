@@ -33,9 +33,13 @@ import {
   statTile,
   table,
 } from "../components.js";
+import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
 import { compactNumber, count, describeSpan, duration } from "../format.js";
 import { icon } from "../icons.js";
+
+const t = scope("analytics");
+const c = scope("common");
 
 const PERIODS: readonly RollupPeriod[] = ["HOURLY", "DAILY", "WEEKLY", "MONTHLY"];
 
@@ -44,14 +48,17 @@ const PERIODS: readonly RollupPeriod[] = ["HOURLY", "DAILY", "WEEKLY", "MONTHLY"
  * ~8,760 buckets and gets trimmed server-side; offering it anyway (with the
  * trim explained on the page) is friendlier than hiding the option and leaving
  * the reader wondering why the range list changed.
+ *
+ * The day counts are structure and the words are copy — a guild that writes
+ * "1 week" for seven days changes the label, never the query.
  */
-const RANGES: readonly { days: number; label: string }[] = [
-  { days: 1, label: "24 hours" },
-  { days: 7, label: "7 days" },
-  { days: 30, label: "30 days" },
-  { days: 90, label: "90 days" },
-  { days: 365, label: "1 year" },
-];
+const RANGES = [
+  { days: 1, key: "day" },
+  { days: 7, key: "week" },
+  { days: 30, key: "month" },
+  { days: 90, key: "quarter" },
+  { days: 365, key: "year" },
+] as const;
 
 const state: { period: RollupPeriod; days: number } = { period: "DAILY", days: 30 };
 
@@ -60,7 +67,7 @@ function query(): string {
 }
 
 export async function renderAnalytics(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading analytics…"));
+  replace(host, spinner("analytics"));
 
   const base = `/api/guilds/${encodeURIComponent(guildId)}/analytics`;
   const result = await loadPage<AnalyticsVM>(`${base}?${query()}`);
@@ -78,7 +85,10 @@ export async function renderAnalytics(host: HTMLElement, guildId: string): Promi
     h(
       "div",
       {},
-      pageTitle("Analytics", `${data.period.toLowerCase()} buckets over the last ${describeSpan(spanMs)}`),
+      pageTitle(
+        t("title"),
+        t("subtitle").replace("{period}", data.period.toLowerCase()).replace("{span}", describeSpan(spanMs)),
+      ),
       controls(rerender),
       // One <a download> per table rather than a format switch on the page:
       // the browser's own download machinery already handles the transfer, and
@@ -90,22 +100,22 @@ export async function renderAnalytics(host: HTMLElement, guildId: string): Promi
           "a",
           { class: "export-link", href: `${base}?${query()}&format=csv`, download: true },
           icon("download"),
-          "Export rollups (CSV)",
+          t("exportRollups"),
         ),
         h(
           "a",
           { class: "export-link", href: `${base}?${query()}&format=csv&table=commands`, download: true },
           icon("download"),
-          "Export command stats (CSV)",
+          t("exportCommands"),
         ),
       ),
-      card("Messages", messagesBody(data)),
-      card("Engagement", engagementBody(data)),
-      card("Playtime", playtimeBody(data)),
-      card("Guild experience", gexpBody(data)),
-      card("Top members", membersBody(data)),
+      card(t("cardMessages"), messagesBody(data)),
+      card(t("cardEngagement"), engagementBody(data)),
+      card(t("cardPlaytime"), playtimeBody(data)),
+      card(t("cardGexp"), gexpBody(data)),
+      card(t("cardMembers"), membersBody(data)),
       ...charts(data),
-      card("Top commands", commandsBody(data)),
+      card(t("cardCommands"), commandsBody(data)),
     ),
   );
 }
@@ -120,28 +130,33 @@ export async function renderAnalytics(host: HTMLElement, guildId: string): Promi
 function messagesBody(data: AnalyticsVM): HTMLElement {
   const m = data.messages;
   if (m.discordMessages + m.guildChatMessages + m.commandsUsed === 0) {
-    return emptyState("No messages were counted in this window. Counting starts when the bots are in the server.");
+    return emptyState("analyticsMessages");
   }
-  const perDay = (total: number): string => `${count(Math.round(total / m.days))} / day`;
+  const perDay = (total: number): string =>
+    t("perDay").replace("{count}", count(Math.round(total / m.days)));
   return h(
     "div",
     { class: "tiles" },
-    statTile("Discord", count(m.discordMessages), perDay(m.discordMessages)),
-    statTile("Guild chat", count(m.guildChatMessages), perDay(m.guildChatMessages)),
-    statTile("Commands", count(m.commandsUsed), perDay(m.commandsUsed)),
+    statTile(t("tileDiscord"), count(m.discordMessages), perDay(m.discordMessages)),
+    statTile(t("tileGuildChat"), count(m.guildChatMessages), perDay(m.guildChatMessages)),
+    statTile(t("tileCommands"), count(m.commandsUsed), perDay(m.commandsUsed)),
   );
 }
 
 function engagementBody(data: AnalyticsVM): HTMLElement {
   const m = data.messages;
-  if (m.activeMembers === 0) return emptyState("Nobody has been counted as active in this window.");
+  if (m.activeMembers === 0) return emptyState("analyticsEngagement");
   const spoke = m.discordMessages + m.guildChatMessages;
   return h(
     "div",
     { class: "tiles" },
-    statTile("Active members", count(m.activeMembers), `said something in ${m.days} days`),
-    statTile("Messages each", count(Math.round(spoke / m.activeMembers)), "per active member"),
-    statTile("Tracked members", count(data.topMembers.length), "with any recorded activity"),
+    statTile(
+      t("tileActive"),
+      count(m.activeMembers),
+      t("activeNote").replace("{days}", String(m.days)),
+    ),
+    statTile(t("tileEach"), count(Math.round(spoke / m.activeMembers)), t("eachNote")),
+    statTile(t("tileTracked"), count(data.topMembers.length), t("trackedNote")),
   );
 }
 
@@ -157,36 +172,43 @@ function playtimeBody(data: AnalyticsVM): HTMLElement {
   const p = data.playtime;
   const discordTile =
     p.presenceSamples === 0
-      ? statTile("Discord presence", "Not sampled", "no presence samples have been recorded yet")
+      ? statTile(t("tilePresence"), t("presenceNone"), t("presenceNoneNote"))
       : statTile(
-          "Discord presence",
+          t("tilePresence"),
           duration(p.presenceSamples * p.sampleIntervalMinutes * 60_000),
-          `estimated from ${count(p.presenceSamples)} samples ${p.sampleIntervalMinutes} minutes apart`,
+          t("presenceNote")
+            .replace("{samples}", count(p.presenceSamples))
+            .replace("{minutes}", String(p.sampleIntervalMinutes)),
         );
 
   return h(
     "div",
     {},
-    h("div", { class: "tiles" }, discordTile, statTile("In-game days active", count(p.gameActiveDays), "days with any GEXP earned")),
-    h("p", { class: "note" }, "Both figures are estimates. Presence is sampled, not measured, and a day with GEXP says somebody played, not for how long."),
+    h(
+      "div",
+      { class: "tiles" },
+      discordTile,
+      statTile(t("tileGameDays"), count(p.gameActiveDays), t("gameDaysNote")),
+    ),
+    h("p", { class: "note" }, t("playtimeNote")),
   );
 }
 
 function gexpBody(data: AnalyticsVM): HTMLElement {
   if (data.gexp.length === 0) {
-    return emptyState("No guild experience has been recorded yet. It fills in once the guild scan has run.");
+    return emptyState("analyticsGexp");
   }
   // Shaped into the same MetricChart the rollups produce so it draws through
   // the one chart renderer — a second drawing path for a second data source is
   // how two charts on one page end up disagreeing about what a gap means.
   const chart: MetricChart = {
     metric: "guild.gexp",
-    label: "Guild experience",
+    label: t("cardGexp"),
     buckets: data.gexp.map((p) => `${p.day}T00:00:00.000Z`),
     series: [
       {
         key: "",
-        label: "GEXP",
+        label: t("gexpSeries"),
         points: data.gexp.map((p) => p.value),
         total: data.gexp.reduce((sum, p) => sum + p.value, 0),
       },
@@ -205,23 +227,31 @@ function gexpBody(data: AnalyticsVM): HTMLElement {
  * somebody who only talks both belong in the answer.
  */
 function membersBody(data: AnalyticsVM): HTMLElement {
-  if (data.topMembers.length === 0) return emptyState("No member activity has been recorded in this window.");
+  if (data.topMembers.length === 0) return emptyState("analyticsTopMembers");
 
   const rows = data.topMembers.map((m) => {
-    const name = m.ign ?? m.username ?? (m.discordId === null ? "Unknown" : `<@${m.discordId}>`);
-    const note = m.uuid === null ? badge("Discord only", "warn") : m.discordId === null ? badge("In-game only", "warn") : null;
+    const name = m.ign ?? m.username ?? (m.discordId === null ? t("unknownMember") : `<@${m.discordId}>`);
+    const note =
+      m.uuid === null
+        ? badge(t("discordOnly"), "warn")
+        : m.discordId === null
+          ? badge(t("gameOnly"), "warn")
+          : null;
     return [
       person(name, note),
       count(m.discordMessages),
       count(m.guildChatMessages),
       // An unlinked member's GEXP is unknown, not zero — printing 0 here would
       // claim they earned none, which is a different and unfounded statement.
-      m.gexp === null ? "—" : compactNumber(m.gexp),
-      m.activeDays === null ? "—" : count(m.activeDays),
+      m.gexp === null ? c("dash") : compactNumber(m.gexp),
+      m.activeDays === null ? c("dash") : count(m.activeDays),
     ];
   });
 
-  return table(["Member", "Discord", "Guild chat", "GEXP", "Days active"], rows);
+  return table(
+    [t("colMember"), t("colDiscord"), t("colGuildChat"), t("colGexp"), t("colActiveDays")],
+    rows,
+  );
 }
 
 function controls(rerender: () => void): HTMLElement {
@@ -229,7 +259,7 @@ function controls(rerender: () => void): HTMLElement {
     "select",
     {
       class: "control",
-      "aria-label": "Bucket size",
+      "aria-label": t("bucketAria"),
       onchange: (ev: Event) => {
         state.period = (ev.target as HTMLSelectElement).value as RollupPeriod;
         rerender();
@@ -242,32 +272,29 @@ function controls(rerender: () => void): HTMLElement {
     "select",
     {
       class: "control",
-      "aria-label": "Time range",
+      "aria-label": t("rangeAria"),
       onchange: (ev: Event) => {
         state.days = Number((ev.target as HTMLSelectElement).value);
         rerender();
       },
     },
-    ...RANGES.map((r) => h("option", { value: r.days, selected: r.days === state.days }, r.label)),
+    ...RANGES.map((r) =>
+      h("option", { value: r.days, selected: r.days === state.days }, t("range")[r.key]),
+    ),
   );
 
   return h(
     "div",
     { class: "controls" },
-    h("label", { class: "control-label" }, "Range", range),
-    h("label", { class: "control-label" }, "Bucket", period),
+    h("label", { class: "control-label" }, t("rangeLabel"), range),
+    h("label", { class: "control-label" }, t("bucketLabel"), period),
   );
 }
 
 function charts(data: AnalyticsVM): HTMLElement[] {
   if (data.charts.length === 0) {
     return [
-      card(
-        "Activity",
-        emptyState(
-          "No events were recorded in this window. Analytics fill in as the bots are used — try a wider range.",
-        ),
-      ),
+      card(t("cardActivity"), emptyState("analyticsCharts")),
     ];
   }
 
@@ -279,7 +306,7 @@ function charts(data: AnalyticsVM): HTMLElement[] {
         {},
         lineChart(chart, data.period),
         chart.truncated
-          ? h("p", { class: "note" }, "Older buckets were trimmed to keep the chart readable. The CSV export is complete.")
+          ? h("p", { class: "note" }, t("truncated"))
           : null,
       ),
     ),
@@ -288,17 +315,20 @@ function charts(data: AnalyticsVM): HTMLElement[] {
 
 function commandsBody(data: AnalyticsVM): HTMLElement {
   if (data.topCommands.length === 0) {
-    return emptyState("No commands have been used in this window.");
+    return emptyState("analyticsCommands");
   }
 
   const rows: BarRow[] = data.topCommands.map((stat) => {
     // Failures and latency go in the note rather than a second bar: they answer
     // a different question ("is it working?") than the bar does ("is it used?").
     const failures = stat.count - stat.successCount;
-    const parts = [`${stat.count > 0 ? Math.round((stat.successCount / stat.count) * 100) : 100}% ok`];
-    if (failures > 0) parts.push(`${count(failures)} failed`);
-    if (stat.avgLatencyMs !== null) parts.push(`~${duration(stat.avgLatencyMs)}`);
-    return { label: stat.command, value: stat.count, note: parts.join(" · ") };
+    const ok = stat.count > 0 ? Math.round((stat.successCount / stat.count) * 100) : 100;
+    const parts = [t("commandOk").replace("{pct}", String(ok))];
+    if (failures > 0) parts.push(t("commandFailed").replace("{count}", count(failures)));
+    if (stat.avgLatencyMs !== null) {
+      parts.push(t("commandLatency").replace("{duration}", duration(stat.avgLatencyMs)));
+    }
+    return { label: stat.command, value: stat.count, note: parts.join(` ${c("dot")} `) };
   });
 
   return barChart(rows);

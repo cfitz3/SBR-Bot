@@ -22,9 +22,12 @@ import type { WordlistRuleDTO } from "@sbr/shared-types";
 import { WordAction, WordMatchType } from "./enums.js";
 import { postAction, type WriteResult } from "../api.js";
 import { badge, card, emptyState } from "../components.js";
+import { scope } from "../copy.js";
 import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";
 import { describeSpan } from "../format.js";
 import { h } from "../dom.js";
+
+const t = scope("filter");
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
 const PATTERN_MAX = 200;
@@ -35,31 +38,27 @@ const WINDOW_MAX = 365;
 /** Mirrors `MAX_GAME_MUTE_SECONDS` in @sbr/moderation; the client cannot import it. */
 const MAX_GAME_MUTE_SECONDS = 30 * 24 * 60 * 60;
 
-const GAME_ACTION_OPTIONS = [
-  ["none", "nothing"],
-  ["g mute", "mute in the guild"],
-  ["g unmute", "unmute in the guild"],
-  ["g kick", "kick from the guild"],
-] as const;
+/**
+ * The in-game mappings the server will accept, in the order they are offered.
+ * The list is closed on both sides — a free-text command box here would be a
+ * configurable way to demote the guild — and the words for each come from copy.
+ */
+const GAME_ACTIONS = ["none", "g mute", "g unmute", "g kick"] as const;
 
-/** What each mapping actually does, in the guild's terms. */
-const GAME_ACTION_HINT: Readonly<Record<string, string>> = {
-  none: "Nothing happens in the Hypixel guild.",
-  "g mute": "The member is muted in guild chat.",
-  "g unmute": "The member's guild-chat mute is lifted.",
-  "g kick": "The member is removed from the Hypixel guild.",
-};
+/** A copy table read by a value the platform owns, falling back to the value. */
+const lookup = (table: unknown, key: string, fallback: string): string =>
+  (table as Readonly<Record<string, string>>)[key] ?? fallback;
 
-const MATCH_OPTIONS = Object.keys(WordMatchType).map((v) => [v, v.toLowerCase()] as const);
-const ACTION_OPTIONS = Object.keys(WordAction).map((v) => [v, v.toLowerCase().replace(/_/g, " ")] as const);
+const gameActionOptions = (): readonly (readonly [string, string])[] =>
+  GAME_ACTIONS.map((v) => [v, lookup(t("gameActionLabel"), v, v)] as const);
 
-/** What each verdict actually does to a message, in the relay's terms. */
-const ACTION_HINT: Readonly<Record<string, string>> = {
-  FLAG: "Relayed as written, and recorded for staff to look at.",
-  REPLACE: "Relayed with the match censored.",
-  BLOCK: "Not relayed at all.",
-  SHADOW_MUTE: "Not relayed, and the sender is not told.",
-};
+const matchOptions = (): readonly (readonly [string, string])[] =>
+  Object.keys(WordMatchType).map((v) => [v, lookup(t("matchOption"), v, v.toLowerCase())] as const);
+
+const actionOptions = (): readonly (readonly [string, string])[] =>
+  Object.keys(WordAction).map(
+    (v) => [v, lookup(t("actionOption"), v, v.toLowerCase().replace(/_/g, " "))] as const,
+  );
 
 /**
  * The filter, as cards, for whichever surface is drawing it.
@@ -73,27 +72,17 @@ const ACTION_HINT: Readonly<Record<string, string>> = {
 export function filterCards(guildId: string, vm: WordlistVM, reload: () => void): readonly HTMLElement[] {
   const { installed, rules, escalation, relaySync } = vm;
   return [
-    h(
-      "p",
-      { class: "page-note" },
-      "Rules run on every message the bridge relays, in severity order — the harshest verdict among the " +
-        "matches is the one applied. Test a phrase against the live set with /filter-test before saving it.",
-    ),
-    card("Repeat warnings", escalationForm(guildId, escalation, reload)),
-    card("In-game punishment sync", relaySyncForm(guildId, relaySync, reload)),
+    h("p", { class: "page-note" }, t("intro")),
+    card(t("cardEscalation"), escalationForm(guildId, escalation, reload)),
+    card(t("cardRelaySync"), relaySyncForm(guildId, relaySync, reload)),
     ...(installed
       ? [
-          card("Add a rule", createForm(guildId, reload)),
+          card(t("cardCreate"), createForm(guildId, reload)),
           ...(rules.length === 0
-            ? [card("Rules", emptyState("Nothing is being filtered in this guild."))]
+            ? [card(t("cardRules"), emptyState("wordlistRules"))]
             : rules.map((rule) => ruleCard(guildId, rule, reload))),
         ]
-      : [
-          card(
-            "Rules",
-            emptyState("The chat filter isn't switched on for this deployment, so there are no rules to edit."),
-          ),
-        ]),
+      : [card(t("cardRules"), emptyState("wordlistDisabled"))]),
   ];
 }
 
@@ -127,9 +116,9 @@ function ruleCard(guildId: string, rule: WordlistRuleDTO, reload: () => void): H
 
   const status = statusSlot();
   const remove = actionButton({
-    label: "Remove",
+    label: t("remove"),
     tone: "danger",
-    confirm: "Confirm remove",
+    confirm: t("removeConfirm"),
     status,
     run: () => postAction(guildId, "wordlist.delete", { id: rule.id }),
     onDone: reload,
@@ -140,41 +129,41 @@ function ruleCard(guildId: string, rule: WordlistRuleDTO, reload: () => void): H
     h(
       "div",
       {},
-      h("p", { class: "field-hint" }, ACTION_HINT[rule.action] ?? ""),
+      h("p", { class: "field-hint" }, lookup(t("action"), rule.action, "")),
       fieldGroup(
         toggleField({
-          label: "Live",
-          hint: "Off leaves the rule here but stops it matching. Use this before removing one.",
+          label: t("liveLabel"),
+          hint: t("liveHint"),
           checked: rule.enabled,
           save: (enabled) => write({ enabled }),
         }),
         textField({
-          label: "Pattern",
-          hint: "What to match. Regex is compiled as written; wildcard takes * and ?.",
+          label: t("patternLabel"),
+          hint: t("patternHint"),
           value: rule.pattern,
           validate: (raw) =>
             raw.trim().length === 0 || raw.length > PATTERN_MAX
-              ? `Enter a pattern up to ${PATTERN_MAX} characters.`
+              ? t("errPattern").replace("{max}", String(PATTERN_MAX))
               : null,
           save: (raw) => write({ pattern: raw.trim() }),
         }),
         selectField({
-          label: "Match",
-          hint: "How the pattern is compared against the message.",
+          label: t("matchLabel"),
+          hint: t("matchHint"),
           value: rule.matchType,
-          options: MATCH_OPTIONS.map(([v, l]) => [v, l] as const),
+          options: matchOptions(),
           save: (next) => write({ matchType: next as WordlistRuleDTO["matchType"] }),
         }),
         selectField({
-          label: "Verdict",
-          hint: "What the relay does when it matches.",
+          label: t("verdictLabel"),
+          hint: t("verdictHint"),
           value: rule.action,
-          options: ACTION_OPTIONS.map(([v, l]) => [v, l] as const),
+          options: actionOptions(),
           save: (next) => write({ action: next as WordlistRuleDTO["action"] }),
         }),
         textField({
-          label: "Severity",
-          hint: `1–${SEVERITY_MAX}. Higher wins when a message trips more than one rule.`,
+          label: t("severityLabel"),
+          hint: t("severityHint").replace("{max}", String(SEVERITY_MAX)),
           value: String(rule.severity),
           validate: validateSeverity,
           save: (raw) => write({ severity: Number(raw.trim()) }),
@@ -183,7 +172,7 @@ function ruleCard(guildId: string, rule: WordlistRuleDTO, reload: () => void): H
       h("div", { class: "field-row" }, remove),
       status.el,
     ),
-    badge(rule.enabled ? "live" : "off", rule.enabled ? "ok" : "neutral"),
+    badge(rule.enabled ? t("liveBadge") : t("offBadge"), rule.enabled ? "ok" : "neutral"),
   );
 }
 
@@ -193,8 +182,8 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
   const pattern = h("input", {
     class: "control control-text",
     type: "text",
-    placeholder: "the word or pattern to catch",
-    "aria-label": "Pattern",
+    placeholder: t("createPatternPlaceholder"),
+    "aria-label": t("patternLabel"),
     autocomplete: "off",
     spellcheck: "false",
   }) as HTMLInputElement;
@@ -202,8 +191,8 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
   const severity = h("input", {
     class: "control control-text",
     type: "text",
-    placeholder: "1",
-    "aria-label": "Severity",
+    placeholder: t("createSeverityPlaceholder"),
+    "aria-label": t("severityLabel"),
     autocomplete: "off",
   }) as HTMLInputElement;
 
@@ -211,13 +200,13 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
   let action = "BLOCK";
 
   const button = actionButton({
-    label: "Add rule",
+    label: t("create"),
     tone: "primary",
     status,
     run: async () => {
       const text = pattern.value.trim();
       if (text.length === 0 || text.length > PATTERN_MAX) {
-        return { kind: "error", message: `Enter a pattern up to ${PATTERN_MAX} characters.` };
+        return { kind: "error", message: t("errPattern").replace("{max}", String(PATTERN_MAX)) };
       }
       const severityText = severity.value.trim() === "" ? "1" : severity.value;
       const severityError = validateSeverity(severityText);
@@ -240,16 +229,12 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
   return h(
     "div",
     { class: "field" },
-    h(
-      "p",
-      { class: "field-hint" },
-      "An identical pattern and match type is refused as a duplicate — edit the existing rule instead.",
-    ),
+    h("p", { class: "field-hint" }, t("createNote")),
     h("div", { class: "field-row" }, pattern, severity),
     selectField({
-      label: "Match",
+      label: t("matchLabel"),
       value: matchType,
-      options: MATCH_OPTIONS.map(([v, l]) => [v, l] as const),
+      options: matchOptions(),
       // Nothing is stored until "Add rule"; the dropdown only records the
       // choice, so the save reports success without a write.
       save: async (next) => {
@@ -258,9 +243,9 @@ function createForm(guildId: string, reload: () => void): HTMLElement {
       },
     }),
     selectField({
-      label: "Verdict",
+      label: t("verdictLabel"),
       value: action,
-      options: ACTION_OPTIONS.map(([v, l]) => [v, l] as const),
+      options: actionOptions(),
       save: async (next) => {
         action = next;
         return { kind: "ok" };
@@ -296,30 +281,32 @@ function escalationForm(guildId: string, policy: WordlistVM["escalation"], reloa
 
   const status = statusSlot();
 
-  const warnsInput = numberInput("3", "Warnings");
-  const durationInput = numberInput("3600", "Duration in seconds");
+  const warnsInput = numberInput(t("warnsPlaceholder"), t("warnsLabel"));
+  const durationInput = numberInput(t("durationPlaceholder"), t("durationLabel"));
   let newAction = "MUTE";
 
   const addRung = actionButton({
-    label: "Add step",
+    label: t("addRung"),
     tone: "primary",
     status,
     run: async () => {
-      if (rungs.length >= MAX_RUNGS) return { kind: "error", message: `A ladder holds up to ${MAX_RUNGS} steps.` };
+      if (rungs.length >= MAX_RUNGS) {
+        return { kind: "error", message: t("errRungLimit").replace("{max}", String(MAX_RUNGS)) };
+      }
       const warns = Number(warnsInput.value.trim());
       if (!Number.isInteger(warns) || warns < 1 || warns > 100) {
-        return { kind: "error", message: "Enter a warning count between 1 and 100." };
+        return { kind: "error", message: t("errRungWarns") };
       }
       if (rungs.some((r) => r.warns === warns)) {
-        return { kind: "error", message: `There is already a step at ${warns} warnings.` };
+        return { kind: "error", message: t("errRungDuplicate").replace("{warns}", String(warns)) };
       }
       const raw = durationInput.value.trim();
       const durationSeconds = raw === "" ? null : Number(raw);
       if (durationSeconds !== null && (!Number.isInteger(durationSeconds) || durationSeconds < 1)) {
-        return { kind: "error", message: "Enter a whole number of seconds, or leave it blank for permanent." };
+        return { kind: "error", message: t("errRungDuration") };
       }
       if (newAction === "MUTE" && durationSeconds === null) {
-        return { kind: "error", message: "A mute needs a duration — an endless mute is refused." };
+        return { kind: "error", message: t("errRungEndlessMute") };
       }
       rungs.push({ warns, action: newAction as "MUTE" | "BAN", durationSeconds, source: "GUILD" });
       return save();
@@ -331,12 +318,19 @@ function escalationForm(guildId: string, policy: WordlistVM["escalation"], reloa
     h(
       "div",
       { class: "field-row" },
-      h("span", { class: "job-cell" }, describeRung(rung), badge(rung.source === "DEFAULT" ? "built-in" : "custom",
-        rung.source === "DEFAULT" ? "neutral" : "ok")),
+      h(
+        "span",
+        { class: "job-cell" },
+        describeRung(rung),
+        badge(
+          rung.source === "DEFAULT" ? t("rungBuiltIn") : t("rungCustom"),
+          rung.source === "DEFAULT" ? "neutral" : "ok",
+        ),
+      ),
       actionButton({
-        label: "Remove",
+        label: t("remove"),
         tone: "danger",
-        confirm: "Confirm remove",
+        confirm: t("removeConfirm"),
         status,
         run: () => {
           const at = rungs.findIndex((r) => r.warns === rung.warns);
@@ -351,16 +345,11 @@ function escalationForm(guildId: string, policy: WordlistVM["escalation"], reloa
   return h(
     "div",
     {},
-    h(
-      "p",
-      { class: "field-hint" },
-      "When a warning brings a member to one of these counts, the platform applies the step itself, attributed " +
-        "to the staffer who warned. Warnings older than the window stop counting.",
-    ),
+    h("p", { class: "field-hint" }, t("escalationHint")),
     fieldGroup(
       toggleField({
-        label: "Escalate automatically",
-        hint: "Off leaves /warn as a record only. The ladder below is kept either way.",
+        label: t("escalateLabel"),
+        hint: t("escalateHint"),
         checked: policy.enabled,
         save: (next) => {
           enabled = next;
@@ -368,14 +357,14 @@ function escalationForm(guildId: string, policy: WordlistVM["escalation"], reloa
         },
       }),
       textField({
-        label: "Window",
-        hint: `How many days a warning counts for, 1–${WINDOW_MAX}. Longer means one bad week follows a member further.`,
+        label: t("windowLabel"),
+        hint: t("windowHint").replace("{max}", String(WINDOW_MAX)),
         value: String(policy.windowDays),
         validate: (raw) => {
           const value = Number(raw.trim());
           return Number.isInteger(value) && value >= 1 && value <= WINDOW_MAX
             ? null
-            : `Enter a whole number of days between 1 and ${WINDOW_MAX}.`;
+            : t("errWindow").replace("{max}", String(WINDOW_MAX));
         },
         save: (raw) => {
           windowDays = Number(raw.trim());
@@ -384,14 +373,14 @@ function escalationForm(guildId: string, policy: WordlistVM["escalation"], reloa
       }),
     ),
     ...rows,
-    h("p", { class: "field-hint" }, "Add a step: warnings, then seconds (blank for permanent, bans only)."),
+    h("p", { class: "field-hint" }, t("addRungHint")),
     h("div", { class: "field-row" }, warnsInput, durationInput),
     selectField({
-      label: "Then",
+      label: t("thenLabel"),
       value: newAction,
       options: [
-        ["MUTE", "mute"],
-        ["BAN", "ban"],
+        ["MUTE", lookup(t("rungAction"), "MUTE", "mute")],
+        ["BAN", lookup(t("rungAction"), "BAN", "ban")],
       ],
       save: async (next) => {
         newAction = next;
@@ -436,8 +425,8 @@ function relaySyncForm(guildId: string, policy: WordlistVM["relaySync"], reload:
   const rowFields = rows.map((row) =>
     fieldGroup(
       toggleField({
-        label: `On ${row.discordAction.toLowerCase()}`,
-        hint: GAME_ACTION_HINT[row.gameAction] ?? "",
+        label: t("rowLabel").replace("{action}", row.discordAction.toLowerCase()),
+        hint: lookup(t("gameAction"), row.gameAction, ""),
         checked: row.enabled,
         save: (next) => {
           row.enabled = next;
@@ -445,9 +434,9 @@ function relaySyncForm(guildId: string, policy: WordlistVM["relaySync"], reload:
         },
       }),
       selectField({
-        label: "In guild chat",
+        label: t("inGuildChatLabel"),
         value: row.gameAction,
-        options: GAME_ACTION_OPTIONS.map(([v, l]) => [v, l] as const),
+        options: gameActionOptions(),
         save: (next) => {
           row.gameAction = next as typeof row.gameAction;
           return save();
@@ -457,11 +446,11 @@ function relaySyncForm(guildId: string, policy: WordlistVM["relaySync"], reload:
       ...(row.gameAction === "g mute"
         ? [
             selectField({
-              label: "For how long",
+              label: t("durationModeLabel"),
               value: row.durationMode,
               options: [
-                ["same", "the same as the Discord punishment"],
-                ["fixed", "a fixed length"],
+                ["same", t("durationModeSame")],
+                ["fixed", t("durationModeFixed")],
               ],
               save: (next) => {
                 row.durationMode = next as typeof row.durationMode;
@@ -471,14 +460,14 @@ function relaySyncForm(guildId: string, policy: WordlistVM["relaySync"], reload:
             ...(row.durationMode === "fixed"
               ? [
                   textField({
-                    label: "Length",
-                    hint: "Seconds. Hypixel caps a guild mute at 30 days.",
+                    label: t("lengthLabel"),
+                    hint: t("lengthHint"),
                     value: row.fixedSeconds === null ? "" : String(row.fixedSeconds),
                     validate: (raw) => {
                       const value = Number(raw.trim());
                       return Number.isInteger(value) && value >= 1 && value <= MAX_GAME_MUTE_SECONDS
                         ? null
-                        : `Enter a whole number of seconds between 1 and ${MAX_GAME_MUTE_SECONDS}.`;
+                        : t("errLength").replace("{max}", String(MAX_GAME_MUTE_SECONDS));
                     },
                     save: (raw) => {
                       row.fixedSeconds = Number(raw.trim());
@@ -495,17 +484,11 @@ function relaySyncForm(guildId: string, policy: WordlistVM["relaySync"], reload:
   return h(
     "div",
     {},
-    h(
-      "p",
-      { class: "field-hint" },
-      "A punishment issued here can be carried into the Hypixel guild by the bridge account. Only members with a " +
-        "linked account can be matched to an IGN — an unlinked member is punished on Discord and nowhere else, " +
-        "which the audit log records.",
-    ),
+    h("p", { class: "field-hint" }, t("relaySyncHint")),
     fieldGroup(
       toggleField({
-        label: "Carry punishments into guild chat",
-        hint: "Off leaves every row below stored but inert.",
+        label: t("relaySyncLabel"),
+        hint: t("relaySyncFieldHint"),
         checked: policy.enabled,
         save: (next) => {
           enabled = next;
@@ -514,19 +497,21 @@ function relaySyncForm(guildId: string, policy: WordlistVM["relaySync"], reload:
       }),
     ),
     ...rowFields,
-    h(
-      "p",
-      { class: "field-hint" },
-      "The other direction is best-effort: Hypixel announces some in-game moderation in guild chat and not all of " +
-        "it, so actions taken in-game appear in the history when the bridge saw them announced.",
-    ),
+    h("p", { class: "field-hint" }, t("relaySyncReverseNote")),
     status.el,
   );
 }
 
 function describeRung(rung: { warns: number; action: string; durationSeconds: number | null }): string {
-  const how = rung.durationSeconds === null ? "permanently" : `for ${describeSpan(rung.durationSeconds * 1000)}`;
-  return `${rung.warns} warning${rung.warns === 1 ? "" : "s"} → ${rung.action.toLowerCase()} ${how}`;
+  const how =
+    rung.durationSeconds === null
+      ? t("rungPermanent")
+      : t("rungFor").replace("{span}", describeSpan(rung.durationSeconds * 1000));
+  return t("rung")
+    .replace("{warns}", String(rung.warns))
+    .replace("{warnWord}", rung.warns === 1 ? t("warnOne") : t("warnMany"))
+    .replace("{action}", lookup(t("rungAction"), rung.action, rung.action.toLowerCase()))
+    .replace("{how}", how);
 }
 
 function numberInput(placeholder: string, ariaLabel: string): HTMLInputElement {
@@ -542,7 +527,7 @@ function numberInput(placeholder: string, ariaLabel: string): HTMLInputElement {
 function validateSeverity(raw: string): string | null {
   const value = Number(raw.trim());
   if (raw.trim().length === 0 || !Number.isInteger(value) || value < 1 || value > SEVERITY_MAX) {
-    return `Enter a whole number between 1 and ${SEVERITY_MAX}.`;
+    return t("errSeverity").replace("{max}", String(SEVERITY_MAX));
   }
   return null;
 }

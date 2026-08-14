@@ -13,7 +13,10 @@
  */
 import type { DirectoryChannel, DirectoryMember, DirectoryRole, DirectoryVM } from "@sbr/panel-core";
 import { denialMessage, loadPage, type WriteResult } from "./api.js";
+import { scope } from "./copy.js";
 import { h } from "./dom.js";
+
+const t = scope("forms");
 
 /** Unique ids so every `<label for>` points at its own control. */
 let seq = 0;
@@ -49,9 +52,9 @@ export function statusSlot(): StatusSlot {
       const mine = token;
       el.className = `field-status field-status-${state}`;
       el.textContent =
-        state === "saving" ? "Saving…"
-        : state === "saved" ? (message ?? "Saved")
-        : state === "error" ? (message ?? "Couldn't save that.")
+        state === "saving" ? t("saving")
+        : state === "saved" ? (message ?? t("saved"))
+        : state === "error" ? (message ?? t("saveError"))
         : "";
       // A plain "Saved" is safe to clear — the control itself now shows the new
       // value. A note says something the control does not ("linked, but
@@ -119,7 +122,7 @@ export function textField(opts: TextFieldOptions): HTMLElement {
     type: "button",
     disabled: true,
     onclick: () => void commit(),
-  }, "Save") as HTMLButtonElement;
+  }, t("save")) as HTMLButtonElement;
 
   const clearButton =
     opts.clear === undefined || opts.readOnly === true
@@ -129,7 +132,7 @@ export function textField(opts: TextFieldOptions): HTMLElement {
           type: "button",
           disabled: opts.value.length === 0,
           onclick: () => void clear(),
-        }, "Clear") as HTMLButtonElement);
+        }, t("clear")) as HTMLButtonElement);
 
   function syncButtons(): void {
     if (opts.readOnly === true) return;
@@ -377,7 +380,7 @@ function channelRow(c: DirectoryChannel): PickerRow {
 }
 
 function roleRow(r: DirectoryRole): PickerRow {
-  return { id: r.id, label: `@${r.name}`, sub: r.managed ? "Managed by an integration" : null };
+  return { id: r.id, label: `@${r.name}`, sub: r.managed ? t("roleManaged") : null };
 }
 
 function memberRow(m: DirectoryMember): PickerRow {
@@ -386,7 +389,7 @@ function memberRow(m: DirectoryMember): PickerRow {
     // Server nickname first, because that is the name the rest of the guild sees
     // this person by, and it is what staff will type when searching.
     label: m.nick ?? m.globalName ?? m.username,
-    sub: m.bot ? `@${m.username} · bot` : `@${m.username}`,
+    sub: (m.bot ? t("memberBotHandle") : t("memberHandle")).replace("{username}", m.username),
   };
 }
 
@@ -481,7 +484,7 @@ export function pickerField(opts: PickerFieldOptions): HTMLElement {
     hidden: true,
     disabled: true,
     onclick: () => void commitRaw(),
-  }, "Save") as HTMLButtonElement;
+  }, t("save")) as HTMLButtonElement;
 
   const clearButton =
     opts.clear === undefined || opts.readOnly === true
@@ -491,7 +494,7 @@ export function pickerField(opts: PickerFieldOptions): HTMLElement {
           type: "button",
           disabled: opts.value.length === 0,
           onclick: () => void clear(),
-        }, "Clear") as HTMLButtonElement);
+        }, t("clear")) as HTMLButtonElement);
 
   function syncButtons(): void {
     if (clearButton) clearButton.disabled = baselineId.length === 0;
@@ -645,7 +648,7 @@ function combobox(opts: ComboboxOptions): Combobox {
       // and only one of them is the operator's to fix by typing something else.
       list.append(
         h("li", { class: "picker-empty", role: "presentation" },
-          rawMode ? "Directory unavailable — paste the id instead." : "No matches."),
+          rawMode ? t("pickerUnavailable") : t("pickerNoMatches")),
       );
     } else {
       list.append(
@@ -796,7 +799,7 @@ export function multiPickerField(opts: MultiPickerOptions): HTMLElement {
           h("button", {
             class: "picker-chip-remove",
             type: "button",
-            "aria-label": `Remove ${label}`,
+            "aria-label": t("chipRemove").replace("{label}", label),
             onclick: () => void commit(selected.filter((entry) => entry.id !== id)),
           }, "×"),
         ),
@@ -953,41 +956,21 @@ export function isSnowflake(raw: string): boolean {
 
 export function validateSnowflake(kind: string): (raw: string) => string | null {
   return (raw) => {
-    if (raw.length === 0) return `Enter a ${kind} id, or use Clear to unset it.`;
-    return SNOWFLAKE.test(raw) ? null : `That doesn't look like a Discord ${kind} id (17–20 digits).`;
+    if (raw.length === 0) return t("errIdEmpty").replace("{kind}", kind);
+    return SNOWFLAKE.test(raw) ? null : t("errId").replace("{kind}", kind);
   };
 }
 
-/** Empty means "no requirement", which the recruitment settings encode as null. */
-export function validateThreshold(raw: string): string | null {
-  if (raw.length === 0) return null;
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 0) return "Enter a non-negative number, or leave it blank for no requirement.";
-  return null;
-}
-
-export function parseThreshold(raw: string): number | null {
-  return raw.length === 0 ? null : Number(raw);
-}
-
-/**
- * Coins, kept as text all the way to the server.
- *
- * Never parsed to a number here: ten billion coins is past the point where a
- * double is exact, and a threshold that silently shifts by a few coins is the
- * kind of bug that only shows up in an argument about who should have got in.
- */
-export function validateCoins(raw: string): string | null {
-  const text = raw.trim();
-  if (text.length === 0) return null;
-  return /^\d{1,30}$/.test(text) ? null : "Enter a whole number of coins in digits, or leave it blank.";
-}
+// `validateThreshold`, `parseThreshold` and `validateCoins` lived here, for the
+// screening and recruitment stat bars. Those bars are gone — the scam check is
+// the only entry requirement — and no other field in the panel is a nullable
+// threshold or a coin figure, so the validators went with them.
 
 /** A required whole number inside a range, for the bounded screening counters. */
 export function validateWhole(raw: string, min: number, max: number): string | null {
   const value = Number(raw.trim());
   if (raw.trim().length === 0 || !Number.isInteger(value) || value < min || value > max) {
-    return `Enter a whole number between ${min} and ${max}.`;
+    return t("errWhole").replace("{min}", String(min)).replace("{max}", String(max));
   }
   return null;
 }

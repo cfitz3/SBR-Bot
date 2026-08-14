@@ -29,7 +29,7 @@ import {
 import type { NetworthService } from "@sbr/pricing";
 import type { Logger } from "@sbr/observability";
 import type { ProfileProvider, SkyblockProfileData, UpgradePriceSource } from "./ports.js";
-import { parseDungeons, parseSkills, parseSlayers } from "./skyblock/parse.js";
+import { parseDungeons, parseSkills, parseSlayers, skyblockLevel } from "./skyblock/parse.js";
 import { senitherWeight } from "./skyblock/weight.js";
 import { buildAchievements } from "./achievements.js";
 import { analyseAccessories, CATALOG_NOTE, type AccessoryReport, type CatalogEntry } from "./skyblock/accessories.js";
@@ -360,6 +360,7 @@ function toSummary(p: SkyblockProfileData): ProfileSummaryDTO {
     profileId: p.profileId,
     cuteName: p.cuteName,
     gameMode: p.gameMode,
+    skyblockLevel: skyblockLevel(p.rawMember),
     skillAverage: skills.average,
     catacombsLevel: dungeons.catacombsLevel,
     slayerXp: slayers.totalExperience,

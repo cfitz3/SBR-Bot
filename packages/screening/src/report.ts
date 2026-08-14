@@ -17,16 +17,9 @@ const SENTENCES: Readonly<Record<ScreeningReason, string>> = {
   PRIOR_EXPULSION: "Previously kicked or banned from this guild",
   PRIOR_DENIAL: "A previous join request was refused",
   REPEAT_ATTEMPTS: "Has asked to join several times recently",
-  NEW_ACCOUNT: "Account is newer than the guild's minimum",
-  INACTIVE: "Has not logged in for a long time",
   STATS_UNREADABLE: "Stats could not be read at all",
   API_DISABLED: "Some profile API settings are off, so parts of the stats are hidden",
-  BELOW_SKYBLOCK_LEVEL: "Skyblock level below the guild requirement",
-  BELOW_SKILL_AVERAGE: "Skill average below the guild requirement",
-  BELOW_CATACOMBS: "Catacombs below the guild requirement",
-  BELOW_WEIGHT: "Senither weight below the guild requirement",
-  BELOW_NETWORTH: "Networth below the guild requirement",
-  MEETS_REQUIREMENTS: "Meets every requirement checked",
+  MEETS_REQUIREMENTS: "Nothing to flag — the scam check came back clear",
 };
 
 export function reasonSentence(reason: ScreeningReason): string {

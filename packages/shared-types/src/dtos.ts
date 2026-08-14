@@ -21,11 +21,11 @@ import type {
   RaidSensitivity,
   RSVPState,
   SkyblockGameMode,
-  TicketCategory,
   TicketStatus,
   WordAction,
   WordMatchType,
 } from "./enums.js";
+import type { ViewColor } from "./views.js";
 
 /** A resolved Discord ↔ Minecraft link. */
 export interface LinkedIdentityDTO {
@@ -79,6 +79,15 @@ export interface ProfileSummaryDTO {
   readonly profileId: string;
   readonly cuteName: string | null;
   readonly gameMode: SkyblockGameMode;
+  /**
+   * SkyBlock Level, fractional. The headline number on the profile card and the
+   * one metric that moves for everyone: skills plateau, dungeons are a
+   * sub-community, and networth swings with the market, but levelling advances
+   * for anyone who plays at all. The fraction is progress within the current
+   * level and is kept for the same reason catacombs keeps its own — it is real
+   * information, and rounding it away makes a week of play look like nothing.
+   */
+  readonly skyblockLevel: number | null;
   readonly skillAverage: number | null;
   readonly catacombsLevel: number | null;
   /**
@@ -503,77 +512,202 @@ export interface PermGroupDTO {
 export interface TicketDTO {
   readonly id: string;
   readonly guildId: string;
+  /** Per-guild sequence. What staff and members call the ticket out loud. */
+  readonly number: number;
   readonly openerDiscordId: string;
   readonly assigneeDiscordId: string | null;
-  readonly category: TicketCategory;
+  /** Null when the category it was opened under has since been deleted. */
+  readonly categoryId: string | null;
+  readonly categoryKey: string | null;
+  readonly categoryName: string | null;
   readonly status: TicketStatus;
+  readonly channelId: string | null;
   readonly subject: string | null;
+  readonly topic: string | null;
+  readonly claimedByDiscordId: string | null;
+  readonly claimedAt: string | null;
+  readonly closeRequestedByDiscordId: string | null;
+  readonly closeRequestedAt: string | null;
+  readonly lastMessageAt: string | null;
+  /** Null until staff answer. Rendered as "—", never as zero. */
+  readonly firstStaffReplyAt: string | null;
+  readonly feedbackRating: number | null;
+  readonly transcriptReady: boolean;
   readonly closeReason: string | null;
   readonly createdAt: string;
   readonly closedAt: string | null;
 }
 
 /**
- * One entry in a guild's ticket menu.
+ * One question a category asks before the ticket opens.
  *
- * `key` is the stable identifier a member picks and a guild never edits; the
- * label beside it is free text an admin can reword at will. A DEFAULT is a
- * built-in that has no row yet — `id` is null, so the panel's first edit of it
- * is a create rather than an update.
+ * Rendered as a Discord modal, which takes at most five inputs — that cap is
+ * why `TicketCategoryDTO.questions` is bounded rather than open-ended.
  */
-export interface TicketTypeDTO {
-  readonly id: string | null;
-  readonly guildId: string;
-  readonly key: string;
+export interface TicketQuestionDTO {
+  readonly id: string;
   readonly label: string;
-  readonly emoji: string | null;
-  /** Which enum the opened ticket is recorded under. Reporting stays comparable across guilds. */
-  readonly category: TicketCategory;
-  /** Category channel the ticket channel is created under. Null falls back to the guild default. */
-  readonly parentChannelId: string | null;
-  /** Roles pinged and granted access. Empty means the guild-wide staff role only. */
-  readonly staffRoleIds: readonly string[];
-  /** Shown to the member when they open this type — what to include in the first message. */
-  readonly prompt: string | null;
-  /** Menu order, ascending. Ties fall back to label. */
-  readonly position: number;
-  readonly enabled: boolean;
-  readonly source: "DEFAULT" | "GUILD";
-}
-
-/** What the panel may set. `key` identifies the type and is never edited. */
-export interface TicketTypeInput {
-  readonly key: string;
-  readonly label: string;
-  readonly emoji: string | null;
-  readonly category: TicketCategory;
-  readonly parentChannelId: string | null;
-  readonly staffRoleIds: readonly string[];
-  readonly prompt: string | null;
-  readonly position: number;
-  readonly enabled: boolean;
+  readonly placeholder: string | null;
+  readonly style: "SHORT" | "PARAGRAPH";
+  readonly required: boolean;
+  readonly maxLength: number | null;
 }
 
 /**
- * The ticket panel a guild posts in a channel.
+ * One kind of ticket a member can open.
  *
- * `channelId`/`messageId` record where it was last posted so a re-post edits
+ * `key` is the stable identifier the panel button carries and a guild never
+ * edits; `name` beside it is free text an admin can reword at will. Everything
+ * else is per-category on purpose — the settings that actually differ between a
+ * staff application and a ban appeal are exactly these.
+ */
+export interface TicketCategoryDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly key: string;
+  readonly name: string;
+  /** Shown in a select menu, where Discord caps the description at 100 chars. */
+  readonly description: string;
+  readonly emoji: string | null;
+  readonly position: number;
+  readonly enabled: boolean;
+  /** `{num}`, `{name}` and `{nick}` are expanded when the channel is created. */
+  readonly channelNameTemplate: string;
+  readonly parentChannelId: string | null;
+  readonly staffRoleIds: readonly string[];
+  /** The member needs *all* of these, not any. */
+  readonly requiredRoleIds: readonly string[];
+  readonly pingRoleIds: readonly string[];
+  readonly openingMessage: string;
+  readonly image: string | null;
+  readonly claiming: boolean;
+  readonly cooldownSeconds: number | null;
+  readonly memberLimit: number;
+  readonly totalLimit: number;
+  readonly slowModeSeconds: number | null;
+  readonly requireTopic: boolean;
+  /** At most five. Questions take precedence over `requireTopic` when both are set. */
+  readonly questions: readonly TicketQuestionDTO[];
+}
+
+/** What the panel may set. `key` identifies the category and is never edited. */
+export interface TicketCategoryInput {
+  readonly key: string;
+  readonly name: string;
+  readonly description: string;
+  readonly emoji: string | null;
+  readonly position: number;
+  readonly enabled: boolean;
+  readonly channelNameTemplate: string;
+  readonly parentChannelId: string | null;
+  readonly staffRoleIds: readonly string[];
+  readonly requiredRoleIds: readonly string[];
+  readonly pingRoleIds: readonly string[];
+  readonly openingMessage: string;
+  readonly image: string | null;
+  readonly claiming: boolean;
+  readonly cooldownSeconds: number | null;
+  readonly memberLimit: number;
+  readonly totalLimit: number;
+  readonly slowModeSeconds: number | null;
+  readonly requireTopic: boolean;
+  readonly questions: readonly TicketQuestionDTO[];
+}
+
+/** One open/close window, in the guild's timezone. */
+export interface TicketWorkingHoursDayDTO {
+  readonly open: string;
+  readonly close: string;
+}
+
+/** Keyed `"0"`–`"6"`, Sunday first. An absent day means closed all day. */
+export type TicketWorkingHoursDTO = Readonly<Record<string, TicketWorkingHoursDayDTO>>;
+
+/** Per-guild ticket behaviour. */
+export interface TicketSettingsDTO {
+  readonly guildId: string;
+  readonly archiveEnabled: boolean;
+  readonly logChannelId: string | null;
+  readonly blocklistRoleIds: readonly string[];
+  readonly primaryColor: ViewColor;
+  readonly successColor: ViewColor;
+  readonly errorColor: ViewColor;
+  readonly footer: string | null;
+  /** Silence after which a ticket is stale. Null disables the clock. */
+  readonly staleAfterMinutes: number | null;
+  readonly autoCloseAfterMinutes: number;
+  readonly closeButton: boolean;
+  readonly claimButton: boolean;
+  readonly workingHours: TicketWorkingHoursDTO;
+  readonly updatedAt: string | null;
+}
+
+/** What the panel may set. `guildId` comes from the route, not the body. */
+export type TicketSettingsInput = Omit<TicketSettingsDTO, "guildId" | "updatedAt">;
+
+export type TicketPanelStyle = "BUTTONS" | "SELECT";
+
+/**
+ * A posted message members open tickets from.
+ *
+ * `channelId`/`messageId` record where it was last posted so a re-publish edits
  * that message instead of leaving a stale panel behind. Both null until posted.
  */
-export interface TicketPanelConfigDTO {
+export interface TicketPanelDTO {
+  readonly id: string;
   readonly guildId: string;
+  readonly name: string;
   readonly channelId: string | null;
   readonly messageId: string | null;
   readonly title: string;
   readonly description: string | null;
+  readonly image: string | null;
+  readonly thumbnail: string | null;
+  readonly style: TicketPanelStyle;
+  /** Category keys, in the order they appear on the panel. */
+  readonly categoryKeys: readonly string[];
   readonly updatedAt: string | null;
 }
 
-/** What the panel may set on the panel itself. */
-export interface TicketPanelConfigInput {
-  readonly channelId: string | null;
-  readonly title: string;
-  readonly description: string | null;
+/** What the panel may set. Publishing is a separate, explicit action. */
+export type TicketPanelInput = Omit<TicketPanelDTO, "id" | "guildId" | "messageId" | "updatedAt">;
+
+/** A canned reply, optionally auto-sent when a message matches its pattern. */
+export interface TicketTagDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly name: string;
+  readonly content: string;
+  readonly autoPattern: string | null;
+  readonly enabled: boolean;
+}
+
+/** What the panel may set. `name` identifies the tag and is never edited. */
+export type TicketTagInput = Omit<TicketTagDTO, "id" | "guildId">;
+
+/** One attachment on a captured message. */
+export interface TicketAttachmentDTO {
+  readonly name: string;
+  readonly size: number;
+  readonly contentType: string | null;
+  /**
+   * Discord signs CDN links now, so this expires. The transcript records what
+   * was attached rather than pretending to archive the bytes.
+   */
+  readonly url: string;
+}
+
+/** One captured message, as the transcript viewer renders it. */
+export interface TicketMessageDTO {
+  readonly id: string;
+  readonly authorDiscordId: string;
+  readonly authorTag: string;
+  readonly content: string;
+  readonly attachments: readonly TicketAttachmentDTO[];
+  readonly editedAt: string | null;
+  /** Set rather than the row being removed: a transcript that silently loses a deleted message is worse than none. */
+  readonly deletedAt: string | null;
+  readonly createdAt: string;
 }
 
 export interface MilestoneDTO {
@@ -654,6 +788,7 @@ export interface MilestoneDefinitionInput {
 export interface SnapshotMetricsDTO {
   /** ISO-8601 of the capture, for "as of" in the reply. */
   readonly capturedAt: string;
+  readonly skyblockLevel: number | null;
   readonly networth: number | null;
   readonly skillAverage: number | null;
   readonly catacombsLevel: number | null;
@@ -708,8 +843,15 @@ export interface AchievementsDTO {
   readonly configured: boolean;
 }
 
-/** The tracked metrics `/progress` can chart, keyed as `ProfileSnapshot` stores them. */
-export type ProgressMetric = "networth" | "skillAverage" | "catacombsLevel" | "senitherWeight";
+/**
+ * The tracked metrics `/progress` can chart, keyed as `ProfileSnapshot` stores them.
+ *
+ * `senitherWeight` was here and is not any more (Part III decision 1). The
+ * figure is still stored and still printed on `/stats`; it is simply not one of
+ * the four tracks a member is offered to chart, because it is frozen at v1 and
+ * a month spent on a skill it does not score reads as a flat line.
+ */
+export type ProgressMetric = "skyblockLevel" | "networth" | "skillAverage" | "catacombsLevel";
 
 export interface ProgressPointDTO {
   /** Snapshot day, `YYYY-MM-DD`. */

@@ -7,15 +7,19 @@
 import type { HealthVM } from "@sbr/panel-core";
 import { loadPage, postAction } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner, table } from "../components.js";
+import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
 import { actionButton, statusSlot } from "../forms.js";
 import { count, describeSpan, duration, humanizeJob, relativeTime } from "../format.js";
+
+const t = scope("health");
+const c = scope("common");
 
 type JobRow = HealthVM["jobs"][number];
 type ServiceRow = HealthVM["services"][number];
 
 export async function renderHealth(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("Loading job health…"));
+  replace(host, spinner("health"));
 
   const result = await loadPage<HealthVM>(`/api/guilds/${encodeURIComponent(guildId)}/health`);
   if (result.kind === "denied") return replace(host, deniedState(result.reason));
@@ -28,9 +32,9 @@ export async function renderHealth(host: HTMLElement, guildId: string): Promise<
 
   const body =
     jobs.length === 0
-      ? emptyState("No worker jobs have reported in yet.")
+      ? emptyState("healthJobs")
       : table(
-          ["Job", "Status", "Last run", "Duration", "Failures (24h)", ""],
+          [t("colJob"), t("colStatus"), t("colLastRun"), t("colDuration"), t("colFailures"), ""],
           jobs.map((job) => [
             jobCell(job),
             statusBadge(job),
@@ -45,19 +49,19 @@ export async function renderHealth(host: HTMLElement, guildId: string): Promise<
   const down = services.filter((s) => s.status !== "UP").length;
   const subtitle =
     down > 0
-      ? `${down} service(s) not reporting`
+      ? t("subtitleServicesDown").replace("{n}", String(down))
       : unhealthy === 0
-        ? "All services and jobs reporting healthy"
-        : `${unhealthy} job(s) need attention`;
+        ? t("subtitleHealthy")
+        : t("subtitleJobsUnhealthy").replace("{n}", String(unhealthy));
 
   replace(
     host,
     h(
       "div",
       {},
-      pageTitle("Health", subtitle),
-      card("Processes", servicesBody(services)),
-      card("Workers", body),
+      pageTitle(t("title"), subtitle),
+      card(t("cardProcesses"), servicesBody(services)),
+      card(t("cardWorkers"), body),
     ),
   );
 }
@@ -70,23 +74,25 @@ export async function renderHealth(host: HTMLElement, guildId: string): Promise<
  * show you the bot that stopped.
  */
 function servicesBody(services: readonly ServiceRow[]): HTMLElement {
-  if (services.length === 0) return emptyState("Liveness reporting is unavailable — check Redis.");
+  if (services.length === 0) return emptyState("healthServices");
   return table(
-    ["Service", "Status", "Instances", "Last beat", "Detail"],
+    [t("colService"), t("colStatus"), t("colInstances"), t("colLastBeat"), t("colDetail")],
     [...services].sort(byServiceSeverity).map((service) => [
       service.service,
       serviceBadge(service),
       count(service.instances.length),
-      service.instances[0] === undefined ? "never" : `${describeSpan(service.instances[0].ageMs)} ago`,
+      service.instances[0] === undefined
+        ? c("never")
+        : t("beatAgo").replace("{span}", describeSpan(service.instances[0].ageMs)),
       serviceDetail(service),
     ]),
   );
 }
 
 function serviceBadge(service: ServiceRow): HTMLElement {
-  if (service.status === "DOWN") return badge("down", "bad");
-  if (service.status === "STALE") return badge("stale", "warn");
-  return badge("up", "ok");
+  if (service.status === "DOWN") return badge(t("serviceDown"), "bad");
+  if (service.status === "STALE") return badge(t("serviceStale"), "warn");
+  return badge(t("serviceUp"), "ok");
 }
 
 /**
@@ -97,7 +103,7 @@ function serviceBadge(service: ServiceRow): HTMLElement {
  */
 function serviceDetail(service: ServiceRow): HTMLElement {
   const freshest = service.instances[0];
-  if (freshest === undefined) return h("span", { class: "muted" }, "no heartbeat");
+  if (freshest === undefined) return h("span", { class: "muted" }, t("noHeartbeat"));
   const pairs = Object.entries(freshest.details).map(([key, value]) => `${key}=${String(value)}`);
   return h(
     "div",
@@ -132,13 +138,13 @@ function jobCell(job: JobRow): HTMLElement {
  * reader could do to enable it, so the affordance would only raise a question.
  */
 function runCell(job: JobRow, guildId: string, host: HTMLElement): HTMLElement {
-  if (!job.runnable) return h("span", { class: "muted" }, "—");
+  if (!job.runnable) return h("span", { class: "muted" }, c("dash"));
   const status = statusSlot();
   return h(
     "div",
     { class: "job-run" },
     actionButton({
-      label: "Run now",
+      label: t("runNow"),
       status,
       run: () => postAction(guildId, "health.run-job", { jobName: job.type }),
       // Re-read after a beat rather than immediately: the queue has to accept
@@ -151,10 +157,10 @@ function runCell(job: JobRow, guildId: string, host: HTMLElement): HTMLElement {
 }
 
 function statusBadge(job: JobRow): HTMLElement {
-  if (job.lastStatus === "FAILED" || job.error) return badge("failing", "bad");
-  if (job.stale) return badge("stale", "warn");
-  if (job.lastRunAt === null) return badge("never run", "bad");
-  return badge("ok", "ok");
+  if (job.lastStatus === "FAILED" || job.error) return badge(t("jobFailing"), "bad");
+  if (job.stale) return badge(t("jobStale"), "warn");
+  if (job.lastRunAt === null) return badge(t("jobNeverRun"), "bad");
+  return badge(t("jobOk"), "ok");
 }
 
 function isUnhealthy(job: JobRow): boolean {

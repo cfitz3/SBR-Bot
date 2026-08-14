@@ -12,9 +12,32 @@ import type {
   NewEvent,
   NewTicket,
   RSVPState,
+  TicketCategoryDTO,
   TicketDTO,
-  TicketTypeDTO,
+  TicketStatus,
 } from "@sbr/shared-types";
+
+/**
+ * The mutable half of a ticket.
+ *
+ * Every field is optional and absent means "leave it alone", so a claim writes
+ * two columns rather than a whole row — which matters because two staff members
+ * acting at once should not silently undo each other's unrelated edits.
+ */
+export interface TicketPatch {
+  readonly status?: TicketStatus;
+  readonly assigneeDiscordId?: string | null;
+  readonly claimedByDiscordId?: string | null;
+  readonly claimedAt?: Date | null;
+  readonly closeRequestedByDiscordId?: string | null;
+  readonly closeRequestedAt?: Date | null;
+  readonly topic?: string | null;
+  readonly closeReason?: string | null;
+  readonly closedAt?: Date | null;
+  readonly lastMessageAt?: Date;
+  readonly firstStaffReplyAt?: Date;
+  readonly transcriptReady?: boolean;
+}
 
 export interface EventRsvpInfo {
   readonly status: EventStatus;
@@ -108,16 +131,25 @@ export interface CommunityRepository {
   bindLfgMessage(postId: string, channelId: string, messageId: string): Promise<LFGPostDTO | null>;
 
   // ── Tickets ──
+  /** Allocates the per-guild `number` as part of the insert; see `TicketDTO.number`. */
   createTicket(input: NewTicket): Promise<TicketDTO>;
   getTicket(ticketId: string): Promise<TicketDTO | null>;
-  closeTicket(ticketId: string, actorDiscordId: string, reason: string | null): Promise<TicketDTO | null>;
+  /** The ticket a channel belongs to, which is how every in-channel command finds its subject. */
+  getTicketByChannel(channelId: string): Promise<TicketDTO | null>;
+  /**
+   * Applies only the fields present.
+   *
+   * Deliberately dumb: every decision about *whether* a transition is allowed
+   * belongs to `@sbr/tickets`, so the repository never has to be trusted with
+   * one. That separation is what makes the permission rules testable.
+   */
+  patchTicket(ticketId: string, patch: TicketPatch): Promise<TicketDTO | null>;
   listTickets(guildId: string, openerDiscordId?: string): Promise<readonly TicketDTO[]>;
   /**
-   * Every ticket type in effect, built-ins included, in menu order. Disabled
-   * types are included and flagged — the caller decides whether it is drawing a
-   * member's menu or an admin's editor.
+   * Every category in menu order, disabled ones included — the caller decides
+   * whether it is drawing a member's menu or an admin's editor.
    */
-  listTicketTypes(guildId: string): Promise<readonly TicketTypeDTO[]>;
+  listTicketCategories(guildId: string): Promise<readonly TicketCategoryDTO[]>;
 
   // ── Applications ──
   getApplication(applicationId: string): Promise<ApplicationDTO | null>;

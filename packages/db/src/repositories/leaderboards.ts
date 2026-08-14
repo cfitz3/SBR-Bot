@@ -66,7 +66,7 @@ async function activeSnowflakes(guildId: string): Promise<ReadonlySet<string>> {
   return new Set(rows.map((r) => r.discordUser.discordId));
 }
 
-type SnapshotMetric = "networth" | "skillAverage" | "catacombsLevel" | "slayerXp";
+type SnapshotMetric = "skyblockLevel" | "networth" | "skillAverage" | "catacombsLevel" | "slayerXp";
 
 /**
  * The newest snapshot per linked account, projected onto one metric.
@@ -90,6 +90,7 @@ async function snapshotValues(guildId: string, metric: SnapshotMetric): Promise<
     take: MAX_ROWS,
     select: {
       capturedAt: true,
+      skyblockLevel: true,
       networth: true,
       skillAverage: true,
       catacombsLevel: true,
@@ -193,12 +194,20 @@ async function xpValues(guildId: string): Promise<readonly MemberValue[]> {
 
 /** True for the categories keyed by Minecraft uuid rather than Discord id. */
 function isSnapshotCategory(category: LeaderboardCategory): boolean {
-  return category === "wealth" || category === "skill-average" || category === "catacombs" || category === "slayer";
+  return (
+    category === "level" ||
+    category === "wealth" ||
+    category === "skill-average" ||
+    category === "catacombs" ||
+    category === "slayer"
+  );
 }
 
 export const leaderboardSource: LeaderboardSource = {
   async values(guildId, category, windowDays): Promise<readonly MemberValue[]> {
     switch (category) {
+      case "level":
+        return snapshotValues(guildId, "skyblockLevel");
       case "wealth":
         return snapshotValues(guildId, "networth");
       case "skill-average":

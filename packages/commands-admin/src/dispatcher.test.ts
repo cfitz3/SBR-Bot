@@ -454,7 +454,7 @@ test("set-channel with no channel clears the slot", async () => {
   assert.match(r.text, /cleared/);
 });
 
-test("set-recruitment leaves an unnamed threshold alone", async () => {
+test("set-recruitment writes the switch on its own", async () => {
   let patch: RecruitmentSettings | null = null;
   const cfg = guildConfig({ async setRecruitment(_g, input) { patch = input; return ok(undefined); } });
   await make({ config: cfg }).dispatch("set-recruitment", ctx({ args: recordArgs({ open: "true" }) }));
@@ -462,20 +462,21 @@ test("set-recruitment leaves an unnamed threshold alone", async () => {
   assert.ok(patch);
   const written = patch as RecruitmentSettings;
   assert.equal(written.open, true);
-  assert.equal("minWeight" in written, false, "an unnamed bar must not be written");
-  assert.equal("minNetworth" in written, false);
+  // The two stat bars used to be tri-state here, with a `clear_requirements`
+  // wipe to null them. Neither is a requirement now, so the command carries no
+  // threshold at all — and a stray one arriving from an old client must not be
+  // forwarded into the config write.
+  assert.deepEqual(Object.keys(written), ["open"]);
 });
 
-test("set-recruitment clear_requirements explicitly nulls both bars", async () => {
+test("set-recruitment ignores a threshold sent by an out-of-date client", async () => {
   let patch: RecruitmentSettings | null = null;
   const cfg = guildConfig({ async setRecruitment(_g, input) { patch = input; return ok(undefined); } });
   await make({ config: cfg }).dispatch(
     "set-recruitment",
-    ctx({ args: recordArgs({ open: "false", clear_requirements: "true" }) }),
+    ctx({ args: recordArgs({ open: "false", min_weight: "1200", clear_requirements: "true" }) }),
   );
-  const written = patch as unknown as RecruitmentSettings;
-  assert.equal(written.minWeight, null);
-  assert.equal(written.minNetworth, null);
+  assert.deepEqual(patch, { open: false });
 });
 
 test("set-role type:member changes the rank and records it", async () => {

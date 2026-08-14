@@ -564,6 +564,7 @@ A point-in-time capture of a Skyblock profile's stats (time-series for progressi
 | `capturedAt` | timestamp (indexed) |
 | `networth` | BigInt, nullable |
 | `skillAverage`, `catacombsLevel`, `senitherWeight` | Float, nullable |
+| `skyblockLevel` | Float, nullable — fractional SkyBlock Level (`leveling.experience / 100`), the headline progression figure |
 | `slayerXp` | BigInt, nullable — total slayer XP across all bosses |
 | `metrics` | JSON blob for everything not promoted to a column |
 | `source`, `eventId` | see enum; `eventId` set for event-tracked captures |
@@ -580,6 +581,15 @@ writing 0 into historical rows would put long-standing members at the bottom of
 the slayer board, which is a false claim about them rather than a missing one.
 Capturing it costs nothing — the summary already parses slayers for the Senither
 weight.
+
+`skyblockLevel` followed (`20260814090000_snapshot_skyblock_level`) on the same
+terms and for the same reason: a 0 would read as "level zero" and make the first
+real capture look like a jump from nothing to 300. It is promoted to a column
+because it is now the headline metric — a leaderboard category, a milestone type
+(`SKYBLOCK_LEVEL`) and the first `/progress` track — chosen over Senither weight
+because it advances for anyone who plays, where skills plateau, dungeons are a
+sub-community and networth swings with the market. Weight is still captured and
+still shown on `/stats`; it is simply no longer what the platform ranks by.
 
 #### Milestone
 A recognized achievement/threshold crossed by a member.

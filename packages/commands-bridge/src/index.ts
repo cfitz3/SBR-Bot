@@ -4,10 +4,48 @@
 export { CommandDispatcher, type CommandDispatcherDeps } from "./dispatcher.js";
 export { buildBridgeRegistry } from "./handlers.js";
 export { InMemoryCooldownGate } from "./cooldown.js";
-export { formatCoins, renderNetworth, renderFailure, renderLinkError, renderRosterEmbed } from "./render.js";
+// The full renderer surface is exported, not just the handful the bots call
+// directly, because `@sbr/embed-gallery` builds every card this platform can
+// send by calling these — a gallery that reimplemented them would check itself
+// rather than the product.
+export {
+  formatCoins,
+  renderAccessoriesEmbed,
+  renderAchievementsEmbed,
+  renderAdviceEmbed,
+  renderAuctionsEmbed,
+  renderBazaarEmbed,
+  renderDungeonsEmbed,
+  renderFailure,
+  renderLeaderboardEmbed,
+  renderLinkError,
+  renderLowestBinEmbed,
+  renderNetworth,
+  renderNetworthEmbed,
+  renderPriceEmbed,
+  renderProfileEmbed,
+  renderProfileListEmbed,
+  renderProgressEmbed,
+  renderRosterEmbed,
+  renderSkillsEmbed,
+  renderSlayersEmbed,
+  renderStandingEmbed,
+  renderStatsEmbed,
+} from "./render.js";
 export { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
 export { funSpecs, parseDice, readQuotes, rpsOutcome, vibeRank, QUOTES_SETTING_KEY } from "./fun.js";
-export { lfgButtons, renderLfgEmbed, renderMilestoneEmbed } from "./render-community.js";
+export {
+  lfgButtons,
+  renderAttendanceEmbed,
+  renderEventEmbed,
+  renderEventsEmbed,
+  renderLfgEmbed,
+  renderLfgListEmbed,
+  renderMilestoneEmbed,
+  renderTicketEmbed,
+  renderTicketListEmbed,
+} from "./render-community.js";
+export { renderPermEmbed, renderPermListEmbed } from "./render-perms.js";
 export {
   InGameDispatcher,
   INGAME_MAX_CHARS,

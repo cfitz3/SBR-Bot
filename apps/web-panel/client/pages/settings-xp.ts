@@ -16,6 +16,7 @@ import type { XpSettingsVM } from "@sbr/panel-core";
 import type { XpSourcePolicyDTO } from "@sbr/shared-types";
 import { postAction, type WriteResult } from "../api.js";
 import { card, emptyState } from "../components.js";
+import { scope, type PanelCopy } from "../copy.js";
 import {
   actionButton,
   fieldGroup,
@@ -27,6 +28,8 @@ import {
   toggleField,
 } from "../forms.js";
 import { h } from "../dom.js";
+
+const t = scope("xp");
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
 const MAX_WEIGHT = 1_000;
@@ -41,20 +44,13 @@ const MAX_ADJUSTMENT = 1_000_000;
  * The unit matters more than the name: a weight only means something once you
  * know what it multiplies, and "1 per 1000 guild XP" is the difference between
  * a sensible 0.01 and a runaway 10.
+ *
+ * The fallback keeps a source the platform gains before the copy layer names it
+ * selectable, reading as its own key rather than vanishing from the page.
  */
-const SOURCE_COPY: Readonly<Record<string, { readonly label: string; readonly unit: string }>> = {
-  GEXP: { label: "Guild XP", unit: "one unit per guild XP earned that day" },
-  DISCORD_MESSAGE: { label: "Discord messages", unit: "one unit per counted message" },
-  GUILD_CHAT_MESSAGE: { label: "Guild chat messages", unit: "one unit per counted message" },
-  TENURE: { label: "Tenure", unit: "one unit per day in the guild" },
-  COMMAND_USAGE: { label: "Command use", unit: "one unit per counted command" },
-  EVENT: { label: "Events", unit: "one unit per event attended" },
-  MILESTONE: { label: "Milestones", unit: "one unit per XP a milestone definition awards" },
-  MANUAL: { label: "Staff adjustments", unit: "one unit per XP entered by hand" },
-};
-
-function copyFor(source: string): { readonly label: string; readonly unit: string } {
-  return SOURCE_COPY[source] ?? { label: source, unit: "one unit per recorded action" };
+function copyFor(source: string): PanelCopy["xp"]["source"][keyof PanelCopy["xp"]["source"]] {
+  const table = t("source") as Readonly<Record<string, { label: string; unit: string }>>;
+  return table[source] ?? { label: source, unit: t("sourceUnitFallback") };
 }
 
 /** A number the admin typed, bounded. Empty is rejected, not defaulted to 0. */
@@ -62,9 +58,9 @@ function validateNumber(raw: string, max: number, whole: boolean): string | null
   const text = raw.trim();
   const value = Number(text);
   if (text.length === 0 || !Number.isFinite(value) || value < 0 || value > max) {
-    return `Enter a number between 0 and ${max}.`;
+    return t("errNumberRange").replace("{max}", String(max));
   }
-  if (whole && !Number.isInteger(value)) return "Enter a whole number.";
+  if (whole && !Number.isInteger(value)) return t("errWholeNumber");
   return null;
 }
 
@@ -78,25 +74,23 @@ function validateNumber(raw: string, max: number, whole: boolean): string | null
 export function xpSection(guildId: string, vm: XpSettingsVM): readonly HTMLElement[] {
   if (!vm.installed) {
     return [
-      card(
-        "XP",
-        emptyState("Guild XP isn't switched on for this deployment, so there is nothing to configure here."),
-      ),
+      card(t("card"), emptyState("xpDisabled")),
     ];
   }
 
   return [
     card(
-      "XP",
+      t("card"),
       h(
         "p",
         { class: "field-hint" },
-        `${vm.sources.filter((s) => s.enabled).length} of ${vm.sources.length} sources counting. ` +
-          "Changes apply from the next totalling pass onwards; days already scored keep the numbers they were scored under.",
+        t("intro")
+          .replace("{on}", String(vm.sources.filter((s) => s.enabled).length))
+          .replace("{total}", String(vm.sources.length)),
       ),
     ),
     ...vm.sources.map((policy) => sourceCard(guildId, policy)),
-    card("Adjust a member's XP", adjustForm(guildId)),
+    card(t("cardAdjust"), adjustForm(guildId)),
   ];
 }
 
@@ -122,33 +116,33 @@ function sourceCard(guildId: string, policy: XpSourcePolicyDTO): HTMLElement {
   const messageSource = policy.source === "DISCORD_MESSAGE" || policy.source === "GUILD_CHAT_MESSAGE";
 
   return card(
-    `XP — ${label}`,
+    t("cardSource").replace("{label}", label),
     fieldGroup(
       toggleField({
-        label: "Counts towards XP",
-        hint: `Weight is ${unit}.`,
+        label: t("enabledLabel"),
+        hint: t("enabledHint").replace("{unit}", unit),
         checked: policy.enabled,
         save: (enabled) => write({ enabled }),
       }),
       textField({
-        label: "Weight",
-        hint: `XP awarded per unit — ${unit}. Fractions are allowed.`,
+        label: t("weightLabel"),
+        hint: t("weightHint").replace("{unit}", unit),
         value: String(policy.weight),
         validate: (raw) => validateNumber(raw, MAX_WEIGHT, false),
         save: (raw) => write({ weight: Number(raw.trim()) }),
       }),
       textField({
-        label: "Daily cap",
-        hint: "Most XP one member can earn from this source in a day. Clear it for no cap.",
+        label: t("capLabel"),
+        hint: t("capHint"),
         value: policy.dailyCap === null ? "" : String(policy.dailyCap),
-        placeholder: "no cap",
+        placeholder: t("capPlaceholder"),
         validate: (raw) => (raw.trim().length === 0 ? null : validateNumber(raw, MAX_DAILY_CAP, true)),
         save: (raw) => write({ dailyCap: raw.trim().length === 0 ? null : Number(raw.trim()) }),
         clear: () => write({ dailyCap: null }),
       }),
       textField({
-        label: "Cooldown (seconds)",
-        hint: "Minimum gap between two actions that count. 0 counts every one.",
+        label: t("cooldownLabel"),
+        hint: t("cooldownHint"),
         value: String(policy.cooldownSec),
         validate: (raw) => validateNumber(raw, MAX_COOLDOWN_SEC, true),
         save: (raw) => write({ cooldownSec: Number(raw.trim()) }),
@@ -158,8 +152,8 @@ function sourceCard(guildId: string, policy: XpSourcePolicyDTO): HTMLElement {
       // missing one — it invites someone to set it and expect an effect.
       messageSource
         ? textField({
-            label: "Minimum message length",
-            hint: "Shorter messages are ignored entirely. Keeps \"gg\" from being worth the same as a conversation.",
+            label: t("minLengthLabel"),
+            hint: t("minLengthHint"),
             value: String(policy.minLength),
             validate: (raw) => validateNumber(raw, MAX_MIN_LENGTH, true),
             save: (raw) => write({ minLength: Number(raw.trim()) }),
@@ -183,36 +177,36 @@ function adjustForm(guildId: string): HTMLElement {
   const member = idChooser({
     guildId,
     kind: "member",
-    placeholder: "Search by name, or paste an id",
-    ariaLabel: "Member to adjust",
+    placeholder: t("adjustMemberPlaceholder"),
+    ariaLabel: t("adjustMemberLabel"),
   });
 
   const amount = h("input", {
     class: "control control-text",
     type: "text",
-    placeholder: "e.g. 500 or -250",
-    "aria-label": "XP amount, negative to deduct",
+    placeholder: t("adjustAmountPlaceholder"),
+    "aria-label": t("adjustAmountLabel"),
     autocomplete: "off",
     spellcheck: "false",
   }) as HTMLInputElement;
 
-  const reason = reasonBox("Why — this is stored on the member's XP history, not just the audit log.", 3);
+  const reason = reasonBox(t("adjustReason"), 3);
 
   const button = actionButton({
-    label: "Apply adjustment",
+    label: t("adjustApply"),
     tone: "danger",
-    confirm: "Confirm adjustment",
+    confirm: t("adjustConfirm"),
     status,
     run: async () => {
       const discordId = member.value();
       if (!isSnowflake(discordId)) {
-        return { kind: "error", message: "Pick the member, or paste their Discord user id." };
+        return { kind: "error", message: t("errNoMember") };
       }
       const value = Number(amount.value.trim());
       if (!Number.isInteger(value) || value === 0 || Math.abs(value) > MAX_ADJUSTMENT) {
-        return { kind: "error", message: `Enter a non-zero whole number within ±${MAX_ADJUSTMENT}.` };
+        return { kind: "error", message: t("errAmount").replace("{max}", String(MAX_ADJUSTMENT)) };
       }
-      if (reason.value.trim().length === 0) return { kind: "error", message: "A reason is required." };
+      if (reason.value.trim().length === 0) return { kind: "error", message: t("errNoReason") };
       return postAction(guildId, "xp.adjust", { discordId, amount: value, reason: reason.value.trim() });
     },
     onDone: () => {
@@ -228,7 +222,7 @@ function adjustForm(guildId: string): HTMLElement {
   return h(
     "div",
     { class: "field" },
-    h("p", { class: "field-hint" }, "Adds or removes XP directly. Positive credits, negative deducts."),
+    h("p", { class: "field-hint" }, t("adjustIntro")),
     h("div", { class: "field-row" }, member.el, amount),
     reason,
     h("div", { class: "field-row" }, button),

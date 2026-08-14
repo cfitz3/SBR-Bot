@@ -170,6 +170,23 @@ function floors(source: unknown): DungeonFloorDTO[] {
     .sort((a, b) => Number(a.floor) - Number(b.floor));
 }
 
+/**
+ * SkyBlock Level, from the profile's own levelling track. 100 XP to a level.
+ *
+ * The fraction is kept rather than floored, for the same reason catacombs keeps
+ * its progress: a member who moves from 214.1 to 214.9 has had a real week, and
+ * a headline number that reads 214 both times says they did nothing. Callers
+ * that want the badge Hypixel prints can floor it themselves.
+ *
+ * Null, never 0, when the section is absent — a profile with its API settings
+ * off hides `leveling` entirely, and "hidden" is not "level zero"
+ * (HYPIXEL_DATA_LAYER.md §5).
+ */
+export function skyblockLevel(member: unknown): number | null {
+  const xp = num(dig(member, "leveling", "experience"));
+  return xp === null ? null : xp / 100;
+}
+
 export function parseDungeons(member: unknown): DungeonsDTO {
   const dungeons = obj(dig(member, "dungeons"));
   const catacombs = obj(dig(dungeons, "dungeon_types", "catacombs"));

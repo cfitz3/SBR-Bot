@@ -17,7 +17,9 @@
     "test": "node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
+    "@sbr/brand": "*",
     "@sbr/observability": "*",
-    "@sbr/shared-types": "*"
+    "@sbr/shared-types": "*",
+    "@sbr/tickets": "*"
   }
 }

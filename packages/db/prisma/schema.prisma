@@ -126,13 +126,9 @@ enum ModActionType {
   GUILD_EXPEL
 }
 
-enum TicketCategory {
-  SUPPORT
-  REPORT
-  APPEAL
-  APPLICATION
-  OTHER
-}
+// `enum TicketCategory` was here. Categories are a model now: a guild writes its
+// own, with its own staff roles, questions and limits, and the five former enum
+// values are seeded as ordinary rows so nothing a guild had is lost.
 
 enum TicketStatus {
   OPEN
@@ -191,6 +187,7 @@ enum LFGStatus {
 }
 
 enum MilestoneType {
+  SKYBLOCK_LEVEL
   SKILL_LEVEL
   CATACOMBS_LEVEL
   SLAYER_TIER
@@ -225,15 +222,15 @@ enum JobStatus {
 // ─────────────────────────── Identity & Accounts ───────────────────────────
 
 model DiscordUser {
-  id          String   @id @default(cuid())
-  discordId   String   @unique
-  username    String?
-  globalName  String?
-  avatarHash  String?
-  isStaff     Boolean  @default(false)
-  lastSeenAt  DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String    @id @default(cuid())
+  discordId  String    @unique
+  username   String?
+  globalName String?
+  avatarHash String?
+  isStaff    Boolean   @default(false)
+  lastSeenAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   linkedAccounts LinkedAccount[]
   memberships    GuildMember[]
@@ -242,18 +239,18 @@ model DiscordUser {
 }
 
 model MinecraftAccount {
-  id                  String   @id @default(cuid())
-  uuid                String   @unique
-  currentIgn          String?
-  ignHistoryCachedAt  DateTime?
+  id                   String    @id @default(cuid())
+  uuid                 String    @unique
+  currentIgn           String?
+  ignHistoryCachedAt   DateTime?
   hypixelLastFetchedAt DateTime?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  linkedAccounts    LinkedAccount[]
-  selectedProfiles  SelectedSkyblockProfile[]
-  snapshots         ProfileSnapshot[]
-  milestones        Milestone[]
+  linkedAccounts   LinkedAccount[]
+  selectedProfiles SelectedSkyblockProfile[]
+  snapshots        ProfileSnapshot[]
+  milestones       Milestone[]
 
   @@index([uuid])
   @@index([currentIgn])
@@ -289,31 +286,33 @@ model Guild {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
-  config        GuildConfig?
-  channels      GuildChannelBinding[]
-  settings      GuildSetting[]
-  members       GuildMember[]
-  memberCache   GuildMemberCache[]
-  gexpDaily     GuildGexpDaily[]
-  scans         GuildScan[]
-  permissions   BridgePermission[]
-  wordlist      WordlistEntry[]
-  infractions   Infraction[]
-  modActions    ModerationAction[]
-  tickets       Ticket[]
-  applications  Application[]
-  events        Event[]
-  lfgPosts      LFGPost[]
-  perms         PermGroup[]
-  xpEvents      XpEvent[]
-  xpBalances    XpBalance[]
-  xpSources     XpSourceConfig[]
-  activityDaily ActivityDaily[]
-  screenings    GuildJoinScreening[]
-  subscriptions NotificationSubscription[]
-  milestoneDefs MilestoneDefinition[]
-  ticketPanel   TicketPanelConfig?
-  ticketTypes   TicketTypeConfig[]
+  config           GuildConfig?
+  channels         GuildChannelBinding[]
+  settings         GuildSetting[]
+  members          GuildMember[]
+  memberCache      GuildMemberCache[]
+  gexpDaily        GuildGexpDaily[]
+  scans            GuildScan[]
+  permissions      BridgePermission[]
+  wordlist         WordlistEntry[]
+  infractions      Infraction[]
+  modActions       ModerationAction[]
+  tickets          Ticket[]
+  applications     Application[]
+  events           Event[]
+  lfgPosts         LFGPost[]
+  perms            PermGroup[]
+  xpEvents         XpEvent[]
+  xpBalances       XpBalance[]
+  xpSources        XpSourceConfig[]
+  activityDaily    ActivityDaily[]
+  screenings       GuildJoinScreening[]
+  subscriptions    NotificationSubscription[]
+  milestoneDefs    MilestoneDefinition[]
+  ticketSettings   TicketSettings?
+  ticketCategories TicketCategory[]
+  ticketPanels     TicketPanel[]
+  ticketTags       TicketTag[]
 
   @@index([discordGuildId])
 }
@@ -590,6 +589,13 @@ model GuildConfig {
   timezone         String   @default("UTC")
   applicationsOpen Boolean  @default(false)
   bridgeSuspended  Boolean  @default(false)
+  /// Deprecated. These were the guild's entry bars, checked by screening before
+  /// the scam check became the only requirement. Nothing reads them any more —
+  /// `/set-recruitment` no longer offers them and the runtime config no longer
+  /// carries them — but they are kept rather than dropped: the values are a
+  /// record of what a guild once required, and no code path is made correct by
+  /// deleting them. Anything genuinely needing an entry bar should add its own
+  /// column rather than revive these.
   minWeight        Int?
   minNetworth      BigInt?
   // Platform role -> Discord role id, as `/set-role type:mapping` records it.
@@ -688,38 +694,92 @@ model ModerationAction {
 }
 
 model Ticket {
-  id                 String         @id @default(cuid())
-  guildId            String
-  openerDiscordId    String
-  assigneeDiscordId  String?
-  category           TicketCategory @default(SUPPORT)
-  status             TicketStatus   @default(OPEN)
-  channelId          String?
-  subject            String?
-  closeReason        String?
-  closedAt           DateTime?
-  createdAt          DateTime       @default(now())
-  updatedAt          DateTime       @updatedAt
+  id                        String       @id @default(cuid())
+  guildId                   String
+  /// Per-guild sequence, starting at 1. This is `{num}` in a channel-name or
+  /// opening-message template, and it is what staff and members call the ticket
+  /// in conversation — a cuid is unusable for that.
+  number                    Int          @default(0)
+  openerDiscordId           String
+  assigneeDiscordId         String?
+  categoryId                String?
+  status                    TicketStatus @default(OPEN)
+  channelId                 String?
+  subject                   String?
+  /// Free-text reason the member gave, when the category asks for a topic.
+  topic                     String?
+  /// Answers to the category's questions, keyed by question id. Mutually
+  /// exclusive with `topic` in practice: a category asks for one or the other.
+  answers                   Json         @default("{}")
+  claimedByDiscordId        String?
+  claimedAt                 DateTime?
+  closeRequestedByDiscordId String?
+  closeRequestedAt          DateTime?
+  /// Drives the stale and auto-close clocks. Written on every captured message.
+  lastMessageAt             DateTime?
+  /// First staff message, which is the input to `{avgResponseTime}`. Null until
+  /// staff answer — and rendered as "—", never as zero.
+  firstStaffReplyAt         DateTime?
+  feedbackRating            Int?
+  feedbackComment           String?
+  transcriptReady           Boolean      @default(false)
+  closeReason               String?
+  closedAt                  DateTime?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
 
-  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  guild    Guild           @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  category TicketCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  messages TicketMessage[]
 
+  @@unique([guildId, number])
   @@index([guildId, status])
   @@index([guildId, openerDiscordId])
+  @@index([channelId])
+}
+
+/// One captured message in a ticket channel — the transcript store.
+///
+/// Edits and deletions are recorded rather than applied: a transcript that
+/// silently loses a deleted message is worse than no transcript, because it
+/// reads as a complete record of a conversation that did not happen that way.
+model TicketMessage {
+  id               String    @id @default(cuid())
+  ticketId         String
+  discordMessageId String
+  authorDiscordId  String
+  /// Denormalised on purpose: the author may leave the server, and a transcript
+  /// that renders a bare snowflake for half its lines is not a record anyone can
+  /// read a year later.
+  authorTag        String
+  content          String
+  /// Filename, size and content type per attachment, plus the CDN url. The url
+  /// expires — Discord signs them now — so the transcript states what was
+  /// attached rather than pretending to archive the bytes.
+  attachments      Json      @default("[]")
+  editedAt         DateTime?
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@unique([ticketId, discordMessageId])
+  @@index([ticketId, createdAt])
 }
 
 model Application {
-  id                  String            @id @default(cuid())
-  guildId             String
-  applicantDiscordId  String
-  minecraftAccountId  String?
-  answers             Json              @default("{}")
-  status              ApplicationStatus @default(SUBMITTED)
-  reviewerDiscordId   String?
-  decisionReason      String?
-  submittedAt         DateTime?
-  decidedAt           DateTime?
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
+  id                 String            @id @default(cuid())
+  guildId            String
+  applicantDiscordId String
+  minecraftAccountId String?
+  answers            Json              @default("{}")
+  status             ApplicationStatus @default(SUBMITTED)
+  reviewerDiscordId  String?
+  decisionReason     String?
+  submittedAt        DateTime?
+  decidedAt          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
   guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
 
@@ -730,22 +790,22 @@ model Application {
 // ─────────────────────────── Community & Engagement ───────────────────────────
 
 model Event {
-  id              String      @id @default(cuid())
-  guildId         String
-  title           String
-  description     String?
-  type            EventType   @default(CUSTOM)
-  status          EventStatus @default(SCHEDULED)
-  startsAt        DateTime
-  endsAt          DateTime?
-  capacity        Int?
-  hostDiscordId   String?
-  messageId       String?
+  id                String      @id @default(cuid())
+  guildId           String
+  title             String
+  description       String?
+  type              EventType   @default(CUSTOM)
+  status            EventStatus @default(SCHEDULED)
+  startsAt          DateTime
+  endsAt            DateTime?
+  capacity          Int?
+  hostDiscordId     String?
+  messageId         String?
   // Progression-tracking events drive the sub-hourly snapshot cohort (WORKERS.md §2.5).
-  tracksProgression Boolean   @default(false)
-  reminderState   Json        @default("{}")
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  tracksProgression Boolean     @default(false)
+  reminderState     Json        @default("{}")
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
   guild     Guild             @relation(fields: [guildId], references: [id], onDelete: Cascade)
   rsvps     EventRSVP[]
@@ -768,41 +828,41 @@ model EventRSVP {
 }
 
 model LFGPost {
-  id               String      @id @default(cuid())
-  guildId          String
-  authorDiscordId  String
-  activity         LFGActivity @default(OTHER)
-  details          String?
-  slotsTotal       Int         @default(5)
+  id                String      @id @default(cuid())
+  guildId           String
+  authorDiscordId   String
+  activity          LFGActivity @default(OTHER)
+  details           String?
+  slotsTotal        Int         @default(5)
   // Denormalized count of `members`, kept in step on every join/leave so the
   // list view can sort and filter without loading the roster of every post.
-  slotsFilled      Int         @default(1)
+  slotsFilled       Int         @default(1)
   /// Discord ids holding a slot, author first (COMMANDS.md /runs roster).
-  members          String[]    @default([])
-  status           LFGStatus   @default(OPEN)
-  expiresAt        DateTime?
+  members           String[]    @default([])
+  status            LFGStatus   @default(OPEN)
+  expiresAt         DateTime?
   /// A short headline the author writes, e.g. "F7 carries, need healer".
   /// Separate from `details` because one goes in the embed title and the other
   /// in its body, and squashing them means the list view has nothing short to
   /// show.
-  title            String?
+  title             String?
   /// Where the post was published, so the embed can be edited in place as
   /// people join and leave rather than leaving a stale roster on screen.
   /// Nullable because publishing can fail — a post that exists with no message
   /// is recoverable; a post that only exists as a message is not.
-  channelId        String?
-  messageId        String?
+  channelId         String?
+  messageId         String?
   /// The perm this post's roster was autofilled from, when it was. Kept for the
   /// same reason a screening keeps its inputs: "why were those four already in
   /// the party" should be answerable later.
-  permGroupId      String?
+  permGroupId       String?
   /// Closure is recorded, not inferred from `status`: "closed by the author at
   /// 9pm" and "expired quietly overnight" are both CLOSED-ish states that mean
   /// different things when someone asks what happened to a run.
   closedAt          DateTime?
   closedByDiscordId String?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
   guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
 
@@ -1017,6 +1077,11 @@ model ProfileSnapshot {
   /// nine figures, and the leaderboard ranks on the sum, not the tiers.
   slayerXp           BigInt?
   senitherWeight     Float?
+  /// SkyBlock Level, fractional (`leveling.experience / 100`). The headline
+  /// number on the profile card and a metric in its own right: skills plateau
+  /// and networth swings with the market, but levelling advances for anyone who
+  /// plays. Null when the profile hid its `leveling` section — not zero.
+  skyblockLevel      Float?
   metrics            Json           @default("{}")
   createdAt          DateTime       @default(now())
 
@@ -1179,51 +1244,123 @@ model MetricRollup {
 /// One row per guild: a second panel would mean two places to open the same
 /// ticket, and the message id here is what lets the bot edit the posted panel
 /// in place instead of leaving a stale copy behind whenever the types change.
-model TicketPanelConfig {
-  id          String   @id @default(cuid())
-  guildId     String   @unique
-  /// Where the panel is posted. Null until an admin picks a channel.
-  channelId   String?
-  /// The panel message itself, so an edit updates rather than reposts.
-  messageId   String?
-  title       String   @default("Support")
-  description String?
-  /// Presentation the panel editor owns (colour, thumbnail); no behaviour here.
-  embed       Json     @default("{}")
-  updatedAt   DateTime @updatedAt
+/// Per-guild ticket behaviour, mirroring the discord-tickets settings model.
+model TicketSettings {
+  guildId               String   @id
+  /// Whether messages are captured at all. Off means no transcript exists, which
+  /// the panel says plainly rather than showing an empty one.
+  archiveEnabled        Boolean  @default(true)
+  logChannelId          String?
+  /// Roles that may not open a ticket. Checked first, so a blocked member is
+  /// told they are blocked rather than told they failed some other rule.
+  blocklistRoleIds      String[] @default([])
+  primaryColor          String   @default("INFO")
+  successColor          String   @default("SUCCESS")
+  errorColor            String   @default("DANGER")
+  footer                String?
+  /// Silence after which a ticket is considered stale. Null disables the clock.
+  staleAfterMinutes     Int?
+  /// How long a pending-closure ticket waits before the sweep closes it.
+  autoCloseAfterMinutes Int      @default(720)
+  closeButton           Boolean  @default(true)
+  claimButton           Boolean  @default(true)
+  /// Per-weekday open/close times, in the guild's timezone. Outside them a
+  /// member is told when staff are back rather than left waiting in silence.
+  workingHours          Json     @default("{}")
+  updatedAt             DateTime @updatedAt
 
   guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
 }
 
 /// One kind of ticket a member can open.
 ///
-/// Guilds layer these over the built-in types by `key`, exactly as milestone
-/// definitions do: a guild that has configured nothing still gets the five
-/// standard types, and adding a built-in later reaches every guild rather than
-/// only the ones seeded after the change.
-model TicketTypeConfig {
-  id              String         @id @default(cuid())
-  guildId         String
-  key             String
-  label           String
-  emoji           String?
-  /// Which of the fixed categories a ticket of this type is filed under. The
-  /// category drives routing and reporting; the type is what a member picks.
-  category        TicketCategory @default(SUPPORT)
-  /// Category channel new ticket channels are created under. Null = wherever
-  /// the transport defaults to.
-  parentChannelId String?
-  staffRoleIds    String[]       @default([])
-  /// Shown to the member when they choose this type — the question the guild
-  /// actually wants answered before staff pick the ticket up.
-  prompt          String?
-  position        Int            @default(0)
-  enabled         Boolean        @default(true)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+/// A model rather than the fixed enum it replaced: the fields a guild actually
+/// needs to vary — staff roles, parent channel, limits, questions — are all
+/// per-category, and an enum could carry none of them.
+model TicketCategory {
+  id                  String   @id @default(cuid())
+  guildId             String
+  key                 String
+  name                String
+  /// Shown in the select menu, where Discord caps the description at 100 chars.
+  description         String   @default("")
+  emoji               String?
+  position            Int      @default(0)
+  enabled             Boolean  @default(true)
+  /// `{num}`, `{name}` and `{nick}` are expanded at creation time.
+  channelNameTemplate String   @default("ticket-{num}")
+  parentChannelId     String?
+  staffRoleIds        String[] @default([])
+  /// The member needs *all* of these, not any — matching the reference
+  /// implementation, and the stricter of the two readings.
+  requiredRoleIds     String[] @default([])
+  pingRoleIds         String[] @default([])
+  openingMessage      String   @default("")
+  image               String?
+  claiming            Boolean  @default(true)
+  cooldownSeconds     Int?
+  /// Open tickets one member may hold in this category.
+  memberLimit         Int      @default(1)
+  /// Open tickets the category may hold at once. Defaults to 50 because Discord
+  /// caps a channel category at 50 channels, and the 51st create fails.
+  totalLimit          Int      @default(50)
+  slowModeSeconds     Int?
+  requireTopic        Boolean  @default(false)
+  /// Up to five, because a Discord modal takes five inputs. Questions take
+  /// precedence over `requireTopic` when both are set.
+  questions           Json     @default("[]")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  guild   Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  tickets Ticket[]
 
   @@unique([guildId, key])
   @@index([guildId, enabled])
+}
+
+/// A posted message members open tickets from. Many per guild.
+model TicketPanel {
+  id           String           @id @default(cuid())
+  guildId      String
+  name         String
+  channelId    String?
+  /// The panel message, so a change edits in place rather than reposting.
+  messageId    String?
+  title        String           @default("Support")
+  description  String?
+  image        String?
+  thumbnail    String?
+  style        TicketPanelStyle @default(BUTTONS)
+  /// Category keys, in the order they appear on the panel.
+  categoryKeys String[]         @default([])
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([guildId])
+}
+
+enum TicketPanelStyle {
+  BUTTONS
+  SELECT
+}
+
+/// A canned reply, optionally auto-sent when a message matches its pattern.
+model TicketTag {
+  id          String   @id @default(cuid())
+  guildId     String
+  name        String
+  content     String
+  /// Case-insensitive, multiline regex. Compiled defensively — a pattern that
+  /// no longer compiles disables the tag rather than breaking message capture.
+  autoPattern String?
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, name])
 }
