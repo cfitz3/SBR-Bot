@@ -59,7 +59,7 @@ export interface DiscordSyncPorts {
 
 export interface DiscordSyncResult {
   /** Set when nothing was written, naming why. */
-  readonly skipped?: "unreachable";
+  readonly skipped?: "unreachable" | "implausible";
   readonly seen: number;
   readonly joined: number;
   readonly left: number;
@@ -83,6 +83,22 @@ export async function syncDiscordMembers(
   const people = fetched.filter((row) => !row.bot);
   const present = new Set(people.map((row) => row.id));
   const known = new Set(await ports.listActiveIds(guildId));
+
+  /*
+   * A 200 that carries nobody is not the same claim as "everyone left", even
+   * though the diff below cannot tell them apart. The realistic cause is the
+   * Server Members privileged intent being off: the gateway then hands the bot
+   * only itself, the bot is filtered out as a bot, and the fetch succeeds with
+   * an empty list — which would mark the entire server as departed on the next
+   * two-hourly run. `null` is the honest signal for that, but the bot has no way
+   * to know its own cache is crippled, so the refusal has to live here.
+   *
+   * The cost of the guard is one genuinely-empty server staying stale, which
+   * cannot happen while a member is present to look at the panel.
+   */
+  if (people.length === 0 && known.size > 0) {
+    return { skipped: "implausible", seen: 0, joined: 0, left: 0 };
+  }
 
   const writes: DiscordMemberWrite[] = people.map((row) => ({
     discordId: row.id,
