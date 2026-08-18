@@ -16,6 +16,7 @@ import type {
 } from "@sbr/shared-types";
 import { padInlineRow } from "@sbr/shared-types";
 import { describeState, punishmentState } from "@sbr/moderation";
+import { reasonSentence, type JoinActionResult, type ScreeningRecord } from "@sbr/screening";
 
 /** Discord renders `<t:…:R>` as a live relative timestamp in the reader's locale. */
 export function relativeTs(iso: string): string {
@@ -234,4 +235,53 @@ export function renderApplicationListEmbed(apps: readonly ApplicationDTO[]): Emb
     footer: "Decide with /accept-member id:<id> or /deny-member id:<id>.",
     color: "INFO",
   };
+}
+
+// ─────────────────── In-game join queue (/join-queue) ────────────────────────
+
+/**
+ * The queue of in-game join requests still awaiting a decision.
+ *
+ * Different from the applications list above and deliberately not merged with
+ * it: an application is a Discord form somebody filled in, a join request is a
+ * player standing at the guild door in-game. They arrive by different routes,
+ * they are resolved by different commands, and a staffer looking at one queue
+ * should not have to work out which rows belong to the other.
+ *
+ * The verdict is shown rather than the risk score. The score orders the queue;
+ * the verdict is the thing staff are being asked to agree or disagree with.
+ */
+export function renderJoinQueueEmbed(rows: readonly ScreeningRecord[]): EmbedView {
+  if (rows.length === 0) {
+    return {
+      title: "In-game join queue",
+      description: "Nobody is waiting. Requests appear here as they are screened.",
+      color: "NEUTRAL",
+    };
+  }
+  return {
+    title: `In-game join queue (${rows.length})`,
+    fields: rows.slice(0, 10).map((r) => ({
+      name: `${r.ign} — ${r.verdict.toLowerCase()} (risk ${r.riskScore})`,
+      // The first reason is the one that decided it; the rest are in the staff
+      // report already posted, and a ten-row list is not the place to repeat them.
+      value: `${reasonSentence(r.reasons[0] ?? "MEETS_REQUIREMENTS")} · ${relativeTs(r.requestedAt.toISOString())}`,
+      inline: false,
+    })),
+    footer: "Decide with /join-accept ign:<name> or /join-deny ign:<name>.",
+    color: "INFO",
+  };
+}
+
+/** One decision, phrased so "sent" and "recorded" stay distinguishable. */
+export function renderJoinAction(action: "accepted" | "denied" | "invited", result: JoinActionResult): string {
+  if (!result.ok) {
+    return result.reason === "BAD_NAME"
+      ? "That isn't a Minecraft username — letters, numbers and underscores, up to 16 characters."
+      : "The bridge couldn't take that command. It isn't connected to the guild right now, so nothing was sent.";
+  }
+  const recorded = result.recorded
+    ? " Their screening row is marked."
+    : " No pending screening matched them, so only the in-game command was sent.";
+  return `Sent \`/guild ${action === "invited" ? "invite" : action === "accepted" ? "accept" : "deny"} ${result.ign}\`.${recorded}`;
 }

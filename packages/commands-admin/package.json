@@ -19,6 +19,7 @@
   "dependencies": {
     "@sbr/brand": "*",
     "@sbr/moderation": "*",
+    "@sbr/screening": "*",
     "@sbr/observability": "*",
     "@sbr/shared-types": "*"
   }

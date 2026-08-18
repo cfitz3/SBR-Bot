@@ -14,7 +14,7 @@
  * and a completed join looks like:
  *
  * ```
- * [MVP+] Steve joined the guild!
+ * Guild > [MVP+] Steve joined.
  * ```
  *
  * Written in the same tolerant spirit as the `/g online` parser: Hypixel has
@@ -25,9 +25,21 @@
  * tags and colour codes, and anything unrecognised is ignored rather than
  * guessed at.
  *
- * Deliberately narrow in one respect: only lines that name a *specific* action
- * are matched. "Click here to accept" carries no new information and is
- * skipped, so a single request does not screen twice.
+ * **The patterns are unanchored at both ends, and that is the fix for the bug
+ * this file shipped with.** Hypixel sends the whole framed block above as *one*
+ * chat packet with embedded newlines, so a parser anchored with `^…$` against a
+ * whitespace-collapsed packet matched nothing at all: no log line, no lookup,
+ * no accept, for every request the guild ever received. The transport now
+ * splits packets into lines before calling here, and these patterns would
+ * survive the unsplit form too — two independent reasons the block has to
+ * parse, because the failure is invisible when it returns.
+ *
+ * Deliberately narrow in two respects. Only lines naming a *specific* action
+ * are matched — "Click here to accept" carries no new information and is
+ * skipped, so a single request does not screen twice. And anything that is
+ * somebody *talking* is refused outright: an unanchored search would otherwise
+ * read a member typing "Steve has requested to join the guild!" in guild chat
+ * as a request from Steve.
  */
 import { stripMinecraftColors } from "@sbr/bridge";
 
@@ -41,15 +53,41 @@ export type GuildJoinEvent =
 const NAME = "([A-Za-z0-9_]{1,16})";
 
 /**
+ * A character that may sit immediately before a username.
+ *
+ * Not `\b`: `_` is both a word character and a legal username character, so a
+ * word boundary would happily start the capture mid-name and read `Steve_123`
+ * as `123`. This says "either the start of the line, or something that cannot
+ * be part of a name".
+ */
+const BEFORE = "(?:^|[^A-Za-z0-9_])";
+
+/**
  * `[MVP+] Steve has requested to join the Guild!`
  *
- * The article and capitalisation of "Guild" have both varied; the exclamation
- * mark is optional for the same reason.
+ * The article and capitalisation of "Guild" have both varied, and the trailing
+ * punctuation is not required — on the framed form the sentence is followed by
+ * the "click here" line rather than by the end of the string.
  */
-const REQUEST = new RegExp(`^${NAME} has requested to join the guild!?$`, "i");
+const REQUEST = new RegExp(`${BEFORE}${NAME} has requested to join the guild`, "i");
 
-/** `[MVP+] Steve joined the guild!` */
-const JOINED = new RegExp(`^${NAME} joined the guild!?$`, "i");
+/**
+ * `Guild > [MVP+] Steve joined.` — the announcement Hypixel actually prints to
+ * the guild when somebody is admitted. The older `Steve joined the guild!`
+ * wording is kept alongside it rather than replaced: both have been seen, and
+ * an extra pattern costs one regex per chat line.
+ */
+const JOINED_ANNOUNCE = new RegExp(`^guild *> *${NAME} joined(?:[^A-Za-z0-9_]|$)`, "i");
+const JOINED_PLAIN = new RegExp(`${BEFORE}${NAME} joined the guild`, "i");
+
+/**
+ * A line that is somebody speaking: `Guild > Steve: …`, `Officer > Alex: …`.
+ *
+ * Checked before anything else, because every pattern here is unanchored and
+ * chat is arbitrary attacker-controlled text. The colon is what distinguishes
+ * speech from Hypixel's own `Guild > Steve joined.` announcement.
+ */
+const CHAT_LINE = /^(?:guild|officer|party|co-op|from|to)\s*>?\s*[^:]{0,32}:/i;
 
 /**
  * Strip colour codes and rank tags, and collapse whitespace.
@@ -68,17 +106,21 @@ function clean(line: string): string {
 /**
  * Read one chat line as a join event, or null when it is not one.
  *
- * Called on every `messagestr` line, so it stays cheap: two regexes against a
- * cleaned string, no allocation beyond that.
+ * Called on every `messagestr` line, so it stays cheap: a handful of regexes
+ * against a cleaned string, no allocation beyond that.
  */
 export function parseJoinEvent(line: string): GuildJoinEvent | null {
   const text = clean(line);
   if (text.length === 0) return null;
+  if (CHAT_LINE.test(text)) return null;
+
+  const announced = JOINED_ANNOUNCE.exec(text);
+  if (announced) return { kind: "JOINED", ign: announced[1]! };
 
   const request = REQUEST.exec(text);
   if (request) return { kind: "REQUEST", ign: request[1]! };
 
-  const joined = JOINED.exec(text);
+  const joined = JOINED_PLAIN.exec(text);
   if (joined) return { kind: "JOINED", ign: joined[1]! };
 
   return null;
@@ -87,4 +129,21 @@ export function parseJoinEvent(line: string): GuildJoinEvent | null {
 /** The command that admits an applicant. */
 export function acceptCommand(ign: string): string {
   return `/guild accept ${ign}`;
+}
+
+/** The command that refuses one. */
+export function denyCommand(ign: string): string {
+  return `/guild deny ${ign}`;
+}
+
+/**
+ * The command that invites somebody who never asked.
+ *
+ * Separate from `acceptCommand` because the two are not interchangeable:
+ * Hypixel refuses `accept` for a player with no pending request, and refuses
+ * `invite` for one who has already asked. Staff pick by which situation they
+ * are in, and the queue command reports which one applies.
+ */
+export function inviteCommand(ign: string): string {
+  return `/guild invite ${ign}`;
 }

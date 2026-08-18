@@ -193,6 +193,10 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/bridge-suspend` | Pause chat relay (both directions) | Officer | `reason?`, `duration?` | Confirmation + status broadcast | Already suspended | DB (`GuildConfig`) + Cache + pub/sub event |
 | `/bridge-unsuspend` | Resume chat relay | Officer | *(none)* | Confirmation + status broadcast | Not suspended | DB + Cache + pub/sub |
+| `/join-queue` | List screened in-game join requests awaiting a decision | Officer | *(none)* | Queue embed | *(empty queue reads as such)* | DB (`Screening`) |
+| `/join-accept` | Admit an applicant in-game | Officer | `ign*` | Confirmation naming the applicant | Not a Minecraft name; bridge not in-game | DB (`Screening`) + pub/sub `GAME_COMMAND` |
+| `/join-deny` | Refuse an applicant in-game | Officer | `ign*` | Confirmation | As above | DB + pub/sub |
+| `/guild-invite` | Invite a player who never applied | Officer | `ign*` | Confirmation | As above | pub/sub |
 
 ---
 

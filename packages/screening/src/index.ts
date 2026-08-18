@@ -5,6 +5,15 @@
 export { ScreeningService, type ScreeningServiceDeps, type ScreenRequest, type ScreenResult } from "./service.js";
 export { evaluate, parsePolicy, serializePolicy, riskWeight, type PolicyInput, type PolicyDecision } from "./policy.js";
 export { chatLine, formatCoins, reasonLines, reasonSentence, staffReport, statLine } from "./report.js";
+export {
+  JoinQueueService,
+  type GuildCommandSender,
+  type JoinAction,
+  type JoinActionFailure,
+  type JoinActionResult,
+  type JoinPlayerLookup,
+  type JoinQueueDeps,
+} from "./queue.js";
 export type {
   ApplicantHistorySource,
   ApplicantLinkSource,

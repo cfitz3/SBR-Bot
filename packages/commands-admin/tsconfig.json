@@ -10,6 +10,7 @@
     { "path": "../shared-types" },
     { "path": "../observability" },
     { "path": "../moderation" },
+    { "path": "../screening" },
     { "path": "../../brand" }
   ]
 }

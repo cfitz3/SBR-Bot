@@ -46,6 +46,9 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/purge` | Staff | Bounded (≤100 msgs, ≤14d); logs count + scope, not content, by default. |
 | `/infractions` | Staff | Read-only history view. |
 | `/member-note` | Staff | Private staff note (audited). |
+| `/join-queue` | Officer | Read-only view of screened in-game requests still pending. |
+| `/join-accept` / `/join-deny` | Officer | Sends the guild command through the bridge, then marks the row — never the other way round; refuses names that are not `[A-Za-z0-9_]{1,16}`. |
+| `/guild-invite` | Officer | Invites a player who never applied; marks no screening row. |
 | `/bridge-suspend` / `-unsuspend` | Officer | Reason required; broadcasts status. |
 
 ### Governance

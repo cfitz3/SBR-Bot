@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { acceptCommand, parseJoinEvent } from "./join.js";
+import { acceptCommand, denyCommand, inviteCommand, parseJoinEvent } from "./join.js";
 
 test("a plain request is read", () => {
   assert.deepEqual(parseJoinEvent("Steve has requested to join the Guild!"), { kind: "REQUEST", ign: "Steve" });
@@ -48,4 +48,58 @@ test("ordinary guild chat is never mistaken for a join", () => {
 
 test("the accept command names the applicant", () => {
   assert.equal(acceptCommand("Steve"), "/guild accept Steve");
+});
+
+test("the framed block Hypixel actually sends parses even unsplit", () => {
+  // The bug this file exists to pin. Hypixel sends the divider, the request and
+  // the "click here" line as ONE chat packet; the transport splits it, but the
+  // parser must survive the unsplit form too, because when it does not the
+  // failure is complete silence rather than an error.
+  const block = [
+    "§b-----------------------------------------------------",
+    "§b[MVP§c+§b] §bSteve_123 §ehas requested to join the Guild!",
+    "§eClick here to accept or type §b/guild accept Steve_123§e!",
+    "§b-----------------------------------------------------",
+  ].join("\n");
+  assert.deepEqual(parseJoinEvent(block), { kind: "REQUEST", ign: "Steve_123" });
+});
+
+test("each line of the split block reads correctly on its own", () => {
+  assert.deepEqual(parseJoinEvent("§b[MVP§c+§b] §bSteve_123 §ehas requested to join the Guild!"), {
+    kind: "REQUEST",
+    ign: "Steve_123",
+  });
+  assert.equal(parseJoinEvent("§b-----------------------------------------------------"), null);
+  assert.equal(parseJoinEvent("§eClick here to accept or type §b/guild accept Steve_123§e!"), null);
+});
+
+test("Hypixel's own join announcement is read as a join", () => {
+  assert.deepEqual(parseJoinEvent("§2Guild > §b[MVP§c+§b] §aSteve§2 joined."), { kind: "JOINED", ign: "Steve" });
+  assert.deepEqual(parseJoinEvent("Guild > Alex joined."), { kind: "JOINED", ign: "Alex" });
+});
+
+test("a member typing the notice into guild chat is not a request", () => {
+  // Every pattern is unanchored, so speech has to be refused explicitly —
+  // otherwise anyone could name anyone and have them screened, or accepted.
+  for (const line of [
+    "Guild > Bob: Steve has requested to join the Guild!",
+    "§2Guild > §aBob§f: §rSteve has requested to join the Guild!",
+    "Officer > Bob: Alex joined the guild!",
+    "Guild > Bob: Alex joined.",
+  ]) {
+    assert.equal(parseJoinEvent(line), null, line);
+  }
+});
+
+test("an underscore name is captured whole", () => {
+  // `\b` would start the capture after the underscore and screen "123".
+  assert.deepEqual(parseJoinEvent("Steve_123 has requested to join the guild"), {
+    kind: "REQUEST",
+    ign: "Steve_123",
+  });
+});
+
+test("the deny and invite commands name the player", () => {
+  assert.equal(denyCommand("Steve"), "/guild deny Steve");
+  assert.equal(inviteCommand("Steve"), "/guild invite Steve");
 });

@@ -8,6 +8,7 @@ import { loadConfig, type AppConfig } from "@sbr/config";
 import {
   communityRepository,
   assertDatabaseReady,
+  screeningRepository,
   disconnectDb,
   guildConfigRepository,
   guildRepository,
@@ -25,6 +26,7 @@ import {
   WordlistServiceImpl,
 } from "@sbr/moderation";
 import { IdentityServiceImpl } from "@sbr/identity";
+import { JoinQueueService, ScreeningService, type GuildCommandSender } from "@sbr/screening";
 import { HypixelClient } from "@sbr/hypixel";
 import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
@@ -141,6 +143,60 @@ export async function createAdminApp(): Promise<AdminApp> {
   const safety = new SafetyServiceImpl({ store: adapters.safety, effects, logger: log });
   const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
 
+  /**
+   * The in-game join queue: `/join-queue`, `/join-accept`, `/join-deny`,
+   * `/guild-invite`.
+   *
+   * Only the repository half of screening is wired here. This process never
+   * *screens* anybody — that happens on the bridge, where the chat line arrives
+   * — so the scammer list, the stat reader and the policy source would be dead
+   * weight. What staff need from here is the queue those screenings left behind
+   * and a way to answer one.
+   */
+  const screening = new ScreeningService({ repo: screeningRepository, logger: log });
+
+  /**
+   * Guild commands from staff, over the same bus punishments use.
+   *
+   * The liveness check is not decoration. Redis pub/sub has no store-and-forward:
+   * publishing to a channel nobody is subscribed to succeeds and the message is
+   * gone. Without this, `/join-accept` would answer "sent" whenever the bridge
+   * happened to be down, and staff would come back to an applicant still waiting
+   * with the platform insisting they had been admitted. A bridge that is up but
+   * not spawned in-game is equally no use, so `mcSpawned` is what is checked
+   * rather than mere presence.
+   */
+  const guildCommands: GuildCommandSender = {
+    async send(guildId, command) {
+      const live = await adapters.heartbeat.list().catch(() => []);
+      const bridge = live.find((r) => r.service === "bridge-bot" && r.details["mcSpawned"] === true);
+      if (!bridge) {
+        log.warn("guild command not sent: no bridge is in-game", { guildId });
+        return false;
+      }
+      try {
+        await adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() });
+        return true;
+      } catch (error) {
+        log.error("guild command could not be published", { guildId, error: String(error) });
+        return false;
+      }
+    },
+  };
+
+  const joinQueue = new JoinQueueService({
+    screening,
+    commands: guildCommands,
+    // Mojang's casing, and the uuid that matches a typed name back to its row.
+    players: {
+      async resolveIgn(ign) {
+        const found = await hypixel.resolveUuid(ign);
+        return found === null ? null : { uuid: found.uuid, ign: found.name };
+      },
+    },
+    logger: log,
+  });
+
   const dispatcher = new AdminDispatcher({
     registry: buildAdminRegistry(),
     roles: rankResolver,
@@ -154,6 +210,7 @@ export async function createAdminApp(): Promise<AdminApp> {
       wordlist,
       effects,
       analytics,
+      joinQueue,
       logger: log,
     },
     logger: log,

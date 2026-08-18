@@ -29,7 +29,7 @@ import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-
 import { startMilestoneAnnouncer } from "./milestones.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
-import { acceptCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
+import { acceptCommand, denyCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
 import { CommandQueue } from "./command-queue.js";
 import { isPunitiveNotice, parseModNotice, type ModNotice } from "./mod-notice.js";
 import { chatLine, staffReport } from "@sbr/screening";
@@ -630,7 +630,25 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     });
     session.bot = bot;
 
+    // One packet is not one line.
+    //
+    // Hypixel sends its framed announcements — the join request, the `/g online`
+    // reply, the guild-info block — as a *single* chat packet whose text carries
+    // embedded newlines. Mineflayer hands that to `messagestr` as one string, and
+    // every parser below reads a line: they anchor with `^…$`, and the roster
+    // collector counts entries. Fed the whole block they all matched nothing, and
+    // matched nothing *silently* — which is why a join request produced no log,
+    // no lookup and no accept.
+    //
+    // So the packet is split here, once, and each line is read on its own. This
+    // is the right altitude for it: every parser downstream is line-shaped, and
+    // fixing them individually would leave the next one to be written with the
+    // same trap in it.
     bot.on("messagestr", (str: string) => {
+      for (const line of str.split(/\r?\n/)) handleChatLine(bot, line);
+    });
+
+    function handleChatLine(bot: Bot, str: string): void {
       // Roster capture takes every line, guild chat or not: the `/g online`
       // reply is a server message block, not chat, so it never parses as chat.
       captureRosterLine(str);
@@ -639,6 +657,10 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // guild-chat parse rather than inside it.
       const join = parseJoinEvent(str);
       if (join) {
+        // Logged the moment it is recognised, before any lookup can fail. The
+        // original bug was indistinguishable from "nobody has asked to join":
+        // this line is what tells the two apart next time.
+        app.log.info("guild join event seen", { kind: join.kind, ign: join.ign });
         relay("join-screening", () => handleJoin(bot, join));
         return;
       }
@@ -689,7 +711,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
         // reply to a question Discord watched somebody ask in guild chat.
         sayInGuildChat(bot, answer, true);
       });
-    });
+    }
     bot.on("spawn", () => {
       spawned = true;
       // Only a successful spawn clears the backoff. Resetting on connect would
@@ -847,13 +869,33 @@ ${staffReport(screening)}`);
       return;
     }
 
+    // Raw commands, not `/gc`: these are instructions to Hypixel, not lines of
+    // guild chat, so they must not go through the echo-suppressing sender.
+    //
+    // They go through the same paced queue every other game command uses, and
+    // they used to go through `bot.chat` directly. That was wrong twice over: a
+    // burst of applicants could out-run Hypixel's command limit and silence the
+    // account the whole relay depends on, and a request that arrived while the
+    // session was down was dropped on the floor *after* the row had already
+    // been marked ACCEPTED — the platform's record then said "accepted" about
+    // somebody Hypixel had never heard us accept. The queue holds the command
+    // through a reconnect instead, and the outcome is only recorded once the
+    // command is on its way.
     if (shouldAccept) {
-      // A raw command, not `/gc`: this is an instruction to Hypixel, not a line
-      // of guild chat, so it must not go through the echo-suppressing sender.
-      if (spawned) bot.chat(acceptCommand(resolved.ign));
-      await app.screening.decide(id, "ACCEPTED", "AUTO");
+      if (sendGameCommand(guildId, acceptCommand(resolved.ign))) {
+        await app.screening.decide(id, "ACCEPTED", "AUTO");
+      } else {
+        app.log.warn("auto-accept could not be queued; left pending for staff", { ign: resolved.ign });
+      }
     } else if (screening.verdict === "DENY") {
-      await app.screening.decide(id, "DENIED", "AUTO");
+      // Denying in-game as well as on the row. Recording DENIED without sending
+      // the command left the applicant sitting in Hypixel's request queue for
+      // whoever logged in next to accept by hand, against our own decision.
+      if (sendGameCommand(guildId, denyCommand(resolved.ign))) {
+        await app.screening.decide(id, "DENIED", "AUTO");
+      } else {
+        app.log.warn("auto-deny could not be queued; left pending for staff", { ign: resolved.ign });
+      }
     }
 
     // The public line is deliberately vague — see `chatLine`. Said only when we

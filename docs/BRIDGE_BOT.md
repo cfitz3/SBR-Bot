@@ -208,6 +208,13 @@ has had to look at them.
 1. **Parse.** `parseJoinEvent` reads `… has requested to join the Guild!` off
    the `messagestr` stream, tolerating rank tags, colour codes and the wording
    changes Hypixel has shipped before. `… joined the guild!` is a separate event.
+   **One `messagestr` is not one line**: Hypixel sends the divider, the request
+   and the "Click here" instruction as a single packet with embedded newlines, so
+   the transport splits on `
+` and hands each line over separately. Every
+   pattern is also unanchored, which is defence in depth against a future
+   framing — and is why guild *speech* (`Guild > Bob: … has requested …`) has to
+   be refused explicitly, so no member can have anyone screened by typing it.
    The "Click here to accept" follow-up line is deliberately *not* a second
    request, and a 60-second dedupe collapses the reprints Hypixel sends to every
    member with the invite permission.
@@ -228,10 +235,20 @@ has had to look at them.
    the risk score, the reasons and the applicant's stats as they were at that
    moment — which is also the metrics capture: an applicant has no
    `ProfileSnapshot` because they are not a member yet.
-5. **Act.** On ACCEPT with `autoAccept` on, the bot sends `/guild accept <ign>`.
-   On DENY it records the refusal. On REVIEW it does nothing and waits.
+5. **Act.** On ACCEPT with `autoAccept` on, the bot queues `/guild accept <ign>`
+   through the `CommandQueue`; on DENY it queues `/guild deny <ign>`. The row is
+   marked **only if the queue took the command** — a backlog that dropped it
+   leaves the request PENDING for staff rather than recording an accept that
+   never happened. On REVIEW it does nothing and waits.
 6. **Report.** A full report goes to the `staff` channel. Guild chat gets at most
    a neutral line.
+7. **Decide, by hand.** Anything left PENDING — which is everything, when
+   `autoAccept` is off — is answered from Discord with `/join-queue`,
+   `/join-accept` and `/join-deny` (see `ADMIN_BOT.md`). Those publish a
+   `GAME_COMMAND` over the mod bus for this bot to type. Because that bus is
+   plain pub/sub with no store-and-forward, the admin bot checks the bridge's
+   heartbeat for `mcSpawned` first and tells staff the command could not be sent
+   rather than losing it silently.
 
 ### 6A.2 Rules that are not negotiable
 

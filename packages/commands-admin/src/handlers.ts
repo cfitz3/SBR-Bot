@@ -17,7 +17,7 @@ import type {
 } from "@sbr/shared-types";
 import { withCommandCopy } from "@sbr/brand";
 import { isEscalation } from "@sbr/moderation";
-import type { AdminHandler, AdminCommandSpec } from "./types.js";
+import type { AdminHandler, AdminCommandSpec, AdminReply } from "./types.js";
 import { parseDurationSeconds, renderModError } from "./util.js";
 import {
   relativeTs,
@@ -27,6 +27,8 @@ import {
   renderEffectError,
   renderFilterTestEmbed,
   renderInfractionPages,
+  renderJoinAction,
+  renderJoinQueueEmbed,
   renderSafetyError,
   renderSafetyStatusEmbed,
   renderWordlistEmbed,
@@ -438,6 +440,85 @@ const setRole: AdminHandler = async (ctx, deps) => {
 
 // ── Applications ────────────────────────────────────────────────────────────
 
+// ── In-game join queue ──────────────────────────────────────────────────────
+//
+// The counterpart to the bridge's auto-accept. Screening records every request
+// and posts a staff report; with auto-accept off — the default — nothing on the
+// platform could then act on one, and staff had to log into the game account
+// and type the command by hand against a queue the panel was showing them.
+//
+// Every command here is OFFICER. Opening the guild door is a membership
+// decision of the same weight as `/accept-member`, and it is irreversible in
+// the sense that matters: the person is inside before anyone reviews it.
+
+/** Shared by all four: the bridge may simply not be wired into this process. */
+function noBridge(): AdminReply {
+  return {
+    ephemeral: true,
+    text: "The in-game join queue isn't available here — this bot has no bridge to send guild commands through.",
+  };
+}
+
+const joinQueue: AdminHandler = async (ctx, deps) => {
+  if (!deps.joinQueue) return noBridge();
+  const rows = await deps.joinQueue.pending(ctx.guildId);
+  return {
+    ephemeral: true,
+    text: rows.length === 0 ? "Nobody is waiting to join." : `${rows.length} waiting on a decision.`,
+    embed: renderJoinQueueEmbed(rows),
+  };
+};
+
+/**
+ * `/join-accept` and `/join-deny` differ only in which command is sent and
+ * which outcome is recorded, so they share one implementation — the validation,
+ * the audit note and the "sent but not recorded" phrasing must not be able to
+ * drift between admitting somebody and refusing them.
+ */
+function joinDecisionHandler(accept: boolean): AdminHandler {
+  return async (ctx, deps) => {
+    if (!deps.joinQueue) return noBridge();
+    const ign = ctx.args.getString("ign");
+    if (!ign) return { ephemeral: true, text: `Usage: /join-${accept ? "accept" : "deny"} ign:<name>` };
+
+    const result = accept
+      ? await deps.joinQueue.accept(ctx.guildId, ign, ctx.actorId)
+      : await deps.joinQueue.deny(ctx.guildId, ign, ctx.actorId);
+
+    return { ephemeral: true, text: renderJoinAction(accept ? "accepted" : "denied", result) };
+  };
+}
+
+const joinAccept = joinDecisionHandler(true);
+const joinDeny = joinDecisionHandler(false);
+
+/**
+ * Suggest the names actually waiting.
+ *
+ * Typed by hand, a username is one transposed character away from a command
+ * that either does nothing or admits somebody else entirely — and the queue is
+ * exactly the list of names that are valid right now, so there is no reason to
+ * make staff retype one off a report.
+ */
+const joinQueueNames: NonNullable<AdminCommandSpec["autocomplete"]> = async (focused, ctx, deps) => {
+  if (!deps.joinQueue) return [];
+  const rows = await deps.joinQueue.pending(ctx.guildId).catch(() => []);
+  const needle = focused.value.toLowerCase();
+  return rows
+    .filter((r) => r.ign.toLowerCase().startsWith(needle))
+    .slice(0, 25)
+    .map((r) => ({ name: `${r.ign} — ${r.verdict.toLowerCase()}`.slice(0, 100), value: r.ign }));
+};
+
+const guildInvite: AdminHandler = async (ctx, deps) => {
+  if (!deps.joinQueue) return noBridge();
+  const ign = ctx.args.getString("ign");
+  if (!ign) return { ephemeral: true, text: "Usage: /guild-invite ign:<name>" };
+  const result = await deps.joinQueue.invite(ctx.guildId, ign, ctx.actorId);
+  return { ephemeral: true, text: renderJoinAction("invited", result) };
+};
+
+
 const applicationReview: AdminHandler = async (ctx, deps) => {
   const id = ctx.args.getString("id");
   if (id) {
@@ -833,6 +914,35 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       ],
       minRole: "OFFICER",
       handler: denyMember,
+    },
+    {
+      name: "join-queue",
+      description: "In-game join requests awaiting a decision",
+      minRole: "OFFICER",
+      handler: joinQueue,
+    },
+    {
+      name: "join-accept",
+      description: "Admit somebody who asked to join in-game",
+      options: [{ name: "ign", description: "Minecraft username", type: "string", required: true, autocomplete: true }],
+      minRole: "OFFICER",
+      handler: joinAccept,
+      autocomplete: joinQueueNames,
+    },
+    {
+      name: "join-deny",
+      description: "Refuse an in-game join request",
+      options: [{ name: "ign", description: "Minecraft username", type: "string", required: true, autocomplete: true }],
+      minRole: "OFFICER",
+      handler: joinDeny,
+      autocomplete: joinQueueNames,
+    },
+    {
+      name: "guild-invite",
+      description: "Invite a player who hasn't asked to join",
+      options: [{ name: "ign", description: "Minecraft username", type: "string", required: true }],
+      minRole: "OFFICER",
+      handler: guildInvite,
     },
     {
       name: "bridge-suspend",

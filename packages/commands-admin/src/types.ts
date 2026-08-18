@@ -18,6 +18,7 @@ import type {
   SafetyService,
   WordlistService,
 } from "@sbr/shared-types";
+import type { JoinQueueService } from "@sbr/screening";
 import type { Logger } from "@sbr/observability";
 
 export interface AdminContext {
@@ -50,6 +51,16 @@ export interface AdminHandlerDeps {
   /** The Discord side of `/kick`, `/purge` and `/lockdown`. */
   readonly effects: GuildEffects;
   readonly analytics: AnalyticsService;
+  /**
+   * The in-game join queue: `/join-queue`, `/join-accept`, `/join-deny`,
+   * `/guild-invite`.
+   *
+   * Optional because it needs a bridge to type commands through, and a
+   * deployment without one should say so rather than fail to start. The
+   * handlers answer "the bridge isn't wired up here" when it is absent, which
+   * is the same shape of answer they give when it is wired up but offline.
+   */
+  readonly joinQueue?: JoinQueueService;
   readonly logger: Logger;
 }
 
