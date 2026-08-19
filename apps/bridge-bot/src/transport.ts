@@ -52,6 +52,16 @@ import {
   type JoinActionResult,
 } from "@sbr/screening";
 import type { ActionRowView } from "@sbr/shared-types";
+import { guildRepository } from "@sbr/db";
+import { TicketGateway } from "./tickets.js";
+import {
+  capturedFrom,
+  handleTicketModal,
+  registerTicketComponents,
+  ticketArchivePort,
+  ticketConfigPort,
+  ticketDiscordPort,
+} from "./tickets-discord.js";
 
 export interface GuildChatLine {
   readonly name: string;
@@ -480,6 +490,26 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     onError: (namespace, error) => app.log.error("component handler threw", { namespace, error: String(error) }),
   });
   registerCommunityButtons(app, components);
+
+  // Tickets. Built here rather than in the composition root because every one
+  // of its side effects needs the live client, and registered against the same
+  // stateless-id router as every other persistent control.
+  const tickets = new TicketGateway({
+    community: app.handlerDeps.community,
+    config: app.handlerDeps.config,
+    tickets: ticketConfigPort(),
+    archive: ticketArchivePort(),
+    discord: ticketDiscordPort(discord, app.log),
+    guildName: async (guildId) => (await guildRepository.displayName(guildId)) ?? "this server",
+    log: app.log,
+  });
+  const ticketRouting = {
+    gateway: tickets,
+    resolveGuild: (discordGuildId: string) => app.resolveGuild(discordGuildId),
+    log: app.log,
+  };
+  registerTicketComponents(components, ticketRouting);
+  app.setTickets(tickets);
   // The board needs the client, and the client is built from the app, so it is
   // handed over here rather than composed in.
   app.setLfgBoard(createLfgBoard(app, discord));
@@ -513,8 +543,17 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       void handle(i).catch((e: unknown) => app.log.error("interaction failed", { error: String(e) }));
     } else if (i.isAutocomplete()) {
       void complete(i).catch((e: unknown) => app.log.error("autocomplete failed", { error: String(e) }));
-    } else if (i.isButton()) {
+    } else if (i.isButton() || i.isStringSelectMenu()) {
+      // Select menus route through the same table: a ticket panel offering more
+      // than five categories has to be a menu, and it carries the same kind of
+      // stateless id a button does.
       void components.handle(i).catch((e: unknown) => app.log.error("component failed", { error: String(e) }));
+    } else if (i.isModalSubmit()) {
+      // Modals do not come through the component router — they are not message
+      // components — so they are offered to each owner in turn.
+      void handleTicketModal(i, ticketRouting).catch((e: unknown) =>
+        app.log.error("modal failed", { error: String(e) }),
+      );
     }
   });
   discord.once(Events.ClientReady, (c) => app.log.info("bridge discord gateway ready", { tag: c.user.tag }));
@@ -899,6 +938,25 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
 
   if (opts.mc) connectMinecraft(opts.mc);
 
+  // An edited or deleted message is stamped, never rewritten away: a transcript
+  // that silently drops what somebody deleted reads as a complete record of a
+  // conversation that did not happen that way. Both are best-effort — an
+  // uncached message from before the last restart has no content to compare.
+  discord.on(Events.MessageUpdate, (_before, after) => {
+    relay("tickets:edit", async () => {
+      // A partial is an edit to a message from before this process started:
+      // we hold no content to record, and guessing "" would erase what the
+      // transcript already has.
+      if (after.partial) return;
+      await tickets.captureEdit(after.id, after.content);
+    });
+  });
+  discord.on(Events.MessageDelete, (message) => {
+    relay("tickets:delete", async () => {
+      await tickets.captureDelete(message.id);
+    });
+  });
+
   // Discord → in-game relay (only messages in the configured bridge channel).
   discord.on(Events.MessageCreate, (msg: Message) => {
     const bot = session.bot;
@@ -940,6 +998,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       await msg.delete().catch((error: unknown) => {
         app.log.warn("automod could not delete a message", { messageId: msg.id, error: String(error) });
       });
+    });
+
+    // Transcripts. Cheap for the 99.9% of messages that are not in a ticket:
+    // one indexed lookup by channel id and nothing else. Bot messages are
+    // captured too — the greeting is part of the conversation — but never count
+    // as a staff reply, which is what `fromBot` is for.
+    relay("tickets:capture", async () => {
+      await tickets.capture(capturedFrom(msg));
     });
 
     relay("discord→game", async () => {

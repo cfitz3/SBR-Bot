@@ -26,6 +26,7 @@
     { "path": "../../packages/redis" },
     { "path": "../../packages/screening" },
     { "path": "../../packages/skykings" },
-    { "path": "../../packages/shared-types" }
+    { "path": "../../packages/shared-types" },
+    { "path": "../../packages/tickets" }
   ]
 }

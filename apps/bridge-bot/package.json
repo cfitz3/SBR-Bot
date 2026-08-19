@@ -30,6 +30,7 @@
     "@sbr/screening": "*",
     "@sbr/skykings": "*",
     "@sbr/shared-types": "*",
+    "@sbr/tickets": "*",
     "@sbr/discord-kit": "*",
     "discord.js": "^14.27.0",
     "mineflayer": "^4.37.1",

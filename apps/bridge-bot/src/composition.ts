@@ -88,6 +88,7 @@ import {
 import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
+import type { TicketGateway } from "./tickets.js";
 
 export interface BridgeApp {
   readonly config: AppConfig;
@@ -177,6 +178,16 @@ export interface BridgeApp {
   setStatusSource(source: (() => BridgeStatusDetails) | null): void;
   /** Hand the composition the Discord-backed LFG board once the client exists. */
   setLfgBoard(board: LfgBoard | null): void;
+  /**
+   * The ticket gateway, once the client exists.
+   *
+   * Late-bound like the board, and readable afterwards because two things
+   * outside the transport need it: the panel, which asks for a ticket panel to
+   * be published and wants a real answer rather than a hopeful one, and the
+   * sweep, which asks what to do with a ticket nobody has answered.
+   */
+  setTickets(gateway: TicketGateway | null): void;
+  readonly tickets: TicketGateway | null;
   /**
    * Hand the composition somewhere to put moderation commands arriving on the
    * bus.
@@ -391,6 +402,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // it is set every call is a no-op, which is the right answer: the post is
   // already saved, and only its card in the channel is missing.
   let liveBoard: LfgBoard | null = null;
+  let liveTickets: TicketGateway | null = null;
   const lfgBoard: LfgBoard = {
     async publish(post) {
       await liveBoard?.publish(post);
@@ -617,6 +629,12 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setLfgBoard(board) {
       liveBoard = board;
+    },
+    setTickets(gateway) {
+      liveTickets = gateway;
+    },
+    get tickets() {
+      return liveTickets;
     },
     setGameCommandSink(sink) {
       gameCommandSink = sink;

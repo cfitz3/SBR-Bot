@@ -74,8 +74,29 @@ test("each line of the split block reads correctly on its own", () => {
 });
 
 test("Hypixel's own join announcement is read as a join", () => {
-  assert.deepEqual(parseJoinEvent("§2Guild > §b[MVP§c+§b] §aSteve§2 joined."), { kind: "JOINED", ign: "Steve" });
-  assert.deepEqual(parseJoinEvent("Guild > Alex joined."), { kind: "JOINED", ign: "Alex" });
+  assert.deepEqual(parseJoinEvent("§b[MVP§c+§b] §aSteve §ejoined the guild!"), { kind: "JOINED", ign: "Steve" });
+  assert.deepEqual(parseJoinEvent("Alex joined the guild!"), { kind: "JOINED", ign: "Alex" });
+});
+
+test("a member logging in is not a member joining the guild", () => {
+  // The shipped bug this pattern exists to close. `Guild > Steve joined.` is
+  // the presence notice every member emits on every connect; reading it as a
+  // guild join screened, logged and announced an existing member as a new one,
+  // several times a day, for as long as they kept playing.
+  for (const line of [
+    "Guild > Steve joined.",
+    "§2Guild > §b[MVP§c+§b] §aSteve§2 joined.",
+    "Guild > Steve left.",
+    "§2Guild > §aSteve_123§2 left.",
+  ]) {
+    assert.equal(parseJoinEvent(line), null, line);
+  }
+});
+
+test("a real join is still read when the guild prefix is present", () => {
+  // The refusal is on the *presence* shape — "joined." and nothing after — not
+  // on the prefix, so a broadcast that happens to carry one still counts.
+  assert.deepEqual(parseJoinEvent("Guild > Steve joined the guild!"), { kind: "JOINED", ign: "Steve" });
 });
 
 test("a member typing the notice into guild chat is not a request", () => {
@@ -85,7 +106,7 @@ test("a member typing the notice into guild chat is not a request", () => {
     "Guild > Bob: Steve has requested to join the Guild!",
     "§2Guild > §aBob§f: §rSteve has requested to join the Guild!",
     "Officer > Bob: Alex joined the guild!",
-    "Guild > Bob: Alex joined.",
+    "Guild > Bob: Alex joined the guild!",
   ]) {
     assert.equal(parseJoinEvent(line), null, line);
   }

@@ -104,6 +104,18 @@ export const guildRepository = {
   },
 
   /**
+   * The guild's display name, for anything read outside Discord.
+   *
+   * Read from our own row rather than from the gateway so a transcript sent by
+   * a bot that does not share the server — the admin bot re-sending one, say —
+   * still names the guild the same way the one that closed it did.
+   */
+  async displayName(guildId: string): Promise<string | null> {
+    const guild = await prisma.guild.findUnique({ where: { id: guildId }, select: { name: true } });
+    return guild?.name ?? null;
+  },
+
+  /**
    * Every active guild — the iteration set for guild-scoped worker jobs.
    *
    * `hypixelGuildId` comes back nullable because a Discord server can be onboarded

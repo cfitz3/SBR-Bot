@@ -14,8 +14,15 @@
  * and a completed join looks like:
  *
  * ```
- * Guild > [MVP+] Steve joined.
+ * [MVP+] Steve joined the guild!
  * ```
+ *
+ * **`Guild > Steve joined.` is not that line.** It is the login notice every
+ * member produces every time they connect, and reading it as a guild join was a
+ * shipped bug: the platform screened, logged and announced a "new member" for
+ * an existing one, several times a day, per member. The two are told apart by
+ * the `Guild >` prefix — Hypixel's presence notices carry it, and the join
+ * broadcast does not.
  *
  * Written in the same tolerant spirit as the `/g online` parser: Hypixel has
  * changed the wording and the decoration around these lines before, and a
@@ -72,13 +79,23 @@ const BEFORE = "(?:^|[^A-Za-z0-9_])";
 const REQUEST = new RegExp(`${BEFORE}${NAME} has requested to join the guild`, "i");
 
 /**
- * `Guild > [MVP+] Steve joined.` — the announcement Hypixel actually prints to
- * the guild when somebody is admitted. The older `Steve joined the guild!`
- * wording is kept alongside it rather than replaced: both have been seen, and
- * an extra pattern costs one regex per chat line.
+ * `[MVP+] Steve joined the guild!`
+ *
+ * The words "the guild" are load-bearing, not decoration: without them this
+ * also matches `Guild > Steve joined.`, which is a login. That is why the
+ * pattern is not loosened to a bare "joined" however tempting the tolerance
+ * elsewhere in this file makes it look.
  */
-const JOINED_ANNOUNCE = new RegExp(`^guild *> *${NAME} joined(?:[^A-Za-z0-9_]|$)`, "i");
 const JOINED_PLAIN = new RegExp(`${BEFORE}${NAME} joined the guild`, "i");
+
+/**
+ * A presence notice: `Guild > Steve joined.` / `Guild > Steve left.`
+ *
+ * Matched only so it can be *refused*. `CHAT_LINE` does not cover it — there is
+ * no colon, because nobody is speaking — so without this the login notice falls
+ * through to whichever pattern is loosest.
+ */
+const PRESENCE = new RegExp(`^guild *> *${NAME} (?:joined|left)[.!]?$`, "i");
 
 /**
  * A line that is somebody speaking: `Guild > Steve: …`, `Officer > Alex: …`.
@@ -113,9 +130,8 @@ export function parseJoinEvent(line: string): GuildJoinEvent | null {
   const text = clean(line);
   if (text.length === 0) return null;
   if (CHAT_LINE.test(text)) return null;
-
-  const announced = JOINED_ANNOUNCE.exec(text);
-  if (announced) return { kind: "JOINED", ign: announced[1]! };
+  // Before anything else: a member logging in is not a member joining.
+  if (PRESENCE.test(text)) return null;
 
   const request = REQUEST.exec(text);
   if (request) return { kind: "REQUEST", ign: request[1]! };

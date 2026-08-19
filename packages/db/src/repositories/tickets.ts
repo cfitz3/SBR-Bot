@@ -276,6 +276,23 @@ export const ticketRepository = {
     return rows.map(toTicketDTO);
   },
 
+  /**
+   * The most recent tickets in a guild, whatever their status.
+   *
+   * Deliberately not `listOpen`: this is what the `{avg*}` panel placeholders
+   * are averaged over, and every one of those numbers — resolution time,
+   * rating — only exists on a ticket that has closed.
+   */
+  async listRecent(guildId: string, limit = 100): Promise<readonly TicketDTO[]> {
+    const rows = await prisma.ticket.findMany({
+      where: { guildId },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      select: TICKET_SELECT,
+    });
+    return rows.map(toTicketDTO);
+  },
+
   // ── transcript ────────────────────────────────────────────────────────────
 
   /**
