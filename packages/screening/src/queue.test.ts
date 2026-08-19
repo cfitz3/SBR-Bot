@@ -41,7 +41,16 @@ function row(over: Partial<ScreeningRecord> = {}): ScreeningRecord {
   };
 }
 
-function harness(opts: { send?: boolean; pending?: ScreeningRecord | null; resolves?: boolean } = {}) {
+function harness(
+  opts: {
+    send?: boolean;
+    pending?: ScreeningRecord | null;
+    resolves?: boolean;
+    /** The newest request on record, whatever became of it — what `admit` reads. */
+    latest?: ScreeningRecord | null;
+    now?: Date;
+  } = {},
+) {
   const decisions: [string, ScreeningOutcome, string][] = [];
   const sent: string[] = [];
   const repo: ScreeningRepository = {
@@ -50,12 +59,15 @@ function harness(opts: { send?: boolean; pending?: ScreeningRecord | null; resol
     async pending() { return [row()]; },
     async forPlayer() { return []; },
     async findPending() { return opts.pending === undefined ? row() : opts.pending; },
+    async findLatestByIgn() { return opts.latest ?? null; },
+    async expireStale() { return 0; },
   };
   const queue = new JoinQueueService({
     screening: new ScreeningService({ repo, logger: silent }),
     commands: { async send(_guildId, command) { sent.push(command); return opts.send !== false; } },
     players: { async resolveIgn(ign) { return opts.resolves === false ? null : { uuid: UUID, ign: ign === "jack" ? "Jack" : ign }; } },
     logger: silent,
+    ...(opts.now ? { now: () => opts.now as Date } : {}),
   });
   return { queue, decisions, sent };
 }
@@ -131,4 +143,113 @@ test("the queue reads through to the repository", async () => {
   const rows = await queue.pending("g1");
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.ign, "Jack");
+});
+
+/**
+ * Admission on the clock.
+ *
+ * `REQUESTED_AT` is the row's stamp; the two `now`s below sit either side of
+ * the five-minute window so the branch is chosen by arithmetic rather than by
+ * how long the test happened to take.
+ */
+const REQUESTED_AT = new Date("2026-08-09T12:00:00.000Z");
+const INSIDE = new Date("2026-08-09T12:01:00.000Z");
+const OUTSIDE = new Date("2026-08-09T12:06:00.000Z");
+
+test("a request still inside its window is accepted", async () => {
+  const { queue, decisions, sent } = harness({
+    latest: row({ requestedAt: REQUESTED_AT }),
+    now: INSIDE,
+  });
+  const out = await queue.admit("g1", "jack", "staff-1");
+  assert.equal(out.ok && out.via, "ACCEPT");
+  assert.deepEqual(sent, ["/guild accept Jack"]);
+  assert.deepEqual(decisions, [["row-1", "ACCEPTED", "staff-1"]]);
+  // Four minutes of the five are left; staff are told, because a number close
+  // to zero is the cue to stop typing and press the button.
+  assert.equal(out.ok && out.remainingMs, 4 * 60_000);
+});
+
+test("a request past its window becomes an invite, and the row is retired", async () => {
+  // The case the whole change exists for: `/guild accept` past five minutes is
+  // an error upstream, not a slow success, so admitting has to switch route —
+  // and say so, because an invite needs the applicant to act.
+  const { queue, decisions, sent } = harness({
+    latest: row({ requestedAt: REQUESTED_AT }),
+    now: OUTSIDE,
+  });
+  const out = await queue.admit("g1", "jack", "staff-1");
+  assert.equal(out.ok && out.via, "INVITE");
+  assert.deepEqual(sent, ["/guild invite Jack"]);
+  assert.deepEqual(decisions, [["row-1", "EXPIRED", "staff-1"]]);
+  assert.equal(out.ok && out.remainingMs, 0);
+});
+
+test("a row the sweep already retired still routes to an invite", async () => {
+  // `pending()` expires stale rows, so by the time staff press Accept the row
+  // is usually EXPIRED rather than an overdue PENDING. Reading only PENDING
+  // here would send an accept Hypixel has nothing to match it to.
+  const { queue, decisions, sent } = harness({
+    latest: row({ requestedAt: REQUESTED_AT, outcome: "EXPIRED", decidedAt: OUTSIDE, decidedBy: "AUTO" }),
+    now: OUTSIDE,
+  });
+  const out = await queue.admit("g1", "jack", "staff-1");
+  assert.equal(out.ok && out.via, "INVITE");
+  assert.deepEqual(sent, ["/guild invite Jack"]);
+  // Already retired — deciding it a second time would rewrite who retired it.
+  assert.deepEqual(decisions, []);
+});
+
+test("no request on record is accepted, not invited", async () => {
+  // The likely explanation is a request we never witnessed. A refused accept
+  // costs one line in chat; inviting somebody who is in fact at the door is
+  // refused *and* leaves their live request ticking down unanswered.
+  const { queue, sent } = harness({ latest: null, now: INSIDE });
+  const out = await queue.admit("g1", "jack", "staff-1");
+  assert.equal(out.ok && out.via, "ACCEPT");
+  assert.deepEqual(sent, ["/guild accept Jack"]);
+});
+
+test("roster commands carry their argument, and nothing else", async () => {
+  const { queue, sent } = harness();
+  await queue.kick("g1", "jack", "staff-1", "inactive 30 days");
+  await queue.mute("g1", "jack", "staff-1", "30m");
+  await queue.unmute("g1", "jack", "staff-1");
+  await queue.promote("g1", "jack", "staff-1");
+  await queue.demote("g1", "jack", "staff-1");
+  assert.deepEqual(sent, [
+    "/guild kick Jack inactive 30 days",
+    "/guild mute Jack 30m",
+    "/guild unmute Jack",
+    "/guild promote Jack",
+    "/guild demote Jack",
+  ]);
+});
+
+test("a roster command never decides a screening row", async () => {
+  // Kicking somebody is a statement about a member, not about their months-old
+  // application. Marking that row DENIED would corrupt the only record of what
+  // the guild knew when it let them in.
+  const { queue, decisions } = harness();
+  await queue.kick("g1", "jack", "staff-1");
+  await queue.promote("g1", "jack", "staff-1");
+  assert.deepEqual(decisions, []);
+});
+
+test("a free-text argument that could become a second command is refused", async () => {
+  const { queue, sent } = harness();
+  for (const bad of ["30 minutes", "0m", "1y", "", "30m; /guild kick Alex"]) {
+    assert.deepEqual(await queue.mute("g1", "Jack", "staff-1", bad), { ok: false, reason: "BAD_DURATION" }, bad);
+  }
+  for (const bad of ["inactive\n/guild kick Alex", "see /help", "§cbye", "x".repeat(65)]) {
+    assert.deepEqual(await queue.kick("g1", "Jack", "staff-1", bad), { ok: false, reason: "BAD_REASON" }, bad);
+  }
+  assert.deepEqual(sent, []);
+});
+
+test("an omitted kick reason is allowed and sends a bare command", async () => {
+  const { queue, sent } = harness();
+  const out = await queue.kick("g1", "Jack", "staff-1");
+  assert.equal(out.ok, true);
+  assert.deepEqual(sent, ["/guild kick Jack"]);
 });

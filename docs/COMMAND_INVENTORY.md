@@ -284,10 +284,15 @@ destructive command requiring `confirm:true`.
 | `/application-review` | OFFICER | `id?` | Omit to list the queue, pass an id to open one | List embed, or the applicant's answers |
 | `/accept-member` | OFFICER | `id*` `reason?` | Accept and add to the roster; also promotes to `MEMBER` | Confirmation, and an explicit report when the roster row is missing |
 | `/deny-member` | OFFICER | `id*` `reason?` | Reject | Confirmation |
-| `/join-queue` | OFFICER | — | In-game join requests screened and still awaiting a decision | List embed, verdict and risk per row |
-| `/join-accept` | OFFICER | `ign*` (autocomplete) | Type `/guild accept` in-game and mark the screening ACCEPTED | Confirmation, or an explicit "the bridge could not take that" |
-| `/join-deny` | OFFICER | `ign*` (autocomplete) | Type `/guild deny` in-game and mark the screening DENIED | Confirmation |
-| `/guild-invite` | OFFICER | `ign*` | Invite somebody who never applied; decides no screening row | Confirmation |
+| `/join-queue` | MODERATOR | — | Live in-game join requests; expires stale rows on read | List embed, remaining window first, then verdict and risk |
+| `/join-accept` | MODERATOR | `ign*` (autocomplete) | Accept inside the window, invite past it, then mark the row | Confirmation naming the route taken |
+| `/join-deny` | MODERATOR | `ign*` (autocomplete) | Type `/guild deny` in-game and mark the screening DENIED | Confirmation |
+| `/guild-invite` | MODERATOR | `ign*` | Invite somebody who never asked; decides no screening row | Confirmation |
+| `/guild-kick` | MODERATOR | `ign*` `reason?` | Remove a member from the in-game guild | Confirmation |
+| `/guild-mute` | MODERATOR | `ign*` `duration*` | Silence a member in guild chat (`30m`, `12h`, `7d`) | Confirmation |
+| `/guild-unmute` | MODERATOR | `ign*` | Lift an in-game guild mute | Confirmation |
+| `/guild-promote` | MODERATOR | `ign*` | Raise a member one in-game guild rank | Confirmation |
+| `/guild-demote` | MODERATOR | `ign*` | Lower a member one in-game guild rank | Confirmation |
 | `/bridge-suspend` | OFFICER | — | Stop relaying both directions | Confirmation |
 | `/bridge-unsuspend` | OFFICER | — | Resume relaying | Confirmation |
 

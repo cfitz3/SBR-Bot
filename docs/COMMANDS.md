@@ -193,10 +193,15 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/bridge-suspend` | Pause chat relay (both directions) | Officer | `reason?`, `duration?` | Confirmation + status broadcast | Already suspended | DB (`GuildConfig`) + Cache + pub/sub event |
 | `/bridge-unsuspend` | Resume chat relay | Officer | *(none)* | Confirmation + status broadcast | Not suspended | DB + Cache + pub/sub |
-| `/join-queue` | List screened in-game join requests awaiting a decision | Officer | *(none)* | Queue embed | *(empty queue reads as such)* | DB (`Screening`) |
-| `/join-accept` | Admit an applicant in-game | Officer | `ign*` | Confirmation naming the applicant | Not a Minecraft name; bridge not in-game | DB (`Screening`) + pub/sub `GAME_COMMAND` |
-| `/join-deny` | Refuse an applicant in-game | Officer | `ign*` | Confirmation | As above | DB + pub/sub |
-| `/guild-invite` | Invite a player who never applied | Officer | `ign*` | Confirmation | As above | pub/sub |
+| `/join-queue` | Live in-game join requests and how long is left to answer them | Moderator | *(none)* | Queue embed, remaining window per row | *(empty queue reads as such)* | DB (`Screening`) |
+| `/join-accept` | Admit somebody who asked to join in-game | Moderator | `ign*` | Confirmation naming the route: accepted, or invited because the window had closed | Not a Minecraft name; bridge not in-game | DB (`Screening`) + pub/sub `GAME_COMMAND` |
+| `/join-deny` | Refuse an in-game join request | Moderator | `ign*` | Confirmation | As above | DB + pub/sub |
+| `/guild-invite` | Invite a player who hasn't asked to join | Moderator | `ign*` | Confirmation | As above | pub/sub |
+| `/guild-kick` | Remove a member from the in-game guild | Moderator | `ign*` `reason?` | Confirmation | Reason contains characters we won't type in-game | pub/sub |
+| `/guild-mute` | Silence a member in guild chat | Moderator | `ign*` `duration*` | Confirmation | Duration is not a count and a unit (`30m`) | pub/sub |
+| `/guild-unmute` | Let a muted member speak in guild chat again | Moderator | `ign*` | Confirmation | As above | pub/sub |
+| `/guild-promote` | Raise a member one in-game guild rank | Moderator | `ign*` | Confirmation | As above | pub/sub |
+| `/guild-demote` | Lower a member one in-game guild rank | Moderator | `ign*` | Confirmation | As above | pub/sub |
 
 ---
 

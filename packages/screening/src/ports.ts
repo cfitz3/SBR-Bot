@@ -50,6 +50,31 @@ export interface ScreeningRepository {
   forPlayer(guildId: string, uuid: string, limit: number): Promise<readonly ScreeningRecord[]>;
   /** Newest screening for a player still awaiting a decision, if any. */
   findPending(guildId: string, uuid: string): Promise<ScreeningRecord | null>;
+  /**
+   * The newest request from a name, whatever became of it.
+   *
+   * Two departures from `findPending`, both needed by the same caller. It looks
+   * up by name, because Mojang is the flakiest dependency here and the decision
+   * it feeds — accept or invite — is on a five-minute deadline that will not
+   * wait for a uuid. And it ignores the outcome, because an already-EXPIRED row
+   * is precisely the evidence that an invite is the only route left; filtering
+   * to PENDING would hide the very rows the sweep has just retired.
+   *
+   * Weaker than the uuid form, and only ever used as a fallback: a name is not
+   * a stable identity, so this can in principle match a row belonging to
+   * whoever held the name previously.
+   */
+  findLatestByIgn(guildId: string, ign: string): Promise<ScreeningRecord | null>;
+  /**
+   * Mark every PENDING row requested before `before` as EXPIRED, and say how
+   * many that was.
+   *
+   * Hypixel drops a join request five minutes after it is made, so a row that
+   * has sat past that is not waiting for staff — it is describing a request
+   * that no longer exists anywhere upstream. Leaving it PENDING is what turns
+   * the queue into a list of buttons that silently do nothing.
+   */
+  expireStale(guildId: string, before: Date): Promise<number>;
 }
 
 /**

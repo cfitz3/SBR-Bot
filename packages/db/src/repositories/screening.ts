@@ -168,6 +168,24 @@ export const screeningRepository: ScreeningRepository = {
     });
     return row ? toRecord(row) : null;
   },
+
+  async findLatestByIgn(guildId: string, ign: string): Promise<ScreeningRecord | null> {
+    const row = await prisma.guildJoinScreening.findFirst({
+      // Minecraft names are case-insensitive to their owner, and the casing we
+      // stored came from whichever source answered first.
+      where: { guildId, ign: { equals: ign, mode: "insensitive" } },
+      orderBy: { requestedAt: "desc" },
+    });
+    return row ? toRecord(row) : null;
+  },
+
+  async expireStale(guildId: string, before: Date): Promise<number> {
+    const { count } = await prisma.guildJoinScreening.updateMany({
+      where: { guildId, outcome: "PENDING", requestedAt: { lt: before } },
+      data: { outcome: "EXPIRED", decidedAt: new Date(), decidedBy: "AUTO" },
+    });
+    return count;
+  },
 };
 
 export const screeningHistorySource: ApplicantHistorySource = {

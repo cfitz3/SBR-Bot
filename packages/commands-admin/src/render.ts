@@ -16,7 +16,14 @@ import type {
 } from "@sbr/shared-types";
 import { padInlineRow } from "@sbr/shared-types";
 import { describeState, punishmentState } from "@sbr/moderation";
-import { reasonSentence, type JoinActionResult, type ScreeningRecord } from "@sbr/screening";
+import {
+  formatRemaining,
+  reasonSentence,
+  remainingWindowMs,
+  type AdmitResult,
+  type JoinActionResult,
+  type ScreeningRecord,
+} from "@sbr/screening";
 
 /** Discord renders `<t:…:R>` as a live relative timestamp in the reader's locale. */
 export function relativeTs(iso: string): string {
@@ -254,34 +261,79 @@ export function renderApplicationListEmbed(apps: readonly ApplicationDTO[]): Emb
 export function renderJoinQueueEmbed(rows: readonly ScreeningRecord[]): EmbedView {
   if (rows.length === 0) {
     return {
-      title: "In-game join queue",
-      description: "Nobody is waiting. Requests appear here as they are screened.",
+      title: "Live join requests",
+      description: "Nobody is at the door. Requests appear here as they are screened, and last five minutes.",
       color: "NEUTRAL",
     };
   }
   return {
-    title: `In-game join queue (${rows.length})`,
+    title: `Live join requests (${rows.length})`,
     fields: rows.slice(0, 10).map((r) => ({
       name: `${r.ign} — ${r.verdict.toLowerCase()} (risk ${r.riskScore})`,
       // The first reason is the one that decided it; the rest are in the staff
       // report already posted, and a ten-row list is not the place to repeat them.
-      value: `${reasonSentence(r.reasons[0] ?? "MEETS_REQUIREMENTS")} · ${relativeTs(r.requestedAt.toISOString())}`,
+      //
+      // The remainder leads, because it is the only field that changes what a
+      // staffer can do about the row: past zero, `/join-accept` stops being an
+      // admission and becomes an invitation the applicant has to accept.
+      value: `**${formatRemaining(remainingWindowMs(r.requestedAt))}** · ${reasonSentence(r.reasons[0] ?? "MEETS_REQUIREMENTS")} · ${relativeTs(r.requestedAt.toISOString())}`,
       inline: false,
     })),
-    footer: "Decide with /join-accept ign:<name> or /join-deny ign:<name>.",
+    footer: "Answer with /join-accept ign:<name> or /join-deny ign:<name>. Hypixel drops a request five minutes after it is made.",
     color: "INFO",
   };
 }
 
-/** One decision, phrased so "sent" and "recorded" stay distinguishable. */
-export function renderJoinAction(action: "accepted" | "denied" | "invited", result: JoinActionResult): string {
-  if (!result.ok) {
-    return result.reason === "BAD_NAME"
-      ? "That isn't a Minecraft username — letters, numbers and underscores, up to 16 characters."
-      : "The bridge couldn't take that command. It isn't connected to the guild right now, so nothing was sent.";
+/** Why an action never reached the chat box. Shared by every roster command. */
+function renderActionFailure(reason: Exclude<JoinActionResult, { ok: true }>["reason"]): string {
+  switch (reason) {
+    case "BAD_NAME":
+      return "That isn't a Minecraft username — letters, numbers and underscores, up to 16 characters.";
+    case "BAD_DURATION":
+      return "That isn't a duration Hypixel takes — a number and a unit, like `30m`, `12h` or `7d`.";
+    case "BAD_REASON":
+      return "That reason has characters I won't type into guild chat. Letters, numbers and basic punctuation only.";
+    case "NOT_SENT":
+      return "The bridge couldn't take that command. It isn't connected to the guild right now, so nothing was sent.";
   }
+}
+
+/** One roster action, phrased so "sent" and "recorded" stay distinguishable. */
+export function renderJoinAction(verb: string, result: JoinActionResult, extra = ""): string {
+  if (!result.ok) return renderActionFailure(result.reason);
+  // Only the two actions that answer a join request touch a screening row, so
+  // only they have anything to say about one. Reporting "no pending screening
+  // matched" after a promotion would invite the reader to wonder what a
+  // promotion was supposed to match.
+  const recorded =
+    verb === "accept" || verb === "deny"
+      ? result.recorded
+        ? " Their screening row is marked."
+        : " No pending screening matched them, so only the in-game command was sent."
+      : "";
+  const suffix = extra === "" ? "" : ` ${extra}`;
+  return `Sent \`/guild ${verb} ${result.ign}${suffix}\`.${recorded}`;
+}
+
+/**
+ * The outcome of `/join-accept`, which is two different acts wearing one name.
+ *
+ * Inside the window it admits somebody. Outside it, the request no longer
+ * exists upstream and the best we can do is invite them — which needs the
+ * applicant to act, so saying "accepted" would be a straightforwardly false
+ * report of where that person now is.
+ */
+export function renderAdmit(result: AdmitResult): string {
+  if (!result.ok) return renderActionFailure(result.reason);
+  if (result.via === "INVITE") {
+    return [
+      `**${result.ign}'s request had already expired** — Hypixel drops one five minutes after it is made.`,
+      `Sent \`/guild invite ${result.ign}\` instead. They are not in the guild until they accept the invite themselves.`,
+    ].join("\n");
+  }
+  const left = result.remainingMs > 0 ? ` ${formatRemaining(result.remainingMs)} of their request window to spare.` : "";
   const recorded = result.recorded
     ? " Their screening row is marked."
     : " No pending screening matched them, so only the in-game command was sent.";
-  return `Sent \`/guild ${action === "invited" ? "invite" : action === "accepted" ? "accept" : "deny"} ${result.ign}\`.${recorded}`;
+  return `Sent \`/guild accept ${result.ign}\`.${recorded}${left}`;
 }

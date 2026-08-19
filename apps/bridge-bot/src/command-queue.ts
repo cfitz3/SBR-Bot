@@ -46,11 +46,44 @@ export interface CommandQueueStats {
   readonly dropped: number;
   /** Abandoned because no session appeared before `maxAgeMs`. */
   readonly expired: number;
+  /** Ordinary commands displaced to make room for an urgent one. */
+  readonly evicted: number;
+}
+
+/**
+ * Per-command overrides. Both exist for the same caller: a join accept.
+ *
+ * Hypixel gives an applicant five minutes, and the whole point of the queue is
+ * that it holds commands — through a reconnect, behind whatever backlog staff
+ * have already built up. Those two facts are in direct conflict for exactly one
+ * kind of command, so rather than weaken the pacing for everything, the command
+ * with a deadline says so.
+ */
+export interface CommandOptions {
+  /**
+   * Send this before the ordinary backlog, and keep it when the backlog is
+   * full by displacing an ordinary command instead of being refused.
+   *
+   * Deliberately not a general priority number. Two levels is enough to express
+   * "this has an upstream deadline" and few enough that nobody can build a
+   * hierarchy in which the important thing is at level three.
+   */
+  readonly urgent?: boolean;
+  /**
+   * Abandon this command after `maxAgeMs` rather than the queue's default.
+   *
+   * Sending it late is not a lesser success, it is a different and wrong
+   * action: `/guild accept` after the window has closed is a command Hypixel
+   * answers with an error, against a row we would then have marked ACCEPTED.
+   */
+  readonly maxAgeMs?: number;
 }
 
 interface QueuedCommand {
   readonly command: string;
   readonly at: number;
+  readonly urgent: boolean;
+  readonly maxAgeMs: number;
 }
 
 export class CommandQueue {
@@ -65,6 +98,7 @@ export class CommandQueue {
   private sent = 0;
   private dropped = 0;
   private expired = 0;
+  private evicted = 0;
 
   constructor(
     /**
@@ -83,19 +117,69 @@ export class CommandQueue {
     this.now = opts.now ?? (() => Date.now());
   }
 
-  /** Enqueue a command. Returns false when the backlog is full and it was dropped. */
-  push(command: string): boolean {
+  /**
+   * Enqueue a command. Returns false when it could not be taken.
+   *
+   * An urgent command is placed after any urgent commands already waiting and
+   * ahead of every ordinary one, and if the backlog is full it displaces the
+   * newest ordinary command rather than being refused — the same
+   * drop-the-newest rule the queue already applies, applied one level down.
+   * When the backlog is *entirely* urgent it is refused like anything else:
+   * silently sending everything at that point would defeat the pacing the queue
+   * exists for, and the account it protects is the whole relay.
+   */
+  push(command: string, opts: CommandOptions = {}): boolean {
+    const urgent = opts.urgent === true;
+    const entry: QueuedCommand = {
+      command,
+      at: this.now(),
+      urgent,
+      maxAgeMs: opts.maxAgeMs ?? this.maxAgeMs,
+    };
+
     if (this.pending.length >= this.maxBacklog) {
-      this.dropped += 1;
-      return false;
+      if (!urgent || !this.displaceOrdinary()) {
+        this.dropped += 1;
+        return false;
+      }
     }
-    this.pending.push({ command, at: this.now() });
+
+    if (urgent) {
+      // First position not already claimed by an urgent command. Urgent
+      // commands therefore stay in arrival order among themselves: two
+      // applicants inside the same window are both on a clock, and the one who
+      // asked first has less of it left.
+      let at = 0;
+      while (at < this.pending.length && this.pending[at]?.urgent === true) at += 1;
+      this.pending.splice(at, 0, entry);
+    } else {
+      this.pending.push(entry);
+    }
+
     void this.drain();
     return true;
   }
 
   stats(): CommandQueueStats {
-    return { queued: this.pending.length, sent: this.sent, dropped: this.dropped, expired: this.expired };
+    return {
+      queued: this.pending.length,
+      sent: this.sent,
+      dropped: this.dropped,
+      expired: this.expired,
+      evicted: this.evicted,
+    };
+  }
+
+  /** Drop the newest ordinary command to make room. False when there is none. */
+  private displaceOrdinary(): boolean {
+    for (let i = this.pending.length - 1; i >= 0; i -= 1) {
+      if (this.pending[i]?.urgent !== true) {
+        this.pending.splice(i, 1);
+        this.evicted += 1;
+        return true;
+      }
+    }
+    return false;
   }
 
   /** Await the backlog clearing. Only tests need this; production is fire-and-forget. */
@@ -113,7 +197,7 @@ export class CommandQueue {
 
         const entry = this.pending[0];
         if (entry === undefined) break;
-        if (this.now() - entry.at >= this.maxAgeMs) {
+        if (this.now() - entry.at >= entry.maxAgeMs) {
           this.pending.shift();
           this.expired += 1;
           continue;

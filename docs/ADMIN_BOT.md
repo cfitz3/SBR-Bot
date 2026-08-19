@@ -46,9 +46,13 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/purge` | Staff | Bounded (≤100 msgs, ≤14d); logs count + scope, not content, by default. |
 | `/infractions` | Staff | Read-only history view. |
 | `/member-note` | Staff | Private staff note (audited). |
-| `/join-queue` | Officer | Read-only view of screened in-game requests still pending. |
-| `/join-accept` / `/join-deny` | Officer | Sends the guild command through the bridge, then marks the row — never the other way round; refuses names that are not `[A-Za-z0-9_]{1,16}`. |
-| `/guild-invite` | Officer | Invites a player who never applied; marks no screening row. |
+| `/join-queue` | Moderator | Live in-game requests, each showing how much of the five-minute window is left. Stale rows are retired to `EXPIRED` on read, so the queue never lists a button that cannot work. |
+| `/join-accept` | Moderator | Accepts inside the window, **invites** past it, and says which it did — an invite still needs the applicant to accept. Sends first, marks the row second; refuses names that are not `[A-Za-z0-9_]{1,16}`. |
+| `/join-deny` | Moderator | Sends the guild command through the bridge, then marks the row — never the other way round. |
+| `/guild-invite` | Moderator | Invites a player who never asked; marks no screening row. |
+| `/guild-kick` | Moderator | `reason?`, restricted to `[A-Za-z0-9 .,!?'()_-]{1,64}` so nothing typed here can begin a second command in-game. Decides no screening row. |
+| `/guild-mute` / `/guild-unmute` | Moderator | `duration*` as `[1-9][0-9]{0,2}[smhd]` (e.g. `30m`). Recorded as history by the bridge's own notice parser, not enforced by us. |
+| `/guild-promote` / `/guild-demote` | Moderator | One in-game rank each way; Hypixel decides which rank, we only ask. |
 | `/bridge-suspend` / `-unsuspend` | Officer | Reason required; broadcasts status. |
 
 ### Governance

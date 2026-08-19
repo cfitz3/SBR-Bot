@@ -19,8 +19,10 @@ import { withCommandCopy } from "@sbr/brand";
 import { isEscalation } from "@sbr/moderation";
 import type { AdminHandler, AdminCommandSpec, AdminReply } from "./types.js";
 import { parseDurationSeconds, renderModError } from "./util.js";
+import type { JoinActionResult, JoinQueueService } from "@sbr/screening";
 import {
   relativeTs,
+  renderAdmit,
   renderApplicationEmbed,
   renderApplicationListEmbed,
   renderAuditPages,
@@ -440,22 +442,56 @@ const setRole: AdminHandler = async (ctx, deps) => {
 
 // ── Applications ────────────────────────────────────────────────────────────
 
-// ── In-game join queue ──────────────────────────────────────────────────────
+// ── The guild door, and the roster behind it ────────────────────────────────
 //
-// The counterpart to the bridge's auto-accept. Screening records every request
-// and posts a staff report; with auto-accept off — the default — nothing on the
-// platform could then act on one, and staff had to log into the game account
-// and type the command by hand against a queue the panel was showing them.
+// The counterpart to the bridge's auto-accept, and now the whole in-game
+// membership surface: admit, refuse, invite, kick, mute, promote, demote.
 //
-// Every command here is OFFICER. Opening the guild door is a membership
-// decision of the same weight as `/accept-member`, and it is irreversible in
-// the sense that matters: the person is inside before anyone reviews it.
+// Two things shape this group. The first is that a join request is *live*: the
+// applicant typed `/g join` and Hypixel will honour `/g accept` for five
+// minutes, so these are not applications sitting in a tray. `/join-accept`
+// therefore goes through `admit()`, which checks the clock and falls back to an
+// invite once it has run out, rather than sending a command that would quietly
+// fail upstream.
+//
+// The second is that everything here is MODERATOR by default. That is lower
+// than the membership commands next door, deliberately: the value of these is
+// that whoever is around can use them *now*, and a floor that waits for an
+// officer is a floor that misses the window. Guilds that disagree raise it on
+// the panel's Permissions card, which overrides every default in this file.
 
-/** Shared by all four: the bridge may simply not be wired into this process. */
+/** Shared by all of them: the bridge may simply not be wired into this process. */
 function noBridge(): AdminReply {
   return {
     ephemeral: true,
-    text: "The in-game join queue isn't available here — this bot has no bridge to send guild commands through.",
+    text: "In-game guild commands aren't available here — this bot has no bridge to send them through.",
+  };
+}
+
+/**
+ * The roster commands, which differ only in verb and argument.
+ *
+ * One factory rather than six handlers: the usage line, the missing-bridge
+ * answer and the "sent, not necessarily obeyed" phrasing have to stay identical
+ * across them, and six copies is six chances for a kick to report itself
+ * differently from a mute.
+ */
+function rosterHandler(
+  name: string,
+  run: (queue: JoinQueueService, guildId: string, ign: string, actorId: string, extra: string) => Promise<JoinActionResult>,
+  verb: string,
+  extraOption?: { readonly option: string; readonly required: boolean },
+): AdminHandler {
+  return async (ctx, deps) => {
+    if (!deps.joinQueue) return noBridge();
+    const ign = ctx.args.getString("ign");
+    const extra = (extraOption ? ctx.args.getString(extraOption.option) : null) ?? "";
+    const usage = `Usage: /${name} ign:<name>${extraOption ? ` ${extraOption.option}:<value>` : ""}`;
+    if (!ign) return { ephemeral: true, text: usage };
+    if (extraOption?.required && extra === "") return { ephemeral: true, text: usage };
+
+    const result = await run(deps.joinQueue, ctx.guildId, ign, ctx.actorId, extra);
+    return { ephemeral: true, text: renderJoinAction(verb, result, extra) };
   };
 }
 
@@ -470,27 +506,21 @@ const joinQueue: AdminHandler = async (ctx, deps) => {
 };
 
 /**
- * `/join-accept` and `/join-deny` differ only in which command is sent and
- * which outcome is recorded, so they share one implementation — the validation,
- * the audit note and the "sent but not recorded" phrasing must not be able to
- * drift between admitting somebody and refusing them.
+ * Admit somebody, by whichever route is still open.
+ *
+ * Not shared with `/join-deny` any more, because the two stopped being mirror
+ * images the moment the window mattered: denying a request that has already
+ * expired changes nothing and reads the same either way, while accepting one
+ * has to become an invite and say so.
  */
-function joinDecisionHandler(accept: boolean): AdminHandler {
-  return async (ctx, deps) => {
-    if (!deps.joinQueue) return noBridge();
-    const ign = ctx.args.getString("ign");
-    if (!ign) return { ephemeral: true, text: `Usage: /join-${accept ? "accept" : "deny"} ign:<name>` };
+const joinAccept: AdminHandler = async (ctx, deps) => {
+  if (!deps.joinQueue) return noBridge();
+  const ign = ctx.args.getString("ign");
+  if (!ign) return { ephemeral: true, text: "Usage: /join-accept ign:<name>" };
+  return { ephemeral: true, text: renderAdmit(await deps.joinQueue.admit(ctx.guildId, ign, ctx.actorId)) };
+};
 
-    const result = accept
-      ? await deps.joinQueue.accept(ctx.guildId, ign, ctx.actorId)
-      : await deps.joinQueue.deny(ctx.guildId, ign, ctx.actorId);
-
-    return { ephemeral: true, text: renderJoinAction(accept ? "accepted" : "denied", result) };
-  };
-}
-
-const joinAccept = joinDecisionHandler(true);
-const joinDeny = joinDecisionHandler(false);
+const joinDeny = rosterHandler("join-deny", (queue, g, ign, actor) => queue.deny(g, ign, actor), "deny");
 
 /**
  * Suggest the names actually waiting.
@@ -510,13 +540,27 @@ const joinQueueNames: NonNullable<AdminCommandSpec["autocomplete"]> = async (foc
     .map((r) => ({ name: `${r.ign} — ${r.verdict.toLowerCase()}`.slice(0, 100), value: r.ign }));
 };
 
-const guildInvite: AdminHandler = async (ctx, deps) => {
-  if (!deps.joinQueue) return noBridge();
-  const ign = ctx.args.getString("ign");
-  if (!ign) return { ephemeral: true, text: "Usage: /guild-invite ign:<name>" };
-  const result = await deps.joinQueue.invite(ctx.guildId, ign, ctx.actorId);
-  return { ephemeral: true, text: renderJoinAction("invited", result) };
-};
+const guildInvite = rosterHandler("guild-invite", (queue, g, ign, actor) => queue.invite(g, ign, actor), "invite");
+
+const guildKick = rosterHandler(
+  "guild-kick",
+  (queue, g, ign, actor, extra) => queue.kick(g, ign, actor, extra),
+  "kick",
+  { option: "reason", required: false },
+);
+
+const guildMute = rosterHandler(
+  "guild-mute",
+  (queue, g, ign, actor, extra) => queue.mute(g, ign, actor, extra),
+  "mute",
+  { option: "duration", required: true },
+);
+
+const guildUnmute = rosterHandler("guild-unmute", (queue, g, ign, actor) => queue.unmute(g, ign, actor), "unmute");
+
+const guildPromote = rosterHandler("guild-promote", (queue, g, ign, actor) => queue.promote(g, ign, actor), "promote");
+
+const guildDemote = rosterHandler("guild-demote", (queue, g, ign, actor) => queue.demote(g, ign, actor), "demote");
 
 
 const applicationReview: AdminHandler = async (ctx, deps) => {
@@ -917,15 +961,15 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
     },
     {
       name: "join-queue",
-      description: "In-game join requests awaiting a decision",
-      minRole: "OFFICER",
+      description: "Live in-game join requests and how long is left to answer them",
+      minRole: "MODERATOR",
       handler: joinQueue,
     },
     {
       name: "join-accept",
       description: "Admit somebody who asked to join in-game",
       options: [{ name: "ign", description: "Minecraft username", type: "string", required: true, autocomplete: true }],
-      minRole: "OFFICER",
+      minRole: "MODERATOR",
       handler: joinAccept,
       autocomplete: joinQueueNames,
     },
@@ -933,7 +977,7 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       name: "join-deny",
       description: "Refuse an in-game join request",
       options: [{ name: "ign", description: "Minecraft username", type: "string", required: true, autocomplete: true }],
-      minRole: "OFFICER",
+      minRole: "MODERATOR",
       handler: joinDeny,
       autocomplete: joinQueueNames,
     },
@@ -941,8 +985,49 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       name: "guild-invite",
       description: "Invite a player who hasn't asked to join",
       options: [{ name: "ign", description: "Minecraft username", type: "string", required: true }],
-      minRole: "OFFICER",
+      minRole: "MODERATOR",
       handler: guildInvite,
+    },
+    {
+      name: "guild-kick",
+      description: "Remove a member from the in-game guild",
+      options: [
+        { name: "ign", description: "Minecraft username", type: "string", required: true },
+        { name: "reason", description: "Shown in-game; letters, numbers and basic punctuation", type: "string" },
+      ],
+      minRole: "MODERATOR",
+      handler: guildKick,
+    },
+    {
+      name: "guild-mute",
+      description: "Silence a member in guild chat",
+      options: [
+        { name: "ign", description: "Minecraft username", type: "string", required: true },
+        { name: "duration", description: "How long, e.g. 30m, 12h, 7d", type: "string", required: true },
+      ],
+      minRole: "MODERATOR",
+      handler: guildMute,
+    },
+    {
+      name: "guild-unmute",
+      description: "Let a muted member speak in guild chat again",
+      options: [{ name: "ign", description: "Minecraft username", type: "string", required: true }],
+      minRole: "MODERATOR",
+      handler: guildUnmute,
+    },
+    {
+      name: "guild-promote",
+      description: "Raise a member one in-game guild rank",
+      options: [{ name: "ign", description: "Minecraft username", type: "string", required: true }],
+      minRole: "MODERATOR",
+      handler: guildPromote,
+    },
+    {
+      name: "guild-demote",
+      description: "Lower a member one in-game guild rank",
+      options: [{ name: "ign", description: "Minecraft username", type: "string", required: true }],
+      minRole: "MODERATOR",
+      handler: guildDemote,
     },
     {
       name: "bridge-suspend",

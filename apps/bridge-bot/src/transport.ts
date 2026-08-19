@@ -24,15 +24,34 @@ import {
   type LfgBoard,
 } from "@sbr/commands-bridge";
 import { EchoLedger } from "@sbr/bridge";
-import { ComponentRouter, interactionArgs, respond, toActionRow, toEmbed, toSlashCommands } from "@sbr/discord-kit";
+import {
+  ComponentRouter,
+  customId,
+  interactionArgs,
+  respond,
+  toActionRow,
+  toEmbed,
+  toSlashCommands,
+} from "@sbr/discord-kit";
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
 import { startMilestoneAnnouncer } from "./milestones.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
 import { acceptCommand, denyCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
-import { CommandQueue } from "./command-queue.js";
+import { CommandQueue, type CommandOptions } from "./command-queue.js";
 import { isPunitiveNotice, parseModNotice, type ModNotice } from "./mod-notice.js";
-import { chatLine, staffReport } from "@sbr/screening";
+import {
+  JOIN_WINDOW_MS,
+  JoinQueueService,
+  chatLine,
+  formatRemaining,
+  remainingWindowMs,
+  staffReport,
+  type AdmitResult,
+  type JoinActionFailure,
+  type JoinActionResult,
+} from "@sbr/screening";
+import type { ActionRowView } from "@sbr/shared-types";
 
 export interface GuildChatLine {
   readonly name: string;
@@ -123,6 +142,83 @@ export function registerCommunityButtons(app: BridgeApp, components: ComponentRo
     const reply = await communityButtonReplies.run(postId, interaction.user.id, action, guildId, app.handlerDeps);
     await interaction.reply({ content: reply.text, ephemeral: true });
   });
+}
+
+/**
+ * The Accept / Deny controls on a live join notice.
+ *
+ * These exist because the five-minute window is shorter than the round trip
+ * through a slash command: staff see the notice, and the answer has to be one
+ * press away rather than "switch to the admin bot, type the name, hope you
+ * spelled it right". All the state a press needs is the IGN in the customId, so
+ * a notice still works after a restart — which matters most, since a restart is
+ * exactly when a request goes unanswered.
+ *
+ * Permission is `canManageRoster`, which is the same floor `/join-accept` uses.
+ * The check is per press rather than per post: a notice can outlive somebody's
+ * staff role, and the button is not a capability token.
+ */
+export function registerJoinButtons(app: BridgeApp, components: ComponentRouter, queue: JoinQueueService): void {
+  components.register("join", async (interaction, [action, ign]) => {
+    if (!action || !ign) {
+      await interaction.reply({ content: "That button is from an older version and no longer works.", ephemeral: true });
+      return;
+    }
+    const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
+    if (guildId === null) {
+      await interaction.reply({ content: "This server isn't registered with the platform.", ephemeral: true });
+      return;
+    }
+    if (!(await app.canManageRoster(guildId, interaction.user.id).catch(() => false))) {
+      await interaction.reply({ content: "You don't have permission to answer join requests.", ephemeral: true });
+      return;
+    }
+
+    // Deferred: both branches type a command into Minecraft behind a paced
+    // queue and may read the database first, which is comfortably longer than
+    // Discord's three-second reply budget on a bad day.
+    await interaction.deferReply({ ephemeral: true });
+    const text =
+      action === "a"
+        ? admitLine(await queue.admit(guildId, ign, interaction.user.id))
+        : denyLine(await queue.deny(guildId, ign, interaction.user.id), ign);
+    await interaction.editReply({ content: text, allowedMentions: { parse: [] } });
+  });
+}
+
+/** Why a guild command never left the building. Shared by both button branches. */
+function actionFailure(reason: JoinActionFailure): string {
+  switch (reason) {
+    case "BAD_NAME":
+      return "That isn't a Minecraft username, so nothing was sent.";
+    case "BAD_DURATION":
+      return "That isn't a mute duration (try `30m`), so nothing was sent.";
+    case "BAD_REASON":
+      return "That reason contains characters we won't type in-game, so nothing was sent.";
+    case "NOT_SENT":
+      return "The bridge couldn't take the command — it may be offline or backed up. Nothing was sent.";
+  }
+}
+
+/**
+ * The reply to an Accept press.
+ *
+ * An invite is reported as a different thing from an accept, never as a quieter
+ * one: it needs the applicant to act, so a staffer told only "done" would walk
+ * away believing somebody is in the guild who is not.
+ */
+function admitLine(result: AdmitResult): string {
+  if (!result.ok) return actionFailure(result.reason);
+  if (result.via === "INVITE") {
+    return `**${result.ign}**'s request had already expired, so an invite was sent instead. They aren't in the guild until they accept it themselves.`;
+  }
+  const left = result.remainingMs > 0 ? ` (${formatRemaining(result.remainingMs)})` : "";
+  return `Accepted **${result.ign}**${left}.`;
+}
+
+function denyLine(result: JoinActionResult, ign: string): string {
+  if (!result.ok) return actionFailure(result.reason);
+  return `Denied **${result.ign || ign}**.`;
 }
 
 /** A text channel this bot can actually post in — i.e. not a partial group DM. */
@@ -259,6 +355,15 @@ const GAME_COMMAND_SPACING_MS = 1_200;
 const GAME_COMMAND_BACKLOG = 50;
 /** Ten minutes. Beyond that a mute is arriving against a punishment that may already have expired. */
 const GAME_COMMAND_MAX_AGE_MS = 10 * 60_000;
+
+/**
+ * An answer to a join request: `/g accept Steve`, `/guild deny Steve`.
+ *
+ * Anchored and shaped tightly enough that it cannot match a kick reason or a
+ * relayed chat line containing the word "accept" — the consequence of a false
+ * positive is a command that jumps the queue and displaces a punishment.
+ */
+const JOIN_ANSWER = /^\/(?:g|guild) (?:accept|deny) [A-Za-z0-9_]{1,16}$/i;
 
 /** How long to let Minecraft flush its disconnect before abandoning the wait. */
 const MC_QUIT_TIMEOUT_MS = 5_000;
@@ -466,6 +571,28 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   );
 
   /**
+   * Answers to a join request, which are the only commands here on somebody
+   * else's clock.
+   *
+   * Hypixel honours `/g accept` for five minutes after a request and then
+   * forgets it. Every other command the queue carries is a punishment or a rank
+   * change that is just as valid a minute later, so they are content to wait
+   * behind whatever backlog exists; these are not. Sent late they do not
+   * arrive late, they fail — against a screening row the platform has by then
+   * marked ACCEPTED.
+   *
+   * Recognised by inspecting the command rather than carried as a flag because
+   * these arrive by two routes — the bridge's own auto-accept, and the Redis
+   * bus when a staffer runs `/join-accept` on the admin bot — and a flag would
+   * have to be threaded through a published message format that has no field
+   * for it. The rule is about the command itself, so it belongs with the queue
+   * that paces it.
+   */
+  function commandUrgency(command: string): CommandOptions {
+    return JOIN_ANSWER.test(command) ? { urgent: true, maxAgeMs: JOIN_WINDOW_MS } : {};
+  }
+
+  /**
    * Accept a moderation command for this guild.
    *
    * The guild check is not a formality: one Redis instance backs every guild on
@@ -480,12 +607,29 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       app.log.warn("moderation command ignored: not this bridge's guild", { guildId, bridgeGuildId: internalGuildId });
       return false;
     }
-    const accepted = gameCommands.push(command);
+    const accepted = gameCommands.push(command, commandUrgency(command));
     if (!accepted) {
       app.log.warn("moderation command dropped: bridge command backlog full", { guildId, ...gameCommands.stats() });
     }
     return accepted;
   }
+
+  /**
+   * The door and the roster, as a service the buttons can call.
+   *
+   * Built here rather than in the composition root because it needs
+   * `sendGameCommand`, and that needs the Mineflayer session, which is created
+   * from the app rather than alongside it. It holds no session state itself —
+   * the sender it closes over resolves the live bot on every call — so a
+   * reconnect does not invalidate it.
+   */
+  const joinControl = new JoinQueueService({
+    screening: app.screening,
+    commands: { send: (guildId, command) => sendGameCommand(guildId, command) },
+    players: app.players,
+    logger: app.log,
+  });
+  registerJoinButtons(app, components, joinControl);
 
   /**
    * Persist an in-game moderation notice against this bridge's guild.
@@ -832,16 +976,54 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   }
 
   /**
+   * The Accept / Deny controls for one live request.
+   *
+   * The IGN is the only state carried, because it is the only state the answer
+   * needs — the row is looked up when the button is pressed, not when it is
+   * posted. That keeps the notice correct if the row is decided in the meantime
+   * by somebody else, or by the expiry sweep.
+   */
+  function joinControls(ign: string): ActionRowView {
+    return {
+      buttons: [
+        { label: "Accept", style: "SUCCESS", customId: customId("join", "a", ign) },
+        { label: "Deny", style: "DANGER", customId: customId("join", "d", ign) },
+      ],
+    };
+  }
+
+  /**
+   * The deadline, as Discord's own relative timestamp.
+   *
+   * Rendered client-side, so it keeps counting down in a channel nobody is
+   * refreshing — which is the whole point. Measured from when we saw the
+   * request rather than from the stored row: the two are within a second of
+   * each other, and this path has to work when there is no row at all.
+   */
+  function deadlineLine(seenAt: number): string {
+    return `Expires <t:${Math.floor((seenAt + JOIN_WINDOW_MS) / 1_000)}:R> — after that they can only be invited.`;
+  }
+
+  /**
    * Screen a join request, or record a completed join.
    *
    * Nothing here throws into the chat handler: `relay` catches, and every step
-   * that could fail is allowed to leave the rest working. In particular a
-   * failure to resolve the applicant's uuid ends the screening — we will not
-   * accept somebody we could not identify — while a failure to post the staff
-   * report only costs the report, because the row is already written.
+   * that could fail is allowed to leave the rest working. A failure to post the
+   * staff report only costs the report, because the row is already written.
+   *
+   * A name we cannot resolve no longer ends the matter. It ends the *screening*
+   * — we will not auto-accept somebody we could not identify — but the request
+   * is real and running on a five-minute clock, so staff still get a notice
+   * they can act on. Silently returning was the older behaviour, and it meant a
+   * Mojang outage looked exactly like nobody having asked to join.
    */
   async function handleJoin(bot: Bot, event: GuildJoinEvent): Promise<void> {
     if (seenRecently(`${event.kind}:${event.ign.toLowerCase()}`)) return;
+
+    // Captured before any awaits: everything below is measured against the
+    // moment the request appeared in chat, which is when Hypixel's clock
+    // started — not the moment we finished thinking about it.
+    const seenAt = Date.now();
 
     const guildId = await resolveInternalGuild();
     if (!guildId) return;
@@ -849,6 +1031,17 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     const resolved = await app.handlerDeps.players.resolveIgn(event.ign);
     if (!resolved) {
       app.log.warn("join event for an unresolvable name — not screened", { ign: event.ign, kind: event.kind });
+      if (event.kind !== "JOINED") {
+        await postStaffReport(
+          guildId,
+          [
+            `**Join request from ${event.ign}.**`,
+            "We couldn't look up that account, so no screening ran — decide from what you know.",
+            deadlineLine(seenAt),
+          ].join("\n"),
+          [joinControls(event.ign)],
+        );
+      }
       return;
     }
 
@@ -864,8 +1057,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
 
     if (event.kind === "JOINED") {
       await app.screening.decide(id, "JOINED", "AUTO");
-      await postStaffReport(guildId, `**${resolved.ign} joined the guild.**
-${staffReport(screening)}`);
+      await postStaffReport(guildId, `**${resolved.ign} joined the guild.**\n${staffReport(screening)}`);
       return;
     }
 
@@ -884,6 +1076,15 @@ ${staffReport(screening)}`);
     if (shouldAccept) {
       if (sendGameCommand(guildId, acceptCommand(resolved.ign))) {
         await app.screening.decide(id, "ACCEPTED", "AUTO");
+        // The number that decides whether this feature works at all: screening
+        // reads three third parties and the send is paced behind a queue. If it
+        // creeps towards the window then the budget or the pacing is wrong, and
+        // a log line is how anyone would ever find out.
+        app.log.info("auto-accepted inside the join window", {
+          ign: resolved.ign,
+          decisionMs: Date.now() - seenAt,
+          windowMs: JOIN_WINDOW_MS,
+        });
       } else {
         app.log.warn("auto-accept could not be queued; left pending for staff", { ign: resolved.ign });
       }
@@ -901,17 +1102,22 @@ ${staffReport(screening)}`);
     // The public line is deliberately vague — see `chatLine`. Said only when we
     // actually acted, so a request quietly queued for staff does not announce
     // itself to the guild.
-    if (shouldAccept || screening.verdict === "DENY") {
+    const answered = shouldAccept || screening.verdict === "DENY";
+    if (answered) {
       sayInGuildChat(bot, chatLine(screening), true);
     }
 
+    // Buttons only on a request still waiting for an answer. Offering them on
+    // one we have already answered invites a second command against a row that
+    // is no longer PENDING, which Hypixel refuses — loudly, in guild chat.
+    const heading = shouldAccept
+      ? `**Auto-accepted ${resolved.ign}.**`
+      : `**Join request from ${resolved.ign} — ${screening.verdict.toLowerCase()}.**`;
+    const lines = answered ? [heading] : [heading, deadlineLine(seenAt)];
     await postStaffReport(
       guildId,
-      shouldAccept
-        ? `**Auto-accepted ${resolved.ign}.**
-${staffReport(screening)}`
-        : `**Join request from ${resolved.ign} — ${screening.verdict.toLowerCase()}.**
-${staffReport(screening)}`,
+      [...lines, staffReport(screening)].join("\n"),
+      answered ? undefined : [joinControls(resolved.ign)],
     );
   }
 
@@ -920,16 +1126,26 @@ ${staffReport(screening)}`,
    * guild that has not configured one still gets screening, recorded and
    * decided, it just has nowhere for the write-up to go.
    */
-  async function postStaffReport(guildId: string, content: string): Promise<void> {
+  async function postStaffReport(
+    guildId: string,
+    content: string,
+    components?: readonly ActionRowView[],
+  ): Promise<void> {
     const channelId = await app.handlerDeps.config.getChannel(guildId, "staff");
     if (!channelId) return;
     const channel = await discord.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isTextBased() || !("send" in channel)) return;
     // The report quotes a stranger's IGN and a third-party listing reason,
     // neither of which we control; mentions stay unparsed.
-    await channel.send({ content, allowedMentions: { parse: [] } }).catch((e: unknown) => {
-      app.log.warn("could not post screening report", { error: String(e) });
-    });
+    await channel
+      .send({
+        content,
+        allowedMentions: { parse: [] },
+        ...(components?.length ? { components: components.map(toActionRow) } : {}),
+      })
+      .catch((e: unknown) => {
+        app.log.warn("could not post screening report", { error: String(e) });
+      });
   }
 
   /**

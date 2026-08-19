@@ -242,13 +242,36 @@ has had to look at them.
    never happened. On REVIEW it does nothing and waits.
 6. **Report.** A full report goes to the `staff` channel. Guild chat gets at most
    a neutral line.
-7. **Decide, by hand.** Anything left PENDING — which is everything, when
-   `autoAccept` is off — is answered from Discord with `/join-queue`,
-   `/join-accept` and `/join-deny` (see `ADMIN_BOT.md`). Those publish a
-   `GAME_COMMAND` over the mod bus for this bot to type. Because that bus is
-   plain pub/sub with no store-and-forward, the admin bot checks the bridge's
+7. **Decide, by hand, inside five minutes.** Anything left PENDING — which is
+   everything, when `autoAccept` is off — is answered either from the Accept /
+   Deny buttons on the staff report, or from Discord with `/join-queue`,
+   `/join-accept` and `/join-deny` (see `ADMIN_BOT.md`). The slash commands
+   publish a `GAME_COMMAND` over the mod bus for this bot to type; the buttons
+   are handled in-process, since they are already running here. Because that bus
+   is plain pub/sub with no store-and-forward, the admin bot checks the bridge's
    heartbeat for `mcSpawned` first and tells staff the command could not be sent
    rather than losing it silently.
+
+   **The window is the whole design.** Hypixel honours `/g accept` for five
+   minutes after the request and then forgets it, so three separate places are
+   bounded rather than merely fast:
+
+   - the screening gather runs under an 8s budget per port
+     (`DEFAULT_SCREEN_BUDGET_MS`), and a slow third party is recorded as
+     `timed out` on the row instead of holding the decision open;
+   - join answers go through the command queue's **urgent lane** — they overtake
+     the ordinary backlog and displace the newest ordinary command rather than
+     being refused when it is full;
+   - each carries `maxAgeMs = JOIN_WINDOW_MS`, so an answer that outlived the
+     window is abandoned rather than typed against a row we already marked
+     ACCEPTED.
+
+   A row past its window is retired to `EXPIRED` by the queue read, and
+   `/join-accept` on an expired or unseen-but-lapsed request sends
+   `/guild invite` instead — reported as an invite, never as a quieter accept,
+   because the applicant still has to accept it themselves. The measured
+   `decisionMs` of every auto-accept is logged; if it creeps towards the window,
+   the budget or the pacing is wrong.
 
 ### 6A.2 Rules that are not negotiable
 

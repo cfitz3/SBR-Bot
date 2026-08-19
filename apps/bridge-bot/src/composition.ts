@@ -41,6 +41,7 @@ import { LeaderboardService } from "@sbr/leaderboards";
 import {
   GuildConfigServiceImpl,
   COOLDOWN_SETTING_KEY,
+  meetsFloor,
   parseCooldowns,
   resolveCommandCooldownMs,
 } from "@sbr/guild-config";
@@ -77,6 +78,7 @@ import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/
 import { randomUUID } from "node:crypto";
 import {
   err,
+  MemberRole,
   ok,
   type GuildRosterSource,
   type MilestoneAnnouncerPort,
@@ -127,6 +129,22 @@ export interface BridgeApp {
   readonly milestones: MilestoneAnnouncerPort;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
+  /**
+   * IGN → uuid. Exposed because the join notice's Accept button has only a name
+   * to work with — the message that carried it may be minutes old and the
+   * screening row it belongs to is looked up by whatever Mojang says now.
+   */
+  readonly players: PlayerLookup;
+  /**
+   * May this Discord member work the guild door and roster from a button?
+   *
+   * Deliberately the *same* answer as `/join-accept`: it reads the floor the
+   * guild set for that command on the Permissions card, defaulting to MODERATOR.
+   * One setting for both surfaces, because a guild that lowers the command and
+   * then finds the buttons still refuse has been lied to about what it
+   * configured.
+   */
+  canManageRoster(guildId: string, discordId: string): Promise<boolean>;
   /**
    * Count a Discord message towards XP. Separate from the relay so a message
    * anywhere in the server counts, not only one in the bridge channel.
@@ -575,6 +593,14 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     automod,
     screening,
     resolveGuild: guildRepository.resolveInternalId,
+    players,
+    async canManageRoster(guildId, discordId) {
+      const [role, floor] = await Promise.all([
+        rankResolver.getRole(guildId, discordId),
+        rolePolicyReader.commandFloor(guildId, "join-accept", MemberRole.MODERATOR),
+      ]);
+      return meetsFloor(role, floor);
+    },
     async creditDiscordMessage(guildId, discordId, text) {
       await xp.recordMessage(guildId, discordId, "DISCORD_MESSAGE", text);
     },

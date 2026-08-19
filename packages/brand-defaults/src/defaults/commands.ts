@@ -365,6 +365,49 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
   },
   "bridge-suspend": { description: "Stop relaying between Discord and guild chat" },
   "bridge-unsuspend": { description: "Resume relaying between Discord and guild chat" },
+  // The in-game door and roster. Every one of these ends as a line typed into
+  // Minecraft by the bridge account, so the option copy says what Hypixel will
+  // accept rather than what sounds friendly — a rejected duration is a command
+  // that silently did nothing.
+  "join-queue": { description: "Live in-game join requests and how long is left to answer them" },
+  "join-accept": {
+    description: "Admit somebody who asked to join in-game",
+    option: { ign: "Minecraft username" },
+  },
+  "join-deny": {
+    description: "Refuse an in-game join request",
+    option: { ign: "Minecraft username" },
+  },
+  "guild-invite": {
+    description: "Invite a player who hasn't asked to join",
+    option: { ign: "Minecraft username" },
+  },
+  "guild-kick": {
+    description: "Remove a member from the in-game guild",
+    option: {
+      ign: "Minecraft username",
+      reason: "Shown in-game; letters, numbers and basic punctuation",
+    },
+  },
+  "guild-mute": {
+    description: "Silence a member in guild chat",
+    option: {
+      ign: "Minecraft username",
+      duration: "How long, e.g. 30m, 12h, 7d",
+    },
+  },
+  "guild-unmute": {
+    description: "Let a muted member speak in guild chat again",
+    option: { ign: "Minecraft username" },
+  },
+  "guild-promote": {
+    description: "Raise a member one in-game guild rank",
+    option: { ign: "Minecraft username" },
+  },
+  "guild-demote": {
+    description: "Lower a member one in-game guild rank",
+    option: { ign: "Minecraft username" },
+  },
   "deny-member": {
     description: "Reject an application",
     option: {

@@ -88,3 +88,69 @@ test("a command queued while the session is down is delivered once it returns", 
   assert.deepEqual(sent, ["/g unmute A"]);
   assert.equal(q.stats().sent, 1);
 });
+
+/**
+ * The urgent lane.
+ *
+ * Everything else this queue carries — a mute, a promotion — is just as valid a
+ * minute later. An answer to a join request is not: Hypixel forgets the request
+ * after five minutes, so a paced backlog of ordinary commands is enough to turn
+ * an accept into a failure. These assertions are the difference between "the
+ * queue is fair" and "the queue is fair and the door still opens".
+ */
+test("an urgent command overtakes the ordinary backlog", async () => {
+  const sent: string[] = [];
+  let up = false;
+  const { q } = queue((c) => (up ? (sent.push(c), true) : false), { maxAgeMs: 600_000 });
+  q.push("/g mute A 1h");
+  q.push("/g kick B");
+  q.push("/guild accept Jack", { urgent: true });
+  up = true;
+  await q.idle();
+  assert.equal(sent[0], "/guild accept Jack");
+});
+
+test("urgent commands keep their own order", async () => {
+  // Overtaking the ordinary queue must not mean overtaking each other: two
+  // applicants answered in one breath should be answered in the order the
+  // staffer pressed, not in reverse.
+  const sent: string[] = [];
+  let up = false;
+  const { q } = queue((c) => (up ? (sent.push(c), true) : false), { maxAgeMs: 600_000 });
+  q.push("/g kick B");
+  q.push("/guild accept Jack", { urgent: true });
+  q.push("/guild deny Alex", { urgent: true });
+  up = true;
+  await q.idle();
+  assert.deepEqual(sent, ["/guild accept Jack", "/guild deny Alex", "/g kick B"]);
+});
+
+test("a full backlog displaces the newest ordinary command rather than refusing an urgent one", async () => {
+  const { q } = queue(() => false, { maxBacklog: 2 });
+  assert.equal(q.push("/g mute A 1h"), true);
+  assert.equal(q.push("/g kick B"), true);
+  // The old behaviour dropped this, which is the failure this lane exists to
+  // prevent: a burst of punishments silently costing the guild an applicant.
+  assert.equal(q.push("/guild accept Jack", { urgent: true }), true);
+  assert.equal(q.stats().evicted, 1);
+});
+
+test("an all-urgent backlog still refuses rather than eating itself", async () => {
+  // There is nothing left to displace, and dropping another join answer to make
+  // room for this one would just move the loss around.
+  const { q } = queue(() => false, { maxBacklog: 2 });
+  assert.equal(q.push("/guild accept A", { urgent: true }), true);
+  assert.equal(q.push("/guild accept B", { urgent: true }), true);
+  assert.equal(q.push("/guild accept C", { urgent: true }), false);
+});
+
+test("a join answer that outlived its window is abandoned, not delivered late", async () => {
+  // Delivered late it does not arrive late, it fails — against a row the
+  // platform has by then already marked ACCEPTED.
+  const sent: string[] = [];
+  const { q } = queue(() => false, { maxAgeMs: 120_000 });
+  q.push("/guild accept Jack", { urgent: true, maxAgeMs: 5_000 });
+  await q.idle();
+  assert.deepEqual(sent, []);
+  assert.equal(q.stats().expired, 1);
+});

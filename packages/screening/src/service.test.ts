@@ -53,6 +53,12 @@ function repo(): ScreeningRepository & { recorded: Screening[]; decisions: [stri
     async findPending() {
       return null;
     },
+    async findLatestByIgn() {
+      return null;
+    },
+    async expireStale() {
+      return 0;
+    },
   };
 }
 
