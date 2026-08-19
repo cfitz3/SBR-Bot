@@ -187,6 +187,25 @@ export function defineReminderDispatchJob(sweep: () => Promise<number>): JobDefi
   };
 }
 
+/**
+ * event-tracking: poll the participants of a live event and score them.
+ *
+ * `progression` rather than `community` because what it actually spends is the
+ * Hypixel budget, and that queue is where the fleet's other profile fetches
+ * queue up behind each other. One retry: the next pass is minutes away, and a
+ * failed poll costs a data point rather than a score.
+ */
+export function defineEventTrackingJob(track: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "event-tracking",
+    queue: "progression",
+    lockKey: "lock:job:event-tracking",
+    lockTtlMs: 10 * 60_000,
+    maxRetries: 1,
+    handler: track,
+  };
+}
+
 /** guild-roster-sync: reconcile the Hypixel guild roster against ours. */
 export function defineRosterSyncJob(sync: () => Promise<number>): JobDefinition<number> {
   return {

@@ -26,6 +26,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `event-transition` | Repeatable + delayed | every 1–5 min / at boundaries | Idempotent state guard (only valid transitions) | Backoff; re-evaluate from truth | Event status lags (SCHEDULED→LIVE→COMPLETED) |
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
 | `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
+| `event-tracking` | Repeatable (cron) | every 10 min (`8-59/10 * * * *`), per-event interval on top | `EventScore` upsert on `(eventId,uuid,metric)`; baselines written once | 1 retry; global lock, 10 min TTL | Live event leaderboards age; recorded scores are unaffected |
 | `ticket-sweep` | Repeatable (cron) | every 6 min (`5-59/6 * * * *`) | The warned flag is a Redis key with a 24 h TTL; a close is refused on an already-closed row | 2 retries; global lock, 5 min TTL | Quiet tickets are warned and auto-closed late; nothing is closed that should not be |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
@@ -85,12 +86,44 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Retry:** per-member requeue with backoff; rate-budget-aware low-priority queue so it never beats live commands to a token.
 - **Logging:** members processed, skipped (API disabled/rate), snapshots written.
 - **Failure impact:** progression (`/progress`, `/whatnext`) and milestone detection lag; no user-facing error.
-- **Event-tracking exception (progression events / leaderboards):** during a running progression event, an **opt-in cohort** (a subset of the ~125-member guild — never all of them) is snapshotted at a **sub-hourly** cadence (e.g. every 5–15 min, configurable per event) so live leaderboards stay fresh. Specifics:
-  - **Scope-limited by design.** The high-frequency cadence applies **only** to the event's registered participant cohort for the event's active window; everyone else stays on the normal ~6–12 h schedule. This keeps the extra Hypixel spend bounded (cohort size × interval), not fleet-wide.
-  - **Separate lane:** runs as a distinct repeatable job (`profile-snapshot:event:{eventId}`) with its own lock and a **higher priority** than bulk snapshots, but still under the reserved worker rate fraction so it can't starve live commands.
-  - **Idempotency:** upsert key gains a fine-grained component (`captureAt`/`seq`) so multiple same-day captures don't collide with the daily upsert; leaderboard reads use the latest snapshot per member.
-  - **Auto start/stop:** the cadence is enabled when the event enters its tracking window and **torn down** (job removed) when the event ends or is cancelled, so we never leave a sub-hourly loop running after the event — tied to `event-transition` (§2.8).
-  - **Rate-budget guardrail:** if the cohort × interval would exceed the worker rate fraction, the job widens the interval (and logs it) rather than eating into live-command budget; leaderboard freshness degrades gracefully instead of throttling users.
+- **Event-tracked cohort:** a live event polls its own participants far more
+  often than the bulk cadence does. That is `event-tracking` (§2.5b), which
+  reuses this job's capture path rather than duplicating it — one definition of
+  what a snapshot contains, so the event leaderboard and the progression charts
+  are measuring the same thing.
+
+### 2.5b `event-tracking`
+- **Trigger / frequency:** repeatable cron, every 10 min (`8-59/10 * * * *`),
+  bulk lane. The tick is not the cadence: each event carries its own
+  `pollIntervalMinutes` (default 30) and a participant captured more recently
+  than that is skipped, so the tick only decides how promptly an event whose
+  interval has elapsed is picked up.
+- **Inputs:** `Event` rows that are **LIVE** and have at least one entry in
+  `trackedMetrics`; their **GOING** RSVPs, resolved through `LinkedAccount` to a
+  verified Minecraft account.
+- **Outputs:** an `EVENT_TRACKED` `ProfileSnapshot` per participant (carrying
+  `eventId`), and an upserted `EventScore` per tracked metric.
+- **Scope-limited by design.** Only live events, only tracked ones, only members
+  who said they were coming, and only those with a linked account. An event
+  nobody RSVP'd to costs nothing; the unlinked are absent rather than scored
+  zero, and the panel shows them as an unlinked warning list.
+- **The baseline is written once.** The first poll after an event goes LIVE
+  records where a member started; every later poll updates `current` and
+  `delta`. Nothing moves a baseline afterwards — doing so would silently reset
+  everyone's score mid-event.
+- **Idempotency:** `EventScore` is keyed `(eventId, uuid, metric)`, so a repeated
+  pass rewrites the same row with the same numbers. Snapshots take a per-capture
+  `seq`, so several captures in one day do not collide with the daily upsert.
+- **A null reading is not a zero.** A metric the profile did not report is
+  skipped, leaving the last good score standing rather than dropping the member
+  to the bottom of the board over one bad fetch.
+- **Retry:** 1 retry, global lock, 10 min TTL. The next pass is minutes away, so
+  a failure costs a data point rather than a score.
+- **Failure impact:** the board's "last updated" stamp ages. Scores already
+  recorded are unaffected, and nothing has to be recomputed to recover.
+- **No teardown to forget.** There is no per-event job to remove when an event
+  ends: the pass reads current truth, so an event leaving LIVE simply stops
+  appearing in the work list.
 
 ### 2.6 `milestone-detect`
 - **Trigger / frequency:** event-driven immediately after a snapshot (per member).

@@ -8,12 +8,15 @@
  */
 import type {
   ActivityRow,
+  EventParticipant,
   EventRow,
+  EventScoreWrite,
   MilestoneCandidate,
   RosterMemberLike,
   SnapshotMetrics,
   SnapshotWrite,
   StoredRosterRow,
+  TrackableEvent,
 } from "@sbr/jobs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../client.js";
@@ -84,30 +87,94 @@ export const eventJobRepository = {
     });
   },
 
-  /** Accounts in the progression cohort of a currently-live tracked event. */
-  async listEventTrackedAccounts(): Promise<readonly { eventId: string; minecraftAccountId: string; uuid: string }[]> {
-    const events = await prisma.event.findMany({
-      where: { status: "LIVE", tracksProgression: true },
-      select: { id: true, rsvps: { where: { state: "GOING" }, select: { discordId: true } } },
+  /** LIVE events that score at least one metric. The tracker's work list. */
+  async listLiveTracked(): Promise<readonly TrackableEvent[]> {
+    const rows = await prisma.event.findMany({
+      where: { status: "LIVE", NOT: { trackedMetrics: { isEmpty: true } } },
+      select: { id: true, guildId: true, trackedMetrics: true, pollIntervalMinutes: true },
+    });
+    return rows;
+  },
+
+  /**
+   * Participants of one event, resolved to the account behind the RSVP.
+   *
+   * GOING only, and verified links only. A member who said "maybe" has not
+   * entered the competition, and an unlinked one has no profile to measure —
+   * both are absent here rather than present with nothing in them.
+   */
+  async listParticipants(eventId: string): Promise<readonly EventParticipant[]> {
+    const rsvps = await prisma.eventRSVP.findMany({
+      where: { eventId, state: "GOING" },
+      select: { discordId: true },
+    });
+    if (rsvps.length === 0) return [];
+
+    const links = await prisma.linkedAccount.findMany({
+      where: {
+        status: "VERIFIED",
+        discordUser: { discordId: { in: rsvps.map((r) => r.discordId) } },
+      },
+      select: {
+        discordUser: { select: { discordId: true } },
+        minecraftAccount: {
+          select: {
+            id: true,
+            uuid: true,
+            selectedProfiles: { where: { isActive: true }, select: { profileId: true }, take: 1 },
+            snapshots: {
+              where: { eventId },
+              orderBy: { capturedAt: "desc" },
+              select: { capturedAt: true },
+              take: 1,
+            },
+          },
+        },
+      },
     });
 
-    const cohort: { eventId: string; minecraftAccountId: string; uuid: string }[] = [];
-    for (const event of events) {
-      const discordIds = event.rsvps.map((r) => r.discordId);
-      if (discordIds.length === 0) continue;
-      const links = await prisma.linkedAccount.findMany({
-        where: { status: "VERIFIED", discordUser: { discordId: { in: discordIds } } },
-        select: { minecraftAccount: { select: { id: true, uuid: true } } },
+    return links.map((link) => ({
+      discordId: link.discordUser.discordId,
+      minecraftAccountId: link.minecraftAccount.id,
+      uuid: link.minecraftAccount.uuid,
+      profileId: link.minecraftAccount.selectedProfiles[0]?.profileId ?? null,
+      // Scoped to this event: the bulk cadence's captures are hours apart and
+      // would make every participant look freshly polled, stalling the board.
+      lastCapturedAt: link.minecraftAccount.snapshots[0]?.capturedAt.toISOString() ?? null,
+    }));
+  },
+
+  /**
+   * Record one reading.
+   *
+   * The baseline is written by the create branch and never by the update: the
+   * first poll after an event goes LIVE decides where a member started, and
+   * anything that moved it afterwards would erase everyone's progress. `delta`
+   * is stored so the board can order in the database.
+   */
+  async upsertScore(write: EventScoreWrite): Promise<void> {
+    const existing = await prisma.eventScore.findUnique({
+      where: { eventId_uuid_metric: { eventId: write.eventId, uuid: write.uuid, metric: write.metric } },
+      select: { baseline: true },
+    });
+    if (existing === null) {
+      await prisma.eventScore.create({
+        data: {
+          eventId: write.eventId,
+          discordId: write.discordId,
+          uuid: write.uuid,
+          metric: write.metric,
+          baseline: write.value,
+          current: write.value,
+          delta: 0,
+        },
       });
-      for (const link of links) {
-        cohort.push({
-          eventId: event.id,
-          minecraftAccountId: link.minecraftAccount.id,
-          uuid: link.minecraftAccount.uuid,
-        });
-      }
+      return;
     }
-    return cohort;
+    await prisma.eventScore.update({
+      where: { eventId_uuid_metric: { eventId: write.eventId, uuid: write.uuid, metric: write.metric } },
+      data: { discordId: write.discordId, current: write.value, delta: write.value - existing.baseline },
+    });
   },
 };
 

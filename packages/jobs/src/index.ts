@@ -25,6 +25,7 @@ export {
   defineRosterSyncJob,
   defineSafetyExpiryJob,
   defineTicketSweepJob,
+  defineEventTrackingJob,
   defineXpAggregateJob,
 } from "./jobs.js";
 export {
@@ -119,3 +120,13 @@ export {
   type TicketSweepAction,
   type TicketSweepDeps,
 } from "./tickets.js";
+export {
+  trackEvents,
+  isEventMetric,
+  EVENT_METRICS,
+  type EventMetric,
+  type EventParticipant,
+  type EventScoreWrite,
+  type EventTrackingDeps,
+  type TrackableEvent,
+} from "./event-tracking.js";

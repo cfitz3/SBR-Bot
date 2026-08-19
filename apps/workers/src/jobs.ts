@@ -34,6 +34,7 @@ import {
   defineGuildScanJob,
   defineInactivityScanJob,
   defineMilestoneDetectJob,
+  defineEventTrackingJob,
   defineProfileSnapshotJob,
   definePunishmentExpiryJob,
   defineReminderDispatchJob,
@@ -51,6 +52,8 @@ import {
   scanGuild,
   scanInactivity,
   snapshotProfiles,
+  trackEvents,
+  type TrackedAccount,
   sweepAuctions,
   sweepTickets,
   syncDiscordMembers,
@@ -199,40 +202,64 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
 
   // ─────────────────────────── progression ───────────────────────────
 
+  /**
+   * One profile capture, shared by the bulk snapshot cadence and the event
+   * tracker. Two copies of this would be two definitions of what a snapshot
+   * contains, and the event leaderboard would eventually be measuring something
+   * subtly different from the progression charts.
+   */
+  const captureProfile = async (account: TrackedAccount) => {
+    const profileId = account.profileId ?? undefined;
+    // The profile summary already carries SkyBlock Level, skill average,
+    // catacombs level and Senither weight — the numbers `/stats` prints. Only
+    // networth needs a second call, because it requires a priced pass.
+    // Both reads hit one cached profile fetch, not two upstream calls.
+    const [summary, networth] = await Promise.all([
+      ctx.progression.getProfileSummary(account.uuid, profileId),
+      ctx.progression.getNetworth(account.uuid, profileId),
+    ]);
+    // No readable profile at all means there is nothing to snapshot;
+    // individual metrics that failed simply record as unknown.
+    if (!summary.ok) return null;
+
+    return {
+      profileId: summary.value.data.profileId,
+      metrics: {
+        skyblockLevel: summary.value.data.skyblockLevel,
+        networth: networth.ok ? networth.value.data.total : null,
+        skillAverage: summary.value.data.skillAverage,
+        catacombsLevel: summary.value.data.catacombsLevel,
+        slayerXp: summary.value.data.slayerXp,
+        senitherWeight: summary.value.data.senitherWeight,
+      },
+    };
+  };
+
   const snapshot: JobDefinition<number> = {
     ...defineProfileSnapshotJob(async () =>
       snapshotProfiles({
         listTracked: () => snapshotJobRepository.listTracked(),
-        async capture(account) {
-          const profileId = account.profileId ?? undefined;
-          // The profile summary already carries SkyBlock Level, skill average,
-          // catacombs level and Senither weight — the numbers `/stats` prints. Only
-          // networth needs a second call, because it requires a priced pass.
-          // Both reads hit one cached profile fetch, not two upstream calls.
-          const [summary, networth] = await Promise.all([
-            ctx.progression.getProfileSummary(account.uuid, profileId),
-            ctx.progression.getNetworth(account.uuid, profileId),
-          ]);
-          // No readable profile at all means there is nothing to snapshot;
-          // individual metrics that failed simply record as unknown.
-          if (!summary.ok) return null;
-
-          return {
-            profileId: summary.value.data.profileId,
-            metrics: {
-              skyblockLevel: summary.value.data.skyblockLevel,
-              networth: networth.ok ? networth.value.data.total : null,
-              skillAverage: summary.value.data.skillAverage,
-              catacombsLevel: summary.value.data.catacombsLevel,
-              slayerXp: summary.value.data.slayerXp,
-              senitherWeight: summary.value.data.senitherWeight,
-            },
-          };
-        },
+        capture: captureProfile,
         write: (row) => snapshotJobRepository.write(row),
       }),
     ),
     lockKey: keys.lockJob("snapshot"),
+  };
+
+  const eventTracking: JobDefinition<number> = {
+    ...defineEventTrackingJob(async () =>
+      trackEvents({
+        listLiveTracked: () => eventJobRepository.listLiveTracked(),
+        listParticipants: (eventId) => eventJobRepository.listParticipants(eventId),
+        capture: captureProfile,
+        writeSnapshot: (row) => snapshotJobRepository.write(row),
+        upsertScore: (write) => eventJobRepository.upsertScore(write),
+        onError(scope, error) {
+          ctx.log.warn("event tracking failed", { scope, error: String(error) });
+        },
+      }),
+    ),
+    lockKey: keys.lockJob("event-tracking"),
   };
 
   const milestones: JobDefinition<number> = {
@@ -727,6 +754,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     inactivity,
     punishmentExpiry,
     ticketSweep,
+    eventTracking,
     xpAggregate,
     analyticsIngest,
     analyticsRollup,

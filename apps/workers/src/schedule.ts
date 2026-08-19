@@ -73,6 +73,11 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // Snapshots run twice an hour and take the oldest-captured slice each time,
   // which spreads ~125 members across the documented 6–12h window on its own.
   { name: "profile-snapshot", repeat: { pattern: "7,37 * * * *" }, priority: LANE.bulk },
+  // Off-minute /10: 8,18,28,…,58. Bulk because what it actually spends is the
+  // Hypixel budget, and ten minutes is fine for a job whose real cadence is the
+  // per-event poll interval — the tick only decides how promptly an event whose
+  // interval has elapsed gets picked up.
+  { name: "event-tracking", repeat: { pattern: "8-59/10 * * * *" }, priority: LANE.bulk },
   // Five minutes behind the snapshot pass, so it compares against rows that
   // exist rather than racing the writer.
   { name: "milestone-detect", repeat: { pattern: "12,42 * * * *" }, priority: LANE.bulk },

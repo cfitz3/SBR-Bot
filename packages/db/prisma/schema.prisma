@@ -800,18 +800,60 @@ model Event {
   endsAt            DateTime?
   capacity          Int?
   hostDiscordId     String?
+  /// Where the tracker board was published, and the message that is edited in
+  /// place as the event runs. The channel is stored rather than resolved from
+  /// the `events` slot each pass: a slot rebound mid-event would otherwise
+  /// orphan a board nobody can update, and a board that cannot be edited is
+  /// worse than one posted in the old channel.
+  channelId         String?
   messageId         String?
+  /// When the board was last edited. Shown on the board itself, so a reader can
+  /// tell a quiet leaderboard from a stalled one.
+  boardUpdatedAt    DateTime?
   // Progression-tracking events drive the sub-hourly snapshot cohort (WORKERS.md §2.5).
   tracksProgression Boolean     @default(false)
+  /// Metric keys this event scores, e.g. `catacombs`, `skill:mining`. Driven off
+  /// the parsed snapshot's own keys rather than an enum, so a metric Hypixel
+  /// adds needs no migration.
+  trackedMetrics    String[]    @default([])
+  /// How often the tracker polls participants while the event is LIVE.
+  pollIntervalMinutes Int       @default(30)
+  /// The mirrored Discord scheduled event, when one was created.
+  discordEventId    String?
   reminderState     Json        @default("{}")
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
   guild     Guild             @relation(fields: [guildId], references: [id], onDelete: Cascade)
   rsvps     EventRSVP[]
+  scores    EventScore[]
   snapshots ProfileSnapshot[]
 
   @@index([guildId, status, startsAt])
+}
+
+/// One participant's standing in one metric of one event.
+///
+/// `baseline` is captured on the first poll after the event goes LIVE and never
+/// moves again; `delta` is the score, stored rather than computed so the board
+/// can order by it in the database instead of loading every row to sort in
+/// memory. Keyed by uuid rather than by Discord id because the figure comes from
+/// a SkyBlock profile — a member who relinks keeps their progress.
+model EventScore {
+  id        String   @id @default(cuid())
+  eventId   String
+  discordId String
+  uuid      String
+  metric    String
+  baseline  Float
+  current   Float
+  delta     Float    @default(0)
+  updatedAt DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, uuid, metric])
+  @@index([eventId, metric, delta])
 }
 
 model EventRSVP {

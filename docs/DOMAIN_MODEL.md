@@ -34,6 +34,7 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | TicketPanelConfig | Postgres | Persistent (config) |
 | Application | Postgres | Persistent |
 | Event | Postgres | Persistent |
+| EventScore | Postgres | Persistent |
 | EventRSVP | Postgres | Persistent |
 | LFGPost | Postgres (+ Redis TTL mirror) | Persistent record, ephemeral visibility |
 | PermGroup | Postgres | Persistent (disbanded, never deleted) |
@@ -451,11 +452,29 @@ A scheduled community event.
 | `capacity` | nullable |
 | `hostDiscordUserId` | FK |
 | `status` | see enum |
-| `messageId` | announcement message |
+| `channelId`, `messageId` | the tracker board, edited in place. The channel is stored rather than re-resolved from the `events` slot, so rebinding the slot mid-event cannot orphan a board |
+| `boardUpdatedAt` | last board edit; shown on the board so a quiet leaderboard reads differently from a stalled one |
+| `trackedMetrics` | metric keys this event scores; empty means untracked |
+| `pollIntervalMinutes` | how often participants are polled while LIVE (default 30) |
+| `discordEventId` | the mirrored Discord scheduled event, when one was created |
+| `reminderState` | which reminder offsets have been sent |
 
 **Enum — `EventType`:** `DUNGEON`, `SLAYER`, `FISHING`, `MINING`, `GIVEAWAY`, `MEETING`, `CUSTOM`.
 **Enum — `EventStatus`:** `SCHEDULED`, `LIVE`, `COMPLETED`, `CANCELLED`.
-**Relationships:** N—1 `Guild`; 1—N `EventRSVP`.
+**Relationships:** N—1 `Guild`; 1—N `EventRSVP`, 1—N `EventScore`.
+
+#### EventScore
+One participant's standing in one metric of one event (`WORKERS.md §2.5b`).
+
+| Field | Notes |
+|-------|-------|
+| `eventId` | FK |
+| `discordId`, `uuid` | who. Keyed by uuid, so a member who relinks keeps their progress |
+| `metric` | one of the metrics a snapshot records |
+| `baseline` | captured on the first poll after the event goes LIVE, and never moved again |
+| `current`, `delta` | the latest reading and the gain. `delta` is stored rather than derived so the board can order in the database |
+
+**Relationships:** N—1 `Event`. Unique on (`eventId`,`uuid`,`metric`).
 
 #### EventRSVP
 A user's response to an event.
@@ -785,6 +804,7 @@ erDiagram
     Guild ||--o{ Application : receives
     Guild ||--o{ Event : schedules
     Event ||--o{ EventRSVP : gathers
+    Event ||--o{ EventScore : scores
     Guild ||--o{ LFGPost : hosts
     Guild ||--o{ PermGroup : houses
     PermGroup ||--o{ PermMember : seats
