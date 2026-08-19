@@ -63,6 +63,12 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // that already publish their own invalidation.
   { name: "config-cache-invalidation", repeat: { pattern: "4-59/7 * * * *" }, priority: LANE.timely },
 
+  // Off-minute /6: 5,11,17,…,53. Timely rather than bulk because both of its
+  // outcomes are things a member sees: a warning that arrives late is a ticket
+  // closed with no notice, and a close that arrives late is a channel sitting
+  // open past the window the guild configured.
+  { name: "ticket-sweep", repeat: { pattern: "5-59/6 * * * *" }, priority: LANE.timely },
+
   // ── bulk lane: everything that can wait for a token ──
   // Snapshots run twice an hour and take the oldest-captured slice each time,
   // which spreads ~125 members across the documented 6–12h window on its own.

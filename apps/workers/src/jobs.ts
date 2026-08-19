@@ -20,6 +20,7 @@ import {
   discordSyncRepository,
   xpRepository,
   activitySink,
+  ticketRepository,
 } from "@sbr/db";
 import {
   defineAnalyticsIngestJob,
@@ -38,6 +39,7 @@ import {
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
   defineRosterSyncJob,
+  defineTicketSweepJob,
   defineXpAggregateJob,
   detectAndRecord,
   dispatchReminders,
@@ -50,6 +52,7 @@ import {
   scanInactivity,
   snapshotProfiles,
   sweepAuctions,
+  sweepTickets,
   syncDiscordMembers,
   syncRoster,
   transitionEvents,
@@ -58,6 +61,7 @@ import {
   type MilestoneDefinition,
 } from "@sbr/jobs";
 import { XpService } from "@sbr/xp";
+import { createWorkerTicketBridge } from "./ticket-bridge.js";
 import type { WorkerContext } from "./composition.js";
 
 /** How long a swept BIN reading stays readable before the key expires. */
@@ -69,6 +73,15 @@ const SALES_TTL_SECONDS = 2 * 60 * 60;
 const RESOURCE_TTL_SECONDS = 12 * 60 * 60;
 /** Reference endpoints worth keeping warm; each is independent of the others. */
 const RESOURCE_NAMES = ["skills", "collections", "items"] as const;
+/**
+ * How long a "this ticket has been warned" flag lives.
+ *
+ * A day, which is longer than any sensible auto-close window and shorter than
+ * forever. The flag exists to stop a warning repeating every few minutes; once
+ * a ticket has been quiet, resumed, and gone quiet again a day later, warning
+ * it a second time is the right thing rather than a duplicate.
+ */
+const TICKET_WARNED_TTL_SECONDS = 24 * 60 * 60;
 /** Cap on accounts examined for milestones per run, to bound a cold start. */
 const MILESTONE_BATCH = 200;
 
@@ -572,6 +585,49 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("punishment-expiry"),
   };
 
+  /**
+   * Quiet tickets: warned once, then closed if nobody comes back.
+   *
+   * The decision and the doing both live in the bridge bot — it holds the
+   * gateway to the community server, and carrying out either answer means
+   * posting in a channel or deleting one. What this process contributes is the
+   * schedule, the lock, and the memory of which tickets have already been
+   * warned, which is a Redis key with a TTL rather than a database column
+   * because it describes a notification and not a ticket.
+   */
+  const ticketSweep: JobDefinition<number> = {
+    ...defineTicketSweepJob(async () => {
+      const bridge = createWorkerTicketBridge({
+        baseUrl: ctx.config.internalApi.bridgeBaseUrl,
+        token: ctx.config.internalApi.token,
+        logger: ctx.log,
+      });
+      const warnedKey = (ticketId: string) => keys.cacheGlobal(`ticket-warned:${ticketId}`);
+
+      return sweepTickets({
+        async listGuilds() {
+          const guilds = await guildRepository.listActive();
+          return guilds.map((g) => g.id);
+        },
+        listSweepable: (guildId) => ticketRepository.listSweepable(guildId),
+        async wasWarned(ticketId) {
+          return (await client.get(warnedKey(ticketId))) !== null;
+        },
+        async rememberWarned(ticketId) {
+          await client.set(warnedKey(ticketId), "1", { EX: TICKET_WARNED_TTL_SECONDS });
+        },
+        async forgetWarned(ticketId) {
+          await client.del(warnedKey(ticketId));
+        },
+        sweepOne: (ticket, staleWarned) => bridge.sweep(ticket, staleWarned),
+        onError(scope, error) {
+          ctx.log.warn("ticket sweep failed", { scope, error: String(error) });
+        },
+      });
+    }),
+    lockKey: keys.lockJob("ticket-sweep"),
+  };
+
   // ───────────────────────────── analytics ─────────────────────────────
 
   const analyticsIngest: JobDefinition<number> = {
@@ -672,6 +728,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     discordMemberSync,
     inactivity,
     punishmentExpiry,
+    ticketSweep,
     xpAggregate,
     analyticsIngest,
     analyticsRollup,

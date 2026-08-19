@@ -24,6 +24,7 @@ export {
   defineResourcesRefreshJob,
   defineRosterSyncJob,
   defineSafetyExpiryJob,
+  defineTicketSweepJob,
   defineXpAggregateJob,
 } from "./jobs.js";
 export {
@@ -112,3 +113,9 @@ export {
   type RosterSyncResult,
   type StoredRosterRow,
 } from "./maintenance.js";
+export {
+  sweepTickets,
+  type SweepableTicket,
+  type TicketSweepAction,
+  type TicketSweepDeps,
+} from "./tickets.js";

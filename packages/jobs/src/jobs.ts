@@ -261,6 +261,28 @@ export function definePunishmentExpiryJob(sweep: () => Promise<number>): JobDefi
   };
 }
 
+/**
+ * ticket-sweep: warn quiet tickets and close the ones nobody came back to.
+ *
+ * Runs here rather than on a timer inside the bridge bot for the same reason
+ * every other recurring job does: the lock, the retry policy and the run log
+ * live in this process, and a bot that sweeps on its own `setInterval` sweeps
+ * twice the moment a second replica starts.
+ *
+ * Two retries, because each ticket is decided independently and re-running the
+ * pass simply re-examines whatever the failed attempt did not reach.
+ */
+export function defineTicketSweepJob(sweep: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "ticket-sweep",
+    queue: "community",
+    lockKey: "lock:job:ticket-sweep",
+    lockTtlMs: 5 * 60_000,
+    maxRetries: 2,
+    handler: sweep,
+  };
+}
+
 /** inactivity-scan: flag members who look inactive. Advisory only, never a kick. */
 export function defineInactivityScanJob(scan: () => Promise<number>): JobDefinition<number> {
   return {

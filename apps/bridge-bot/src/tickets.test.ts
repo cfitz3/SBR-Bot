@@ -149,6 +149,8 @@ interface HarnessOptions {
   readonly postFails?: boolean;
   readonly editFails?: boolean;
   readonly byChannel?: TicketDTO | null;
+  /** What `getTicket` answers with, for the by-id paths. */
+  readonly ticketById?: TicketDTO;
 }
 
 /** The gateway, its fakes, and an ordered log of every side effect. */
@@ -227,7 +229,7 @@ function harness(options: HarnessOptions = {}) {
       ok: true as const,
       value: opener === undefined ? (options.open ?? []) : (options.mine ?? []),
     }),
-    getTicket: async () => ({ ok: true as const, value: opened }),
+    getTicket: async () => ({ ok: true as const, value: options.ticketById ?? opened }),
     getTicketByChannel: async () => ({
       ok: true as const,
       value: options.byChannel === undefined ? ticket({ channelId: "chan-1" }) : options.byChannel,
@@ -500,4 +502,49 @@ test("every refusal reads as something a member can act on", () => {
     /2 minutes/,
   );
   assert.equal(eligibilityMessage({ allowed: true, reason: "OK", retryAfterSeconds: null, opensAt: null }), "");
+});
+
+// ── sweep ────────────────────────────────────────────────────────────────────
+
+test("a sweep for a ticket in another server is not answered at all", async () => {
+  // The worker holds ids from its own database read, and the guild in the path
+  // is what the caller claims. Disagreement is a caller error, not a ticket.
+  const { gateway, steps } = harness({ ticketById: ticket({ guildId: "g1", channelId: "chan-1" }) });
+
+  assert.equal(await gateway.sweepById("g2", "t-1", false), null);
+  assert.deepEqual(steps, []);
+});
+
+test("a quiet ticket is warned once, in its own channel", async () => {
+  const { gateway, posts } = harness({
+    settings: settings({ staleAfterMinutes: 10 }),
+    ticketById: ticket({ channelId: "chan-1", lastMessageAt: "2026-08-18T12:00:00.000Z" }),
+  });
+
+  assert.equal(await gateway.sweepById("g1", "t-1", false), "WARN_STALE");
+  assert.equal(posts[0]?.channelId, "chan-1");
+  // Addressed to the person who opened it, or the warning reaches nobody.
+  assert.equal(posts[0]?.message.content, "<@member-1>");
+
+  // Same ticket, already warned: the second pass says nothing.
+  const second = harness({
+    settings: settings({ staleAfterMinutes: 10 }),
+    ticketById: ticket({ channelId: "chan-1", lastMessageAt: "2026-08-18T12:00:00.000Z" }),
+  });
+  assert.equal(await second.gateway.sweepById("g1", "t-1", true), "NONE");
+  assert.deepEqual(second.posts, []);
+});
+
+test("past the window the ticket closes itself and the channel goes with it", async () => {
+  const { gateway, steps, disposed } = harness({
+    settings: settings({ staleAfterMinutes: 10, autoCloseAfterMinutes: 20 }),
+    ticketById: ticket({ channelId: "chan-1", lastMessageAt: "2026-08-18T11:00:00.000Z" }),
+  });
+
+  assert.equal(await gateway.sweepById("g1", "t-1", true), "AUTO_CLOSE");
+  // Closed first, disposed last: a channel deleted before the row is written
+  // is a conversation with no record of why it ended.
+  assert.equal(steps[0], "close-row");
+  assert.equal(steps.at(-1), "dispose");
+  assert.deepEqual(disposed, [{ channelId: "chan-1", archive: true }]);
 });

@@ -177,6 +177,9 @@ export class BridgeApi {
       case "ticket-close":
         await this.close(res, tickets, guildId, body);
         return;
+      case "ticket-sweep":
+        await this.sweep(res, tickets, guildId, body);
+        return;
       default:
         sendJson(res, 404, { problem: "NOT_FOUND", detail: "no such route" });
         return;
@@ -223,6 +226,34 @@ export class BridgeApi {
       return;
     }
     sendJson(res, 200, { sent: true });
+  }
+
+  /**
+   * One ticket's turn in the worker's sweep.
+   *
+   * The worker owns the schedule and the memory of what has already been
+   * warned; this owns the decision and the two things carrying it out needs —
+   * a channel to post in and a channel to dispose of. Hence one call per
+   * ticket rather than one per pass: the alternative is this process holding a
+   * warned-set of its own, which is the state the worker already has.
+   */
+  private async sweep(
+    res: ServerResponse,
+    tickets: TicketGateway,
+    guildId: string,
+    body: Record<string, unknown>,
+  ): Promise<void> {
+    const ticketId = str(body["ticketId"]);
+    if (ticketId === null) {
+      sendJson(res, 400, { problem: "BAD_REQUEST", detail: "ticketId is required" });
+      return;
+    }
+    const action = await tickets.sweepById(guildId, ticketId, body["staleWarned"] === true);
+    if (action === null) {
+      sendJson(res, 404, { problem: "NO_TICKET", detail: "no such ticket in that server" });
+      return;
+    }
+    sendJson(res, 200, { action });
   }
 
   private async close(

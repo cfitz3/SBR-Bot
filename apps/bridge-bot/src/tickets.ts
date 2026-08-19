@@ -815,6 +815,21 @@ export class TicketGateway {
     return action;
   }
 
+  /**
+   * Sweep one ticket by id, for the worker.
+   *
+   * The row is re-read here rather than accepted from the caller: the worker
+   * listed these ids a moment ago and a ticket can close in between, and a
+   * sweep acting on a caller's copy of a ticket is a sweep acting on whatever
+   * the caller says is true. Null means there is no such ticket in that guild.
+   */
+  async sweepById(guildId: string, ticketId: string, staleWarned: boolean): Promise<SweepAction | null> {
+    const found = await this.d.community.getTicket(ticketId);
+    const ticket = found.ok ? found.value : null;
+    if (ticket === null || ticket.guildId !== guildId) return null;
+    return this.sweepOne(ticket, staleWarned);
+  }
+
   // ── log channel ───────────────────────────────────────────────────────────
 
   /**

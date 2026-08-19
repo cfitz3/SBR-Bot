@@ -26,6 +26,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `event-transition` | Repeatable + delayed | every 1–5 min / at boundaries | Idempotent state guard (only valid transitions) | Backoff; re-evaluate from truth | Event status lags (SCHEDULED→LIVE→COMPLETED) |
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
 | `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
+| `ticket-sweep` | Repeatable (cron) | every 6 min (`5-59/6 * * * *`) | The warned flag is a Redis key with a 24 h TTL; a close is refused on an already-closed row | 2 retries; global lock, 5 min TTL | Quiet tickets are warned and auto-closed late; nothing is closed that should not be |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
 | `xp-aggregate` | Repeatable (cron) | every 3 h (`48 */3 * * *`) | Derived awards upsert on `XpEvent.dedupeKey`; balances rebuilt from the whole ledger | 1 retry; global lock, 10 min TTL | Standings lag by up to a pass; nothing is lost — counters are re-derived next run |
@@ -134,6 +135,16 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Retry:** backoff, 3 attempts; a global lock stops two workers sweeping at once.
 - **Failure impact:** the `/audit in_force` list and the panel's "In force now" card over-report for up to one cadence — staff may believe a member is still muted after the mute ended.
 - **Timely, not bulk:** what it clears is what staff read to decide whether somebody is *already* being punished, and five minutes of "still muted" after a mute ended is a wrong answer to a question people act on.
+
+### 2.9c `ticket-sweep`
+- **Trigger / frequency:** cron, every six minutes (`5-59/6 * * * *`), **timely** lane.
+- **Inputs:** every active guild's `OPEN`/`PENDING` tickets, plus a per-ticket "already warned" flag held in Redis.
+- **Outputs:** a one-time "still need this?" post in the ticket channel, or an automatic close — transcript delivered, log posted, channel disposed of.
+- **Where the work happens:** the decision is `sweep()` in `@sbr/tickets` and it runs in the **bridge bot**, which is the process holding a gateway to the community server. This job walks the guilds, remembers what has been warned, and calls `POST /internal/g/<guildId>/ticket-sweep` once per ticket. It runs here rather than on a timer inside that bot because the lock, the retry policy and the run log live in workers — a bot sweeping on its own `setInterval` sweeps twice the moment a second replica starts.
+- **Why Redis and not a column:** "has been warned" is a fact about a notification, not about a ticket. Its worst failure — a warning repeated after a restart — is far milder than a schema migration for a boolean that expires on its own. The TTL is 24 h, longer than any sensible auto-close window, so a ticket that goes quiet, resumes, and goes quiet again the next day is warned again rather than silently skipped.
+- **Idempotency:** a warned ticket answers `NONE` on the next pass; closing an already-closed ticket is refused by the lifecycle rules. Nothing is written twice.
+- **Retry:** 2 attempts; each ticket is decided independently, so a re-run simply re-examines what the failed pass did not reach.
+- **Failure impact:** with the bridge bot down, every call returns null and nothing is recorded — the pass is a no-op and the next one picks the same tickets up. Warnings and closes are late; none are lost.
 
 ### 2.10 `analytics-ingest` + `analytics-rollup`
 - **Trigger / frequency:** ingest = continuous stream consumer; rollups = hourly / daily (~00:15 guild-local, staggered) / weekly.
