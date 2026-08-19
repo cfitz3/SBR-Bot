@@ -810,6 +810,10 @@ model Event {
   /// When the board was last edited. Shown on the board itself, so a reader can
   /// tell a quiet leaderboard from a stalled one.
   boardUpdatedAt    DateTime?
+  /// Set once the board has been edited into its result card. A finished event
+  /// is otherwise indistinguishable from one whose board is merely overdue, and
+  /// the board pass would rewrite the same card every half hour forever.
+  boardFinal        Boolean     @default(false)
   // Progression-tracking events drive the sub-hourly snapshot cohort (WORKERS.md §2.5).
   tracksProgression Boolean     @default(false)
   /// Metric keys this event scores, e.g. `catacombs`, `skill:mining`. Driven off
@@ -830,6 +834,7 @@ model Event {
   snapshots ProfileSnapshot[]
 
   @@index([guildId, status, startsAt])
+  @@index([status, boardUpdatedAt])
 }
 
 /// One participant's standing in one metric of one event.

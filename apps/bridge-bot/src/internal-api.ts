@@ -1,5 +1,5 @@
 /**
- * The bridge bot's loopback control API — the ticket half.
+ * The bridge bot's loopback control API — tickets, and the event tracker board.
  *
  * Ticket channels live in the community server, and this process is the one
  * holding a gateway connection to it. So "Publish" on the panel's tickets page
@@ -25,6 +25,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from "node:crypto";
 import type { Logger } from "@sbr/observability";
 import type { TicketGateway } from "./tickets.js";
+import type { EventBoardGateway } from "./event-board.js";
 
 const BIND_HOST = "127.0.0.1";
 
@@ -38,6 +39,12 @@ export interface BridgeApiDeps {
    * should say "not ready" rather than crash on a null.
    */
   readonly tickets: () => TicketGateway | null;
+  /**
+   * The event tracker board, resolved per request for the same reason: it is
+   * built with the Discord client and a board pass arriving before the gateway
+   * is up should be told to come back rather than crash.
+   */
+  readonly eventBoard: () => EventBoardGateway | null;
   /** Platform guild id → Discord snowflake, so callers never map ids themselves. */
   readonly toDiscordGuildId: (internalGuildId: string) => Promise<string | null>;
   readonly token: string;
@@ -141,6 +148,18 @@ export class BridgeApi {
     const [, rawGuildId, resource] = match;
     const guildId = decodeURIComponent(rawGuildId ?? "");
 
+    // Answered before the ticket gateway is required: a board pass has nothing
+    // to do with tickets and should not be told the bridge is not ready because
+    // some other subsystem isn't.
+    if (resource === "event-board") {
+      if ((req.method ?? "GET") !== "POST") {
+        sendJson(res, 405, { problem: "METHOD_NOT_ALLOWED", detail: "use POST" });
+        return;
+      }
+      await this.board(res, guildId, await readBody(req));
+      return;
+    }
+
     const tickets = this.d.tickets();
     if (tickets === null) {
       // 503, not 500: the caller should say "the bot is starting up", and a
@@ -184,6 +203,37 @@ export class BridgeApi {
         sendJson(res, 404, { problem: "NOT_FOUND", detail: "no such route" });
         return;
     }
+  }
+
+  /**
+   * Redraw one event's tracker board. Called by the workers' board pass, which
+   * has the rows but no gateway to the community server.
+   */
+  private async board(res: ServerResponse, guildId: string, body: Record<string, unknown>): Promise<void> {
+    const eventId = str(body["eventId"]);
+    if (eventId === null) {
+      sendJson(res, 400, { problem: "BAD_REQUEST", detail: "eventId is required" });
+      return;
+    }
+    const boards = this.d.eventBoard();
+    if (boards === null) {
+      sendJson(res, 503, { problem: "NOT_READY", detail: "the bridge bot is still connecting" });
+      return;
+    }
+    const result = await boards.publish(guildId, eventId);
+    if (!result.ok) {
+      // 404 for an event this server does not have, so the caller can tell "it
+      // is gone" from "I could not post it" without reading the problem string.
+      const status = result.problem === "NO_EVENT" ? 404 : 422;
+      sendJson(res, status, { problem: result.problem, detail: result.detail });
+      return;
+    }
+    sendJson(res, 200, {
+      channelId: result.channelId,
+      messageId: result.messageId,
+      edited: result.edited,
+      final: result.final,
+    });
   }
 
   private async publish(

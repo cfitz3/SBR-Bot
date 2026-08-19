@@ -32,6 +32,39 @@ function toBigInt(value: number | null): bigint | null {
 
 // ────────────────────────────── events ──────────────────────────────
 
+/**
+ * The board row shapes are declared here rather than imported, because both
+ * things that consume them — the workers' board job and the bridge bot's board
+ * gateway — describe their own port, and this module satisfies both
+ * structurally. A drift shows up as a type error at the wiring site, which is
+ * where it belongs.
+ */
+export interface BoardableEvent {
+  readonly id: string;
+  readonly guildId: string;
+}
+
+export interface EventBoardRow {
+  readonly id: string;
+  readonly guildId: string;
+  readonly title: string;
+  readonly status: "SCHEDULED" | "LIVE" | "COMPLETED" | "CANCELLED";
+  readonly startsAt: string;
+  readonly endsAt: string | null;
+  readonly channelId: string | null;
+  readonly messageId: string | null;
+  readonly trackedMetrics: readonly string[];
+  /** GOING RSVPs — who the event is actually about. */
+  readonly participantCount: number;
+}
+
+export interface EventStanding {
+  readonly discordId: string;
+  readonly uuid: string;
+  readonly delta: number;
+}
+
+
 export const eventJobRepository = {
   /** SCHEDULED and LIVE events across every guild — the sweep's whole input. */
   async listOpenEvents(): Promise<readonly EventRow[]> {
@@ -175,6 +208,98 @@ export const eventJobRepository = {
       where: { eventId_uuid_metric: { eventId: write.eventId, uuid: write.uuid, metric: write.metric } },
       data: { discordId: write.discordId, current: write.value, delta: write.value - existing.baseline },
     });
+  },
+
+  // ── the tracker board ──────────────────────────────────────────────────────
+
+  /**
+   * Events whose board is due a pass: a live one that has not been edited
+   * within its refresh window, and a finished one whose card has not yet been
+   * written. `boardFinal` is what separates the second case from an endless
+   * rewrite of the same result card.
+   *
+   * A finished event with no `messageId` is skipped rather than posted: a
+   * result card for something nobody ever saw a board for is an announcement,
+   * and this job does not announce.
+   */
+  async listBoardDue(staleBefore: Date, limit = 50): Promise<readonly BoardableEvent[]> {
+    const rows = await prisma.event.findMany({
+      where: {
+        OR: [
+          { status: "LIVE", OR: [{ boardUpdatedAt: null }, { boardUpdatedAt: { lt: staleBefore } }] },
+          { status: { in: ["COMPLETED", "CANCELLED"] }, boardFinal: false, NOT: { messageId: null } },
+        ],
+      },
+      orderBy: { startsAt: "asc" },
+      take: limit,
+      select: { id: true, guildId: true },
+    });
+    return rows;
+  },
+
+  /** Everything the board renders, in one read. */
+  async boardEvent(eventId: string): Promise<EventBoardRow | null> {
+    const row = await prisma.event.findUnique({
+      where: { id: eventId },
+      select: {
+        id: true,
+        guildId: true,
+        title: true,
+        status: true,
+        startsAt: true,
+        endsAt: true,
+        channelId: true,
+        messageId: true,
+        trackedMetrics: true,
+        _count: { select: { rsvps: { where: { state: "GOING" } } } },
+      },
+    });
+    if (row === null) return null;
+    return {
+      id: row.id,
+      guildId: row.guildId,
+      title: row.title,
+      status: row.status as EventBoardRow["status"],
+      startsAt: row.startsAt.toISOString(),
+      endsAt: row.endsAt?.toISOString() ?? null,
+      channelId: row.channelId,
+      messageId: row.messageId,
+      trackedMetrics: row.trackedMetrics,
+      participantCount: row._count.rsvps,
+    };
+  },
+
+  /**
+   * The leaderboard for one metric, ordered on the stored `delta` so the sort
+   * happens in Postgres rather than over every participant's row.
+   */
+  async standings(eventId: string, metric: string, limit: number): Promise<readonly EventStanding[]> {
+    const rows = await prisma.eventScore.findMany({
+      where: { eventId, metric },
+      orderBy: { delta: "desc" },
+      take: limit,
+      select: { discordId: true, uuid: true, delta: true },
+    });
+    return rows;
+  },
+
+  /**
+   * Record where the board landed. `messageId` of null un-records a board that
+   * could not be posted, so the next pass posts fresh instead of editing a
+   * message that is not there.
+   */
+  async bindBoardMessage(
+    eventId: string,
+    channelId: string,
+    messageId: string | null,
+    final: boolean,
+  ): Promise<void> {
+    await prisma.event
+      .update({
+        where: { id: eventId },
+        data: { channelId, messageId, boardUpdatedAt: new Date(), boardFinal: final },
+      })
+      .catch(() => undefined);
   },
 };
 

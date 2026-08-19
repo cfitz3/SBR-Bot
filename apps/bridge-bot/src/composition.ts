@@ -89,6 +89,7 @@ import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
 import type { TicketGateway } from "./tickets.js";
+import type { EventBoardGateway } from "./event-board.js";
 
 export interface BridgeApp {
   readonly config: AppConfig;
@@ -188,6 +189,14 @@ export interface BridgeApp {
    */
   setTickets(gateway: TicketGateway | null): void;
   readonly tickets: TicketGateway | null;
+  /**
+   * The event tracker board, handed over by the transport for the same reason
+   * as the ticket gateway: every one of its side effects is a message in the
+   * community server, and the workers' board pass reaches it over the loopback
+   * API rather than through Discord.
+   */
+  setEventBoard(gateway: EventBoardGateway | null): void;
+  readonly eventBoard: EventBoardGateway | null;
   /**
    * Hand the composition somewhere to put moderation commands arriving on the
    * bus.
@@ -413,6 +422,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // already saved, and only its card in the channel is missing.
   let liveBoard: LfgBoard | null = null;
   let liveTickets: TicketGateway | null = null;
+  let liveEventBoard: EventBoardGateway | null = null;
   const lfgBoard: LfgBoard = {
     async publish(post) {
       await liveBoard?.publish(post);
@@ -657,6 +667,12 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     get tickets() {
       return liveTickets;
+    },
+    setEventBoard(gateway) {
+      liveEventBoard = gateway;
+    },
+    get eventBoard() {
+      return liveEventBoard;
     },
     setGameCommandSink(sink) {
       gameCommandSink = sink;

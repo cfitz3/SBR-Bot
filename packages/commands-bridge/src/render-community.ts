@@ -91,6 +91,117 @@ function offsetLabel(minutes: number): string {
   return `in ${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
+export interface EventBoardStandingView {
+  readonly discordId: string;
+  readonly delta: number;
+}
+
+export interface EventBoardView {
+  readonly eventId: string;
+  readonly title: string;
+  readonly status: "SCHEDULED" | "LIVE" | "COMPLETED" | "CANCELLED";
+  readonly startsAt: string;
+  readonly endsAt?: string | null;
+  /** The metric the standings are ordered by, or null when nothing is tracked. */
+  readonly metric: string | null;
+  readonly participantCount: number;
+  readonly standings: readonly EventBoardStandingView[];
+  /** When this render was made, for the "last updated" stamp. */
+  readonly updatedAt: string;
+}
+
+/** Metric keys read as camelCase in the database and as English on the board. */
+const METRIC_LABELS: Readonly<Record<string, string>> = {
+  skyblockLevel: "SkyBlock level",
+  networth: "networth",
+  skillAverage: "skill average",
+  catacombsLevel: "catacombs level",
+  slayerXp: "slayer XP",
+  senitherWeight: "weight",
+};
+
+export function metricLabel(metric: string): string {
+  return METRIC_LABELS[metric] ?? metric;
+}
+
+/**
+ * Gains, not readings — a board that showed networth would be a rich list, and
+ * the event is about what somebody did during it. Large figures are abbreviated
+ * because a networth delta is eleven digits and ten of those in a column is
+ * unreadable.
+ */
+export function formatDelta(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  const sign = value < 0 ? "-" : "+";
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${sign}${trim(abs / 1_000_000_000)}b`;
+  if (abs >= 1_000_000) return `${sign}${trim(abs / 1_000_000)}m`;
+  if (abs >= 10_000) return `${sign}${trim(abs / 1_000)}k`;
+  return `${sign}${trim(abs)}`;
+}
+
+function trim(value: number): string {
+  return value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+const STATUS_LABELS: Readonly<Record<EventBoardView["status"], string>> = {
+  SCHEDULED: "starting soon",
+  LIVE: "live now",
+  COMPLETED: "final results",
+  CANCELLED: "cancelled",
+};
+
+/**
+ * The tracker board: one message per event, posted once and edited in place.
+ *
+ * It is written to be readable at every stage of an event's life, because it is
+ * the same message throughout — a scheduled event shows a countdown and no
+ * standings, a live one shows the top of the table, and a completed one is left
+ * in the channel as the result card rather than deleted.
+ */
+export function renderEventBoardEmbed(view: EventBoardView): EmbedView {
+  const final = view.status === "COMPLETED" || view.status === "CANCELLED";
+  const when = final
+    ? `Ended ${timestampTag(view.endsAt == null ? view.updatedAt : view.endsAt, "R")}`
+    : `${timestampTag(view.startsAt)} (${timestampTag(view.startsAt, "R")})`;
+
+  const fields: EmbedFieldView[] = [
+    { name: view.status === "LIVE" ? "Started" : "Starts", value: when, inline: true },
+    { name: "Participants", value: `${view.participantCount}`, inline: true },
+  ];
+
+  if (view.metric !== null) {
+    const shown = Math.min(view.standings.length, BOARD_STANDINGS);
+    fields.push({
+      name: shown === 0 ? `Standings · ${metricLabel(view.metric)}` : `Top ${shown} · ${metricLabel(view.metric)}`,
+      value: standingsBlock(view.standings),
+      inline: false,
+    });
+  }
+
+  return {
+    title: `${view.title} — ${STATUS_LABELS[view.status]}`,
+    fields,
+    footer: `id ${view.eventId} • updated ${timestampTag(view.updatedAt, "R")}`,
+    color: view.status === "CANCELLED" ? "DANGER" : view.status === "LIVE" ? "SUCCESS" : "INFO",
+  };
+}
+
+/** How many rows the board shows. Ten fits a field without scrolling past it. */
+export const BOARD_STANDINGS = 10;
+
+function standingsBlock(standings: readonly EventBoardStandingView[]): string {
+  if (standings.length === 0) {
+    // Not an error: the first poll of a live event has captured baselines and
+    // nothing else, so everyone is legitimately on zero.
+    return "No scores yet — the first poll sets everyone's baseline.";
+  }
+  return standings
+    .slice(0, BOARD_STANDINGS)
+    .map((s, i) => `**${i + 1}.** <@${s.discordId}> — ${formatDelta(s.delta)}`)
+    .join("\n");
+}
+
 /** RSVP buttons carry the event id, so they keep working across restarts. */
 export function rsvpButtons(eventId: string): readonly ActionRowView[] {
   return [

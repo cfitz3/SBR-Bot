@@ -34,6 +34,7 @@ import {
   defineGuildScanJob,
   defineInactivityScanJob,
   defineMilestoneDetectJob,
+  defineEventBoardJob,
   defineEventTrackingJob,
   defineProfileSnapshotJob,
   definePunishmentExpiryJob,
@@ -58,6 +59,7 @@ import {
   sweepTickets,
   syncDiscordMembers,
   syncRoster,
+  publishEventBoards,
   transitionEvents,
   type JobDefinition,
   type DiscordMemberRow,
@@ -65,6 +67,7 @@ import {
 } from "@sbr/jobs";
 import { XpService } from "@sbr/xp";
 import { createWorkerTicketBridge } from "./ticket-bridge.js";
+import { createWorkerEventBoard } from "./event-board-bridge.js";
 import type { WorkerContext } from "./composition.js";
 
 /** How long a swept BIN reading stays readable before the key expires. */
@@ -653,6 +656,29 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("ticket-sweep"),
   };
 
+  /**
+   * The tracker board. Same division of labour as the ticket sweep: this
+   * process knows which boards are stale, and the one with a gateway to the
+   * community server is the only one that can edit a message.
+   */
+  const eventBoard: JobDefinition<number> = {
+    ...defineEventBoardJob(async () => {
+      const bridge = createWorkerEventBoard({
+        baseUrl: ctx.config.internalApi.bridgeBaseUrl,
+        token: ctx.config.internalApi.token,
+        logger: ctx.log,
+      });
+      return publishEventBoards({
+        listDue: (staleBefore) => eventJobRepository.listBoardDue(staleBefore),
+        publish: (event) => bridge.publish(event),
+        onError(scope, error) {
+          ctx.log.warn("event board failed", { scope, error: String(error) });
+        },
+      });
+    }),
+    lockKey: keys.lockJob("event-board"),
+  };
+
   // ───────────────────────────── analytics ─────────────────────────────
 
   const analyticsIngest: JobDefinition<number> = {
@@ -755,6 +781,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     punishmentExpiry,
     ticketSweep,
     eventTracking,
+    eventBoard,
     xpAggregate,
     analyticsIngest,
     analyticsRollup,

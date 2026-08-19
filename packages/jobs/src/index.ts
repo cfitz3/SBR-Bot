@@ -25,6 +25,7 @@ export {
   defineRosterSyncJob,
   defineSafetyExpiryJob,
   defineTicketSweepJob,
+  defineEventBoardJob,
   defineEventTrackingJob,
   defineXpAggregateJob,
 } from "./jobs.js";
@@ -130,3 +131,9 @@ export {
   type EventTrackingDeps,
   type TrackableEvent,
 } from "./event-tracking.js";
+export {
+  publishEventBoards,
+  BOARD_REFRESH_MS,
+  type BoardableEvent,
+  type EventBoardJobDeps,
+} from "./event-board.js";

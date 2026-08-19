@@ -68,6 +68,9 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // closed with no notice, and a close that arrives late is a channel sitting
   // open past the window the guild configured.
   { name: "ticket-sweep", repeat: { pattern: "5-59/6 * * * *" }, priority: LANE.timely },
+  // Half-hourly, off the half hour: the boards are only as fresh as the
+  // tracker that feeds them, and it polls every thirty minutes by default.
+  { name: "event-board", repeat: { pattern: "13,43 * * * *" }, priority: LANE.timely },
 
   // ── bulk lane: everything that can wait for a token ──
   // Snapshots run twice an hour and take the oldest-captured slice each time,

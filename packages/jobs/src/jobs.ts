@@ -206,6 +206,24 @@ export function defineEventTrackingJob(track: () => Promise<number>): JobDefinit
   };
 }
 
+/**
+ * event-board: redraw the tracker board of every live event.
+ *
+ * `community`, not `progression`: every unit of work here is a Discord edit
+ * over the bridge's loopback API, and none of it touches the Hypixel budget the
+ * progression queue exists to pace.
+ */
+export function defineEventBoardJob(publish: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "event-board",
+    queue: "community",
+    lockKey: "lock:job:event-board",
+    lockTtlMs: 5 * 60_000,
+    maxRetries: 1,
+    handler: publish,
+  };
+}
+
 /** guild-roster-sync: reconcile the Hypixel guild roster against ours. */
 export function defineRosterSyncJob(sync: () => Promise<number>): JobDefinition<number> {
   return {

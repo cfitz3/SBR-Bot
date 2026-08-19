@@ -454,6 +454,7 @@ A scheduled community event.
 | `status` | see enum |
 | `channelId`, `messageId` | the tracker board, edited in place. The channel is stored rather than re-resolved from the `events` slot, so rebinding the slot mid-event cannot orphan a board |
 | `boardUpdatedAt` | last board edit; shown on the board so a quiet leaderboard reads differently from a stalled one |
+| `boardFinal` | set once the board has been edited into its result card, so `event-board` writes that card once rather than every pass |
 | `trackedMetrics` | metric keys this event scores; empty means untracked |
 | `pollIntervalMinutes` | how often participants are polled while LIVE (default 30) |
 | `discordEventId` | the mirrored Discord scheduled event, when one was created |

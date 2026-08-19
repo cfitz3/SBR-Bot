@@ -36,6 +36,7 @@ import {
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
 import { startMilestoneAnnouncer } from "./milestones.js";
 import { deliverEventReminder } from "./events.js";
+import { EventBoardGateway } from "./event-board.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
 import { acceptCommand, denyCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
@@ -53,7 +54,7 @@ import {
   type JoinActionResult,
 } from "@sbr/screening";
 import type { ActionRowView } from "@sbr/shared-types";
-import { guildRepository } from "@sbr/db";
+import { eventJobRepository, guildRepository } from "@sbr/db";
 import { TicketGateway } from "./tickets.js";
 import {
   capturedFrom,
@@ -511,6 +512,41 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   };
   registerTicketComponents(components, ticketRouting);
   app.setTickets(tickets);
+
+  // The tracker board. Like the tickets gateway it needs the live client, and
+  // like the reminder sink it posts into the guild's `events` channel — but
+  // only when the event has no channel of its own recorded yet, which the
+  // gateway decides rather than this wiring.
+  app.setEventBoard(
+    new EventBoardGateway({
+      events: eventJobRepository,
+      getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "events"),
+      discord: {
+        async post(channelId, embed) {
+          const channel = await discord.channels.fetch(channelId).catch(() => null);
+          if (!channel || !channel.isTextBased() || !("send" in channel)) return null;
+          const message = await (channel as SendableChannel)
+            // The standings are a column of `<@id>` mentions and none of them
+            // is a ping: the board is redrawn every half hour and would
+            // otherwise notify the top ten each time.
+            .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+            .catch(() => null);
+          return message?.id ?? null;
+        },
+        async edit(channelId, messageId, embed) {
+          const channel = await discord.channels.fetch(channelId).catch(() => null);
+          if (!channel || !channel.isTextBased() || !("messages" in channel)) return false;
+          const message = await channel.messages.fetch(messageId).catch(() => null);
+          if (message === null) return false;
+          const edited = await message
+            .edit({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+            .catch(() => null);
+          return edited !== null;
+        },
+      },
+      log: app.log,
+    }),
+  );
   // The board needs the client, and the client is built from the app, so it is
   // handed over here rather than composed in.
   app.setLfgBoard(createLfgBoard(app, discord));
@@ -1308,6 +1344,9 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // sink pointing at a queue whose session is closing would just age out.
       app.setGameCommandSink(null);
       app.setEventReminderSink(null);
+      // The board gateway holds the client this is about to destroy; a board
+      // pass arriving after it should be told "not ready", not handed a corpse.
+      app.setEventBoard(null);
       stopping = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

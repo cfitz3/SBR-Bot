@@ -27,6 +27,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
 | `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
 | `event-tracking` | Repeatable (cron) | every 10 min (`8-59/10 * * * *`), per-event interval on top | `EventScore` upsert on `(eventId,uuid,metric)`; baselines written once | 1 retry; global lock, 10 min TTL | Live event leaderboards age; recorded scores are unaffected |
+| `event-board` | Repeatable (cron) | every 30 min (`13,43 * * * *`) | The board is one message, edited in place; `boardFinal` stops a finished card being rewritten | 1 retry; global lock, 5 min TTL | Live boards show older numbers than the database holds; nothing is duplicated |
 | `ticket-sweep` | Repeatable (cron) | every 6 min (`5-59/6 * * * *`) | The warned flag is a Redis key with a 24 h TTL; a close is refused on an already-closed row | 2 retries; global lock, 5 min TTL | Quiet tickets are warned and auto-closed late; nothing is closed that should not be |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
@@ -147,6 +148,37 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Idempotency:** each reminder marks itself sent; a re-fire checks state and no-ops if already dispatched.
 - **Retry:** backoff; if the event was cancelled/rescheduled, the job re-validates against current truth before sending.
 - **Failure impact:** a reminder is late or missed; the event itself is unaffected.
+
+### 2.7c `event-board`
+- **Trigger / frequency:** cron, every thirty minutes (`13,43 * * * *`), **timely** lane.
+- **Inputs:** `Event` rows that are LIVE and whose `boardUpdatedAt` is older than
+  `BOARD_REFRESH_MS` (30 min), plus COMPLETED/CANCELLED events that have a
+  `messageId` and `boardFinal = false` — the result card nobody has written yet.
+- **Outputs:** one `POST /internal/g/<guildId>/event-board` per due event; the
+  bridge bot renders the board and edits its message, then records
+  `channelId` / `messageId` / `boardUpdatedAt` / `boardFinal`.
+- **Where the work happens:** the same division of labour as `ticket-sweep`
+  (§2.9c). This process knows which boards are stale; the **bridge bot** is the
+  only one with a gateway to the community server, so the render, the post and
+  the edit all live in `apps/bridge-bot/src/event-board.ts`.
+- **One message, edited in place.** A half-hourly re-post would leave a channel
+  of dead leaderboards, each of them wrong. When the remembered message has been
+  deleted the edit fails, the id is cleared and a fresh board is posted, so
+  "somebody tidied the channel" self-heals.
+- **The result card.** A finished event's board is edited one final time and
+  left in the channel rather than deleted, so the channel keeps the history.
+  `boardFinal` is what makes that once rather than forever — without it a
+  completed event is indistinguishable from one merely overdue.
+- **Channel choice:** the event's stored `channelId` wins over the guild's
+  `events` slot. A slot rebound mid-event would otherwise orphan a board nobody
+  can update.
+- **Mentions:** the standings are a column of `<@id>` and none of them pings.
+  The board is redrawn every half hour and would otherwise notify the top ten
+  each time.
+- **Idempotency:** a re-run edits the same message to the same content.
+- **Retry:** 1 retry; a global lock stops two workers redrawing at once.
+- **Failure impact:** a board shows numbers up to a cadence old. The scores
+  themselves are `event-tracking`'s (§2.5b) and are unaffected.
 
 ### 2.8 `event-transition`
 - **Trigger / frequency:** repeatable sweep every 1–5 min, plus delayed jobs pinned to start/end boundaries.
