@@ -1,4 +1,4 @@
-# Handoff — 14 August 2026
+# Handoff — 19 August 2026
 
 Where the build stands, what is safe to run in production right now, and what
 the next session picks up. Written at a deliberate stopping point: the tree
@@ -8,7 +8,8 @@ so out loud.
 ## State
 
 - **Build**: `npx tsc -b` and `npm run build -w @sbr/app-web-panel` both exit 0.
-- **Tests**: `npm test` — 1374 pass, 0 fail.
+- **Tests**: `npm test` — 1459 pass, 0 fail, 1 skipped (a POSIX file-mode
+  assertion that cannot hold on Windows).
 - **Brand checker**: `npm run brand check` clean; 70 command descriptions within
   Discord's cap, 43 theme tokens all with fallbacks, 60 gallery cards with no
   error-severity issues.
@@ -55,23 +56,36 @@ finishing rather than reverting:
   before. A member can now close only their own; staff close from the ticket
   channel or the panel, both capability-gated.
 
-**Not landed, and visibly so.** The Discord half:
+**Also landed, since.** The Discord half is now in as well:
 
-- `apps/bridge-bot/src/tickets.ts` — panel publishing, the
-  `tkt:new|claim|close|closereq|feedback` component namespaces, channel creation
-  with permission overwrites, question modals, message capture, log-channel
-  notices.
-- Admin `/tickets list|view|close|transcript`.
-- The `ticket-sweep` worker job (stale warning, pending-closure auto-close).
-- `docs/TICKETS.md`.
+- `apps/bridge-bot/src/tickets.ts` and `tickets-discord.ts` — panel publishing,
+  the `tkt:new|pick|claim|release|close|closereq` component namespaces, channel
+  creation with permission overwrites, question modals, message capture,
+  log-channel notices, archiving-or-deleting on close.
+- A loopback control API on the bridge bot (`internal-api.ts`) and its three
+  clients — panel, admin bot, workers. `ticketEffects` **is** wired into the
+  panel composition now, so **Publish** and **Re-send transcript** do what they
+  say, and report the bridge's own words when they cannot.
+- Admin `/tickets list|view|close|transcript`, moderator-gated, with a
+  cross-guild id check on `view`.
+- The `ticket-sweep` worker job — stale warning and pending-closure auto-close,
+  every six minutes, with the warned flag in Redis rather than a column.
+- `docs/TICKETS.md`, and rows in `COMMANDS.md`, `COMMAND_INVENTORY.md`,
+  `ADMIN_BOT.md`, `WORKERS.md`.
 
-Because `ticketEffects` is not wired into the panel's composition, **Publish**
-and **Re-send transcript** answer *"No bot is connected to post the panel"*
-rather than appearing to work. That is the intended state for this commit: the
-configuration surface is usable, and the two actions that need a gateway say why
-they cannot run. Nothing silently no-ops.
+**Still open in tickets.** `feedbackRating` is read by `averageRating` and shown
+through the `{avgRating}` placeholder, but nothing writes it — there is no
+rating prompt. It needs a repository write, a `CommunityService` method, a DM
+prompt on close and `tkt:rate:<ticketId>:<n>` buttons. Until then `{avgRating}`
+renders `—` everywhere, which is at least honest.
 
 ## Deploying this commit
+
+The bridge bot now serves a loopback API of its own, so `.env` needs
+`BRIDGE_API_PORT` (default 3012) — and `BRIDGE_API_URL` too if the bridge bot
+does not share a host with the panel and the admin bot. Without
+`INTERNAL_API_TOKEN` the bridge logs that panel publishing and `/tickets close`
+are unavailable and starts anyway.
 
 `npx prisma migrate deploy` before starting anything — the ticket rebuild drops
 the `TicketCategory` *enum* and seeds its five values as rows. Then the usual
@@ -81,20 +95,18 @@ A fresh install still needs `/set-channel` before the relay speaks.
 
 ## Next session, in order
 
-1. **Finish Phase 14** — the four items above. The bridge side copies the LFG
-   publish-then-edit pattern at `apps/bridge-bot/src/transport.ts:149-190`.
-2. **Phase 15** — Events configurable, deployable, trackable. Start with the
+1. **Phase 15** — Events configurable, deployable, trackable. Start with the
    dead reminder path: `apps/workers/src/jobs.ts` publishes `event-reminder`
    onto a channel nothing subscribes to.
-3. **Phase 16** — Milestones become achievements. `backfillMilestones` is the
+2. **Phase 16** — Milestones become achievements. `backfillMilestones` is the
    load-bearing piece; without it every existing member has zero on day one.
-4. **Phase 17** — the `enabled` flag on command specs, retiring the run
+3. **Phase 17** — the `enabled` flag on command specs, retiring the run
    commands, and the `TICKET_MANAGE` capability.
-5. **Part I Phase 11** — the XP page.
-6. **Part II Phase C2** — bot reply and embed prose behind keys (waits on 17).
-7. **Part IV** — the progression planner/tracker, plus the in-game prefix
+4. **Part I Phase 11** — the XP page.
+5. **Part II Phase C2** — bot reply and embed prose behind keys (waits on 17).
+6. **Part IV** — the progression planner/tracker, plus the in-game prefix
    command visual overhaul.
-8. **Part V** — the VPS→Discord health monitor and logger, then a security pass
+7. **Part V** — the VPS→Discord health monitor and logger, then a security pass
    and a full stress test before the guild opens to the public.
 
 The full plan lives at `~/.claude/plans/typed-dreaming-torvalds.md`.

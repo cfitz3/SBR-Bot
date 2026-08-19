@@ -284,6 +284,7 @@ destructive command requiring `confirm:true`.
 | `/application-review` | OFFICER | `id?` | Omit to list the queue, pass an id to open one | List embed, or the applicant's answers |
 | `/accept-member` | OFFICER | `id*` `reason?` | Accept and add to the roster; also promotes to `MEMBER` | Confirmation, and an explicit report when the roster row is missing |
 | `/deny-member` | OFFICER | `id*` `reason?` | Reject | Confirmation |
+| `/tickets` | MODERATOR | `action*` `id?` (autocomplete) `reason?` | `list`/`view` read the database; `close`/`transcript` go over loopback to the bridge bot, which holds the gateway | Queue embed, ticket card, or a `.md` transcript attachment |
 | `/join-queue` | MODERATOR | — | Live in-game join requests; expires stale rows on read | List embed, remaining window first, then verdict and risk |
 | `/join-accept` | MODERATOR | `ign*` (autocomplete) | Accept inside the window, invite past it, then mark the row | Confirmation naming the route taken |
 | `/join-deny` | MODERATOR | `ign*` (autocomplete) | Type `/guild deny` in-game and mark the screening DENIED | Confirmation |

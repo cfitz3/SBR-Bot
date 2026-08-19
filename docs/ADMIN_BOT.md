@@ -46,6 +46,7 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/purge` | Staff | Bounded (≤100 msgs, ≤14d); logs count + scope, not content, by default. |
 | `/infractions` | Staff | Read-only history view. |
 | `/member-note` | Staff | Private staff note (audited). |
+| `/tickets` | Moderator | The support queue from the admin server. `list` and `view` read the shared tables directly; `view` accepts `#12`, `12` or an id, and **refuses an id belonging to another server**. `close` and `transcript` call the bridge bot, because closing disposes of a channel this bot cannot see — a bridge that is down is reported in words, never as a silent no-op. See `TICKETS.md`. |
 | `/join-queue` | Moderator | Live in-game requests, each showing how much of the five-minute window is left. Stale rows are retired to `EXPIRED` on read, so the queue never lists a button that cannot work. |
 | `/join-accept` | Moderator | Accepts inside the window, **invites** past it, and says which it did — an invite still needs the applicant to accept. Sends first, marks the row second; refuses names that are not `[A-Za-z0-9_]{1,16}`. |
 | `/join-deny` | Moderator | Sends the guild command through the bridge, then marks the row — never the other way round. |
