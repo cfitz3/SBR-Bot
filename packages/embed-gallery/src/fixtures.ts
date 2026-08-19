@@ -11,6 +11,7 @@
  * because a gallery built only from tidy data proves the renderers work on data
  * we never see.
  */
+import type { EventReminderView } from "@sbr/commands-bridge";
 import type {
   AccessoryReportDTO,
   AuctionListingDTO,
@@ -711,6 +712,13 @@ export const EVENT: EventDTO = {
   rsvpCount: 27,
   hostDiscordId: "200000000000000001",
   description: "Fractional catacombs levels gained over the weekend. Bring a class you actually play.",
+};
+
+export const EVENT_REMINDER: EventReminderView = {
+  eventId: EVENT.id,
+  title: EVENT.title,
+  startsAt: iso(15 * 60_000),
+  offsetMinutes: 15,
 };
 
 export const EVENTS: readonly EventDTO[] = [

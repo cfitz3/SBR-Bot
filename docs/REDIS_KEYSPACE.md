@@ -75,7 +75,7 @@ oauth:state:Xk92...     "pending"   EX 300  (deleted on callback)
 Three distinct mechanisms:
 
 - **Job queues — `bull:{queueName}:*`:** owned/encoded by **BullMQ**; contains job data, delayed/repeatable schedules, and state. Do not hand-edit. TTL is queue-managed (completed/failed retention configured per queue).
-- **Pub/sub channels — `chan:{topic}:{scope}`:** fire-and-forget domain events for cross-instance fan-out. No TTL (transient messages, not stored). Topics: `chan:bridge:{guildId}` (relay fan-out), `chan:config:{guildId}` (config reload), `chan:mod:{guildId}` (moderation commands for the bridge to type), `chan:jobs` (manual job triggers, panel → workers), `chan:events` (global refresh signals).
+- **Pub/sub channels — `chan:{topic}:{scope}`:** fire-and-forget domain events for cross-instance fan-out. No TTL (transient messages, not stored). Topics: `chan:bridge:{guildId}` (work for the bridge bot's gateway — today, event reminders; subscribed in `apps/bridge-bot/src/composition.ts`), `chan:config:{guildId}` (config reload), `chan:mod:{guildId}` (moderation commands for the bridge to type), `chan:jobs` (manual job triggers, panel → workers), `chan:events` (global refresh signals).
 - **Analytics ingest buffer — `buf:analytics`:** a Redis **Stream** (append-only), drained by the `analytics-ingest` consumer group; trimmed by `MAXLEN` once consumed.
 
 - **Serialization:** BullMQ internal; pub/sub payloads small **JSON**; stream entries field-map JSON.

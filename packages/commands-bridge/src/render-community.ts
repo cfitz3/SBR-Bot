@@ -61,6 +61,36 @@ export function renderEventEmbed(event: EventDTO): EmbedView {
   return event.description == null ? embed : { ...embed, description: event.description };
 }
 
+export interface EventReminderView {
+  readonly eventId: string;
+  readonly title: string;
+  readonly startsAt: string;
+  readonly offsetMinutes: number;
+}
+
+/**
+ * The "starting soon" notice. The heading says how long is left in words
+ * because the reminder is defined by its offset — the relative timestamp beside
+ * it will disagree by a few seconds and that is fine, but a reader skimming a
+ * channel should not have to hover to learn whether this is the hour warning or
+ * the five-minute one.
+ */
+export function renderEventReminderEmbed(view: EventReminderView): EmbedView {
+  return {
+    title: `${view.title} — starts ${offsetLabel(view.offsetMinutes)}`,
+    description: `${timestampTag(view.startsAt)} (${timestampTag(view.startsAt, "R")})`,
+    footer: `id ${view.eventId}`,
+    color: "WARNING",
+  };
+}
+
+function offsetLabel(minutes: number): string {
+  if (minutes <= 0) return "now";
+  if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
 /** RSVP buttons carry the event id, so they keep working across restarts. */
 export function rsvpButtons(eventId: string): readonly ActionRowView[] {
   return [

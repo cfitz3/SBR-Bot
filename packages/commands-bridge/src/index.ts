@@ -38,6 +38,8 @@ export {
   lfgButtons,
   renderAttendanceEmbed,
   renderEventEmbed,
+  renderEventReminderEmbed,
+  type EventReminderView,
   renderEventsEmbed,
   renderLfgEmbed,
   renderLfgListEmbed,

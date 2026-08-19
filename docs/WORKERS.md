@@ -103,7 +103,14 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 ### 2.7 `reminder-dispatch`
 - **Trigger / frequency:** **delayed jobs** enqueued when an event is created, firing at configured offsets (e.g. 24h/1h before `Event.startsAt`).
 - **Inputs:** `Event`, `EventRSVP` (GOING/MAYBE), reminder config.
-- **Outputs:** reminder pings via the Bridge bot; updates `reminderState`.
+- **Outputs:** an `event-reminder` message on `chan:bridge:{guildId}`, which the
+  bridge bot delivers into the guild's **`events`** channel
+  (`apps/bridge-bot/src/events.ts`), pinging only the members who RSVP'd;
+  updates `reminderState`.
+- **Delivery is fire-and-forget.** Redis pub/sub drops a message published
+  while no bridge is connected, and that is the intended trade: a "starts in
+  15 minutes" notice delivered an hour late is worse than one never sent. The
+  offset is only marked sent once the publish resolves.
 - **Idempotency:** each reminder marks itself sent; a re-fire checks state and no-ops if already dispatched.
 - **Retry:** backoff; if the event was cancelled/rescheduled, the job re-validates against current truth before sending.
 - **Failure impact:** a reminder is late or missed; the event itself is unaffected.

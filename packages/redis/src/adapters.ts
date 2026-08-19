@@ -397,6 +397,105 @@ export function parseModBusMessage(raw: string): ModBusMessage | null {
 }
 
 /**
+ * One message on the bridge inbox: a reminder that an event is about to start.
+ *
+ * `guildId` is on the payload rather than read back out of the channel name.
+ * The channel is pattern-subscribed, so the subscriber *could* parse the guild
+ * out of `chan:bridge:<id>` — but that makes the routing depend on a key format
+ * instead of on the message, and a key format is exactly the sort of thing that
+ * gets a prefix added to it one day.
+ */
+export interface EventReminderMessage {
+  readonly kind: "event-reminder";
+  readonly guildId: string;
+  readonly eventId: string;
+  readonly title: string;
+  /** ISO timestamp. Rendered as a Discord timestamp tag, so the clock is the reader's. */
+  readonly startsAt: string;
+  /** How far ahead of `startsAt` this reminder is — 60, 15, 5. */
+  readonly offsetMinutes: number;
+  /** The members who said they were coming. Only these are pingable. */
+  readonly discordIds: readonly string[];
+}
+
+/** Everything that travels to the bridge bot on `chan:bridge:*`. */
+export type BridgeBusMessage = EventReminderMessage;
+
+/**
+ * The bridge inbox: how a process with no gateway asks the one that has one to
+ * say something in a guild.
+ *
+ * Third bus with this shape, after `RedisConfigBus` and `RedisModBus`, and
+ * deliberately identical to them — publish on the shared client,
+ * pattern-subscribe on a duplicate, validate rather than cast.
+ *
+ * Fire-and-forget, and for reminders that is the correct trade rather than a
+ * concession: a "starts in 15 minutes" notice delivered after the event has
+ * begun is worse than one that never arrives. The workers only mark the offset
+ * sent once the publish resolves, so a bot that is down loses the ping and not
+ * the event.
+ */
+export class RedisBridgeBus {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async publish(message: BridgeBusMessage): Promise<void> {
+    await this.ctx.client.publish(this.ctx.keys.chanBridge(message.guildId), JSON.stringify(message));
+  }
+
+  async subscribe(onMessage: (message: BridgeBusMessage) => void): Promise<() => Promise<void>> {
+    const sub = this.ctx.client.duplicate();
+    sub.on("error", () => {
+      // As on the other two buses: node-redis reconnects on its own, and an
+      // unhandled 'error' would take the bridge down over a blip.
+    });
+    await sub.connect();
+
+    const pattern = this.ctx.keys.chanBridge("*");
+    await sub.pSubscribe(pattern, (raw: string) => {
+      const parsed = parseBridgeBusMessage(raw);
+      if (parsed !== null) onMessage(parsed);
+    });
+
+    return async () => {
+      await sub.pUnsubscribe(pattern).catch(() => undefined);
+      await sub.quit().catch(() => undefined);
+    };
+  }
+}
+
+/**
+ * Validated rather than cast. This payload decides who gets pinged, so a
+ * malformed `discordIds` is not something to pass through and hope the
+ * allow-mentions list catches: entries that are not snowflake-shaped strings are
+ * dropped, and a message with nothing left to ping is still delivered — the
+ * event notice is useful without the mentions.
+ */
+export function parseBridgeBusMessage(raw: string): BridgeBusMessage | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    if (record["kind"] !== "event-reminder") return null;
+
+    const { guildId, eventId, title, startsAt, offsetMinutes } = record;
+    if (typeof guildId !== "string" || guildId.length === 0) return null;
+    if (typeof eventId !== "string" || eventId.length === 0) return null;
+    if (typeof title !== "string" || title.length === 0) return null;
+    if (typeof startsAt !== "string" || Number.isNaN(Date.parse(startsAt))) return null;
+    if (typeof offsetMinutes !== "number" || !Number.isFinite(offsetMinutes)) return null;
+
+    const ids = record["discordIds"];
+    const discordIds = Array.isArray(ids)
+      ? ids.filter((id): id is string => typeof id === "string" && /^\d{5,25}$/.test(id))
+      : [];
+
+    return { kind: "event-reminder", guildId, eventId, title, startsAt, offsetMinutes, discordIds };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The jobs an operator may start by hand from the panel's Health page.
  *
  * An allow-list rather than "any name that has a definition", because the name
@@ -801,6 +900,7 @@ export function createRedisAdapters(ctx: RedisContext) {
     priceSource: new RedisPriceSource(ctx),
     configBus: new RedisConfigBus(ctx),
     modBus: new RedisModBus(ctx),
+    bridgeBus: new RedisBridgeBus(ctx),
     jobTriggers: new RedisJobTriggerBus(ctx),
     heartbeat: new RedisHeartbeat(ctx),
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),

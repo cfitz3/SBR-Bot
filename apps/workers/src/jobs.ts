@@ -361,17 +361,15 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           // bridge channel and the bot that owns the guild delivers it. That
           // also means a restarting bot doesn't cost the reminder its send —
           // the offset is only marked after this resolves.
-          await client.publish(
-            keys.chanBridge(event.guildId),
-            JSON.stringify({
-              kind: "event-reminder",
-              eventId: event.id,
-              title: event.title,
-              startsAt: event.startsAt,
-              offsetMinutes,
-              discordIds,
-            }),
-          );
+          await ctx.adapters.bridgeBus.publish({
+            kind: "event-reminder",
+            guildId: event.guildId,
+            eventId: event.id,
+            title: event.title,
+            startsAt: event.startsAt,
+            offsetMinutes,
+            discordIds,
+          });
         },
         markSent: (eventId, offset) => eventJobRepository.markReminderSent(eventId, offset),
       }),

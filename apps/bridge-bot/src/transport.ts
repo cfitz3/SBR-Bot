@@ -35,6 +35,7 @@ import {
 } from "@sbr/discord-kit";
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
 import { startMilestoneAnnouncer } from "./milestones.js";
+import { deliverEventReminder } from "./events.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
 import { acceptCommand, denyCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
@@ -534,6 +535,34 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       return message !== null;
     },
     log: app.log,
+  });
+
+  // Reminders arrive from the workers on the bridge bus; the composition holds
+  // the subscription and this is the end of it that can speak.
+  app.setEventReminderSink((message) => {
+    void deliverEventReminder(
+      {
+        getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "events"),
+        async post(channelId, embed, mentionDiscordIds) {
+          const channel = await discord.channels.fetch(channelId).catch(() => null);
+          if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+          const sent = await (channel as SendableChannel)
+            .send({
+              ...(mentionDiscordIds.length === 0
+                ? {}
+                : { content: mentionDiscordIds.map((id) => `<@${id}>`).join(" ") }),
+              embeds: [toEmbed(embed)],
+              // Only the members who said they were coming. The title is guild
+              // configuration and must not be able to become an @everyone.
+              allowedMentions: { parse: [], users: [...mentionDiscordIds] },
+            })
+            .catch(() => null);
+          return sent !== null;
+        },
+        log: app.log,
+      },
+      message,
+    ).catch((error: unknown) => app.log.error("event reminder failed", { error: String(error) }));
   });
 
   discord.on(Events.InteractionCreate, (i) => {
@@ -1278,6 +1307,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // Detach first: the bus keeps delivering until the process exits, and a
       // sink pointing at a queue whose session is closing would just age out.
       app.setGameCommandSink(null);
+      app.setEventReminderSink(null);
       stopping = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

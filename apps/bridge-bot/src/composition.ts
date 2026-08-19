@@ -74,7 +74,7 @@ import {
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
 import { createLogger, type Logger } from "@sbr/observability";
-import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
+import { closeRedis, createRedisAdapters, getRedis, startHeartbeat, type EventReminderMessage } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import {
   err,
@@ -200,6 +200,16 @@ export interface BridgeApp {
    * punishment that waits for a boot is one nobody is expecting any more.
    */
   setGameCommandSink(sink: ((guildId: string, command: string) => void) | null): void;
+  /**
+   * Hand the composition somewhere to put event reminders arriving on the
+   * bridge bus.
+   *
+   * Late-bound for the same reason the game-command sink is: posting needs the
+   * Discord client, which is built from the app. An unset sink drops the
+   * reminder with a log line, which is the honest outcome — the reminder is
+   * about to be stale, and there is nothing to queue it into.
+   */
+  setEventReminderSink(sink: ((message: EventReminderMessage) => void) | null): void;
   /**
    * Record a moderation action that happened in-game, as parsed from Hypixel's
    * own guild-chat notices.
@@ -587,6 +597,18 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     gameCommandSink(message.guildId, message.command);
   });
 
+  let eventReminderSink: ((message: EventReminderMessage) => void) | null = null;
+  const unsubscribeBridge = await adapters.bridgeBus.subscribe((message) => {
+    if (eventReminderSink === null) {
+      log.warn("event reminder dropped: bridge not connected", {
+        guildId: message.guildId,
+        eventId: message.eventId,
+      });
+      return;
+    }
+    eventReminderSink(message);
+  });
+
   let liveStatus: (() => BridgeStatusDetails) | null = null;
   const stopHeartbeat = startHeartbeat(adapters.heartbeat, () => ({
     service: "bridge-bot",
@@ -639,6 +661,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     setGameCommandSink(sink) {
       gameCommandSink = sink;
     },
+    setEventReminderSink(sink) {
+      eventReminderSink = sink;
+    },
     async recordInGameAction(guildId, notice) {
       // Best-effort on both ends: the target may not be linked, and the actor is
       // an in-game name that need not correspond to a Discord account at all.
@@ -680,6 +705,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
       stopHeartbeat();
       await unsubscribe().catch(() => undefined);
       await unsubscribeMod().catch(() => undefined);
+      await unsubscribeBridge().catch(() => undefined);
       await Promise.allSettled([closeRedis(), disconnectDb()]);
     },
   };
