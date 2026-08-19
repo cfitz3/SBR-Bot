@@ -369,6 +369,14 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
   // Minecraft by the bridge account, so the option copy says what Hypixel will
   // accept rather than what sounds friendly — a rejected duration is a command
   // that silently did nothing.
+  tickets: {
+    description: "Look at the ticket queue, and close or export one",
+    option: {
+      action: "What to do",
+      id: "Ticket number or id",
+      reason: "Why it is being closed",
+    },
+  },
   "join-queue": { description: "Live in-game join requests and how long is left to answer them" },
   "join-accept": {
     description: "Admit somebody who asked to join in-game",

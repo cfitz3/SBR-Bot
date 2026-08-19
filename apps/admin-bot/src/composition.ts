@@ -36,6 +36,7 @@ import { createLogger, type Logger } from "@sbr/observability";
 import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import { DiscordGuildEffects } from "./effects.js";
+import { createTicketBridge } from "./ticket-bridge.js";
 
 /** Per-boot identity in the heartbeat keyspace; see the panel's copy for why. */
 const INSTANCE_ID = randomUUID().slice(0, 8);
@@ -211,6 +212,13 @@ export async function createAdminApp(): Promise<AdminApp> {
       effects,
       analytics,
       joinQueue,
+      // `/tickets close` and `/tickets transcript` belong to the bridge bot,
+      // which is the client in the server the ticket channels live in.
+      ticketBridge: createTicketBridge({
+        baseUrl: config.internalApi.bridgeBaseUrl,
+        token: config.internalApi.token,
+        logger: log,
+      }),
       logger: log,
     },
     logger: log,

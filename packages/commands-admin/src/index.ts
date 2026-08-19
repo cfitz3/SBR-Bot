@@ -28,4 +28,5 @@ export type {
   AdminOptionSpec,
   Choice,
   RoleResolver,
+  TicketBridge,
 } from "./types.js";

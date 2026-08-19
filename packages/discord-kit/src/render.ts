@@ -9,6 +9,7 @@
 import type { ActionRowView, ButtonView, EmbedView, SelectMenuView } from "@sbr/shared-types";
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle as DiscordButtonStyle,
   EmbedBuilder,
@@ -91,11 +92,20 @@ export interface ReplyView {
   readonly embed?: EmbedView;
   readonly components?: readonly ActionRowView[];
   readonly pages?: readonly EmbedView[];
+  /**
+   * An attachment rendered from text — a ticket transcript, today.
+   *
+   * Text rather than bytes because everything the platform attaches is
+   * generated here and now: a handler that wanted to forward arbitrary binary
+   * would be doing something this shape should not quietly allow.
+   */
+  readonly file?: { readonly name: string; readonly content: string };
 }
 
 export interface DiscordReplyOptions {
   content?: string;
   embeds?: EmbedBuilder[];
+  files?: AttachmentBuilder[];
   components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
   flags?: MessageFlags.Ephemeral;
   allowedMentions?: { parse: [] };
@@ -119,6 +129,14 @@ export function replyOptions(reply: ReplyView): DiscordReplyOptions {
   if (embedView) options.embeds = [toEmbed(embedView)];
   else options.content = reply.text;
   if (reply.components?.length) options.components = reply.components.map(toActionRow);
+  if (reply.file) {
+    options.files = [
+      new AttachmentBuilder(Buffer.from(reply.file.content, "utf8"), { name: reply.file.name }),
+    ];
+    // An attachment with no words above it reads as a mystery file. The text is
+    // kept even when an embed carried the same information.
+    options.content = reply.text;
+  }
   if (reply.ephemeral) options.flags = MessageFlags.Ephemeral;
   return options;
 }

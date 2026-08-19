@@ -23,6 +23,7 @@ import {
   type ModerationService,
   type RecruitmentSettings,
   type SafetyService,
+  type TicketDTO,
   type WordlistError,
   type WordlistService,
 } from "@sbr/shared-types";
@@ -30,7 +31,7 @@ import type { Logger } from "@sbr/observability";
 import { AdminDispatcher } from "./dispatcher.js";
 import { buildAdminRegistry } from "./handlers.js";
 import { parseDurationSeconds } from "./util.js";
-import type { AdminContext, RoleResolver } from "./types.js";
+import type { AdminContext, RoleResolver, TicketBridge } from "./types.js";
 
 // A real Discord snowflake: `getUser` rejects anything that is not one, so the
 // fixture has to look like an id rather than the word "target".
@@ -170,6 +171,7 @@ const analytics: AnalyticsService = { async capture() {}, async emit() {} };
 
 interface Overrides {
   moderation?: ModerationService;
+  ticketBridge?: TicketBridge;
   roles?: RoleResolver;
   community?: CommunityService;
   config?: GuildConfigService;
@@ -191,6 +193,7 @@ function make(over: Overrides = {}) {
       wordlist: over.wordlist ?? wordlist(),
       effects: over.effects ?? effects(),
       analytics,
+      ...(over.ticketBridge === undefined ? {} : { ticketBridge: over.ticketBridge }),
       logger: silent,
     },
     logger: silent,
@@ -669,4 +672,127 @@ test("re-deciding an application reports the existing verdict", async () => {
 test("application review is refused below OFFICER", async () => {
   const r = await make({ roles: roles({ actor: "MODERATOR" }) }).dispatch("application-review", ctx());
   assert.match(r.text, /requires OFFICER/);
+});
+
+
+// ────────────────────────────── /tickets ─────────────────────────────────────
+
+function ticket(over: Partial<TicketDTO> = {}): TicketDTO {
+  return {
+    id: "tkt-1",
+    guildId: "g1",
+    number: 12,
+    openerDiscordId: "111111111111111111",
+    assigneeDiscordId: null,
+    categoryId: "cat-1",
+    categoryKey: "support",
+    categoryName: "Support",
+    status: "OPEN",
+    channelId: "222222222222222222",
+    subject: null,
+    topic: null,
+    claimedByDiscordId: null,
+    claimedAt: null,
+    closeRequestedByDiscordId: null,
+    closeRequestedAt: null,
+    lastMessageAt: null,
+    firstStaffReplyAt: null,
+    feedbackRating: null,
+    transcriptReady: false,
+    closeReason: null,
+    createdAt: "2026-08-18T12:00:00.000Z",
+    closedAt: null,
+    ...over,
+  };
+}
+
+/** A community with one open ticket, plus a `getTicket` that ignores the guild. */
+function ticketCommunity(rows: readonly TicketDTO[] = [ticket()]): CommunityService {
+  return community({
+    async listTickets() {
+      return ok(rows);
+    },
+    async getTicket(id: string) {
+      return ok(rows.find((t) => t.id === id) ?? null);
+    },
+  } as Partial<CommunityService>);
+}
+
+test("/tickets list shows the open queue", async () => {
+  const r = await make({ roles: roles({ actor: "MODERATOR" }), community: ticketCommunity() }).dispatch(
+    "tickets",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /1 open/);
+  assert.match(r.embed?.fields?.[0]?.name ?? "", /#12/);
+});
+
+test("/tickets view accepts the number staff actually say", async () => {
+  const r = await make({ roles: roles({ actor: "MODERATOR" }), community: ticketCommunity() }).dispatch(
+    "tickets",
+    ctx({ args: recordArgs({ action: "view", id: "#12" }) }),
+  );
+  assert.match(r.embed?.title ?? "", /Ticket #12/);
+});
+
+test("/tickets view refuses a ticket belonging to another server", async () => {
+  // Ids are opaque but enumerable in bulk; nothing else in this path would stop
+  // one server's staff from reading another's conversation.
+  const r = await make({
+    roles: roles({ actor: "MODERATOR" }),
+    community: ticketCommunity([ticket({ guildId: "other" })]),
+  }).dispatch("tickets", ctx({ args: recordArgs({ action: "view", id: "tkt-1" }) }));
+  assert.match(r.text, /couldn't find/);
+});
+
+test("/tickets close without a bridge says so rather than moving the row", async () => {
+  // Closing the row here would leave the channel open with everyone still in
+  // it — the half-done state the bridge exists to prevent.
+  const r = await make({ roles: roles({ actor: "MODERATOR" }), community: ticketCommunity() }).dispatch(
+    "tickets",
+    ctx({ args: recordArgs({ action: "close", id: "#12" }) }),
+  );
+  assert.match(r.text, /bridge bot isn't running/);
+});
+
+test("/tickets close reports the bridge's own words when it refuses", async () => {
+  const bridge: TicketBridge = {
+    async close() {
+      return { ok: false, detail: "that ticket is already closed" };
+    },
+    async transcript() {
+      return null;
+    },
+  };
+  const r = await make({
+    roles: roles({ actor: "MODERATOR" }),
+    community: ticketCommunity(),
+    ticketBridge: bridge,
+  }).dispatch("tickets", ctx({ args: recordArgs({ action: "close", id: "#12" }) }));
+  assert.match(r.text, /already closed/);
+});
+
+test("/tickets transcript comes back as a file", async () => {
+  const bridge: TicketBridge = {
+    async close() {
+      return { ok: true, number: 12 };
+    },
+    async transcript() {
+      return { name: "ticket-12.md", content: "# 12" };
+    },
+  };
+  const r = await make({
+    roles: roles({ actor: "MODERATOR" }),
+    community: ticketCommunity(),
+    ticketBridge: bridge,
+  }).dispatch("tickets", ctx({ args: recordArgs({ action: "transcript", id: "tkt-1" }) }));
+  assert.equal(r.file?.name, "ticket-12.md");
+});
+
+test("/tickets is not a member command", async () => {
+  const r = await make({ roles: roles({ actor: "MEMBER" }), community: ticketCommunity() }).dispatch(
+    "tickets",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /requires MODERATOR/);
 });

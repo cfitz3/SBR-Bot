@@ -50,6 +50,17 @@ export interface AppConfig {
     readonly port: number;
     /** Where the panel dials the bot. Loopback unless the two are split apart. */
     readonly baseUrl: string;
+    /**
+     * The *bridge* bot's half of the same idea, on its own port.
+     *
+     * Ticket channels live in the community server, where the bridge bot is the
+     * client holding the gateway — so panel "Publish" and admin `/tickets close`
+     * have to reach that process, not the admin one. Same token: both sockets
+     * are loopback, in the same trust domain, and a second secret to rotate buys
+     * nothing.
+     */
+    readonly bridgePort: number;
+    readonly bridgeBaseUrl: string;
   };
   readonly hypixel: { readonly apiKey: string | undefined };
   /**
@@ -234,7 +245,19 @@ function internalApiConfig(v: Validator): AppConfig["internalApi"] {
   if (parseOrigin(baseUrl) === null) {
     v.push(`Invalid INTERNAL_API_URL="${baseUrl}" (expected an absolute URL)`);
   }
-  return { token, port, baseUrl };
+
+  const bridgePort = v.int("BRIDGE_API_PORT", 3012);
+  if (bridgePort === port) {
+    // Both default to loopback on one host, so a collision is a silent
+    // "address in use" at start-up on whichever process loses the race.
+    v.push("BRIDGE_API_PORT and INTERNAL_API_PORT are the same — the two bots cannot share a port");
+  }
+  const bridgeBaseUrl = v.optionalString("BRIDGE_API_URL") ?? `http://127.0.0.1:${String(bridgePort)}`;
+  if (parseOrigin(bridgeBaseUrl) === null) {
+    v.push(`Invalid BRIDGE_API_URL="${bridgeBaseUrl}" (expected an absolute URL)`);
+  }
+
+  return { token, port, baseUrl, bridgePort, bridgeBaseUrl };
 }
 
 /**

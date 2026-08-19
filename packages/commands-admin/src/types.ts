@@ -35,6 +35,8 @@ export interface AdminContext {
 export interface AdminReply {
   readonly text: string;
   readonly ephemeral: boolean;
+  /** A generated text attachment — a ticket transcript. */
+  readonly file?: { readonly name: string; readonly content: string };
   readonly embed?: EmbedView;
   readonly components?: readonly ActionRowView[];
   /** Multi-page output (`/infractions`, `/audit`); page 1 doubles as `embed`. */
@@ -61,7 +63,34 @@ export interface AdminHandlerDeps {
    * is the same shape of answer they give when it is wired up but offline.
    */
   readonly joinQueue?: JoinQueueService;
+  /** The bridge bot's ticket effects. Absent means `/tickets close` says so. */
+  readonly ticketBridge?: TicketBridge;
   readonly logger: Logger;
+}
+
+/**
+ * The bridge bot's ticket gateway, seen from here.
+ *
+ * Ticket channels live in the community server, where the *bridge* bot holds
+ * the gateway — so closing a ticket from this bot means asking that one, or the
+ * row would move while its channel stayed open with everyone still in it.
+ * Reading tickets needs none of this and goes straight to the database, which
+ * is why only the two effects are here.
+ *
+ * Optional for the same reason `joinQueue` is: a deployment without a bridge
+ * should say so rather than fail to start.
+ */
+export interface TicketBridge {
+  close(request: {
+    readonly guildId: string;
+    readonly ticketId: string;
+    readonly actorDiscordId: string;
+    readonly reason: string | null;
+  }): Promise<{ readonly ok: true; readonly number: number } | { readonly ok: false; readonly detail: string }>;
+  transcript(
+    guildId: string,
+    ticketId: string,
+  ): Promise<{ readonly name: string; readonly content: string } | null>;
 }
 
 export type AdminHandler = (ctx: AdminContext, deps: AdminHandlerDeps) => Promise<AdminReply>;

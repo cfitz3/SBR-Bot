@@ -36,6 +36,7 @@ import { createLogger, type Logger } from "@sbr/observability";
 import { createRedisAdapters, getRedis, RUNNABLE_JOBS, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import { createBotDirectory, createDiscordEnforcer, MAX_TIMEOUT_SECONDS, type EnforceRequest } from "./directory.js";
+import { createTicketEffects } from "./ticket-effects.js";
 import type { ModerationActionDTO } from "@sbr/shared-types";
 
 /**
@@ -289,6 +290,14 @@ export async function createPanelApp(): Promise<PanelApp> {
         await adapters.jobTriggers.publish({ ...request, at: new Date().toISOString() });
       },
     },
+    // The Discord side of "Publish" and "Re-send transcript". Ticket channels
+    // live where the *bridge* bot is, so this dials that process rather than
+    // the admin one the pickers use.
+    ticketEffects: createTicketEffects({
+      baseUrl: config.internalApi.bridgeBaseUrl,
+      token: config.internalApi.token,
+      logger: log,
+    }),
     limiter: adapters.cooldowns,
     audit,
     analytics,

@@ -12,12 +12,19 @@ import type {
   MemberRole,
   ModActionType,
   RaidSensitivity,
+  TicketDTO,
   WordAction,
   WordMatchType,
 } from "@sbr/shared-types";
 import { withCommandCopy } from "@sbr/brand";
 import { isEscalation } from "@sbr/moderation";
-import type { AdminHandler, AdminCommandSpec, AdminReply } from "./types.js";
+import type {
+  AdminCommandSpec,
+  AdminContext,
+  AdminHandler,
+  AdminHandlerDeps,
+  AdminReply,
+} from "./types.js";
 import { parseDurationSeconds, renderModError } from "./util.js";
 import type { JoinActionResult, JoinQueueService } from "@sbr/screening";
 import {
@@ -33,6 +40,8 @@ import {
   renderJoinQueueEmbed,
   renderSafetyError,
   renderSafetyStatusEmbed,
+  renderTicketEmbed,
+  renderTicketListEmbed,
   renderWordlistEmbed,
 } from "./render.js";
 
@@ -563,6 +572,121 @@ const guildPromote = rosterHandler("guild-promote", (queue, g, ign, actor) => qu
 const guildDemote = rosterHandler("guild-demote", (queue, g, ign, actor) => queue.demote(g, ign, actor), "demote");
 
 
+// ─────────────────────────────── Tickets ────────────────────────────────────
+
+/**
+ * Resolve what a staffer typed into a ticket.
+ *
+ * Two forms are accepted because staff use two: "#12" is what the channel
+ * topic, the panel and every conversation call it, and the opaque row id is
+ * what a log line or the autocomplete hands back. Numbers only resolve against
+ * the open list — a closed ticket is found by id, which is the id the close
+ * notice printed.
+ */
+async function findTicket(
+  ctx: AdminContext,
+  deps: AdminHandlerDeps,
+  raw: string,
+): Promise<TicketDTO | null> {
+  const number = Number.parseInt(raw.replace(/^#/, ""), 10);
+  if (Number.isInteger(number) && String(number) === raw.replace(/^#/, "")) {
+    const open = await deps.community.listTickets(ctx.guildId);
+    return (open.ok ? open.value.find((t) => t.number === number) : undefined) ?? null;
+  }
+  const found = await deps.community.getTicket(raw);
+  const ticket = found.ok ? found.value : null;
+  // Guild-checked here rather than trusted: a ticket id is opaque but guessable
+  // in bulk, and nothing else in this path would stop one server's staff from
+  // reading another's conversation.
+  return ticket !== null && ticket.guildId === ctx.guildId ? ticket : null;
+}
+
+/**
+ * `/tickets` — the staff view of the queue, and the two actions that need one.
+ *
+ * `list` and `view` read the database directly. `close` and `transcript` go
+ * through the bridge bot, because closing has to dispose of a Discord channel
+ * this process cannot see, and a transcript is rendered from the archive the
+ * gateway writes.
+ */
+const tickets: AdminHandler = async (ctx, deps) => {
+  const action = ctx.args.getString("action") ?? "list";
+  const id = ctx.args.getString("id");
+
+  if (action === "list") {
+    const open = await deps.community.listTickets(ctx.guildId);
+    if (!open.ok) return { ephemeral: true, text: "Couldn't read the ticket queue." };
+    return {
+      ephemeral: true,
+      text: open.value.length === 0 ? "Nothing open." : `${String(open.value.length)} open.`,
+      embed: renderTicketListEmbed(open.value),
+    };
+  }
+
+  if (!id) return { ephemeral: true, text: `Usage: /tickets action:${action} id:<number>` };
+  const ticket = await findTicket(ctx, deps, id);
+  if (ticket === null) return { ephemeral: true, text: "I couldn't find that ticket." };
+
+  if (action === "view") {
+    return { ephemeral: true, text: `Ticket #${String(ticket.number)}.`, embed: renderTicketEmbed(ticket) };
+  }
+
+  if (action === "transcript") {
+    if (!deps.ticketBridge) return noTicketBridge();
+    const transcript = await deps.ticketBridge.transcript(ctx.guildId, ticket.id);
+    if (transcript === null) return { ephemeral: true, text: "I couldn't render that transcript." };
+    return {
+      ephemeral: true,
+      text: `Transcript for ticket #${String(ticket.number)}.`,
+      file: transcript,
+    };
+  }
+
+  if (action === "close") {
+    if (!deps.ticketBridge) return noTicketBridge();
+    const result = await deps.ticketBridge.close({
+      guildId: ctx.guildId,
+      ticketId: ticket.id,
+      actorDiscordId: ctx.actorId,
+      reason: ctx.args.getString("reason"),
+    });
+    return {
+      ephemeral: true,
+      text: result.ok ? `Closed ticket #${String(result.number)}.` : `I couldn't close that — ${result.detail}.`,
+    };
+  }
+
+  return { ephemeral: true, text: "Pick list, view, close or transcript." };
+};
+
+/** The bridge owns the channel; without it, closing would only move the row. */
+function noTicketBridge(): AdminReply {
+  return {
+    ephemeral: true,
+    text: "Tickets aren't reachable from here — the bridge bot isn't running or isn't wired to this one.",
+  };
+}
+
+/**
+ * Suggest the tickets that are actually open.
+ *
+ * The value is the row id rather than the number, so a pick is unambiguous even
+ * as new tickets take the next number — and the label is what staff would have
+ * typed anyway.
+ */
+const ticketNames: NonNullable<AdminCommandSpec["autocomplete"]> = async (focused, ctx, deps) => {
+  const open = await deps.community.listTickets(ctx.guildId);
+  if (!open.ok) return [];
+  const needle = focused.value.replace(/^#/, "").toLowerCase();
+  return open.value
+    .filter((t) => needle === "" || String(t.number).startsWith(needle))
+    .slice(0, 25)
+    .map((t) => ({
+      name: `#${String(t.number)} — ${t.categoryName ?? "uncategorised"}`.slice(0, 100),
+      value: t.id,
+    }));
+};
+
 const applicationReview: AdminHandler = async (ctx, deps) => {
   const id = ctx.args.getString("id");
   if (id) {
@@ -958,6 +1082,28 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       ],
       minRole: "OFFICER",
       handler: denyMember,
+    },
+    {
+      name: "tickets",
+      description: "Look at the ticket queue, and close or export one",
+      options: [
+        {
+          name: "action",
+          description: "What to do",
+          type: "string",
+          choices: [
+            { name: "list", value: "list" },
+            { name: "view", value: "view" },
+            { name: "close", value: "close" },
+            { name: "transcript", value: "transcript" },
+          ],
+        },
+        { name: "id", description: "Ticket number or id", type: "string", autocomplete: true },
+        { name: "reason", description: "Why it is being closed", type: "string" },
+      ],
+      minRole: "MODERATOR",
+      handler: tickets,
+      autocomplete: ticketNames,
     },
     {
       name: "join-queue",

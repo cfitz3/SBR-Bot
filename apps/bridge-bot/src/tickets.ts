@@ -511,7 +511,52 @@ export class TicketGateway {
       const result = await this.d.community.closeTicket(ticket.id, actor, reason);
       return { result, note: `Closed by <@${discordId}>.` };
     });
+    // The channel the press came from is authoritative: the row's own
+    // `channelId` is null for a ticket opened before it was bound.
+    return this.afterClose(outcome, discordId, reason, channelId);
+  }
+
+  /**
+   * Close by id rather than by channel — `/tickets close` from the admin bot,
+   * where the staffer is not standing in the ticket.
+   *
+   * A ticket whose channel is already gone still closes: the row is the record,
+   * and refusing here would leave it open forever with nowhere to press the
+   * button.
+   */
+  async closeById(
+    ticketId: string,
+    discordId: string,
+    discordGuildId: string,
+    reason: string | null,
+  ): Promise<ActionResult> {
+    const found = await this.d.community.getTicket(ticketId);
+    const ticket = found.ok ? found.value : null;
+    if (ticket === null) {
+      return { ok: false, problem: "NOT_A_TICKET", detail: "no such ticket" };
+    }
+    const isStaff = await this.isStaff(ticket, discordId, discordGuildId);
+    const result = await this.d.community.closeTicket(ticket.id, { discordId, isStaff }, reason);
+    const outcome = this.translate(result, `Closed by <@${discordId}>.`);
+    return this.afterClose(outcome, discordId, reason, ticket.channelId);
+  }
+
+  /**
+   * Everything a close does once the row has moved: the transcript, the log
+   * notice, and the channel.
+   *
+   * Shared by both close paths so an admin-bot close leaves exactly the same
+   * trail as one pressed in the channel — a transcript that arrives only
+   * sometimes is worse than one that never does, because nobody knows which.
+   */
+  private async afterClose(
+    outcome: ActionResult,
+    discordId: string,
+    reason: string | null,
+    channelId?: string | null,
+  ): Promise<ActionResult> {
     if (!outcome.ok) return outcome;
+    const target = channelId ?? outcome.ticket.channelId;
 
     const settings = await this.d.tickets.settings(outcome.ticket.guildId);
     await this.deliverTranscript(outcome.ticket, settings);
@@ -524,7 +569,7 @@ export class TicketGateway {
         { name: "Opened by", value: `<@${outcome.ticket.openerDiscordId}>`, inline: true },
       ],
     });
-    await this.d.discord.disposeChannel(channelId, settings.archiveEnabled);
+    if (target !== null) await this.d.discord.disposeChannel(target, settings.archiveEnabled);
     return outcome;
   }
 
@@ -552,6 +597,14 @@ export class TicketGateway {
 
     const isStaff = await this.isStaff(ticket, discordId, discordGuildId);
     const { result, note } = await run(ticket, { discordId, isStaff });
+    return this.translate(result, note);
+  }
+
+  /** A lifecycle refusal, in words the presser can read. */
+  private translate(
+    result: { readonly ok: true; readonly value: TicketDTO } | { readonly ok: false; readonly error: { readonly kind: string } },
+    note: string,
+  ): ActionResult {
     if (!result.ok) {
       const kind = result.error.kind;
       if (kind === "ALREADY_CLOSED") {
@@ -608,6 +661,20 @@ export class TicketGateway {
       });
     }
     return sent;
+  }
+
+  /**
+   * Re-send by id, for the panel's "Re-send transcript" and the admin bot.
+   *
+   * Null means there is no such ticket, which is a different answer from false
+   * — "the member has DMs closed" is worth showing, and "you typed the wrong
+   * id" is worth not disguising as it.
+   */
+  async deliverTranscriptById(ticketId: string): Promise<boolean | null> {
+    const found = await this.d.community.getTicket(ticketId);
+    const ticket = found.ok ? found.value : null;
+    if (ticket === null) return null;
+    return this.deliverTranscript(ticket);
   }
 
   /** The markdown transcript, for `/tickets transcript`. */

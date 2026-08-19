@@ -64,6 +64,7 @@ export {
   type MutationErrorKind,
   type MutationLimiter,
   type JobTrigger,
+  type TicketEffects,
   MANUAL_JOB_COOLDOWN_MS,
   type PanelMutationsDeps,
   type ConfigAuditEntry,

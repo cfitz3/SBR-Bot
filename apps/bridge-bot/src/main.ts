@@ -5,7 +5,9 @@
  * (boot-ready) so it can be verified without credentials.
  */
 import { installLifecycle } from "@sbr/observability";
+import { guildRepository } from "@sbr/db";
 import { createBridgeApp } from "./composition.js";
+import { BridgeApi } from "./internal-api.js";
 import { startBridge } from "./transport.js";
 
 async function main(): Promise<void> {
@@ -37,11 +39,33 @@ async function main(): Promise<void> {
   // saying "no bridge here" rather than waiting out a request that can't be sent.
   if (mc) app.setRosterSource(handles.roster);
   app.setStatusSource(() => ({ ...handles.status() }));
+
+  // The ticket control API. Started here rather than inside `startBridge`
+  // because it is the panel's and the admin bot's way in, and it should exist
+  // whether or not there is a Mineflayer session behind it. The gateway is read
+  // per request: it is built during `startBridge`, and a request arriving in
+  // that window answers "still connecting" instead of failing.
+  const bridgeApi = app.config.internalApi.token
+    ? new BridgeApi({
+        tickets: () => app.tickets,
+        toDiscordGuildId: guildRepository.resolveDiscordId,
+        token: app.config.internalApi.token,
+        port: app.config.internalApi.bridgePort,
+        logger: app.log,
+      })
+    : null;
+  if (bridgeApi) {
+    await bridgeApi.start();
+  } else {
+    app.log.warn("INTERNAL_API_TOKEN not set — panel ticket publishing and /tickets close are unavailable");
+  }
+
   app.log.info("bridge-bot serving");
 
   installLifecycle({
     logger: app.log,
     async shutdown() {
+      await bridgeApi?.stop();
       await handles.destroy();
       await app.shutdown();
     },
