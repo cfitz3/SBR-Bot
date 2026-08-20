@@ -216,6 +216,64 @@ export function isMilestoneMetric(value: unknown): value is MilestoneMetric {
   return typeof value === "string" && (MILESTONE_METRICS as readonly string[]).includes(value);
 }
 
+/**
+ * How much of a deal an achievement is, in the guild's own judgement.
+ *
+ * Editorial rather than arithmetic — Catacombs 50 outranks Catacombs 10 because
+ * a guild says so, and two guilds of different sizes genuinely disagree about
+ * where the line falls — which is why it is stored per definition rather than
+ * computed from the threshold.
+ */
+export const ACHIEVEMENT_TIERS = ["BRONZE", "SILVER", "GOLD", "PLATINUM"] as const;
+export type AchievementTier = (typeof ACHIEVEMENT_TIERS)[number];
+
+export function isAchievementTier(value: unknown): value is AchievementTier {
+  return typeof value === "string" && (ACHIEVEMENT_TIERS as readonly string[]).includes(value);
+}
+
+/** Ascending, so a sort can put the rarest last (or first, reversed). */
+export function tierRank(tier: AchievementTier): number {
+  return ACHIEVEMENT_TIERS.indexOf(tier);
+}
+
+/**
+ * The families achievements are grouped under.
+ *
+ * Deliberately **not** a stored column. A category follows from the metric —
+ * a networth threshold is a wealth achievement whatever anyone types — and a
+ * column beside the metric it describes is a row that can contradict itself.
+ * Adding a family therefore means adding a metric, which is the honest cost.
+ */
+export const ACHIEVEMENT_CATEGORIES = [
+  "PROGRESSION",
+  "WEALTH",
+  "DUNGEONS",
+  "SKILLS",
+  "SLAYER",
+  "COMMUNITY",
+  "EVENTS",
+] as const;
+export type AchievementCategory = (typeof ACHIEVEMENT_CATEGORIES)[number];
+
+const CATEGORY_OF_METRIC: Readonly<Record<MilestoneMetric, AchievementCategory>> = {
+  skyblockLevel: "PROGRESSION",
+  senitherWeight: "PROGRESSION",
+  networth: "WEALTH",
+  catacombsLevel: "DUNGEONS",
+  skillAverage: "SKILLS",
+  slayerXp: "SLAYER",
+};
+
+/**
+ * The family a metric belongs to. An unknown metric — a stored row from a
+ * newer deployment, a hand-written definition — lands in PROGRESSION rather
+ * than throwing: an achievement in the wrong group is a presentation problem,
+ * and a member's `/milestones` failing to render is not.
+ */
+export function categoryOfMetric(metric: string): AchievementCategory {
+  return CATEGORY_OF_METRIC[metric as MilestoneMetric] ?? "PROGRESSION";
+}
+
 export const CommandSurface = {
   BRIDGE_BOT: "BRIDGE_BOT",
   ADMIN_BOT: "ADMIN_BOT",

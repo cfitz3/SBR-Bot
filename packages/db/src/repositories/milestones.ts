@@ -14,6 +14,7 @@ import type {
   MilestoneType,
   PendingMilestoneDTO,
 } from "@sbr/shared-types";
+import { isAchievementTier } from "@sbr/shared-types";
 import {
   DEFAULT_MILESTONE_DEFINITIONS,
   isMilestoneMetric,
@@ -32,6 +33,9 @@ function toDefinition(row: {
   xpReward: number;
   announce: boolean;
   enabled: boolean;
+  tier: string;
+  icon: string | null;
+  hidden: boolean;
 }): MilestoneDefinition | null {
   // A metric the detector does not know can never fire, and silently keeping it
   // in the resolved set would make it look configured. Dropped here, where the
@@ -47,6 +51,11 @@ function toDefinition(row: {
     xpReward: row.xpReward,
     announce: row.announce,
     enabled: row.enabled,
+    // Presentation, so an unrecognised tier degrades to the lowest rather than
+    // dropping a definition that would otherwise detect perfectly well.
+    tier: isAchievementTier(row.tier) ? row.tier : "BRONZE",
+    icon: row.icon,
+    hidden: row.hidden,
   };
 }
 
@@ -61,6 +70,9 @@ const SELECT = {
   xpReward: true,
   announce: true,
   enabled: true,
+  tier: true,
+  icon: true,
+  hidden: true,
 } as const;
 
 export const milestoneDefinitionRepository = {
@@ -106,6 +118,9 @@ export const milestoneDefinitionRepository = {
               xpReward: d.xpReward,
               announce: d.announce,
               enabled: d.enabled,
+              tier: d.tier,
+              icon: d.icon,
+              hidden: d.hidden,
               source: "DEFAULT",
             }
           : rowToDto(guildId, row),
@@ -128,6 +143,12 @@ export const milestoneDefinitionRepository = {
       xpReward: input.xpReward,
       announce: input.announce,
       enabled: input.enabled,
+      // Absent means "leave it at the platform's answer" rather than "clear it":
+      // an older client that stores a definition without knowing about tiers
+      // should not silently demote one somebody set.
+      ...(input.tier === undefined ? {} : { tier: input.tier }),
+      ...(input.icon === undefined ? {} : { icon: input.icon }),
+      ...(input.hidden === undefined ? {} : { hidden: input.hidden }),
     };
     const row = await prisma.milestoneDefinition.upsert({
       where: { guildId_key: { guildId, key: input.key } },
@@ -228,6 +249,9 @@ function rowToDto(
     xpReward: number;
     announce: boolean;
     enabled: boolean;
+    tier: string;
+    icon: string | null;
+    hidden: boolean;
   },
 ): MilestoneDefinitionDTO {
   return {
@@ -242,6 +266,9 @@ function rowToDto(
     xpReward: row.xpReward,
     announce: row.announce,
     enabled: row.enabled,
+    tier: isAchievementTier(row.tier) ? row.tier : "BRONZE",
+    icon: row.icon,
+    hidden: row.hidden,
     source: "GUILD",
   };
 }

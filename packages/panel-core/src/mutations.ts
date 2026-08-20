@@ -8,8 +8,10 @@
  * database, so this file holds no SQL and no enforcement logic of its own.
  */
 import {
+  ACHIEVEMENT_TIERS,
   BridgeCapability,
   CONFIG_CHANNEL_SLOTS,
+  isAchievementTier,
   isConfigChannelSlot,
   isMilestoneMetric,
   isUpstreamUnavailable,
@@ -500,6 +502,8 @@ const HYPIXEL_GUILD_NAME_MAX = 64;
 const MILESTONE_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
 const MILESTONE_LABEL_MAX = 80;
 const MILESTONE_DESC_MAX = 500;
+/** Room for one emoji, or a couple of combining parts of one. Not a word. */
+const MILESTONE_ICON_MAX = 4;
 /** A reward big enough to matter, small enough not to rewrite the leaderboard. */
 const MAX_MILESTONE_REWARD = 1_000_000;
 
@@ -1117,6 +1121,28 @@ export class PanelMutations {
       if (typeof body["announce"] !== "boolean") return invalid("announce must be a boolean");
       if (typeof body["enabled"] !== "boolean") return invalid("enabled must be a boolean");
 
+      // Presentation is optional on the way in and absent rather than defaulted
+      // on the way out: a panel build that predates tiers must be able to edit a
+      // Platinum's XP without silently demoting it to Bronze.
+      const tier = body["tier"];
+      if (tier !== undefined && !isAchievementTier(tier)) {
+        return invalid(`tier must be one of ${ACHIEVEMENT_TIERS.join(", ")}`);
+      }
+      const rawIcon = body["icon"];
+      if (rawIcon !== undefined && rawIcon !== null && typeof rawIcon !== "string") {
+        return invalid("icon must be a short string, or null");
+      }
+      // Trimmed to nothing means "no icon", not an icon made of spaces. The cap
+      // is characters rather than bytes because one emoji is several bytes and
+      // the limit being enforced is visual width in an embed field name.
+      const icon =
+        rawIcon === undefined ? undefined : typeof rawIcon === "string" && rawIcon.trim().length > 0 ? rawIcon.trim() : null;
+      if (icon !== undefined && icon !== null && [...icon].length > MILESTONE_ICON_MAX) {
+        return invalid(`icon must be at most ${MILESTONE_ICON_MAX} characters`);
+      }
+      const hidden = body["hidden"];
+      if (hidden !== undefined && typeof hidden !== "boolean") return invalid("hidden must be a boolean");
+
       const definition: MilestoneDefinitionInput = {
         key,
         label: label.trim(),
@@ -1127,6 +1153,9 @@ export class PanelMutations {
         xpReward: body["xpReward"],
         announce: body["announce"],
         enabled: body["enabled"],
+        ...(tier === undefined ? {} : { tier }),
+        ...(icon === undefined ? {} : { icon }),
+        ...(hidden === undefined ? {} : { hidden }),
       };
       try {
         await milestones.upsert(guildId, definition);

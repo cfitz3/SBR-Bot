@@ -7,6 +7,7 @@
  * whose definition was since deleted, a threshold of zero, an unmeasured
  * metric) without a database or a Hypixel client in the room.
  */
+import { categoryOfMetric } from "@sbr/shared-types";
 import type {
   AchievementDTO,
   AchievementsDTO,
@@ -59,6 +60,7 @@ export function buildAchievements(
   const earned: AchievementDTO[] = [];
   const upcoming: AchievementDTO[] = [];
   const matched = new Set<string>();
+  let hiddenLocked = 0;
 
   for (const def of definitions) {
     // A disabled definition is one the guild has stopped recognising. It stays
@@ -81,8 +83,24 @@ export function buildAchievements(
       current,
       progress: achievedAt !== null ? 1 : fraction(current, def.threshold),
       achievedAt,
+      tier: def.tier,
+      icon: def.icon,
+      category: categoryOfMetric(def.metric),
+      hidden: def.hidden,
     };
-    (achievedAt !== null ? earned : upcoming).push(entry);
+
+    if (achievedAt !== null) {
+      // Earning a hidden achievement is exactly when it stops being hidden: the
+      // reveal is the reward, and a member who cannot see what they got has
+      // been given nothing.
+      earned.push(entry);
+      continue;
+    }
+    if (def.hidden) {
+      hiddenLocked += 1;
+      continue;
+    }
+    upcoming.push(entry);
   }
 
   // Earned rows no live definition claims: a definition deleted or re-thresholded
@@ -104,6 +122,12 @@ export function buildAchievements(
       current: reading(snapshot, row.metric),
       progress: 1,
       achievedAt: earnedAt.get(key) ?? row.achievedAt,
+      // The definition that would have said otherwise is gone, so this is what
+      // is left that is true: it was earned, and the metric says where it fits.
+      tier: "BRONZE",
+      icon: null,
+      category: categoryOfMetric(row.metric),
+      hidden: false,
     });
   }
 
@@ -116,7 +140,10 @@ export function buildAchievements(
     earned,
     upcoming,
     earnedCount: earned.length,
-    totalCount: earned.length + upcoming.length,
+    // Hidden-and-locked entries are counted but never named, so a member can
+    // tell there is more without being told what.
+    totalCount: earned.length + upcoming.length + hiddenLocked,
+    hiddenLocked,
     xpEarned: earned.reduce((sum, a) => sum + a.xpReward, 0),
     measuredAt: snapshot?.capturedAt ?? null,
     configured: options.configured,

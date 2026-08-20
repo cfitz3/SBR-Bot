@@ -1490,6 +1490,11 @@ test("a definition that could never fire is refused before it reaches the store"
     { xpReward: -1 },
     { announce: "yes" },
     { enabled: null },
+    { tier: "MYTHIC" },                  // not a tier the renderer has a badge for
+    { tier: 3 },
+    { icon: "legendary" },               // an icon is a glyph, not a word
+    { icon: 5 },
+    { hidden: "yes" },
   ];
 
   for (const [i, over] of cases.entries()) {
@@ -2852,4 +2857,43 @@ test("removing an exception another admin already removed is reported, not passe
   assert.equal(result.error?.kind, "INVALID_INPUT");
   assert.deepEqual(recorded.calls, [{ method: "removeException", args: ["g1", "e1"] }]);
   assert.deepEqual(recorded.audits, []);
+});
+
+test("presentation is optional, so an older panel cannot demote a tier by omission", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.upsertMilestone(session(), "g1", milestoneBody());
+
+  assert.equal(result.ok, true);
+  const stored = recorded.calls[0]?.args[1] as Record<string, unknown>;
+  // Absent, not defaulted: the repository leaves the stored column alone, where
+  // writing "BRONZE" here would quietly flatten a Platinum on every save.
+  assert.ok(!("tier" in stored));
+  assert.ok(!("icon" in stored));
+  assert.ok(!("hidden" in stored));
+});
+
+test("tier, icon and hidden are stored when the panel sends them", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.upsertMilestone(
+    session(),
+    "g1",
+    milestoneBody({ tier: "PLATINUM", icon: "💰", hidden: true }),
+  );
+
+  assert.equal(result.ok, true);
+  const stored = recorded.calls[0]?.args[1] as Record<string, unknown>;
+  assert.equal(stored["tier"], "PLATINUM");
+  assert.equal(stored["icon"], "💰");
+  assert.equal(stored["hidden"], true);
+});
+
+test("an icon of whitespace is no icon at all", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.upsertMilestone(session(), "g1", milestoneBody({ icon: "   " }));
+
+  assert.equal(result.ok, true);
+  assert.equal((recorded.calls[0]?.args[1] as Record<string, unknown>)["icon"], null);
 });

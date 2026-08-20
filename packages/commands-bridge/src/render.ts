@@ -2,11 +2,14 @@
  * User-facing rendering. Maps typed fallback states to honest messages and
  * formats networth respecting exact-vs-estimate and staleness.
  */
-import { describeAge, padInlineRow, stalenessFooter } from "@sbr/shared-types";
+import { describeAge, padInlineRow, stalenessFooter, tierRank } from "@sbr/shared-types";
 import type {
   AccessoryReportDTO,
   AccessorySuggestionDTO,
+  AchievementCategory,
+  AchievementDTO,
   AchievementsDTO,
+  AchievementTier,
   AdviceDTO,
   AuctionListingDTO,
   AuctionsDTO,
@@ -777,11 +780,59 @@ function progressBar(fraction: number): string {
 }
 
 /**
+ * The badge for a tier. Editorial weight in one character, because a field name
+ * has no room for the word and a member reading twelve earned achievements
+ * wants to see at a glance which two were hard.
+ */
+const TIER_BADGE: Readonly<Record<AchievementTier, string>> = {
+  BRONZE: "🥉",
+  SILVER: "🥈",
+  GOLD: "🥇",
+  PLATINUM: "💎",
+};
+
+/** Headings, in the order a member reads them rather than alphabetically. */
+const CATEGORY_LABEL: Readonly<Record<AchievementCategory, string>> = {
+  PROGRESSION: "Progression",
+  WEALTH: "Wealth",
+  DUNGEONS: "Dungeons",
+  SKILLS: "Skills",
+  SLAYER: "Slayer",
+  COMMUNITY: "Community",
+  EVENTS: "Events",
+};
+
+const CATEGORY_ORDER: readonly AchievementCategory[] = [
+  "PROGRESSION",
+  "WEALTH",
+  "DUNGEONS",
+  "SKILLS",
+  "SLAYER",
+  "COMMUNITY",
+  "EVENTS",
+];
+
+/** Six per category: a field is 1024 characters and this is a summary. */
+const PER_CATEGORY = 6;
+/** Four ahead — past that, "next" stops meaning anything. */
+const UPCOMING_SHOWN = 4;
+
+/** A definition's own emoji, or its tier's. Never both: two glyphs is noise. */
+function glyph(a: AchievementDTO): string {
+  return a.icon ?? TIER_BADGE[a.tier];
+}
+
+/**
  * `/milestones` — the guild's achievements and where this member stands.
  *
- * Shows the earned and the next-closest together, because the question behind
- * the command is "what have I done and what's next", and a list of past
- * achievements alone answers only half of it.
+ * Earned is grouped by family and upcoming is ranked by nearness, because those
+ * answer different questions: a record is read by category ("how are my dungeons
+ * going") and a target is read by distance ("what can I get this week"). One
+ * flat list answered neither well.
+ *
+ * Hidden achievements are counted and never named. That is the whole feature: a
+ * number tells a member there is more to find, and a name would be the thing
+ * they were not supposed to have yet.
  */
 export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): EmbedView {
   if (!data.configured) {
@@ -801,16 +852,31 @@ export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): Emb
     };
   }
 
-  const earned = data.earned.slice(0, 5).map((a) => ({
-    name: `✅ ${a.label}`,
-    value: `${formatMetric(a.metric, a.threshold)} · <t:${Math.floor(Date.parse(a.achievedAt ?? "") / 1000)}:R>${
-      a.xpReward > 0 ? ` · +${formatNumber(a.xpReward)} XP` : ""
-    }`,
-    inline: false,
-  }));
+  const byCategory = new Map<AchievementCategory, AchievementDTO[]>();
+  for (const a of data.earned) {
+    const bucket = byCategory.get(a.category);
+    if (bucket === undefined) byCategory.set(a.category, [a]);
+    else bucket.push(a);
+  }
 
-  const upcoming = data.upcoming.slice(0, 5).map((a) => ({
-    name: `▫️ ${a.label}`,
+  const earned = CATEGORY_ORDER.filter((c) => byCategory.has(c)).map((category) => {
+    const all = byCategory.get(category) ?? [];
+    // Rarest first within a family: the tier is the reason to group them at all,
+    // and newest-first would bury a Platinum under three Bronzes.
+    const sorted = [...all].sort(
+      (a, b) => tierRank(b.tier) - tierRank(a.tier) || (b.achievedAt ?? "").localeCompare(a.achievedAt ?? ""),
+    );
+    const lines = sorted.slice(0, PER_CATEGORY).map((a) => {
+      const when = a.achievedAt === null ? "" : ` · <t:${Math.floor(Date.parse(a.achievedAt) / 1000)}:R>`;
+      const xp = a.xpReward > 0 ? ` · +${formatNumber(a.xpReward)} XP` : "";
+      return `${glyph(a)} **${a.label}**${when}${xp}`;
+    });
+    if (sorted.length > PER_CATEGORY) lines.push(`…and ${sorted.length - PER_CATEGORY} more`);
+    return { name: `${CATEGORY_LABEL[category]} (${all.length})`, value: lines.join("\n"), inline: false };
+  });
+
+  const upcoming = data.upcoming.slice(0, UPCOMING_SHOWN).map((a) => ({
+    name: `${glyph(a)} ${a.label}`,
     value:
       a.progress === null
         ? // No snapshot for this metric yet — say so instead of drawing an empty
@@ -825,18 +891,24 @@ export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): Emb
       ? "No snapshot yet — progress appears after the next daily capture."
       : `Measured <t:${Math.floor(Date.parse(data.measuredAt) / 1000)}:R>`;
 
+  // Named in the description rather than a field, so it reads as a property of
+  // the tally it sits under and not as a category of its own.
+  const hidden =
+    data.hiddenLocked === 0
+      ? ""
+      : `\n${data.hiddenLocked} hidden achievement${data.hiddenLocked === 1 ? "" : "s"} still to find.`;
+
   return {
     title: `${ign} — achievements`,
     description:
       `**${data.earnedCount}/${data.totalCount}** earned` +
-      (data.xpEarned > 0 ? ` · **${formatNumber(data.xpEarned)}** guild XP from achievements` : ""),
+      (data.xpEarned > 0 ? ` · **${formatNumber(data.xpEarned)}** guild XP from achievements` : "") +
+      hidden,
     fields: [
       ...(earned.length > 0
         ? earned
         : [{ name: "Nothing earned yet", value: "The closest ones are below.", inline: false }]),
-      ...(upcoming.length > 0
-        ? [{ name: "​", value: "**Up next**", inline: false }, ...upcoming]
-        : []),
+      ...(upcoming.length > 0 ? [{ name: "​", value: "**Up next**", inline: false }, ...upcoming] : []),
     ],
     footer: measured,
     color: data.earnedCount > 0 ? "SUCCESS" : "INFO",

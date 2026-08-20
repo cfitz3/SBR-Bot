@@ -12,6 +12,7 @@
  */
 import {
   MILESTONE_METRICS,
+  type AchievementTier,
   type MilestoneMetric as SharedMilestoneMetric,
 } from "@sbr/shared-types";
 
@@ -157,6 +158,10 @@ export interface MilestoneDefinition {
   readonly xpReward: number;
   readonly announce: boolean;
   readonly enabled: boolean;
+  /** Presentation only — the detector never reads it. */
+  readonly tier: AchievementTier;
+  readonly icon: string | null;
+  readonly hidden: boolean;
 }
 
 function def(
@@ -165,8 +170,24 @@ function def(
   type: MilestoneType,
   metric: MilestoneMetric,
   threshold: number,
+  tier: AchievementTier = "BRONZE",
 ): MilestoneDefinition {
-  return { id: null, key, label, type, metric, threshold, xpReward: 0, announce: true, enabled: true };
+  return {
+    id: null,
+    key,
+    label,
+    type,
+    metric,
+    threshold,
+    xpReward: 0,
+    announce: true,
+    enabled: true,
+    tier,
+    // The defaults ship no icons: an emoji is a guild's own voice, and a
+    // platform-chosen one is the first thing every guild would want to change.
+    icon: null,
+    hidden: false,
+  };
 }
 
 /**
@@ -181,35 +202,35 @@ export const DEFAULT_MILESTONE_DEFINITIONS: readonly MilestoneDefinition[] = [
   // who plays at all: skills plateau, dungeons are a sub-community, and networth
   // swings with the market. Every 25 up to 100 and every 50 after, which is
   // roughly how the milestones feel in-game rather than uniformly spaced.
-  def("level:50", "SkyBlock Level 50", "SKYBLOCK_LEVEL", "skyblockLevel", 50),
-  def("level:100", "SkyBlock Level 100", "SKYBLOCK_LEVEL", "skyblockLevel", 100),
-  def("level:150", "SkyBlock Level 150", "SKYBLOCK_LEVEL", "skyblockLevel", 150),
-  def("level:200", "SkyBlock Level 200", "SKYBLOCK_LEVEL", "skyblockLevel", 200),
-  def("level:250", "SkyBlock Level 250", "SKYBLOCK_LEVEL", "skyblockLevel", 250),
-  def("level:300", "SkyBlock Level 300", "SKYBLOCK_LEVEL", "skyblockLevel", 300),
-  def("level:350", "SkyBlock Level 350", "SKYBLOCK_LEVEL", "skyblockLevel", 350),
-  def("level:400", "SkyBlock Level 400", "SKYBLOCK_LEVEL", "skyblockLevel", 400),
-  def("networth:1b", "1b networth", "NETWORTH_THRESHOLD", "networth", 1e9),
-  def("networth:5b", "5b networth", "NETWORTH_THRESHOLD", "networth", 5e9),
-  def("networth:10b", "10b networth", "NETWORTH_THRESHOLD", "networth", 1e10),
-  def("networth:25b", "25b networth", "NETWORTH_THRESHOLD", "networth", 2.5e10),
-  def("networth:50b", "50b networth", "NETWORTH_THRESHOLD", "networth", 5e10),
-  def("networth:100b", "100b networth", "NETWORTH_THRESHOLD", "networth", 1e11),
-  def("catacombs:10", "Catacombs 10", "CATACOMBS_LEVEL", "catacombsLevel", 10),
-  def("catacombs:20", "Catacombs 20", "CATACOMBS_LEVEL", "catacombsLevel", 20),
-  def("catacombs:25", "Catacombs 25", "CATACOMBS_LEVEL", "catacombsLevel", 25),
-  def("catacombs:30", "Catacombs 30", "CATACOMBS_LEVEL", "catacombsLevel", 30),
-  def("catacombs:35", "Catacombs 35", "CATACOMBS_LEVEL", "catacombsLevel", 35),
-  def("catacombs:40", "Catacombs 40", "CATACOMBS_LEVEL", "catacombsLevel", 40),
-  def("catacombs:45", "Catacombs 45", "CATACOMBS_LEVEL", "catacombsLevel", 45),
-  def("catacombs:50", "Catacombs 50", "CATACOMBS_LEVEL", "catacombsLevel", 50),
-  def("skill-average:20", "Skill average 20", "SKILL_LEVEL", "skillAverage", 20),
-  def("skill-average:30", "Skill average 30", "SKILL_LEVEL", "skillAverage", 30),
-  def("skill-average:40", "Skill average 40", "SKILL_LEVEL", "skillAverage", 40),
-  def("skill-average:45", "Skill average 45", "SKILL_LEVEL", "skillAverage", 45),
-  def("skill-average:50", "Skill average 50", "SKILL_LEVEL", "skillAverage", 50),
-  def("skill-average:55", "Skill average 55", "SKILL_LEVEL", "skillAverage", 55),
-  def("skill-average:60", "Skill average 60", "SKILL_LEVEL", "skillAverage", 60),
+  def("level:50", "SkyBlock Level 50", "SKYBLOCK_LEVEL", "skyblockLevel", 50, "BRONZE"),
+  def("level:100", "SkyBlock Level 100", "SKYBLOCK_LEVEL", "skyblockLevel", 100, "BRONZE"),
+  def("level:150", "SkyBlock Level 150", "SKYBLOCK_LEVEL", "skyblockLevel", 150, "SILVER"),
+  def("level:200", "SkyBlock Level 200", "SKYBLOCK_LEVEL", "skyblockLevel", 200, "SILVER"),
+  def("level:250", "SkyBlock Level 250", "SKYBLOCK_LEVEL", "skyblockLevel", 250, "GOLD"),
+  def("level:300", "SkyBlock Level 300", "SKYBLOCK_LEVEL", "skyblockLevel", 300, "GOLD"),
+  def("level:350", "SkyBlock Level 350", "SKYBLOCK_LEVEL", "skyblockLevel", 350, "PLATINUM"),
+  def("level:400", "SkyBlock Level 400", "SKYBLOCK_LEVEL", "skyblockLevel", 400, "PLATINUM"),
+  def("networth:1b", "1b networth", "NETWORTH_THRESHOLD", "networth", 1e9, "BRONZE"),
+  def("networth:5b", "5b networth", "NETWORTH_THRESHOLD", "networth", 5e9, "SILVER"),
+  def("networth:10b", "10b networth", "NETWORTH_THRESHOLD", "networth", 1e10, "SILVER"),
+  def("networth:25b", "25b networth", "NETWORTH_THRESHOLD", "networth", 2.5e10, "GOLD"),
+  def("networth:50b", "50b networth", "NETWORTH_THRESHOLD", "networth", 5e10, "GOLD"),
+  def("networth:100b", "100b networth", "NETWORTH_THRESHOLD", "networth", 1e11, "PLATINUM"),
+  def("catacombs:10", "Catacombs 10", "CATACOMBS_LEVEL", "catacombsLevel", 10, "BRONZE"),
+  def("catacombs:20", "Catacombs 20", "CATACOMBS_LEVEL", "catacombsLevel", 20, "BRONZE"),
+  def("catacombs:25", "Catacombs 25", "CATACOMBS_LEVEL", "catacombsLevel", 25, "SILVER"),
+  def("catacombs:30", "Catacombs 30", "CATACOMBS_LEVEL", "catacombsLevel", 30, "SILVER"),
+  def("catacombs:35", "Catacombs 35", "CATACOMBS_LEVEL", "catacombsLevel", 35, "GOLD"),
+  def("catacombs:40", "Catacombs 40", "CATACOMBS_LEVEL", "catacombsLevel", 40, "GOLD"),
+  def("catacombs:45", "Catacombs 45", "CATACOMBS_LEVEL", "catacombsLevel", 45, "PLATINUM"),
+  def("catacombs:50", "Catacombs 50", "CATACOMBS_LEVEL", "catacombsLevel", 50, "PLATINUM"),
+  def("skill-average:20", "Skill average 20", "SKILL_LEVEL", "skillAverage", 20, "BRONZE"),
+  def("skill-average:30", "Skill average 30", "SKILL_LEVEL", "skillAverage", 30, "BRONZE"),
+  def("skill-average:40", "Skill average 40", "SKILL_LEVEL", "skillAverage", 40, "SILVER"),
+  def("skill-average:45", "Skill average 45", "SKILL_LEVEL", "skillAverage", 45, "SILVER"),
+  def("skill-average:50", "Skill average 50", "SKILL_LEVEL", "skillAverage", 50, "GOLD"),
+  def("skill-average:55", "Skill average 55", "SKILL_LEVEL", "skillAverage", 55, "GOLD"),
+  def("skill-average:60", "Skill average 60", "SKILL_LEVEL", "skillAverage", 60, "PLATINUM"),
   // The five `weight:*` defaults were here and are gone (Part III decision 1).
   // Senither weight is frozen at v1 and does not score newer skills or slayers,
   // so a member who spends a month on Hunting sees the number barely move — a

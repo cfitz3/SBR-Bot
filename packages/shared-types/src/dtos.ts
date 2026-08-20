@@ -15,6 +15,8 @@ import type {
   LinkStatus,
   MemberRole,
   MemberStatus,
+  AchievementCategory,
+  AchievementTier,
   MilestoneType,
   ModActionType,
   PermStatus,
@@ -779,6 +781,11 @@ export interface MilestoneDefinitionDTO {
   readonly xpReward: number;
   readonly announce: boolean;
   readonly enabled: boolean;
+  readonly tier: AchievementTier;
+  /** A single emoji shown before the label; null falls back to the tier's. */
+  readonly icon: string | null;
+  /** Unlisted while locked. Detection, announcement and XP are unaffected. */
+  readonly hidden: boolean;
   readonly source: "DEFAULT" | "GUILD";
 }
 
@@ -793,6 +800,10 @@ export interface MilestoneDefinitionInput {
   readonly xpReward: number;
   readonly announce: boolean;
   readonly enabled: boolean;
+  /** Optional so a client written before tiers existed still stores a definition. */
+  readonly tier?: AchievementTier;
+  readonly icon?: string | null;
+  readonly hidden?: boolean;
 }
 
 /**
@@ -838,6 +849,16 @@ export interface AchievementDTO {
   readonly progress: number | null;
   /** ISO-8601 when first reached, or null while outstanding. */
   readonly achievedAt: string | null;
+  readonly tier: AchievementTier;
+  readonly icon: string | null;
+  /** Derived from `metric`, never stored — see `categoryOfMetric`. */
+  readonly category: AchievementCategory;
+  /**
+   * True for an achievement the member is not meant to see coming. An unearned
+   * hidden entry never appears in `upcoming`; it is counted in `hiddenLocked`
+   * instead, so the total still adds up.
+   */
+  readonly hidden: boolean;
 }
 
 /** A member's standing against every achievement their guild recognises. */
@@ -848,6 +869,11 @@ export interface AchievementsDTO {
   readonly upcoming: readonly AchievementDTO[];
   readonly earnedCount: number;
   readonly totalCount: number;
+  /**
+   * How many hidden achievements are still locked. Named as a number rather
+   * than listed, because naming them is the one thing hidden means.
+   */
+  readonly hiddenLocked: number;
   /** Guild XP the earned set has paid out. */
   readonly xpEarned: number;
   /** When the snapshot behind `current` was taken; null if never snapshotted. */

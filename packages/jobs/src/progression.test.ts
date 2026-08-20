@@ -212,6 +212,9 @@ function definition(over: Partial<MilestoneDefinition> = {}): MilestoneDefinitio
     xpReward: 0,
     announce: true,
     enabled: true,
+    tier: "SILVER",
+    icon: null,
+    hidden: false,
     ...over,
   };
 }

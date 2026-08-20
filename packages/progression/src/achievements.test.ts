@@ -16,6 +16,9 @@ function def(over: Partial<MilestoneDefinitionDTO> = {}): MilestoneDefinitionDTO
     xpReward: 500,
     announce: true,
     enabled: true,
+    tier: "GOLD",
+    icon: null,
+    hidden: false,
     source: "DEFAULT",
     ...over,
   };
@@ -143,4 +146,43 @@ test("an unmeasured upcoming sorts behind every measured one", () => {
 test("carries the configured flag through", () => {
   assert.equal(buildAchievements([], [], null, { configured: false }).configured, false);
   assert.equal(buildAchievements([], [], null).configured, true);
+});
+
+test("a locked hidden achievement is counted but not listed", () => {
+  const result = buildAchievements(
+    [def(), def({ key: "secret", metric: "catacombsLevel", threshold: 60, hidden: true })],
+    [],
+    snapshot,
+  );
+  assert.equal(result.hiddenLocked, 1);
+  assert.equal(result.totalCount, 2);
+  assert.equal(result.upcoming.length, 1);
+  assert.ok(!result.upcoming.some((a) => a.key === "secret"));
+});
+
+test("earning a hidden achievement reveals it", () => {
+  const result = buildAchievements(
+    [def({ hidden: true })],
+    [earnedRow()],
+    snapshot,
+  );
+  assert.equal(result.hiddenLocked, 0);
+  assert.equal(result.earned[0]?.key, "networth-10b");
+  assert.equal(result.earned[0]?.hidden, true);
+});
+
+test("category is derived from the metric rather than stored", () => {
+  const result = buildAchievements(
+    [def(), def({ key: "cata-40", metric: "catacombsLevel", threshold: 40 })],
+    [earnedRow()],
+    snapshot,
+  );
+  assert.equal(result.earned[0]?.category, "WEALTH");
+  assert.equal(result.upcoming[0]?.category, "DUNGEONS");
+});
+
+test("tier and icon travel with the definition", () => {
+  const result = buildAchievements([def({ tier: "PLATINUM", icon: "💰" })], [], snapshot);
+  assert.equal(result.upcoming[0]?.tier, "PLATINUM");
+  assert.equal(result.upcoming[0]?.icon, "💰");
 });

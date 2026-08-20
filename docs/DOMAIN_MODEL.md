@@ -642,6 +642,22 @@ every guild.
 | `metric`, `threshold` | which snapshot field, and how much |
 | `xpReward` | credited once, on announce. `0` = recognition only (the default) |
 | `announce`, `enabled` | whether it is posted, whether it is in force |
+| `tier` | `BRONZE`/`SILVER`/`GOLD`/`PLATINUM`. Editorial weight only — the detector never reads it |
+| `icon` | one glyph shown instead of the tier badge, or null |
+| `hidden` | not shown while unearned. Earning it is the reveal |
+
+**Enum — `AchievementTier`:** `BRONZE`, `SILVER`, `GOLD`, `PLATINUM`.
+
+**Category is derived, not stored.** `categoryOfMetric` maps the metric to one of
+`PROGRESSION`, `WEALTH`, `DUNGEONS`, `SKILLS`, `SLAYER`, `COMMUNITY`, `EVENTS`,
+falling back to `PROGRESSION`. A stored category could contradict the metric
+sitting beside it, and an unknown metric from a newer deployment would otherwise
+break a member's `/milestones` rather than land in a sensible group.
+
+**Hidden achievements** are counted in `totalCount` and reported as
+`hiddenLocked` — a number, never a list. Naming one is the only thing hiding it
+was meant to prevent, so an unearned hidden row is excluded from `upcoming`
+entirely; once earned it joins `earned` like any other.
 
 **Relationships:** N—1 `Guild`, 1—N `Milestone`.
 

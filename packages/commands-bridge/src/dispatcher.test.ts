@@ -103,6 +103,10 @@ const achievements: AchievementsDTO = {
       current: 42.5,
       progress: 1,
       achievedAt: "2026-01-02T00:00:00Z",
+      tier: "SILVER",
+      icon: null,
+      category: "SKILLS",
+      hidden: false,
     },
   ],
   upcoming: [
@@ -117,10 +121,15 @@ const achievements: AchievementsDTO = {
       current: 8_200_000_000,
       progress: 0.82,
       achievedAt: null,
+      tier: "PLATINUM",
+      icon: null,
+      category: "WEALTH",
+      hidden: false,
     },
   ],
   earnedCount: 1,
   totalCount: 2,
+  hiddenLocked: 0,
   xpEarned: 250,
   measuredAt: "2026-01-03T00:00:00Z",
   configured: true,
@@ -851,7 +860,7 @@ test("milestones says achievements are off rather than reporting none earned", a
   const off = progression({
     async getAchievements() {
       return ok<AchievementsDTO>({
-        earned: [], upcoming: [], earnedCount: 0, totalCount: 0,
+        earned: [], upcoming: [], earnedCount: 0, totalCount: 0, hiddenLocked: 0,
         xpEarned: 0, measuredAt: null, configured: false,
       });
     },

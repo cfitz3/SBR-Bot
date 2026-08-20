@@ -271,7 +271,10 @@ export const PROGRESS: ProgressSeriesDTO = {
 export const ACHIEVEMENTS: AchievementsDTO = {
   configured: true,
   earnedCount: 2,
-  totalCount: 5,
+  totalCount: 6,
+  // One the member cannot see coming. The card has to say the number without
+  // saying the name, which is the only thing worth testing about hidden.
+  hiddenLocked: 1,
   xpEarned: 750,
   measuredAt: iso(-6 * 3600_000),
   earned: [
@@ -286,6 +289,10 @@ export const ACHIEVEMENTS: AchievementsDTO = {
       current: 42,
       progress: 1,
       achievedAt: iso(-9 * 86_400_000),
+      tier: "GOLD",
+      icon: "⚔️",
+      category: "DUNGEONS",
+      hidden: false,
     },
     {
       key: "sa-50",
@@ -298,6 +305,10 @@ export const ACHIEVEMENTS: AchievementsDTO = {
       current: 51.3,
       progress: 1,
       achievedAt: iso(-40 * 86_400_000),
+      tier: "SILVER",
+      icon: null,
+      category: "SKILLS",
+      hidden: false,
     },
   ],
   upcoming: [
@@ -312,6 +323,10 @@ export const ACHIEVEMENTS: AchievementsDTO = {
       current: 8_240_000_000,
       progress: 0.824,
       achievedAt: null,
+      tier: "PLATINUM",
+      icon: null,
+      category: "WEALTH",
+      hidden: false,
     },
     {
       key: "slayer-3m",
@@ -325,12 +340,17 @@ export const ACHIEVEMENTS: AchievementsDTO = {
       current: null,
       progress: null,
       achievedAt: null,
+      tier: "BRONZE",
+      icon: null,
+      category: "SLAYER",
+      hidden: false,
     },
   ],
 };
 
 export const ACHIEVEMENTS_OFF: AchievementsDTO = {
   configured: false,
+  hiddenLocked: 0,
   earned: [],
   upcoming: [],
   earnedCount: 0,

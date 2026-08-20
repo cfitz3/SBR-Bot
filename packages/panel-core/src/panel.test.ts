@@ -803,12 +803,12 @@ const milestoneService = (): MilestoneDefinitionService =>
         {
           id: null, guildId, key: "networth:1b", label: "1b networth", description: null,
           type: "NETWORTH_THRESHOLD", metric: "networth", threshold: 1e9, xpReward: 500,
-          announce: true, enabled: true, source: "DEFAULT",
+          announce: true, enabled: true, tier: "GOLD", icon: null, hidden: false, source: "DEFAULT",
         },
         {
           id: "d2", guildId, key: "cata:50", label: "Catacombs 50", description: null,
           type: "CATACOMBS_LEVEL", metric: "catacombsLevel", threshold: 50, xpReward: 0,
-          announce: false, enabled: false, source: "GUILD",
+          announce: false, enabled: false, tier: "PLATINUM", icon: null, hidden: false, source: "GUILD",
         },
       ];
     },

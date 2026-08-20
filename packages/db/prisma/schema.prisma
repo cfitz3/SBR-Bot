@@ -196,6 +196,19 @@ enum MilestoneType {
   CUSTOM
 }
 
+/// How much of a deal an achievement is. Guild-set, because two guilds of
+/// different sizes genuinely disagree about what Catacombs 35 means.
+///
+/// There is no matching Category enum: a category follows from the metric
+/// (`categoryOfMetric` in `@sbr/shared-types`), and storing it beside the metric
+/// would create a row that can contradict itself.
+enum AchievementTier {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
 enum SnapshotSource {
   SCHEDULED
   ON_DEMAND
@@ -1198,6 +1211,14 @@ model MilestoneDefinition {
   xpReward    Int           @default(0)
   announce    Boolean       @default(true)
   enabled     Boolean       @default(true)
+  /// Editorial weight, not arithmetic: what the guild considers a big deal.
+  /// Ordering within a category and the badge colour both come from this.
+  tier        AchievementTier @default(BRONZE)
+  /// A single emoji rendered before the label. Null renders the tier's own.
+  icon        String?
+  /// Not listed while locked — a member reads about it when they earn it. It
+  /// still detects, announces and pays like any other.
+  hidden      Boolean       @default(false)
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 

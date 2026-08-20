@@ -47,7 +47,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
 | `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
 | `/progress` | Progression over time vs. snapshots | Linked | `metric?`, `range?` | Embed/chart-link: delta since last snapshot | No snapshots yet for account | DB (`ProfileSnapshot`) + Cache (latest) |
-| `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned (newest first, with XP paid) + closest unearned w/ progress bars, `n/total` headline, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet" | DB (`Milestone`, `MilestoneDefinition`, `ProfileSnapshot`) |
+| `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned grouped by category (rarest tier first, tier badge or icon, XP paid) + the four closest unearned w/ progress bars, `n/total` headline, hidden-locked count, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet"; hidden achievements counted, never named | DB (`Milestone`, `MilestoneDefinition`, `ProfileSnapshot`) |
 
 ---
 
