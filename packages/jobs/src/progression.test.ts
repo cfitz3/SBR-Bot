@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  backfillMilestones,
   detectAndRecord,
   detectMilestones,
   resolveDefinitions,
@@ -12,6 +13,9 @@ import {
   type SnapshotMetrics,
   type SnapshotWrite,
   type TrackedAccount,
+  standingMilestones,
+  type BackfillTarget,
+  type MilestoneBackfillDeps,
 } from "./progression.js";
 
 const NOW = new Date("2026-08-07T12:00:00.000Z");
@@ -275,4 +279,118 @@ test("a definition added after the fact does not fire retroactively", () => {
     metrics({ catacombsLevel: 31 }),
   );
   assert.deepEqual(found, []);
+});
+
+// ─────────────────────────── backfill ───────────────────────────
+
+function target(over: Partial<BackfillTarget> = {}): BackfillTarget {
+  return { minecraftAccountId: "a1", guildId: "g1", discordId: "111", ...over };
+}
+
+/** A one-page backfill over `targets`, with everything else defaulted. */
+function backfillDeps(
+  targets: readonly BackfillTarget[],
+  over: Partial<MilestoneBackfillDeps> = {},
+): MilestoneBackfillDeps & { readonly recorded: MilestoneCandidate[] } {
+  const recorded: MilestoneCandidate[] = [];
+  return {
+    recorded,
+    async listTargets(limit, offset) {
+      return targets.slice(offset, offset + limit);
+    },
+    async latestSnapshot() {
+      return metrics({ catacombsLevel: 31 });
+    },
+    async definitionsFor() {
+      return [definition()];
+    },
+    async record(_t, candidate) {
+      recorded.push(candidate);
+      return true;
+    },
+    ...over,
+  };
+}
+
+test("standings report everything already passed, not just the last crossing", () => {
+  const found = standingMilestones(
+    "a1",
+    [definition({ id: "d1", key: "catacombs:20", threshold: 20 }), definition({ id: "d2", threshold: 30 })],
+    metrics({ catacombsLevel: 31 }),
+  );
+  assert.deepEqual(found.map((f) => f.definitionId), ["d1", "d2"]);
+});
+
+test("a standing under the threshold is not one", () => {
+  assert.deepEqual(standingMilestones("a1", [definition()], metrics({ catacombsLevel: 29 })), []);
+});
+
+test("a missing metric is not a standing, however the definition reads", () => {
+  assert.deepEqual(standingMilestones("a1", [definition()], metrics()), []);
+});
+
+test("the backfill records what an account already stands at", async () => {
+  // The guild's definitions are merged with the platform defaults, so the count
+  // is whatever a level-31 account has passed in total; what this asserts is
+  // that the guild's own definition is among them and the account cleared it.
+  const d = backfillDeps([target()]);
+  const written = await backfillMilestones(d);
+  assert.equal(written, d.recorded.length);
+  assert.ok(d.recorded.some((c) => c.definitionId === "d1"));
+  assert.ok(d.recorded.every((c) => c.minecraftAccountId === "a1"));
+});
+
+test("an account with no snapshot is skipped rather than guessed at", async () => {
+  const d = backfillDeps([target()], { async latestSnapshot() { return null; } });
+  assert.equal(await backfillMilestones(d), 0);
+});
+
+test("a row the store already has does not count as written", async () => {
+  // `record` returning false is the unique-constraint hit: the milestone exists,
+  // so a nightly re-run reports zero rather than the same number every night.
+  const d = backfillDeps([target()], { async record() { return false; } });
+  assert.equal(await backfillMilestones(d), 0);
+});
+
+test("keys narrow the run to the definition that was just added", async () => {
+  const d = backfillDeps([target()], {
+    keys: ["catacombs:20"],
+    async definitionsFor() {
+      return [definition({ id: "d1", key: "catacombs:20", threshold: 20 }), definition({ id: "d2", threshold: 30 })];
+    },
+  });
+  assert.equal(await backfillMilestones(d), 1);
+  assert.equal(d.recorded[0]?.definitionId, "d1");
+});
+
+test("definitions are read once per guild, not once per account", async () => {
+  let reads = 0;
+  const d = backfillDeps([target({ minecraftAccountId: "a1" }), target({ minecraftAccountId: "a2" })], {
+    async definitionsFor() {
+      reads += 1;
+      return [definition()];
+    },
+  });
+  await backfillMilestones(d);
+  assert.equal(reads, 1);
+});
+
+test("paging stops at maxAccounts rather than walking the whole table", async () => {
+  const many = Array.from({ length: 10 }, (_, i) => target({ minecraftAccountId: `a${i}` }));
+  const d = backfillDeps(many, { pageSize: 2, maxAccounts: 4 });
+  await backfillMilestones(d);
+  assert.deepEqual([...new Set(d.recorded.map((c) => c.minecraftAccountId))], ["a0", "a1", "a2", "a3"]);
+});
+
+test("a short page ends the walk", async () => {
+  let calls = 0;
+  const d = backfillDeps([target()], {
+    pageSize: 10,
+    async listTargets(limit, offset) {
+      calls += 1;
+      return [target()].slice(offset, offset + limit);
+    },
+  });
+  await backfillMilestones(d);
+  assert.equal(calls, 1);
 });

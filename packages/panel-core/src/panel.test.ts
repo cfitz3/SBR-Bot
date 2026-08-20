@@ -229,6 +229,7 @@ function reads(over: Partial<PanelReads> = {}): PanelReads {
     async eventStandings() { return []; },
     async listTickets() { return []; },
     async listJobHealth() { return []; },
+    async pendingMilestones() { return 0; },
   };
   return { ...base, ...over };
 }
@@ -399,6 +400,38 @@ test("a job that has never run is stale, not silently fresh", async () => {
     reads: reads({ async listJobHealth() { return [job("profile-snapshot", null)]; } }),
   }).loadHealth(session(), "g1");
   assert.equal(r.data?.jobs[0]?.stale, true);
+});
+
+test("achievements the announcer is holding are counted on Health", async () => {
+  const r = await svc({
+    roles: admin(),
+    reads: reads({ async pendingMilestones() { return 7; } }),
+    config: configService({ channels: {} }),
+  }).loadHealth(session(), "g1");
+  assert.equal(r.data?.waiting.milestones, 7);
+  // The usual cause, and the thing the page tells the reader to go and fix.
+  assert.equal(r.data?.waiting.channelBound, false);
+});
+
+test("a bound milestones channel makes the same backlog read as retries", async () => {
+  const r = await svc({
+    roles: admin(),
+    reads: reads({ async pendingMilestones() { return 2; } }),
+    config: configService({ channels: { milestones: "123456789012345678" } }),
+  }).loadHealth(session(), "g1");
+  assert.equal(r.data?.waiting.channelBound, true);
+});
+
+test("an unreadable pending count does not take the jobs table down with it", async () => {
+  const r = await svc({
+    roles: admin(),
+    reads: reads({
+      async pendingMilestones() { throw new Error("db down"); },
+      async listJobHealth() { return [job("profile-snapshot", HOUR)]; },
+    }),
+  }).loadHealth(session(), "g1");
+  assert.equal(r.data?.waiting.milestones, 0);
+  assert.equal(r.data?.jobs.length, 1);
 });
 
 // ── the remaining pages ──

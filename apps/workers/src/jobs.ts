@@ -33,6 +33,7 @@ import {
   defineEventTransitionJob,
   defineGuildScanJob,
   defineInactivityScanJob,
+  defineMilestoneBackfillJob,
   defineMilestoneDetectJob,
   defineEventBoardJob,
   defineEventTrackingJob,
@@ -43,6 +44,7 @@ import {
   defineRosterSyncJob,
   defineTicketSweepJob,
   defineXpAggregateJob,
+  backfillMilestones,
   detectAndRecord,
   dispatchReminders,
   ingestAnalytics,
@@ -326,6 +328,28 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
       return recorded;
     }),
     lockKey: keys.lockJob("milestones"),
+  };
+
+  /**
+   * The catch-up pass. Everything it writes is born announced, so a guild that
+   * turns achievements on today sees its history in the panel and hears nothing
+   * in its channel. No XP either: paying retroactively for thresholds crossed
+   * before the guild had a ledger would hand out months of rewards overnight.
+   */
+  const milestoneBackfill: JobDefinition<number> = {
+    ...defineMilestoneBackfillJob(async () => {
+      const written = await backfillMilestones({
+        listTargets: (limit, offset) => snapshotJobRepository.listAccountsForBackfill(limit, offset),
+        latestSnapshot: (id) => snapshotJobRepository.latestSnapshot(id),
+        definitionsFor: async (guildId) =>
+          guildId === null ? [] : milestoneDefinitionRepository.listForDetection(guildId),
+        record: (target, candidate) =>
+          snapshotJobRepository.record(candidate, target.guildId, target.discordId, true),
+      });
+      if (written > 0) ctx.log.info("milestones back-filled", { written });
+      return written;
+    }),
+    lockKey: keys.lockJob("milestone-backfill"),
   };
 
   const xpAggregate: JobDefinition<number> = {
@@ -772,6 +796,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     resources,
     snapshot,
     milestones,
+    milestoneBackfill,
     eventTransition,
     reminders,
     rosterSync,

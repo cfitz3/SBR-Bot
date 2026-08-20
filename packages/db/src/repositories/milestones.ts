@@ -161,12 +161,16 @@ export const milestoneDefinitionRepository = {
  * beats never saying it.
  */
 export const milestoneAnnouncementRepository: MilestoneAnnouncerPort = {
-  async listPending(limit: number): Promise<readonly PendingMilestoneDTO[]> {
+  async listPending(limit: number, excludeGuildIds: readonly string[] = []): Promise<readonly PendingMilestoneDTO[]> {
     const rows = await prisma.milestone.findMany({
       // Guild-less rows have nowhere to be posted. They stay unannounced rather
       // than being marked done, so linking the account later can still surface
-      // them if we ever choose to.
-      where: { announced: false, guildId: { not: null } },
+      // them if we ever choose to. The exclusion list is the same idea for
+      // guilds that have a home but have not bound a channel to it.
+      where: {
+        announced: false,
+        guildId: excludeGuildIds.length === 0 ? { not: null } : { not: null, notIn: [...excludeGuildIds] },
+      },
       orderBy: { achievedAt: "asc" },
       take: limit,
       select: {

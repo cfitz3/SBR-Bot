@@ -60,9 +60,26 @@ export async function renderHealth(host: HTMLElement, guildId: string): Promise<
       "div",
       {},
       pageTitle(t("title"), subtitle),
+      result.data.waiting.milestones > 0 ? card(t("cardWaiting"), waitingBody(result.data.waiting)) : null,
       card(t("cardProcesses"), servicesBody(services)),
       card(t("cardWorkers"), body),
     ),
+  );
+}
+
+/**
+ * Achievements the announcer is holding.
+ *
+ * Only rendered when there are some, and it leads the page when it is: an
+ * unbound channel is silent everywhere else, and this is the one place the
+ * platform can say so.
+ */
+function waitingBody(waiting: HealthVM["waiting"]): HTMLElement {
+  return h(
+    "div",
+    { class: "job-cell" },
+    h("span", {}, t("waitingCount").replace("{n}", String(waiting.milestones))),
+    h("span", { class: "muted" }, waiting.channelBound ? t("waitingChannelBound") : t("waitingNoChannel")),
   );
 }
 

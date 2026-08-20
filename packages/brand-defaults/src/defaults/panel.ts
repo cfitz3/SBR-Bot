@@ -332,6 +332,15 @@ export const DEFAULT_PANEL = {
     subtitleJobsUnhealthy: "{n} job(s) need attention",
     cardProcesses: "Processes",
     cardWorkers: "Workers",
+    /**
+     * The announcer holds achievements it cannot post rather than discarding
+     * them, so this card is a to-do rather than an error: the two lines say what
+     * is waiting and what would release it.
+     */
+    cardWaiting: "Waiting to be announced",
+    waitingCount: "{n} achievement(s) earned but not yet posted.",
+    waitingNoChannel: "No milestones channel is bound. Set one in Settings and the backlog posts on the next pass.",
+    waitingChannelBound: "A channel is bound, so these are retries — check the Workers table below for a failing announcer.",
     colJob: "Job",
     colStatus: "Status",
     colLastRun: "Last run",

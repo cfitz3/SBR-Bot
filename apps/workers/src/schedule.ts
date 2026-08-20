@@ -84,6 +84,11 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // Five minutes behind the snapshot pass, so it compares against rows that
   // exist rather than racing the writer.
   { name: "milestone-detect", repeat: { pattern: "12,42 * * * *" }, priority: LANE.bulk },
+  // Daily, in the quiet hour, and mostly a no-op: it exists so a definition
+  // added today reflects the members who already satisfy it. `milestone-detect`
+  // only reports crossings, so without this a new threshold would stay empty
+  // for everyone already past it — forever, not just until they next play.
+  { name: "milestone-backfill", repeat: { pattern: "41 4 * * *" }, priority: LANE.bulk },
   { name: "guild-roster-sync", repeat: { pattern: "9,39 * * * *" }, priority: LANE.bulk },
   // The in-game roster cache, on the 6-hour cadence its TTL is written against —
   // offset from midnight so a scan lands shortly *before* the cache goes stale

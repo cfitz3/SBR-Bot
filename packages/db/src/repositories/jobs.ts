@@ -404,6 +404,7 @@ export const snapshotJobRepository = {
     candidate: MilestoneCandidate,
     guildId: string | null,
     discordId: string | null = null,
+    announced: boolean = !candidate.announce,
   ): Promise<boolean> {
     try {
       await prisma.milestone.create({
@@ -421,8 +422,10 @@ export const snapshotJobRepository = {
           // there is nothing left to say about it, and the announcer's queue is
           // exactly "rows still owed a message". Encoding the intent here keeps
           // the sweep a single indexed read instead of a join that re-decides
-          // visibility every pass.
-          announced: !candidate.announce,
+          // visibility every pass. The backfill overrides it to `true` for the
+          // same reason from the other direction: a threshold crossed before
+          // the bot existed is history, not news.
+          announced,
         },
       });
       return true;
@@ -449,7 +452,11 @@ export const snapshotJobRepository = {
    * apply deterministic rather than a race between two workers.
    */
   async listAccountsForDetection(limit: number): Promise<readonly DetectionTarget[]> {
-    const accountIds = await snapshotJobRepository.listAccountsWithHistory(limit);
+    return snapshotJobRepository.resolveTargets(await snapshotJobRepository.listAccountsWithHistory(limit));
+  },
+
+  /** Attach the guild and member context to a page of account ids. */
+  async resolveTargets(accountIds: readonly string[]): Promise<readonly DetectionTarget[]> {
     if (accountIds.length === 0) return [];
 
     const links = await prisma.linkedAccount.findMany({
@@ -490,6 +497,29 @@ export const snapshotJobRepository = {
   },
 
   /** Accounts with at least two snapshots — anything less has nothing to compare. */
+  /**
+   * Accounts to back-fill, paged in a stable order.
+   *
+   * One snapshot is enough here, unlike detection's two: standings are read
+   * from the newest row alone, so a member captured for the first time this
+   * morning still has thresholds worth recording.
+   */
+  async listAccountsForBackfill(limit: number, offset: number): Promise<readonly DetectionTarget[]> {
+    const rows = await prisma.profileSnapshot.groupBy({
+      by: ["minecraftAccountId"],
+      orderBy: { minecraftAccountId: "asc" },
+      take: limit,
+      skip: offset,
+    });
+    return snapshotJobRepository.resolveTargets(rows.map((r) => r.minecraftAccountId));
+  },
+
+  /** The newest snapshot's metrics, or null when the account has none. */
+  async latestSnapshot(minecraftAccountId: string): Promise<SnapshotMetrics | null> {
+    const [newest] = await snapshotJobRepository.recentSnapshots(minecraftAccountId);
+    return newest ?? null;
+  },
+
   async listAccountsWithHistory(limit: number): Promise<readonly string[]> {
     const rows = await prisma.profileSnapshot.groupBy({
       by: ["minecraftAccountId"],

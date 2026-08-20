@@ -1059,6 +1059,10 @@ export const panelRepository = {
 
   // ─────────────────────────── health ───────────────────────────
 
+  async pendingMilestones(guildId: string): Promise<number> {
+    return prisma.milestone.count({ where: { guildId, announced: false } });
+  },
+
   async listJobHealth(): Promise<readonly JobHealthRow[]> {
     const dayAgo = new Date(Date.now() - 86_400_000);
 

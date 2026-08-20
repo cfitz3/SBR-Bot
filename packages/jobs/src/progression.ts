@@ -322,3 +322,132 @@ export async function detectAndRecord(minecraftAccountId: string, deps: Mileston
   }
   return recorded;
 }
+
+// ─────────────────────────────── backfill ───────────────────────────────
+
+/**
+ * Everything a member already satisfies, whether or not they crossed it here.
+ *
+ * The standings counterpart to `detectMilestones`, and the reason the two are
+ * separate functions rather than one with a flag: crossings are what a guild
+ * celebrates, standings are what it *knows*, and only the first is news. Using
+ * standings for announcements would congratulate a member for a threshold they
+ * passed eight months before the bot existed.
+ */
+export function standingMilestones(
+  minecraftAccountId: string,
+  definitions: readonly MilestoneDefinition[],
+  current: SnapshotMetrics,
+): readonly MilestoneCandidate[] {
+  const found: MilestoneCandidate[] = [];
+  for (const d of definitions) {
+    if (!d.enabled) continue;
+    const value = current[d.metric];
+    if (value === null || value < d.threshold) continue;
+    found.push({
+      minecraftAccountId,
+      type: d.type,
+      metric: d.metric,
+      thresholdValue: d.threshold,
+      definitionId: d.id,
+      key: d.key,
+      label: d.label,
+      xpReward: d.xpReward,
+      announce: d.announce,
+    });
+  }
+  return found;
+}
+
+/** An account to catch up, with the guild whose definitions apply. */
+export interface BackfillTarget {
+  readonly minecraftAccountId: string;
+  readonly guildId: string | null;
+  readonly discordId: string | null;
+}
+
+export interface MilestoneBackfillDeps {
+  /** Accounts with at least one snapshot, in a stable order, paged. */
+  listTargets(limit: number, offset: number): Promise<readonly BackfillTarget[]>;
+  /** The newest snapshot for an account, or null if it somehow has none. */
+  latestSnapshot(minecraftAccountId: string): Promise<SnapshotMetrics | null>;
+  /** What that guild recognises. The defaults are layered in by the job. */
+  definitionsFor(guildId: string | null): Promise<readonly MilestoneDefinition[]>;
+  /**
+   * Write the row as *already announced*. Returns false when it existed, which
+   * is the common case on a re-run and is not an error.
+   */
+  record(target: BackfillTarget, candidate: MilestoneCandidate): Promise<boolean>;
+  /**
+   * Restrict to these definition keys.
+   *
+   * This is how a newly added definition is caught up without re-walking every
+   * threshold in the catalogue: the guild adds "Catacombs 45", the backfill
+   * runs for that key alone, and everybody already past it gets a silent row —
+   * so the definition starts life reflecting reality instead of announcing
+   * itself to half the guild the next time anyone gains a level.
+   */
+  keys?: readonly string[];
+  /** Accounts per page. */
+  pageSize?: number;
+  /** Hard cap on accounts examined, so one run cannot walk forever. */
+  maxAccounts?: number;
+}
+
+const DEFAULT_BACKFILL_PAGE = 100;
+const DEFAULT_BACKFILL_MAX = 5_000;
+
+/**
+ * Record every threshold the guild's members have already passed, silently.
+ *
+ * Without this the achievement system is stillborn: `detectMilestones` reports
+ * crossings, so on the day it goes live a guild of long-standing members has
+ * nothing — and the first member to gain a level gets congratulated for a
+ * SkyBlock Level 100 they reached last year while everyone else still shows
+ * zero. The rows are written with the announcement flag already set, so the
+ * backlog is caught up in the database and never in the channel.
+ *
+ * Returns how many rows were created. A second run creates none: the unique
+ * constraint on `(account, type, metric, threshold)` is what makes it safe to
+ * run whenever a definition is added.
+ */
+export async function backfillMilestones(deps: MilestoneBackfillDeps): Promise<number> {
+  const pageSize = deps.pageSize ?? DEFAULT_BACKFILL_PAGE;
+  const max = deps.maxAccounts ?? DEFAULT_BACKFILL_MAX;
+  const only = deps.keys === undefined ? null : new Set(deps.keys);
+
+  // One read per guild rather than per account: a backfill is mostly the same
+  // handful of guilds, and definitions cannot change mid-run.
+  const byGuild = new Map<string, readonly MilestoneDefinition[]>();
+  const definitionsFor = async (guildId: string | null): Promise<readonly MilestoneDefinition[]> => {
+    const cacheKey = guildId ?? "";
+    const cached = byGuild.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const resolved = resolveDefinitions(await deps.definitionsFor(guildId));
+    const filtered = only === null ? resolved : resolved.filter((d) => only.has(d.key));
+    byGuild.set(cacheKey, filtered);
+    return filtered;
+  };
+
+  let written = 0;
+  let seen = 0;
+  for (let offset = 0; seen < max; offset += pageSize) {
+    const page = await deps.listTargets(Math.min(pageSize, max - seen), offset);
+    if (page.length === 0) break;
+    seen += page.length;
+
+    for (const target of page) {
+      const current = await deps.latestSnapshot(target.minecraftAccountId);
+      if (current === null) continue;
+      const definitions = await definitionsFor(target.guildId);
+      if (definitions.length === 0) continue;
+
+      for (const candidate of standingMilestones(target.minecraftAccountId, definitions, current)) {
+        if (await deps.record(target, candidate)) written += 1;
+      }
+    }
+
+    if (page.length < pageSize) break;
+  }
+  return written;
+}

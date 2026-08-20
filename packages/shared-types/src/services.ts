@@ -299,8 +299,14 @@ export interface TicketConfigService {
  * milestone entirely. Duplicated praise is the better failure.
  */
 export interface MilestoneAnnouncerPort {
-  /** Unannounced milestones for guilds, oldest first. */
-  listPending(limit: number): Promise<readonly PendingMilestoneDTO[]>;
+  /**
+   * Unannounced milestones for guilds, oldest first.
+   *
+   * `excludeGuildIds` is how the announcer avoids head-of-line blocking: a
+   * guild with no milestones channel keeps its rows, and asking again without
+   * it is what stops those rows starving every other guild behind them.
+   */
+  listPending(limit: number, excludeGuildIds?: readonly string[]): Promise<readonly PendingMilestoneDTO[]>;
   /** Flip the flag once posted. Returns rows changed. */
   markAnnounced(ids: readonly string[]): Promise<number>;
 }

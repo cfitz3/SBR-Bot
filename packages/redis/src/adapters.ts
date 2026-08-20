@@ -520,6 +520,7 @@ export const RUNNABLE_JOBS: readonly string[] = [
   "discord-member-sync",
   "profile-snapshot",
   "milestone-detect",
+  "milestone-backfill",
   "xp-aggregate",
   "analytics-rollup",
   "bazaar-refresh",

@@ -382,4 +382,12 @@ export interface PanelReads {
   eventStandings(eventId: string, limit?: number): Promise<readonly EventStandingRow[]>;
   listTickets(guildId: string, limit?: number): Promise<readonly TicketDTO[]>;
   listJobHealth(): Promise<readonly JobHealth[]>;
+  /**
+   * How many of this guild's milestones are still waiting to be announced.
+   *
+   * Deliverability is not part of the question: the announcer only leaves a row
+   * pending when it has nowhere to post it or the post failed, so a number here
+   * beside an unbound `milestones` channel is the whole diagnosis.
+   */
+  pendingMilestones(guildId: string): Promise<number>;
 }

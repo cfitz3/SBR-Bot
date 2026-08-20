@@ -153,6 +153,26 @@ export function defineMilestoneDetectJob(detect: () => Promise<number>): JobDefi
 }
 
 /**
+ * milestone-backfill: record thresholds members already passed, silently.
+ *
+ * Scheduled daily rather than run once at install, because it is also how a
+ * newly added definition catches up: `milestone-detect` reports crossings, so a
+ * threshold added after half the guild passed it would never fire for them. A
+ * long lock and no retries — it walks every account, and a second copy racing
+ * the first would only fight the unique constraint.
+ */
+export function defineMilestoneBackfillJob(backfill: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "milestone-backfill",
+    queue: "progression",
+    lockKey: "lock:job:milestone-backfill",
+    lockTtlMs: 30 * 60_000,
+    maxRetries: 0,
+    handler: backfill,
+  };
+}
+
+/**
  * event-transition: move events through SCHEDULED → LIVE → COMPLETED.
  *
  * Short lock, generous retries: it is cheap, purely database-local, and an event

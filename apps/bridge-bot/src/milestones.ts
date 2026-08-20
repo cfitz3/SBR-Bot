@@ -31,57 +31,81 @@ export interface MilestoneAnnouncerDeps {
 }
 
 /**
+ * How many times one pass will re-ask for work after excluding a guild it
+ * cannot deliver to. Bounds the pass at a handful of queries on a fleet where
+ * several guilds are unconfigured at once.
+ */
+const MAX_FETCHES = 4;
+
+/**
  * Drain up to `limit` pending announcements. Returns how many were posted.
  *
- * Milestones for a guild with no `milestones` channel are marked announced
- * without being posted. That loses them, and the alternative loses more: the
- * queue is read oldest-first across every guild, so rows that can never be
- * delivered would sit at the head of it and starve every other guild's
- * announcements behind them. The count is logged so an unconfigured channel is
- * visible rather than silent.
+ * A guild with no `milestones` channel keeps its rows unannounced. They are the
+ * guild's achievements — throwing them away to keep a queue tidy would mean the
+ * day somebody finally binds a channel, the backlog it was waiting for is gone.
+ * The Health page reports the count (`WEB_PANEL.md §3.11`), so the fix is
+ * visible rather than buried in a log line.
+ *
+ * Head-of-line blocking is avoided by asking again without that guild rather
+ * than by consuming its rows: the queue is read oldest-first across the fleet,
+ * so an unconfigured guild would otherwise sit at the head of it forever.
  */
 export async function announceMilestonesOnce(
   deps: MilestoneAnnouncerDeps,
   limit: number = MILESTONE_ANNOUNCE_BATCH,
 ): Promise<number> {
-  const pending = await deps.milestones.listPending(limit);
-  if (pending.length === 0) return 0;
-
   // One channel lookup per guild, not per milestone: a batch is usually one
   // guild's worth, and the binding cannot change mid-pass.
   const channels = new Map<string, string | null>();
+  const undeliverable = new Set<string>();
   const posted: string[] = [];
-  const undeliverable: string[] = [];
+  let waiting = 0;
 
-  for (const milestone of pending) {
-    if (!channels.has(milestone.guildId)) {
-      channels.set(milestone.guildId, await deps.getChannel(milestone.guildId).catch(() => null));
-    }
-    const channelId = channels.get(milestone.guildId) ?? null;
-    if (channelId === null) {
-      undeliverable.push(milestone.id);
-      continue;
+  for (let fetch = 0; fetch < MAX_FETCHES && posted.length < limit; fetch += 1) {
+    const pending = await deps.milestones.listPending(limit - posted.length, [...undeliverable]);
+    if (pending.length === 0) break;
+
+    const before = undeliverable.size;
+    const round: string[] = [];
+    for (const milestone of pending) {
+      if (!channels.has(milestone.guildId)) {
+        channels.set(milestone.guildId, await deps.getChannel(milestone.guildId).catch(() => null));
+      }
+      const channelId = channels.get(milestone.guildId) ?? null;
+      if (channelId === null) {
+        undeliverable.add(milestone.guildId);
+        waiting += 1;
+        continue;
+      }
+
+      const ok = await deps
+        .post(channelId, renderMilestoneEmbed(milestone), milestone.discordId)
+        .catch(() => false);
+      // A failed post stays pending. The next pass retries it, which is the right
+      // behaviour for a transient outage and a visible one for a lasting
+      // permissions problem.
+      if (ok) round.push(milestone.id);
+      else deps.log.warn("milestone announcement did not land", { id: milestone.id, channelId });
     }
 
-    const ok = await deps
-      .post(channelId, renderMilestoneEmbed(milestone), milestone.discordId)
-      .catch(() => false);
-    // A failed post stays pending. The next pass retries it, which is the right
-    // behaviour for a transient outage and a visible one for a lasting
-    // permissions problem.
-    if (ok) posted.push(milestone.id);
-    else deps.log.warn("milestone announcement did not land", { id: milestone.id, channelId });
+    // Flushed per round, not at the end: the next query has to stop returning
+    // what this round already posted, and a crash here loses nothing.
+    if (round.length > 0) {
+      await deps.milestones.markAnnounced(round);
+      posted.push(...round);
+    }
+
+    // Nothing new was excluded, so asking again would return the same rows.
+    if (undeliverable.size === before) break;
   }
 
-  if (undeliverable.length > 0) {
-    deps.log.info("milestones dropped — no milestones channel bound", {
-      count: undeliverable.length,
-      guilds: [...new Set(pending.filter((m) => undeliverable.includes(m.id)).map((m) => m.guildId))],
+  if (waiting > 0) {
+    deps.log.info("milestones waiting on a channel", {
+      seen: waiting,
+      guilds: [...undeliverable],
     });
   }
 
-  const settled = [...posted, ...undeliverable];
-  if (settled.length > 0) await deps.milestones.markAnnounced(settled);
   return posted.length;
 }
 

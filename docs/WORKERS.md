@@ -22,6 +22,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `resources-refresh` | Repeatable | daily | Overwrite resource keys by name | Backoff; safe to replay | Reference data stale (low impact) |
 | `profile-snapshot` | Repeatable + on-demand | tracked members ~6–12 h, spread; **event-tracked cohort sub-hourly** (see §2.5) | Upsert by `(uuid,profileId,captureDate[,seq])` | Backoff; per-member requeue | Progression/milestones lag; **event leaderboards go stale** |
 | `milestone-detect` | Event (after snapshot) | per snapshot | Guard by `Milestone` unique + `announced` flag | Backoff; dedup on unique | Missed/late announcements only |
+| `milestone-backfill` | Cron | daily 04:41 | Guard by `Milestone` unique; writes pre-announced | No retry; lock 30 min | New definitions unreflected for a day |
 | `reminder-dispatch` | Scheduled (delayed jobs) | at offsets before events | Mark reminder sent (`reminderState`) | Backoff; skip if already sent | Missed/late reminder pings |
 | `event-transition` | Repeatable + delayed | every 1–5 min / at boundaries | Idempotent state guard (only valid transitions) | Backoff; re-evaluate from truth | Event status lags (SCHEDULED→LIVE→COMPLETED) |
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
@@ -133,6 +134,16 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Idempotency:** `Milestone` unique constraint on `(account, type, threshold)` + `announced` flag prevents duplicate detection/announcement.
 - **Retry:** backoff; dedup on unique so replay is safe.
 - **Failure impact:** a milestone announcement is missed or late — never double-announced.
+
+### 2.6b `milestone-backfill`
+- **Trigger / frequency:** scheduled daily (`41 4 * * *`), and runnable by hand from Health.
+- **Inputs:** every tracked account's newest `ProfileSnapshot`, and the definitions in force for its guild.
+- **Outputs:** `Milestone` rows for **standings** — everything the account is already past — rather than for crossings.
+- **Why it exists.** `milestone-detect` compares two snapshots, so it only ever fires on the moment somebody crosses a line. A definition added today would therefore never fire for the members who passed it last year, and on a fresh install every member starts with nothing. This pass closes that gap within a day.
+- **Rows are written pre-announced and award no XP.** A backfill that announced would spend a night posting a guild's entire history into a channel, and one that paid would hand out months of XP overnight. What it produces is a record, not an event.
+- **Idempotency:** the same `Milestone` unique constraint. A re-run reports zero written, which is what makes a nightly cadence safe.
+- **Retry:** none (`maxRetries: 0`), global lock, 30 min TTL. There is nothing time-sensitive here; tomorrow's run is the retry.
+- **Failure impact:** newly added definitions stay unreflected for another day. Nothing already recorded is affected.
 
 ### 2.7 `reminder-dispatch`
 - **Trigger / frequency:** **delayed jobs** enqueued when an event is created, firing at configured offsets (e.g. 24h/1h before `Event.startsAt`).

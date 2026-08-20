@@ -539,6 +539,18 @@ export interface HealthVM {
    */
   readonly jobs: readonly (JobHealth & { readonly stale: boolean; readonly runnable: boolean })[];
   readonly services: readonly ServiceHealthVM[];
+  /**
+   * Achievements the announcer is holding rather than posting.
+   *
+   * It lives on Health rather than on the Milestones page because it is not a
+   * configuration question — the definitions are fine, the channel is missing —
+   * and Health is where a reader already goes to ask what is not working.
+   */
+  readonly waiting: {
+    readonly milestones: number;
+    /** False when no `milestones` channel is bound, which is the usual cause. */
+    readonly channelBound: boolean;
+  };
 }
 
 export type PageResult<T> =
@@ -1182,7 +1194,7 @@ export class PanelService {
 
     // Liveness failing must not blank the job table: an unreachable Redis is
     // itself something the reader wants to see the rest of the page during.
-    const [jobs, beats] = await Promise.all([
+    const [jobs, beats, pendingMilestones, config] = await Promise.all([
       this.d.reads.listJobHealth(),
       this.d.heartbeats?.list().catch((error: unknown) => {
         this.log.warn("heartbeat read failed", {
@@ -1191,6 +1203,11 @@ export class PanelService {
         });
         return [] as const;
       }) ?? Promise.resolve([] as const),
+      // A count that cannot be read is reported as zero rather than failing the
+      // page: this is a hint, and the jobs table beside it is the reason to be
+      // here.
+      this.d.reads.pendingMilestones(guildId).catch(() => 0),
+      this.d.config.get(guildId),
     ]);
 
     const now = Date.now();
@@ -1207,6 +1224,11 @@ export class PanelService {
           return { ...j, stale, runnable: runnable.includes(j.type) };
         }),
         services: gradeServices(beats, now),
+        waiting: {
+          milestones: pendingMilestones,
+          channelBound:
+            config.ok && config.value !== null && (config.value.channels.milestones ?? "") !== "",
+        },
       },
     };
   }
