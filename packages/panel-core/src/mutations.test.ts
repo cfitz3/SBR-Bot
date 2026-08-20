@@ -32,7 +32,7 @@ import { DEFAULT_POLICY, SCREENING_POLICY_KEY, serializePolicy } from "@sbr/scre
 import { ROLE_POLICY_SETTING_KEY } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import type { PanelSession, RoleResolver } from "./access.js";
-import type { PermissionExceptionStore } from "./reads.js";
+import type { PermissionExceptionStore, RolesInsight } from "./reads.js";
 import type { EventEffects, TicketEffects } from "./mutations.js";
 import {
   MANUAL_JOB_COOLDOWN_MS,
@@ -65,6 +65,26 @@ interface Recorded {
 }
 
 /** A config service that records what it was asked to do and answers `result`. */
+/**
+ * The dry run's roster, and the refusal list it can clear.
+ *
+ * Empty by default: most of these tests are about what the mutation refuses to
+ * do, and a preview over nobody still has to answer honestly rather than throw.
+ */
+function rolesInsightRecorder(
+  recorded: Recorded,
+  previewMembers?: RolesInsight["previewMembers"],
+): RolesInsight {
+  return {
+    previewMembers:
+      previewMembers ??
+      (async () => ({ members: [], total: 0 })),
+    async pendingDirty() { return 0; },
+    async refusals() { return []; },
+    async clearRefusals(guildId) { recorded.calls.push({ method: "clearRefusals", args: [guildId] }); },
+  };
+}
+
 function configRecorder(
   recorded: Recorded,
   result: Result<void> = ok(undefined),
@@ -416,6 +436,10 @@ function make(
     noExceptions?: boolean;
     /** What `remove` reports back: false is "another admin got there first". */
     exceptionRemoved?: boolean;
+    /** Same, for a deployment with no roster to preview role changes against. */
+    noRolesInsight?: boolean;
+    /** The roster the dry run reads, when there is one. */
+    previewMembers?: RolesInsight["previewMembers"];
   } = {},
 ) {
   const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
@@ -453,6 +477,9 @@ function make(
     ...(over.noExceptions === true
       ? {}
       : { permissionExceptions: exceptionRecorder(recorded, over.exceptionRemoved ?? true) }),
+    ...(over.noRolesInsight === true
+      ? {}
+      : { rolesInsight: rolesInsightRecorder(recorded, over.previewMembers) }),
     limiter: limiter(recorded, over.blocked ?? []),
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
@@ -2896,4 +2923,197 @@ test("an icon of whitespace is no icon at all", async () => {
 
   assert.equal(result.ok, true);
   assert.equal((recorded.calls[0]?.args[1] as Record<string, unknown>)["icon"], null);
+});
+
+// ── roles & welcome ──
+
+const rolePolicy = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  enabled: true,
+  rules: [
+    {
+      key: "member",
+      label: "Guild member",
+      trigger: { kind: "IN_GUILD" },
+      roleId: "555555555555555555",
+      revokeWhenUnqualified: true,
+      enabled: true,
+    },
+  ],
+  ...over,
+});
+
+/** One member for the dry run: in the guild, holding nothing, owed nothing. */
+const previewMember = (over: Record<string, unknown> = {}) => ({
+  facts: {
+    discordId: "1",
+    inGuild: true,
+    linked: false,
+    guildRank: null,
+    xpLevel: 0,
+    achievementKeys: [] as readonly string[],
+    eventsAttended: 0,
+  },
+  heldRoleIds: [] as readonly string[],
+  ledger: [] as readonly { readonly ruleKey: string; readonly roleId: string }[],
+  ...over,
+});
+
+test("an ADMIN saving auto-roles stores the normalised policy and counts the active rules", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.saveAutoRoles(session(), "g1", rolePolicy());
+
+  assert.equal(result.ok, true);
+  assert.match(result.ok === true ? (result.note ?? "") : "", /1 of 1 rule/);
+  const call = recorded.calls.find((c) => c.method === "setSetting");
+  assert.equal(call?.args[1], "roles.auto");
+  const stored = call?.args[2] as { enabled: boolean; rules: readonly Record<string, unknown>[] };
+  assert.equal(stored.enabled, true);
+  assert.equal(stored.rules[0]?.["key"], "member");
+});
+
+test("a rule with no role never reaches the setting", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.saveAutoRoles(
+    session(),
+    "g1",
+    rolePolicy({ rules: [{ key: "member", trigger: { kind: "IN_GUILD" } }] }),
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(recorded.calls.some((c) => c.method === "setSetting"), false);
+});
+
+test("two rules sharing a key are refused: the ledger treats a key as an identity", async () => {
+  const { mutations } = make();
+
+  const result = await mutations.saveAutoRoles(
+    session(),
+    "g1",
+    rolePolicy({
+      rules: [
+        { key: "member", trigger: { kind: "IN_GUILD" }, roleId: "1" },
+        { key: "member", trigger: { kind: "LINKED" }, roleId: "2" },
+      ],
+    }),
+  );
+
+  assert.equal(result.ok, false);
+});
+
+test("a moderator may preview but not save", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "MODERATOR" } });
+
+  const saved = await mutations.saveAutoRoles(session(), "g1", rolePolicy());
+  assert.equal(saved.ok, false);
+
+  const previewed = await mutations.previewAutoRoles(session(), "g1", rolePolicy());
+  assert.equal(previewed.ok, true);
+  assert.equal(recorded.calls.some((c) => c.method === "setSetting"), false);
+});
+
+test("the dry run counts what would happen and writes nothing", async () => {
+  const { mutations, recorded } = make({
+    async previewMembers() {
+      return {
+        members: [
+          // Qualifies, holds nothing: one grant.
+          previewMember(),
+          // Qualifies and already holds it: no grant, and still no revoke.
+          previewMember({
+            facts: { ...previewMember().facts, discordId: "2" },
+            heldRoleIds: ["555555555555555555"],
+            ledger: [{ ruleKey: "member", roleId: "555555555555555555" }],
+          }),
+          // Left the guild, and we granted it: the one revoke.
+          previewMember({
+            facts: { ...previewMember().facts, discordId: "3", inGuild: false },
+            heldRoleIds: ["555555555555555555"],
+            ledger: [{ ruleKey: "member", roleId: "555555555555555555" }],
+          }),
+        ],
+        total: 3,
+      };
+    },
+  });
+
+  const result = await mutations.previewAutoRoles(session(), "g1", rolePolicy());
+
+  assert.equal(result.ok, true);
+  assert.match(result.ok === true ? (result.note ?? "") : "", /1 role\(s\) would be granted and 1 revoked/);
+  assert.match(result.ok === true ? (result.note ?? "") : "", /all 3 member\(s\)/);
+  assert.equal(recorded.calls.some((c) => c.method === "setSetting"), false);
+});
+
+test("a policy that is switched off previews as no change rather than as a mass strip", async () => {
+  const { mutations } = make({
+    async previewMembers() {
+      return { members: [previewMember({ heldRoleIds: ["555555555555555555"] })], total: 1 };
+    },
+  });
+
+  const result = await mutations.previewAutoRoles(session(), "g1", rolePolicy({ enabled: false }));
+
+  assert.equal(result.ok, true);
+  assert.match(result.ok === true ? (result.note ?? "") : "", /switched off/);
+});
+
+test("without a roster the dry run refuses rather than reporting zeroes", async () => {
+  const { mutations } = make({ noRolesInsight: true });
+
+  const result = await mutations.previewAutoRoles(session(), "g1", rolePolicy());
+
+  assert.equal(result.ok, false);
+});
+
+test("saving the welcome stores it and never puts the text in the audit trail", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.saveWelcome(session(), "g1", {
+    join: { enabled: true, channelSlot: "welcome", mode: "EMBED", text: "Welcome {user}!" },
+  });
+
+  assert.equal(result.ok, true);
+  const call = recorded.calls.find((c) => c.method === "setSetting");
+  assert.equal(call?.args[1], "discord.welcome");
+  const audit = recorded.audits.at(-1);
+  assert.equal(JSON.stringify(audit?.change ?? {}).includes("Welcome {user}"), false);
+});
+
+test("a misspelled welcome field is refused rather than silently dropped", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.saveWelcome(session(), "g1", {
+    join: { enabled: true, chanelSlot: "welcome", text: "hi" },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(recorded.calls.some((c) => c.method === "setSetting"), false);
+});
+
+test("a welcome pointed at a slot nothing can bind is refused", async () => {
+  const { mutations } = make();
+
+  const result = await mutations.saveWelcome(session(), "g1", {
+    leave: { enabled: true, channelSlot: "nowhere", text: "bye" },
+  });
+
+  assert.equal(result.ok, false);
+});
+
+test("clearing the refusal list reaches the store, and says it may come back", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.clearRoleRefusals(session(), "g1");
+
+  assert.equal(result.ok, true);
+  assert.match(result.ok === true ? (result.note ?? "") : "", /recur/);
+  assert.equal(recorded.calls.some((c) => c.method === "clearRefusals"), true);
+});
+
+test("with nothing recording refusals, clearing says so rather than pretending", async () => {
+  const { mutations } = make({ noRolesInsight: true });
+
+  assert.equal((await mutations.clearRoleRefusals(session(), "g1")).ok, false);
 });

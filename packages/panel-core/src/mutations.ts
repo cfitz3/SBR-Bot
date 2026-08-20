@@ -74,6 +74,16 @@ import {
   type RelayGameAction,
   type RelaySyncRow,
 } from "@sbr/moderation";
+import {
+  AUTO_ROLES_SETTING_KEY,
+  MAX_RULES,
+  WELCOME_SETTING_KEY,
+  parseAutoRoles,
+  parseWelcome,
+  previewRoleChanges,
+  validateAutoRoles,
+  validateWelcome,
+} from "@sbr/roles";
 import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
 import {
   CAPABILITIES,
@@ -89,7 +99,8 @@ import {
 } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
-import type { PermissionExceptionStore, PermSubjectKind } from "./reads.js";
+import { ROLE_PREVIEW_LIMIT } from "./reads.js";
+import type { PermissionExceptionStore, PermSubjectKind, RolesInsight } from "./reads.js";
 import { XP_SOURCE_ORDER } from "./service.js";
 
 /** Every write the panel can perform, and the platform role it requires. */
@@ -195,6 +206,25 @@ export const MUTATION_TIERS = {
    * halfway, which is what an operator wants at the moment they want it.
    */
   "automod.enable": "ADMIN",
+  /**
+   * The auto-role rules. Admin because a rule hands out Discord roles to
+   * members with nobody in the loop, and one of those roles can be the one
+   * this platform reads back as staff.
+   */
+  "roles.auto.save": "ADMIN",
+  /**
+   * The dry run. Moderator, and a write only in the sense that it goes through
+   * the write channel — it stores nothing. A moderator wondering what a rule
+   * would do should be able to find out without being able to save it.
+   */
+  "roles.preview": "MODERATOR",
+  /**
+   * Welcome, farewell and guild-join messages. Admin: one edit here is read by
+   * the whole server every time somebody joins.
+   */
+  "roles.welcome.save": "ADMIN",
+  /** Dismiss the refusal list once the underlying permission is fixed. */
+  "roles.refusals.clear": "ADMIN",
   /**
    * How often a member may speak or run a command before the gate holds them.
    * Admin because the same numbers bound the XP earned from talking: a lower
@@ -445,6 +475,13 @@ export interface PanelMutationsDeps {
    * refuses the run rather than reporting a queue that nothing is draining.
    */
   readonly jobs?: JobTrigger;
+  /**
+   * The roster and the reconciler's diagnostics. Optional like the rest:
+   * without it the rules and the welcome text still save — they are settings —
+   * and only the dry run refuses, because a preview computed over no roster
+   * would be a confident zero rather than an answer.
+   */
+  readonly rolesInsight?: RolesInsight;
   /**
    * Optional like the rest: without it the levels, floors and command table are
    * still editable and only per-person exceptions refuse.
@@ -2081,6 +2118,146 @@ export class PanelMutations {
         rules,
       });
       return { result, change: { id, removed: true }, note: "Rule removed." };
+    });
+  }
+
+  // ─────────────────────────── auto-roles & the greeter ───────────────────────────
+
+  /**
+   * Save the whole auto-role policy.
+   *
+   * The whole policy, unlike automod's rule-at-a-time write, because the page
+   * edits a table and reordering it is a legitimate edit that no per-row write
+   * could express. The trade is the ordinary one for whole-document saves: two
+   * admins editing this table at the same time, the second save wins. That is
+   * the honest behaviour for a document, and the alternative — merging rule
+   * lists — is where "I deleted that rule" and "I never had that rule" become
+   * indistinguishable.
+   */
+  async saveAutoRoles(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.auto.save", async () => {
+      const problem = validateAutoRoles(input);
+      if (problem !== null) return invalid(problem);
+      // Parsed back before storing, so what lands in the KV is the normalised
+      // shape the reconciler will read rather than whatever extra fields a
+      // client sent. Validation has already refused anything malformed.
+      const policy = parseAutoRoles(input);
+
+      const result = await this.d.config.setSetting(guildId, AUTO_ROLES_SETTING_KEY, policy);
+      const active = policy.rules.filter((rule) => rule.enabled).length;
+      return {
+        result,
+        // Rule keys and triggers, not the roles themselves: the audit trail
+        // records which rules changed, and the roles are readable from the
+        // setting. Keeping the payload small keeps the audit table readable.
+        change: { enabled: policy.enabled, rules: policy.rules.length, active },
+        note: policy.enabled
+          ? `Saved — ${active} of ${policy.rules.length} rule(s) active. The next sync applies them.`
+          : `Saved. Auto-roles are switched off, so nothing will be granted or revoked.`,
+      };
+    });
+  }
+
+  /**
+   * What this policy would do, without doing any of it.
+   *
+   * Nothing is written and nothing is queued. The counts come from the same
+   * `resolveDesiredRoles`/`diffGrants` pair the reconciler uses over the same
+   * ledger rows, so this is the reconciler's own answer rather than a second
+   * implementation that agrees with it only on the cases somebody tested.
+   *
+   * The policy is taken from the request rather than from the stored setting:
+   * the question staff are asking is "what would happen if I saved *this*",
+   * which is the question worth answering before they save it.
+   */
+  async previewAutoRoles(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.preview", async () => {
+      const problem = validateAutoRoles(input);
+      if (problem !== null) return invalid(problem);
+      const policy = parseAutoRoles(input);
+
+      const insight = this.d.rolesInsight;
+      // Refused rather than answered with zeroes. "This would change nothing"
+      // and "I could not look" are different answers and only one of them is
+      // safe to act on.
+      if (insight === undefined) return unavailable("this deployment has no roster to preview against");
+
+      const { members, total } = await insight.previewMembers(guildId, ROLE_PREVIEW_LIMIT);
+      const preview = previewRoleChanges(policy, members, { sampled: total > members.length });
+
+      const scope = preview.sampled
+        ? `the first ${preview.membersConsidered} of ${total} members`
+        : `all ${preview.membersConsidered} member(s)`;
+      const note = policy.enabled
+        ? `Across ${scope}: ${preview.grants} role(s) would be granted and ${preview.revokes} revoked, ` +
+          `affecting ${preview.membersAffected} member(s).` +
+          (preview.sampled ? " The real pass covers everyone." : "")
+        : `Auto-roles are switched off, so nothing would happen. Turn them on to see what these rules would do.`;
+
+      return {
+        result: { ok: true },
+        change: {
+          rules: policy.rules.length,
+          considered: preview.membersConsidered,
+          grants: preview.grants,
+          revokes: preview.revokes,
+          sampled: preview.sampled,
+        },
+        note,
+      };
+    });
+  }
+
+  /**
+   * Save the welcome, farewell and guild-join messages.
+   *
+   * `validateWelcome` is strict where `parseWelcome` is lenient, and the split
+   * is the point: the parser must never throw away a whole policy on a hot path
+   * over one bad field, while this is the gate that decides what gets stored.
+   * A template that would save and then read back as silence is refused here.
+   */
+  async saveWelcome(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.welcome.save", async () => {
+      const problem = validateWelcome(input);
+      if (problem !== null) return invalid(problem);
+      const policy = parseWelcome(input);
+
+      const result = await this.d.config.setSetting(guildId, WELCOME_SETTING_KEY, policy);
+      const on = [
+        policy.join.enabled ? "welcome" : null,
+        policy.leave.enabled ? "farewell" : null,
+        policy.guildJoin.enabled ? "guild join" : null,
+      ].filter((name): name is string => name !== null);
+      return {
+        result,
+        // The switches and the lengths, never the text: a welcome message is
+        // somebody's words, and the audit trail records that it changed rather
+        // than keeping a copy of every draft.
+        change: {
+          join: policy.join.enabled,
+          leave: policy.leave.enabled,
+          guildJoin: policy.guildJoin.enabled,
+          textLength: policy.join.text.length,
+        },
+        note: on.length === 0 ? "Saved. Every message is switched off." : `Saved — ${on.join(", ")} active.`,
+      };
+    });
+  }
+
+  /**
+   * Dismiss the refusal list.
+   *
+   * Staff clicking this are saying "I have fixed the permission". They may be
+   * wrong, and that is fine: the next sync that hits the same wall records it
+   * again, so the worst case is a list that comes back rather than a problem
+   * that is hidden.
+   */
+  async clearRoleRefusals(session: PanelSession | null, guildId: string): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.refusals.clear", async () => {
+      const insight = this.d.rolesInsight;
+      if (insight === undefined) return unavailable("this deployment records no role refusals");
+      await insight.clearRefusals(guildId);
+      return { result: { ok: true }, change: { cleared: true }, note: "Cleared. Any that recur will reappear." };
     });
   }
 

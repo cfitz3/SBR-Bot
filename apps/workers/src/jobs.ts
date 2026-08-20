@@ -788,6 +788,10 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           // Warn, not error: a refusal is a configuration problem the guild's
           // staff fix in the panel, and the Health card is where they see it.
           ctx.log.warn("auto-role refused", { guildId, roleId, detail });
+          // Fire and forget into the diagnostic hash. Staff do not read the
+          // worker's logs, and a refusal nobody with the power to fix it can
+          // see is the same as no refusal at all.
+          void ctx.adapters.roleRefusals.record(guildId, roleId, detail).catch(() => undefined);
         },
         onError(scope, error) {
           ctx.log.warn("role sync failed", { scope, error: String(error) });

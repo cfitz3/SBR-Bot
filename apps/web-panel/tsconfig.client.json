@@ -15,5 +15,9 @@
     "types": ["node"]
   },
   "include": ["client/**/*.ts"],
-  "references": [{ "path": "../../packages/panel-core" }, { "path": "../../brand" }]
+  "references": [
+    { "path": "../../packages/panel-core" },
+    { "path": "../../brand" },
+    { "path": "../../packages/roles" }
+  ]
 }

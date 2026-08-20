@@ -23,6 +23,15 @@ import type { RedisContext } from "./client.js";
  */
 const FUN_TALLY_TTL_SECONDS = 90 * 24 * 3600;
 
+/**
+ * How long a role refusal stays on the Health card.
+ *
+ * A week: long enough that a refusal from a weekend sync is still there on
+ * Monday, short enough that a role somebody deleted months ago is not still
+ * being complained about.
+ */
+const ROLE_REFUSAL_TTL_SECONDS = 7 * 24 * 3600;
+
 const RELEASE_LOCK = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`;
 
 /** LockPort — SET NX PX, owner-checked release. */
@@ -738,6 +747,86 @@ export class RedisRoleDirtySet {
       // Swallowed deliberately: see the class comment. The sweep is the floor.
     }
   }
+
+  /**
+   * How many members are waiting on the next pass.
+   *
+   * The panel's "is this feature keeping up" number. Unreachable Redis reads as
+   * zero rather than throwing: a Health card that cannot render is less use
+   * than one missing a count.
+   */
+  async pending(guildId: string): Promise<number> {
+    try {
+      return await this.ctx.client.sCard(this.ctx.keys.rolesDirty(guildId));
+    } catch {
+      return 0;
+    }
+  }
+}
+
+/** One role the effector would not touch, with the reason staff need. */
+export interface RoleRefusal {
+  readonly roleId: string;
+  readonly detail: string;
+  readonly at: string;
+}
+
+/**
+ * Refusals, kept just long enough to be read.
+ *
+ * A refusal is not an outage and not an audit record — it is "your rule names a
+ * role I am not allowed to give out", which stops being true the moment somebody
+ * drags the bot's role up the list. So it lives in a hash with a TTL, keyed by
+ * role id so a rule refusing on every one of four hundred members is one entry
+ * rather than four hundred, and the newest reason wins.
+ */
+export class RedisRoleRefusals {
+  constructor(private readonly ctx: RedisContext, private readonly ttlSeconds: number) {}
+
+  async record(guildId: string, roleId: string, detail: string): Promise<void> {
+    try {
+      const key = this.ctx.keys.rolesRefused(guildId);
+      await this.ctx.client.hSet(key, roleId, JSON.stringify({ detail: detail.slice(0, 200), at: new Date().toISOString() }));
+      // Refreshed on every write, so the window is "since the last refusal"
+      // rather than "since the first one" — a rule still failing today should
+      // not vanish from the card because it first failed a week ago.
+      await this.ctx.client.expire(key, this.ttlSeconds);
+    } catch {
+      // A diagnostic that cannot be written is not worth failing a sync over.
+    }
+  }
+
+  async list(guildId: string): Promise<readonly RoleRefusal[]> {
+    let raw: Record<string, string>;
+    try {
+      raw = await this.ctx.client.hGetAll(this.ctx.keys.rolesRefused(guildId));
+    } catch {
+      return [];
+    }
+    const out: RoleRefusal[] = [];
+    for (const [roleId, value] of Object.entries(raw)) {
+      try {
+        const parsed = JSON.parse(value) as { detail?: unknown; at?: unknown };
+        out.push({
+          roleId,
+          detail: typeof parsed.detail === "string" ? parsed.detail : "Refused.",
+          at: typeof parsed.at === "string" ? parsed.at : "",
+        });
+      } catch {
+        // An unreadable entry is dropped rather than rendered as garbage.
+      }
+    }
+    return out.sort((a, b) => b.at.localeCompare(a.at));
+  }
+
+  /** Staff say "I fixed it"; the card empties without waiting out the TTL. */
+  async clear(guildId: string): Promise<void> {
+    try {
+      await this.ctx.client.del(this.ctx.keys.rolesRefused(guildId));
+    } catch {
+      // Nothing to undo: the TTL removes it anyway.
+    }
+  }
 }
 
 /**
@@ -1014,6 +1103,7 @@ export function createRedisAdapters(ctx: RedisContext) {
     jobTriggers: new RedisJobTriggerBus(ctx),
     memberBus: new RedisMemberBus(ctx),
     rolesDirty: new RedisRoleDirtySet(ctx),
+    roleRefusals: new RedisRoleRefusals(ctx, ROLE_REFUSAL_TTL_SECONDS),
     heartbeat: new RedisHeartbeat(ctx),
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),
     automodCounters: new RedisAutomodCounters(ctx),

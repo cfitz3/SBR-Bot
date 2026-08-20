@@ -25,6 +25,7 @@ import type {
   PanelReads,
   PermissionException,
   PermissionExceptionStore,
+  RolesInsight,
   ServiceHeartbeat,
 } from "./reads.js";
 import {
@@ -265,6 +266,7 @@ function svc(
     wordlist?: WordlistService;
     permissionExceptions?: PermissionExceptionStore;
     commands?: CommandCatalog;
+    rolesInsight?: RolesInsight;
   } = {},
 ) {
   return new PanelService({
@@ -280,6 +282,7 @@ function svc(
     ...(over.wordlist ? { wordlist: over.wordlist } : {}),
     ...(over.permissionExceptions ? { permissionExceptions: over.permissionExceptions } : {}),
     ...(over.commands ? { commands: over.commands } : {}),
+    ...(over.rolesInsight ? { rolesInsight: over.rolesInsight } : {}),
     logger: silent,
   });
 }
@@ -1108,4 +1111,122 @@ test("exceptions arrive when the store answers, and are marked unavailable when 
   assert.equal(bad.access.allowed, true);
   assert.equal(bad.data?.exceptionsAvailable, false);
   assert.equal((bad.data?.capabilities.length ?? 0) > 0, true);
+});
+
+// ── roles & welcome ──
+
+/** A config service with stored blobs, for the two settings the page reads. */
+function settingsConfig(stored: Readonly<Record<string, unknown>>): GuildConfigService {
+  const partial: Partial<GuildConfigService> = {
+    async get() {
+      return ok({
+        guildId: "g1", channels: {}, prefixes: ["!"], timezone: "UTC",
+        applicationsOpen: true, bridgeSuspended: false, features: {}, roleMappings: {},
+      });
+    },
+    async getSetting<T>(_guildId: string, key: string) {
+      return (stored[key] ?? null) as T | null;
+    },
+  };
+  return partial as GuildConfigService;
+}
+
+const insight = (over: Partial<RolesInsight> = {}): RolesInsight => ({
+  async previewMembers() { return { members: [], total: 0 }; },
+  async pendingDirty() { return 7; },
+  async refusals() { return [{ roleId: "9", detail: "Missing Permissions", at: "2026-08-20T10:00:00.000Z" }]; },
+  async clearRefusals() {},
+  ...over,
+});
+
+test("the roles page is admin-only: a moderator is refused", async () => {
+  const r = await svc({ roles: roles({ "111": "MODERATOR" }) }).loadRoles(session(), "g1");
+  assert.equal(r.access.allowed, false);
+  assert.equal(r.data, null);
+});
+
+test("with no insight port the page reports itself uninstalled rather than empty", async () => {
+  const r = await svc({ roles: admin() }).loadRoles(session(), "g1");
+  assert.equal(r.data?.installed, false);
+  // The policies still come back: they are stored settings, and an admin must
+  // be able to read what is configured even where nothing can report on it.
+  assert.equal(r.data?.autoRoles.enabled, false);
+  assert.equal(r.data?.health, null);
+});
+
+test("health carries the queue depth, the refusals and the role-sync job's own row", async () => {
+  const r = await svc({
+    roles: admin(),
+    rolesInsight: insight(),
+    reads: reads({
+      async listJobHealth(): Promise<readonly JobHealth[]> {
+        return [
+          { type: "guild-scan", lastRunAt: "2026-08-19T00:00:00.000Z", lastStatus: "OK", durationMs: 1, error: null, failuresLastDay: 0 },
+          { type: "role-sync", lastRunAt: "2026-08-20T11:00:00.000Z", lastStatus: "FAILED", durationMs: 2, error: "boom", failuresLastDay: 3 },
+        ];
+      },
+    }),
+  }).loadRoles(session(), "g1");
+
+  assert.equal(r.data?.installed, true);
+  assert.equal(r.data?.health?.pendingDirty, 7);
+  assert.equal(r.data?.health?.refusals[0]?.detail, "Missing Permissions");
+  assert.equal(r.data?.health?.lastSyncAt, "2026-08-20T11:00:00.000Z");
+  assert.equal(r.data?.health?.lastSyncStatus, "FAILED");
+});
+
+test("a fleet that has never run role-sync reads as never, not as a failure", async () => {
+  const r = await svc({ roles: admin(), rolesInsight: insight() }).loadRoles(session(), "g1");
+  assert.equal(r.data?.health?.lastSyncAt, null);
+  assert.equal(r.data?.health?.lastSyncStatus, null);
+});
+
+test("a Redis outage costs the health numbers, never the page", async () => {
+  const r = await svc({
+    roles: admin(),
+    rolesInsight: insight({
+      async pendingDirty() { throw new Error("redis down"); },
+      async refusals() { throw new Error("redis down"); },
+    }),
+  }).loadRoles(session(), "g1");
+
+  assert.equal(r.access.allowed, true);
+  assert.equal(r.data?.installed, true);
+  assert.equal(r.data?.health?.pendingDirty, 0);
+  assert.deepEqual(r.data?.health?.refusals, []);
+});
+
+test("stored policies are read tolerantly: a mangled rule costs its own row only", async () => {
+  const r = await svc({
+    roles: admin(),
+    config: settingsConfig({
+      "roles.auto": {
+        enabled: true,
+        rules: [
+          { key: "member", label: "Guild member", trigger: { kind: "IN_GUILD" }, roleId: "1" },
+          // No role: unusable, and dropped rather than failing the two beside it.
+          { key: "broken", trigger: { kind: "LINKED" } },
+          { key: "linked", trigger: { kind: "LINKED" }, roleId: "2", enabled: false },
+        ],
+      },
+      "discord.welcome": { join: { enabled: true, text: "hi {user}" } },
+    }),
+  }).loadRoles(session(), "g1");
+
+  assert.equal(r.data?.autoRoles.enabled, true);
+  assert.deepEqual(r.data?.autoRoles.rules.map((rule) => rule.key), ["member", "linked"]);
+  assert.equal(r.data?.autoRoles.rules[0]?.enabled, true);
+  assert.equal(r.data?.autoRoles.rules[1]?.enabled, false);
+  assert.equal(r.data?.welcome.join.enabled, true);
+  assert.equal(r.data?.welcome.join.text, "hi {user}");
+  // Untouched sections keep their defaults rather than vanishing.
+  assert.equal(r.data?.welcome.leave.enabled, false);
+});
+
+test("a guild that has saved nothing gets the defaults, switched off", async () => {
+  const r = await svc({ roles: admin() }).loadRoles(session(), "g1");
+  assert.equal(r.data?.autoRoles.enabled, false);
+  assert.deepEqual(r.data?.autoRoles.rules, []);
+  assert.equal(r.data?.welcome.join.enabled, false);
+  assert.equal(r.data?.welcome.guildJoin.enabled, false);
 });

@@ -6,6 +6,7 @@
  * `panelRepository` satisfies this structurally.
  */
 import type { TicketDTO } from "@sbr/shared-types";
+import type { PreviewMember } from "@sbr/roles";
 
 export interface GuildCard {
   readonly id: string;
@@ -391,3 +392,44 @@ export interface PanelReads {
    */
   pendingMilestones(guildId: string): Promise<number>;
 }
+
+/** One role the effector would not apply, and the reason staff need to fix it. */
+export interface RoleRefusalVM {
+  readonly roleId: string;
+  readonly detail: string;
+  /** ISO timestamp of the most recent refusal for this role; "" if unknown. */
+  readonly at: string;
+}
+
+/**
+ * What the Roles page needs that is neither a setting nor a database row the
+ * panel already reads: the roster in resolver shape, and the reconciler's own
+ * diagnostics.
+ *
+ * A port rather than direct imports because the two halves live in different
+ * packages — the roster in Postgres, the dirty set and the refusals in Redis —
+ * and panel-core depends on neither.
+ */
+export interface RolesInsight {
+  /**
+   * A page of the roster with everything `previewRoleChanges` needs, and the
+   * roster total so the page can say whether it looked at all of it.
+   */
+  previewMembers(
+    guildId: string,
+    limit: number,
+  ): Promise<{ readonly members: readonly PreviewMember[]; readonly total: number }>;
+  pendingDirty(guildId: string): Promise<number>;
+  refusals(guildId: string): Promise<readonly RoleRefusalVM[]>;
+  clearRefusals(guildId: string): Promise<void>;
+}
+
+/**
+ * How many members one dry run examines.
+ *
+ * Bounded because the preview is a synchronous page action and a guild can have
+ * thousands of members. Above this the answer is honestly labelled a sample
+ * rather than quietly truncated — `previewRoleChanges` carries the flag, and the
+ * note says so.
+ */
+export const ROLE_PREVIEW_LIMIT = 500;

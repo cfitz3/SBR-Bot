@@ -12,6 +12,7 @@
     { "path": "../moderation" },
     { "path": "../analytics" },
     { "path": "../screening" },
-    { "path": "../guild-config" }
+    { "path": "../guild-config" },
+    { "path": "../roles" }
   ]
 }

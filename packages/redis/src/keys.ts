@@ -113,6 +113,16 @@ export function createKeyFactory(prefix: string) {
     rolesDirty: (guildId: string) => p(`roles:dirty:${guildId}`),
     /** Held for a day by whichever worker claimed this guild's full sweep. */
     rolesSweep: (guildId: string) => p(`roles:sweep:${guildId}`),
+    /**
+     * Roles the effector could not apply, and why — the Health card's read.
+     *
+     * A diagnostic, not a record: a refusal means the guild has a role above
+     * the bot or a role that no longer exists, which is a configuration problem
+     * staff fix in the panel. It carries a TTL so a refusal that has since been
+     * fixed stops being reported without anybody clearing it, and losing the
+     * hash to a flush costs only the message, never the reconcile.
+     */
+    rolesRefused: (guildId: string) => p(`roles:refused:${guildId}`),
     lockSingleFlight: (cacheKey: string) => p(`lock:hypixel:${cacheKey}`),
 
     // 9. Deduplication keys

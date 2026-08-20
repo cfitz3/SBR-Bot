@@ -45,6 +45,8 @@ export {
   parseMemberBusMessage,
   type MemberBusMessage,
   RedisRoleDirtySet,
+  RedisRoleRefusals,
+  type RoleRefusal,
   RedisHeartbeat,
   startHeartbeat,
   type HeartbeatRecord,

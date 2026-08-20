@@ -21,6 +21,7 @@
     "@sbr/guild-config": "*",
     "@sbr/moderation": "*",
     "@sbr/observability": "*",
+    "@sbr/roles": "*",
     "@sbr/screening": "*",
     "@sbr/shared-types": "*"
   }

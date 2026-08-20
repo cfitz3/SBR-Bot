@@ -43,6 +43,23 @@ export const roleGrantRepository: RoleGrantRepository = {
     });
   },
 
+  async openGrantsByMember(guildId, discordIds) {
+    const byMember = new Map<string, GrantRow[]>();
+    if (discordIds.length === 0) return byMember;
+    const rows = await prisma.roleGrant.findMany({
+      where: { guildId, discordId: { in: [...new Set(discordIds)] }, revokedAt: null },
+      select: { discordId: true, ruleKey: true, roleId: true },
+    });
+    for (const row of rows) {
+      const list = byMember.get(row.discordId);
+      if (list === undefined) byMember.set(row.discordId, [{ ruleKey: row.ruleKey, roleId: row.roleId }]);
+      else list.push({ ruleKey: row.ruleKey, roleId: row.roleId });
+    }
+    // Members with no open grants are absent rather than empty-listed; the
+    // caller defaults, and an empty ledger is the honest answer for them.
+    return byMember;
+  },
+
   async openGrantsForRule(guildId, ruleKey): Promise<readonly GrantRecord[]> {
     const rows = await prisma.roleGrant.findMany({
       where: { guildId, ruleKey, revokedAt: null },

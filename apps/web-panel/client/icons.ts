@@ -43,6 +43,8 @@ const PATHS: Readonly<Record<string, readonly string[]>> = {
   tickets: ["M4.5 5.5h15v10h-9l-6 4.5z"],
   // A key: what a level actually is on this platform.
   permissions: ["M10.7 15.2a3.3 3.3 0 100-6.6 3.3 3.3 0 000 6.6z", "M14 11.9h6", "M17 11.9v3", "M19.4 11.9v2.2"],
+  // A luggage tag: a role handed to somebody, hanging off them.
+  roles: ["M4.5 4.5h6.2L20 13.8l-6.2 6.2-9.3-9.3z", "M8.2 8.2h.01"],
   // Funnel: the word filter.
   wordlist: ["M4 5h16l-6.2 7.2V19l-3.6 1.8v-8.6z"],
   // Chrome.

@@ -40,6 +40,8 @@ export {
   type SettingsVM,
   type XpSettingsVM,
   type MilestonesVM,
+  type RolesVM,
+  type RolesHealthVM,
   type TicketsVM,
   type WordlistVM,
   XP_SOURCE_ORDER,
@@ -110,4 +112,7 @@ export type {
   PermissionExceptionStore,
   CommandCatalog,
   CommandCatalogEntry,
+  RoleRefusalVM,
+  RolesInsight,
 } from "./reads.js";
+export { ROLE_PREVIEW_LIMIT } from "./reads.js";

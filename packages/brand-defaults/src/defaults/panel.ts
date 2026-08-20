@@ -29,6 +29,7 @@ export const DEFAULT_PANEL = {
     tickets: "Tickets",
     settings: "Settings",
     milestones: "Milestones",
+    roles: "Roles & welcome",
     permissions: "Permissions",
     xp: "XP",
     leaderboard: "Leaderboard",
@@ -147,6 +148,12 @@ export const DEFAULT_PANEL = {
       permissionsCommandsNone: "No staff commands are registered.",
       permissionsExceptionsUnavailable: "Per-person exceptions aren't available in this deployment.",
       permissionsExceptionsNone: "Nobody is an exception in this guild.",
+
+      rolesNoRules:
+        "No automatic roles yet. Add one below, then use “What would this do?” before you switch them on.",
+      rolesNoRefusals: "Discord has accepted every role change we asked for.",
+      rolesHealthUnavailable:
+        "Role sync isn't switched on for this deployment, so there is nothing to report here.",
 
       selectorGuilds:
         "No guilds to show. You need Manage Server on a Discord guild that the platform has been set up for.",
@@ -1448,6 +1455,95 @@ export const DEFAULT_PANEL = {
    * that renames "Guild XP" changes one key and the fallback below still covers
    * a source the platform gains before this table names it.
    */
+  /**
+   * Roles & welcome — the two things that happen to a member with nobody in the
+   * loop at the moment they happen. Both are written once and then read by the
+   * whole server, which is why the page leads with a dry run and a health card
+   * rather than with the editor.
+   */
+  roles: {
+    title: "Roles & welcome",
+    subtitle: "Who gets which role automatically, and what the server says when somebody arrives.",
+
+    healthCard: "Role sync",
+    healthPending: "Members queued",
+    healthPendingNote: "Waiting for the next sync pass.",
+    healthLastSync: "Last pass",
+    healthNever: "never",
+    refusalsTitle: "Discord refused",
+    /** `{roleId}` is the role we could not apply; `{detail}` is Discord's reason. */
+    refusalRow: "{roleId} — {detail}",
+    refusalsHint:
+      "Almost always one of two things: the bot is missing Manage Roles, or the role sits above the bot's own in the list. Fix it in Discord, then clear this.",
+    refusalsClear: "Clear",
+    refusalsClearConfirm: "Clear the list",
+
+    autoCard: "Automatic roles",
+    autoEnabledLabel: "Grant and revoke automatically",
+    autoEnabledHint:
+      "Off means the rules below are kept but nothing is applied. New rules are worth previewing before this goes on.",
+    previewButton: "What would this do?",
+    previewHint: "Counts the grants and revokes this policy would make. Nothing is written.",
+
+    ruleLabel: "Name",
+    ruleLabelHint: "Yours to read. Renaming keeps everything the rule has already granted.",
+    ruleRoleLabel: "Role to grant",
+    ruleTriggerLabel: "When",
+    ruleRankLabel: "Guild rank",
+    ruleRankHint: "The rank's name in-game. Case doesn't matter.",
+    ruleAchievementLabel: "Achievement key",
+    ruleLevelLabel: "XP level, at least",
+    ruleEventsLabel: "Events attended, at least",
+    ruleRevokeLabel: "Take it back when they no longer qualify",
+    ruleRevokeHint:
+      "Off by default. Only roles this platform granted are ever removed — one somebody was given by hand stays.",
+    ruleEnabledLabel: "Active",
+    ruleRemove: "Remove",
+    ruleRemoveConfirm: "Remove the rule",
+    ruleRemoveHint: "Roles already granted stay put; the rule simply stops applying.",
+
+    addCard: "Add a rule",
+    addKeyLabel: "Key",
+    addKeyHint: "Stable identity for the grant ledger. Lower case, no spaces — for example guild-member.",
+    addButton: "Add rule",
+    addRolePlaceholder: "Search roles, or paste an id",
+
+    trigger: {
+      IN_GUILD: "They're in the Hypixel guild",
+      LINKED: "They've linked their account",
+      GUILD_RANK: "They hold a guild rank",
+      XP_LEVEL: "They reach an XP level",
+      ACHIEVEMENT: "They earn an achievement",
+      EVENTS_ATTENDED: "They attend enough events",
+      MANUAL: "Only by hand",
+    },
+
+    welcomeCard: "Welcome message",
+    farewellCard: "Farewell message",
+    guildJoinCard: "Guild join announcement",
+    welcomeEnabledLabel: "Post it",
+    welcomeChannelLabel: "Channel",
+    welcomeTextLabel: "Message",
+    welcomeTextHint:
+      "Tokens: {tokens}. Anything else is printed as you typed it, and @everyone never pings.",
+    welcomeModeLabel: "Style",
+    welcomeModeText: "Plain text",
+    welcomeModeEmbed: "Embed",
+    welcomeDmLabel: "Also send them a direct message",
+    welcomeDmHint: "Left empty, nothing is sent. A member with DMs closed is not an error.",
+    welcomeDeleteLabel: "Delete after (seconds)",
+    welcomeDeleteHint: "Empty keeps it. Minimum five seconds.",
+    previewTitle: "Preview",
+    previewNote: "Rendered with sample values, exactly as the greeter would render it.",
+
+    errKey: "Use lower case letters, numbers and dashes.",
+    errRole: "Pick the role, or paste its id.",
+    errRank: "Enter the rank's name.",
+    errAchievement: "Enter the achievement's key.",
+    errWholeNumber: "Enter a whole number of at least 0.",
+    errDeleteAfter: "Enter a whole number of at least 5 seconds, or leave it empty.",
+  },
+
   xp: {
     title: "XP",
     subtitle: "Where XP comes from and what it's worth.",

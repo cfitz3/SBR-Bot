@@ -31,6 +31,7 @@ export type PanelPage =
   | "events"
   | "members"
   | "milestones"
+  | "roles"
   | "tickets"
   | "wordlist"
   | "health"
@@ -66,6 +67,10 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // in the same sense the XP weights are — the achievements themselves stay in
   // the bots, where the members who earned them can see them.
   milestones: "ADMIN",
+  // Automatic roles and the greeter. Both act on members with nobody in the
+  // loop at the moment they act — a rule that hands out a role and a message
+  // the whole server reads — so both sit behind the configuration tier.
+  roles: "ADMIN",
   // Moderator, because the page leads with the queue of open tickets and
   // closing one is a Moderator action (`ticket.close`). The configuration on the
   // same page — the menu and the panel that advertises it — is Admin, and the

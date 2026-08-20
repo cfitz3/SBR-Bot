@@ -437,6 +437,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(res, await app.panel.loadSettings(session, guildId));
         case "milestones":
           return sendPage(res, await app.panel.loadMilestones(session, guildId));
+        case "roles":
+          return sendPage(res, await app.panel.loadRoles(session, guildId));
         case "tickets":
           return sendPage(res, await app.panel.loadTickets(session, guildId));
         case "wordlist":
@@ -669,6 +671,18 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.removeAutomodRule(session, guildId, b));
       case "automod.enable":
         return sendMutation(res, await m.setAutomodEnabled(session, guildId, b));
+      // Auto-roles and the greeter. The preview goes through the write channel
+      // and writes nothing — it is here because it needs the same authorization
+      // and the same body the save would take, and answering "what would this
+      // do" from the read side would mean a second way to send a policy.
+      case "roles.auto.save":
+        return sendMutation(res, await m.saveAutoRoles(session, guildId, b));
+      case "roles.preview":
+        return sendMutation(res, await m.previewAutoRoles(session, guildId, b));
+      case "roles.welcome.save":
+        return sendMutation(res, await m.saveWelcome(session, guildId, b));
+      case "roles.refusals.clear":
+        return sendMutation(res, await m.clearRoleRefusals(session, guildId));
       case "config.cooldowns":
         return sendMutation(res, await m.setCooldowns(session, guildId, b));
       // Permissions. Six writes because the page edits four independent stores

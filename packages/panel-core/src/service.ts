@@ -50,6 +50,14 @@ import {
   type ScreeningPolicyView,
 } from "@sbr/screening";
 import {
+  AUTO_ROLES_SETTING_KEY,
+  WELCOME_SETTING_KEY,
+  parseAutoRoles,
+  parseWelcome,
+  type AutoRolePolicy,
+  type WelcomePolicy,
+} from "@sbr/roles";
+import {
   CAPABILITIES,
   COOLDOWN_SETTING_KEY,
   DEFAULT_CAPABILITY_FLOOR,
@@ -85,6 +93,8 @@ import type {
   PanelEvent,
   EventStandingRow,
   PanelReads,
+  RoleRefusalVM,
+  RolesInsight,
   RollupPeriod,
   RollupPoint,
   ServiceHeartbeat,
@@ -462,6 +472,36 @@ export interface MilestonesVM {
   readonly definitions: readonly MilestoneDefinitionDTO[];
 }
 
+/**
+ * Is the feature keeping up, and is anything blocking it?
+ *
+ * Both halves are needed to read the page honestly. A rule that grants nothing
+ * looks identical whether it matches nobody, whether four hundred members are
+ * queued behind it, or whether Discord is refusing the role outright — and the
+ * fix is different in each case.
+ */
+export interface RolesHealthVM {
+  /** Members marked dirty and still waiting on a pass. */
+  readonly pendingDirty: number;
+  readonly refusals: readonly RoleRefusalVM[];
+  readonly lastSyncAt: string | null;
+  readonly lastSyncStatus: string | null;
+}
+
+export interface RolesVM {
+  /**
+   * False when this deployment has no roles port wired. The rules and the
+   * welcome text still render and still save — they are settings rows — but the
+   * dry run and the health card report themselves unavailable rather than
+   * showing zeroes, which would read as "nothing to do".
+   */
+  readonly installed: boolean;
+  readonly autoRoles: AutoRolePolicy;
+  readonly welcome: WelcomePolicy;
+  /** Null when not installed; see above. */
+  readonly health: RolesHealthVM | null;
+}
+
 export interface TicketsVM {
   /** False when no ticket-config service is wired; the page then says so. */
   readonly installed: boolean;
@@ -618,6 +658,11 @@ export interface PanelServiceDeps {
   readonly xp?: XpService;
   /** Optional for the same reason as XP: absent means the page reports it. */
   readonly milestones?: MilestoneDefinitionService;
+  /**
+   * Optional: absent means the Roles page still edits rules and welcome text —
+   * they are settings — but reports the dry run and the health card unavailable.
+   */
+  readonly rolesInsight?: RolesInsight;
   /** Optional: absent means the Tickets page reports itself not installed. */
   readonly tickets?: TicketConfigService;
   /** Optional: absent means the Wordlist page reports itself not installed. */
@@ -1049,6 +1094,57 @@ export class PanelService {
     if (milestones === undefined) return { access, data: { installed: false, definitions: [] } };
 
     return { access, data: { installed: true, definitions: await milestones.list(guildId) } };
+  }
+
+  /**
+   * Auto-roles and the greeter on one page.
+   *
+   * Together because they answer the same question — what happens to somebody
+   * the moment they arrive — and an admin setting one up almost always wants
+   * the other. Splitting them would mean configuring "joins get the Member
+   * role" and "joins get a welcome message" on two screens that never mention
+   * each other.
+   */
+  async loadRoles(session: PanelSession | null, guildId: string): Promise<PageResult<RolesVM>> {
+    const access = await authorize(session, guildId, "roles", this.d.roles);
+    if (!access.allowed) return this.denied(access, "roles", guildId);
+
+    // Tolerant on read, per the settings convention: a blob somebody hand-edited
+    // into nonsense renders as the defaults and can be fixed on this page,
+    // rather than making the page that fixes it the one page that will not load.
+    const [autoRaw, welcomeRaw] = await Promise.all([
+      this.d.config.getSetting(guildId, AUTO_ROLES_SETTING_KEY),
+      this.d.config.getSetting(guildId, WELCOME_SETTING_KEY),
+    ]);
+    const autoRoles = parseAutoRoles(autoRaw);
+    const welcome = parseWelcome(welcomeRaw);
+
+    const insight = this.d.rolesInsight;
+    if (insight === undefined) return { access, data: { installed: false, autoRoles, welcome, health: null } };
+
+    const [pendingDirty, refusals, jobs] = await Promise.all([
+      insight.pendingDirty(guildId).catch(() => 0),
+      insight.refusals(guildId).catch(() => []),
+      // The reconciler's own job row, so "nothing has changed" can be told apart
+      // from "the pass has not run since Tuesday".
+      this.d.reads.listJobHealth().catch(() => []),
+    ]);
+    const sync = jobs.find((job) => job.type === "role-sync") ?? null;
+
+    return {
+      access,
+      data: {
+        installed: true,
+        autoRoles,
+        welcome,
+        health: {
+          pendingDirty,
+          refusals,
+          lastSyncAt: sync?.lastRunAt ?? null,
+          lastSyncStatus: sync?.lastStatus ?? null,
+        },
+      },
+    };
   }
 
   /**

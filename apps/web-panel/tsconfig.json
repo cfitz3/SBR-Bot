@@ -20,6 +20,7 @@
     { "path": "../../packages/observability" },
     { "path": "../../packages/panel-core" },
     { "path": "../../packages/redis" },
+    { "path": "../../packages/roles" },
     { "path": "../../packages/shared-types" },
     { "path": "../../packages/xp" }
   ]

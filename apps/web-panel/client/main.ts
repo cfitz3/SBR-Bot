@@ -21,6 +21,7 @@ import { renderPermissions } from "./pages/permissions.js";
 import { renderSelector } from "./pages/selector.js";
 import { renderSettings } from "./pages/settings.js";
 import { renderMilestones } from "./pages/milestones.js";
+import { renderRoles } from "./pages/roles.js";
 import { renderTickets } from "./pages/tickets.js";
 
 interface GuildRoute {
@@ -57,6 +58,7 @@ const GUILD_PAGES: readonly GuildPage[] = [
   { id: "tickets", group: "queues", icon: "tickets", render: renderTickets },
   { id: "settings", group: "configure", icon: "settings", render: renderSettings },
   { id: "milestones", group: "configure", icon: "milestones", render: renderMilestones },
+  { id: "roles", group: "configure", icon: "roles", render: renderRoles },
   { id: "permissions", group: "configure", icon: "permissions", render: renderPermissions },
   // The filter has no entry of its own: it is a section of Moderation, next to
   // the automod rules that read the same wordlist. A stale `#/…/wordlist` link

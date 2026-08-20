@@ -27,6 +27,14 @@ export interface RoleGrantRepository {
   recordGrants(guildId: string, discordId: string, rows: readonly GrantRow[], reason: string): Promise<void>;
   /** Close grants, having actually removed the roles (or found them gone). */
   closeGrants(guildId: string, discordId: string, rows: readonly GrantRow[]): Promise<void>;
+  /**
+   * Open grants for a batch of members, keyed by discord id.
+   *
+   * The dry run's read. One query for a page of the roster rather than one per
+   * member: a preview that cost four hundred round trips would be a preview
+   * nobody clicked twice, and an approximated one would be worse than none.
+   */
+  openGrantsByMember(guildId: string, discordIds: readonly string[]): Promise<ReadonlyMap<string, readonly GrantRow[]>>;
   /** Every open grant made by one rule — the panel's "who has this" read. */
   openGrantsForRule(guildId: string, ruleKey: string): Promise<readonly GrantRecord[]>;
 }

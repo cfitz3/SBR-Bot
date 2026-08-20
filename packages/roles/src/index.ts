@@ -25,5 +25,11 @@ export {
   type RoleMemberFacts,
   type RuleOutcome,
 } from "./resolve.js";
+export {
+  previewRoleChanges,
+  type PreviewMember,
+  type RolePreview,
+  type RulePreview,
+} from "./preview.js";
 export type { GrantRecord, RoleGrantRepository } from "./ports.js";
 export * from "./welcome.js";

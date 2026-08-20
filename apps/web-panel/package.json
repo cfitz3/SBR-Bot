@@ -24,6 +24,7 @@
     "@sbr/observability": "*",
     "@sbr/panel-core": "*",
     "@sbr/redis": "*",
+    "@sbr/roles": "*",
     "@sbr/screening": "*",
     "@sbr/shared-types": "*",
     "@sbr/xp": "*"

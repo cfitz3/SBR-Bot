@@ -36,6 +36,7 @@ import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
 import { createRedisAdapters, getRedis, RUNNABLE_JOBS, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
+import { createRolesInsight } from "./roles-insight.js";
 import { createBotDirectory, createDiscordEnforcer, MAX_TIMEOUT_SECONDS, type EnforceRequest } from "./directory.js";
 import { createTicketEffects } from "./ticket-effects.js";
 import { createEventEffects } from "./event-effects.js";
@@ -218,6 +219,8 @@ export async function createPanelApp(): Promise<PanelApp> {
    */
   const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
 
+  const rolesInsight = createRolesInsight({ dirty: adapters.rolesDirty, refusals: adapters.roleRefusals });
+
   const panel = new PanelService({
     roles: rankResolver,
     xp,
@@ -230,6 +233,11 @@ export async function createPanelApp(): Promise<PanelApp> {
     wordlist,
     heartbeats: adapters.heartbeat,
     permissionExceptions: bridgePermissionRepository,
+    // The roster the dry run resolves against, and the reconciler's own
+    // diagnostics. Constructed unconditionally: both halves degrade to an
+    // empty answer rather than throwing, and a Roles page that cannot show a
+    // preview is still a Roles page.
+    rolesInsight,
     // The command table on the Permissions page is the admin bot's own
     // registry, read for its metadata only — the panel never dispatches these.
     // Building it here rather than hardcoding a list is what stops the page
@@ -290,6 +298,9 @@ export async function createPanelApp(): Promise<PanelApp> {
     // The same store the read side lists from, so an exception written here is
     // the row the resolver consults on the relay's next message.
     permissionExceptions: bridgePermissionRepository,
+    // The same object the read side holds, so a dry run and the page that
+    // triggered it are looking at exactly one roster.
+    rolesInsight,
     // "Run now" on the Health page. The panel publishes a request and the
     // worker fleet queues it, so `bullmq` stays out of this process entirely
     // and exactly one writer owns the queue.
