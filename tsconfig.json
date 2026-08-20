@@ -24,6 +24,7 @@
     { "path": "packages/xp" },
     { "path": "packages/leaderboards" },
     { "path": "packages/guild-config" },
+    { "path": "packages/roles" },
     { "path": "packages/analytics" },
     { "path": "packages/commands-bridge" },
     { "path": "packages/commands-admin" },

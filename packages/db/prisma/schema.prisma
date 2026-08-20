@@ -326,8 +326,43 @@ model Guild {
   ticketCategories TicketCategory[]
   ticketPanels     TicketPanel[]
   ticketTags       TicketTag[]
+  roleGrants       RoleGrant[]
 
   @@index([discordGuildId])
+}
+
+/// Discord roles this platform handed out, and the rule that authorised each.
+///
+/// The ledger is what makes revocation safe. Auto-roles only ever remove a role
+/// with an open row here, so a role somebody was given by hand, by another bot,
+/// or by a rule that has since been deleted is never stripped by a reconcile.
+///
+/// Soft-deleted rather than dropped: "we gave this and later took it back" is
+/// the question staff actually ask when somebody complains, and a deleted row
+/// cannot answer it.
+model RoleGrant {
+  id        String    @id @default(cuid())
+  guildId   String
+  discordId String
+  roleId    String
+  /// The `roles.auto` rule key that granted it, or `manual` for a staff grant.
+  /// Only the rule that granted a role may take it back, which is why this is
+  /// part of the row's identity rather than a note on it.
+  ruleKey   String
+  /// Free text for the audit trail — who asked, or which job.
+  reason    String?
+  grantedAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  /// The reconciler's read: every open grant for one member.
+  @@index([guildId, discordId])
+  /// Uniqueness is enforced by a *partial* index over open rows only, declared
+  /// in the migration rather than here — Prisma cannot express `WHERE revokedAt
+  /// IS NULL`, and a total unique constraint would make a revoked grant
+  /// permanently unrepeatable.
+  @@index([guildId, roleId])
 }
 
 model GuildMember {

@@ -63,6 +63,7 @@ export {
 export { xpRepository, activitySink } from "./repositories/xp.js";
 export { leaderboardSource } from "./repositories/leaderboards.js";
 export { milestoneDefinitionRepository, milestoneAnnouncementRepository } from "./repositories/milestones.js";
+export { roleGrantRepository } from "./repositories/role-grants.js";
 export { ticketConfigRepository } from "./repositories/ticket-config.js";
 export {
   ticketRepository,

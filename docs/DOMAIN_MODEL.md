@@ -23,6 +23,7 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | GuildScan | Postgres | Persistent (operational audit) |
 | SelectedSkyblockProfile | Postgres | Persistent (choice); live profile data is cached |
 | GuildConfig | Postgres (cached in Redis) | Persistent |
+| RoleGrant | Postgres | Persistent (append-only in effect; revoked, never deleted) |
 | GuildChannelBinding | Postgres (cached with GuildConfig) | Persistent |
 | GuildSetting | Postgres | Persistent |
 | BridgePermission | Postgres (cached in Redis) | Persistent |
@@ -239,6 +240,35 @@ mirrored `*ChannelId` columns were backfilled into bindings and dropped in
 | `timezone` | for events |
 
 **Relationships:** 1—1 `Guild`.
+
+#### RoleGrant
+Discord roles this platform handed out, and the rule that authorised each one.
+The ledger is what makes revocation safe: an auto-role reconcile only ever
+removes a role that has an **open** row here, so a role a member was given by
+hand, by another bot, or by a rule that has since been deleted is never
+stripped. Grants are closed by setting `revokedAt` rather than deleted — "we
+gave this and later took it back" is the question staff actually ask.
+
+| Field | Notes |
+|-------|-------|
+| `guildId` | FK, cascade |
+| `discordId` | who holds it |
+| `roleId` | the Discord role |
+| `ruleKey` | the `roles.auto` rule that granted it, or `manual`. Part of the row's identity: only the rule that granted a role may take it back |
+| `reason` | free text for the audit trail |
+| `grantedAt`, `revokedAt` | `revokedAt IS NULL` means the grant is live |
+
+**Uniqueness is partial.** One *open* grant per (guild, member, role, rule),
+enforced by `RoleGrant_open_key ... WHERE "revokedAt" IS NULL` in the migration
+rather than in the Prisma schema, which cannot express it. A total constraint
+would make a revoked grant permanently unrepeatable — a member who left the
+guild and came back could never be given the member role again.
+
+**Rows are written after Discord accepted the write, never before.** A row for a
+grant that did not land would authorise a revoke of a role we never gave; a
+grant that landed and was not recorded merely means we do not claim it.
+
+**Relationships:** N—1 `Guild`.
 
 #### GuildChannelBinding
 One Discord channel per named slot, per guild. Replaces the fixed `*ChannelId`
