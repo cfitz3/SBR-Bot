@@ -10,12 +10,23 @@
  * The roster arrives on the same read as the list, keyed by `?event=`, so
  * opening an event never shows counts from one fetch beside names from another.
  *
- * Three parts of §3.8 are not here because they are not in the domain yet:
- * editing a scheduled event, marking who actually turned up, and posting the
- * announcement or reminders to Discord. `CommunityService` has no method for
- * any of them, and a button that silently did nothing would be worse than none.
+ * An open event also shows what the tracker has made of it: the scoreboard the
+ * Discord board is drawn from, and the people going who have no linked account
+ * for it to poll. The second is the more useful half — a missing name on a
+ * leaderboard is otherwise indistinguishable from a member who did nothing.
+ *
+ * Two parts of §3.8 are still not here because they are not in the domain:
+ * marking who actually turned up, and posting the announcement or the
+ * reminders on demand. Attendance has no record to write to, and the reminders
+ * belong to the scheduler — a button racing it would post twice.
  */
-import type { EventAttendance, EventRsvp, EventsVM, PanelEvent } from "@sbr/panel-core";
+import type {
+  EventAttendance,
+  EventMetricStandings,
+  EventRsvp,
+  EventsVM,
+  PanelEvent,
+} from "@sbr/panel-core";
 import { loadPage, postAction } from "../api.js";
 import {
   badge,
@@ -32,7 +43,15 @@ import {
 import { scope, type PanelCopy } from "../copy.js";
 import { h, replace } from "../dom.js";
 import { actionButton, statusSlot } from "../forms.js";
-import { count, countdown, dateTime, localInputToIso } from "../format.js";
+import {
+  compactNumber,
+  count,
+  countdown,
+  dateTime,
+  isoToLocalInput,
+  localInputToIso,
+  relativeTime,
+} from "../format.js";
 
 const t = scope("events");
 const c = scope("common");
@@ -56,13 +75,34 @@ const TYPES = [
 const typeOptions = (): readonly (readonly [string, string])[] =>
   TYPES.map((value) => [value, t("type")[value]] as const);
 
+/**
+ * What the tracker can score, mirroring `EVENT_METRICS` in `@sbr/jobs` and the
+ * copy of it the mutations validate against.
+ *
+ * Offering a metric no capture writes would leave a leaderboard permanently
+ * empty with nothing on the page to explain why, so this list is deliberately
+ * the snapshot's own fields and not a wish list.
+ */
+const METRICS = [
+  "skyblockLevel",
+  "networth",
+  "skillAverage",
+  "catacombsLevel",
+  "slayerXp",
+  "senitherWeight",
+] as const satisfies readonly (keyof PanelCopy["events"]["metric"])[];
+
 /** Statuses that still have a future. */
 const UPCOMING = new Set(["SCHEDULED", "LIVE"]);
 
 const TITLE_MAX = 120;
 const DESCRIPTION_MAX = 2_000;
 
-/** Which event's roster is open. Survives a re-read, like the analytics window. */
+/** The tracker's polling bounds, mirroring `CommunityServiceImpl`. */
+const POLL_MIN = 5;
+const POLL_MAX = 1_440;
+
+/** Which event is open. Survives a re-read, like the analytics window. */
 const state: { selected: string } = { selected: "" };
 
 export async function renderEvents(host: HTMLElement, guildId: string): Promise<void> {
@@ -108,10 +148,12 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
       ),
       card(t("cardCreate"), createForm(guildId, rerender)),
       card(t("cardUpcoming"), upcomingBody(guildId, upcoming, rerender)),
+      open ? card(t("cardManage").replace("{title}", open.title), manageBody(guildId, open, rerender)) : null,
+      open ? card(t("cardScores").replace("{title}", open.title), scoresBody(open, data.standings, data.unlinked)) : null,
       open && data.attendance
         ? card(t("cardRoster").replace("{title}", open.title), rosterBody(data.attendance))
         : null,
-      card(t("cardPast"), pastBody(past)),
+      card(t("cardPast"), pastBody(past, rerender)),
     ),
   );
 }
@@ -297,6 +339,264 @@ function statusTone(status: string): BadgeTone {
   }
 }
 
+// ─────────────────────── managing one event ───────────────────────
+
+/**
+ * The edit form, the tracker's settings, and the two irreversible-ish buttons.
+ *
+ * Like `createForm` this submits as a unit, and for the same reason: a start
+ * time and a capacity that disagree are not two independent edits. Nothing here
+ * saves on blur the way the settings pages do — an event is read by other
+ * people the moment it changes, so a half-typed title should not become the
+ * title.
+ *
+ * Every field is sent on Save, including the ones nobody touched, so the values
+ * on screen are the values stored — a field left alone has no way to quietly
+ * keep an older one.
+ */
+function manageBody(guildId: string, event: PanelEvent, rerender: () => void): HTMLElement {
+  const status = statusSlot();
+  const editable = UPCOMING.has(event.status);
+
+  const title = h("input", {
+    class: "control control-text",
+    type: "text",
+    value: event.title,
+    "aria-label": t("titleLabel"),
+    maxlength: TITLE_MAX,
+    autocomplete: "off",
+  }) as HTMLInputElement;
+
+  const startsAt = h("input", {
+    class: "control control-short",
+    type: "datetime-local",
+    value: isoToLocalInput(event.startsAt),
+    "aria-label": t("startsLabel"),
+  }) as HTMLInputElement;
+
+  const capacity = h("input", {
+    class: "control control-short",
+    type: "number",
+    min: 1,
+    max: 1000,
+    value: event.capacity === null ? "" : String(event.capacity),
+    placeholder: t("capacityPlaceholder"),
+    "aria-label": t("capacityLabel"),
+  }) as HTMLInputElement;
+
+  const description = h("textarea", {
+    class: "control control-area",
+    rows: 2,
+    placeholder: t("descriptionPlaceholder"),
+    "aria-label": t("descriptionLabel"),
+    maxlength: DESCRIPTION_MAX,
+  }) as unknown as HTMLTextAreaElement;
+  description.value = event.description ?? "";
+
+  // Checkboxes rather than a multi-select: six options are few enough to show at
+  // once, and the order they were chosen in matters — the first tracked metric is
+  // the one the Discord board sorts by, which a select box gives no way to show.
+  const tracked = new Set<string>(event.trackedMetrics);
+  const metricBoxes = METRICS.map((metric) => {
+    const box = h("input", {
+      class: "switch-input",
+      type: "checkbox",
+      ...(tracked.has(metric) ? { checked: true } : {}),
+      "aria-label": metricLabel(metric),
+    }) as HTMLInputElement;
+    return { metric, box };
+  });
+
+  const pollInterval = h("input", {
+    class: "control control-short",
+    type: "number",
+    min: POLL_MIN,
+    max: POLL_MAX,
+    value: String(event.pollIntervalMinutes),
+    "aria-label": t("pollLabel"),
+  }) as HTMLInputElement;
+
+  const progression = h("input", {
+    class: "switch-input",
+    type: "checkbox",
+    ...(event.tracksProgression ? { checked: true } : {}),
+    "aria-label": t("progressionLabel"),
+  }) as HTMLInputElement;
+
+  const save = actionButton({
+    label: t("save"),
+    tone: "primary",
+    status,
+    run: async () => {
+      const name = title.value.trim();
+      if (name.length === 0) return { kind: "error", message: t("errNoTitle") };
+
+      const iso = localInputToIso(startsAt.value);
+      if (iso === null) return { kind: "error", message: t("errNoStart") };
+      // Only a scheduled event is held to a future start: once it is live the
+      // start is in the past by definition, and the domain agrees.
+      if (event.status === "SCHEDULED" && Date.parse(iso) <= Date.now()) {
+        return { kind: "error", message: t("errPastStart") };
+      }
+
+      const seatsRaw = capacity.value.trim();
+      const seats = seatsRaw.length === 0 ? null : Number(seatsRaw);
+      if (seats !== null && (!Number.isInteger(seats) || seats < 1)) {
+        return { kind: "error", message: t("errCapacity") };
+      }
+
+      const minutes = Number(pollInterval.value.trim());
+      if (!Number.isInteger(minutes) || minutes < POLL_MIN || minutes > POLL_MAX) {
+        return {
+          kind: "error",
+          message: t("errPoll").replace("{min}", count(POLL_MIN)).replace("{max}", count(POLL_MAX)),
+        };
+      }
+
+      return postAction(guildId, "event.update", {
+        eventId: event.id,
+        title: name,
+        startsAt: iso,
+        capacity: seats,
+        description: description.value.trim(),
+        trackedMetrics: metricBoxes.filter(({ box }) => box.checked).map(({ metric }) => metric),
+        pollIntervalMinutes: minutes,
+        tracksProgression: progression.checked,
+      });
+    },
+    onDone: rerender,
+  });
+
+  const publish = actionButton({
+    label: t("publishBoard"),
+    tone: "plain",
+    status,
+    run: () => postAction(guildId, "event.board.publish", { eventId: event.id }),
+    onDone: rerender,
+  });
+
+  // Finishing is a person's call, not the clock's: an event whose start time has
+  // passed may still be running, and the result card is written once.
+  const complete = editable
+    ? actionButton({
+        label: t("complete"),
+        tone: "primary",
+        confirm: t("completeConfirm"),
+        status,
+        run: () => postAction(guildId, "event.complete", { eventId: event.id }),
+        onDone: rerender,
+      })
+    : null;
+
+  return h(
+    "div",
+    { class: "fields" },
+    h("div", { class: "field-row" }, title),
+    h(
+      "div",
+      { class: "field-row" },
+      h("label", { class: "field-label field-label-inline" }, t("startsInline")),
+      startsAt,
+      h("label", { class: "field-label field-label-inline" }, t("capacityInline")),
+      capacity,
+    ),
+    h("div", { class: "field-row" }, description),
+    h("p", { class: "field-label" }, t("metricsLabel")),
+    h(
+      "div",
+      { class: "field-row metric-grid" },
+      ...metricBoxes.map(({ metric, box }) =>
+        h("label", { class: "switch-check" }, box, h("span", {}, metricLabel(metric))),
+      ),
+    ),
+    h("p", { class: "field-hint" }, t("metricsHint")),
+    h(
+      "div",
+      { class: "field-row" },
+      h("label", { class: "field-label field-label-inline" }, t("pollInline")),
+      pollInterval,
+      h("label", { class: "switch-check" }, progression, h("span", {}, t("progressionLabel"))),
+    ),
+    h("div", { class: "field-row" }, save, complete, status.el),
+    h("p", { class: "field-hint" }, boardLine(event)),
+    h("div", { class: "row-actions" }, publish),
+  );
+}
+
+/** When the Discord board was last written, or that there is not one yet. */
+function boardLine(event: PanelEvent): string {
+  if (event.messageId === null || event.boardUpdatedAt === null) return t("boardNone");
+  return t("boardUpdated").replace("{when}", relativeTime(event.boardUpdatedAt));
+}
+
+/** A metric's words, falling back to the stored key for one we have retired. */
+function metricLabel(metric: string): string {
+  const labels = t("metric") as unknown as Readonly<Record<string, string>>;
+  return labels[metric] ?? metric;
+}
+
+// ─────────────────────────── the scoreboard ───────────────────────────
+
+/**
+ * One column per tracked metric, in the event's own order, so the leftmost
+ * column is the one the Discord board sorts by.
+ *
+ * The scores are gains since the event opened rather than readings, so the `+`
+ * is part of what the number means and not decoration.
+ */
+function scoresBody(
+  event: PanelEvent,
+  standings: readonly EventMetricStandings[],
+  unlinked: readonly EventRsvp[],
+): HTMLElement {
+  // The more useful half of this card: a member missing from a leaderboard
+  // because nothing can poll them looks exactly like one who did nothing.
+  const warning =
+    unlinked.length === 0
+      ? null
+      : h(
+          "p",
+          { class: "field-hint" },
+          t("unlinkedWarning").replace("{count}", count(unlinked.length)),
+          h("span", { class: "muted" }, unlinked.map((e) => e.username ?? e.discordId).join(", ")),
+        );
+
+  if (event.trackedMetrics.length === 0) {
+    return h("div", {}, h("p", { class: "muted" }, t("noMetrics")), warning);
+  }
+
+  return h(
+    "div",
+    {},
+    h(
+      "div",
+      { class: "roster" },
+      ...standings.map((block) =>
+        h(
+          "section",
+          { class: "roster-col" },
+          h("h4", {}, metricLabel(block.metric)),
+          block.entries.length === 0
+            ? h("p", { class: "muted" }, c("dash"))
+            : h(
+                "ul",
+                { class: "roster-list" },
+                ...block.entries.map((entry) =>
+                  h(
+                    "li",
+                    {},
+                    entry.username ? h("span", {}, entry.username) : h("code", {}, entry.discordId),
+                    h("span", { class: "muted" }, ` +${compactNumber(entry.delta)}`),
+                  ),
+                ),
+              ),
+        ),
+      ),
+    ),
+    warning,
+  );
+}
+
 // ─────────────────────────── the roster ───────────────────────────
 
 /**
@@ -345,16 +645,31 @@ function rosterEntry(entry: EventRsvp): HTMLElement {
 
 // ─────────────────────────── history ───────────────────────────
 
-function pastBody(events: readonly PanelEvent[]): HTMLElement {
+function pastBody(events: readonly PanelEvent[], rerender: () => void): HTMLElement {
   if (events.length === 0) return emptyState("eventsHistory");
   return table(
-    [t("colEvent"), t("colType"), t("colOutcome"), t("colStarted"), t("colWent")],
+    [t("colEvent"), t("colType"), t("colOutcome"), t("colStarted"), t("colWent"), t("colResult")],
     events.map((event) => [
       event.title,
       event.type.toLowerCase(),
       badge(event.status.toLowerCase(), statusTone(event.status)),
       dateTime(event.startsAt),
       seats(event),
+      // A finished event still has a scoreboard worth reading, so its row opens
+      // the same cards an upcoming one does, minus the buttons it has outgrown.
+      h(
+        "button",
+        {
+          class: "button",
+          type: "button",
+          "aria-expanded": state.selected === event.id ? "true" : "false",
+          onclick: () => {
+            state.selected = state.selected === event.id ? "" : event.id;
+            rerender();
+          },
+        },
+        state.selected === event.id ? t("hideResult") : t("showResult"),
+      ),
     ]),
   );
 }

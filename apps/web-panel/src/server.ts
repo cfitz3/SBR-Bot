@@ -709,6 +709,12 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.createEvent(session, guildId, b));
       case "event.cancel":
         return sendMutation(res, await m.cancelEvent(session, guildId, b["eventId"]));
+      case "event.update":
+        return sendMutation(res, await m.updateEvent(session, guildId, b));
+      case "event.complete":
+        return sendMutation(res, await m.completeEvent(session, guildId, b["eventId"]));
+      case "event.board.publish":
+        return sendMutation(res, await m.publishEventBoard(session, guildId, b["eventId"]));
       case "member.role":
         return sendMutation(res, await m.setMemberRole(session, guildId, b["discordId"], b["role"]));
       case "member.unlink":

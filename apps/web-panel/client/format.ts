@@ -174,6 +174,21 @@ export function localInputToIso(raw: string): string | null {
 }
 
 /**
+ * The inverse: an instant, as the local wall time a `datetime-local` shows.
+ *
+ * Built from the parts rather than from `toISOString().slice(0, 16)`, which
+ * would render UTC and move every prefilled edit form by the viewer's offset —
+ * the same bug `localInputToIso` exists to avoid, in the other direction.
+ */
+export function isoToLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${String(at.getFullYear())}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+/**
  * Job type ids are kebab-case in the database (`guild-roster-sync`). Staff read
  * these on the Health page, so they get title-cased on the way out.
  */

@@ -332,7 +332,7 @@ than buttons only, and the RSVP/run **button routes**.
 
 The last one is the largest gap: the spec treats event scheduling as staff work,
 the code treats it as a member capability. The web panel sides with the spec —
-`event.create` and `event.cancel` are OFFICER-tier there — so the same action
+every `event.*` mutation is OFFICER-tier there — so the same action
 currently has two different bars depending on the surface.
 
 ### 5.4 Option drift (8)

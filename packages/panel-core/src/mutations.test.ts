@@ -33,7 +33,7 @@ import { ROLE_POLICY_SETTING_KEY } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import type { PanelSession, RoleResolver } from "./access.js";
 import type { PermissionExceptionStore } from "./reads.js";
-import type { TicketEffects } from "./mutations.js";
+import type { EventEffects, TicketEffects } from "./mutations.js";
 import {
   MANUAL_JOB_COOLDOWN_MS,
   MUTATION_COOLDOWN_MS,
@@ -142,6 +142,16 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
     setMemberRole: record("setMemberRole"),
     createEvent: record("createEvent"),
     cancelEvent: record("cancelEvent"),
+    updateEvent: record("updateEvent"),
+    completeEvent: record("completeEvent"),
+    // The one method here that has to answer with something rather than record:
+    // every event mutation re-reads the event to check it belongs to this guild,
+    // and `evt_other` is the id that does not.
+    async getEvent(eventId: string) {
+      recorded.calls.push({ method: "getEvent", args: [eventId] });
+      if (eventId === "evt_gone") return ok(null);
+      return ok({ id: eventId, guildId: eventId === "evt_other" ? "g2" : "g1" });
+    },
   } as unknown as CommunityService;
   const identity = { unlink: record("unlink") } as unknown as IdentityService;
   return { moderation, community, identity };
@@ -284,6 +294,16 @@ function ticketEffectsRecorder(recorded: Recorded, throws = false): TicketEffect
   };
 }
 
+/** The board publisher, recorded like the ticket one it is modelled on. */
+function eventEffectsRecorder(recorded: Recorded, throws = false): EventEffects {
+  return {
+    async publishBoard(guildId, eventId, actorDiscordId) {
+      if (throws) throw new Error("the bridge is not connected");
+      recorded.calls.push({ method: "publishBoard", args: [guildId, eventId, actorDiscordId] });
+    },
+  };
+}
+
 /**
  * The chat filter, recorded the same way. `refuse` stands in for the service's
  * own validation — an unparseable regex or a pattern that already exists — which
@@ -371,6 +391,10 @@ function make(
     noTicketEffects?: boolean;
     /** The bot refused the publish. */
     ticketEffectsThrow?: boolean;
+    /** Same, for a panel process with no bot to draw the event board. */
+    noEventEffects?: boolean;
+    /** The bot refused the board publish. */
+    eventEffectsThrow?: boolean;
     /** Same, for a deployment without the chat filter. */
     noWordlist?: boolean;
     /** What the filter service refuses with, when it refuses. */
@@ -412,6 +436,9 @@ function make(
     ...(over.noTicketEffects === true
       ? {}
       : { ticketEffects: ticketEffectsRecorder(recorded, over.ticketEffectsThrow === true) }),
+    ...(over.noEventEffects === true
+      ? {}
+      : { eventEffects: eventEffectsRecorder(recorded, over.eventEffectsThrow === true) }),
     ...(over.noWordlist === true
       ? {}
       : {
@@ -916,6 +943,125 @@ test("cancelling passes the actor through, so the host check has something to co
   assert.equal((await mutations.cancelEvent(session(), "g1", "not an id!")).error?.kind, "INVALID_INPUT");
   assert.equal((await mutations.cancelEvent(session(), "g1", "evt_1")).ok, true);
   assert.deepEqual(recorded.calls[0], { method: "cancelEvent", args: ["evt_1", "111"] });
+});
+
+/**
+ * The panel edits on behalf of the guild, not of the host: reaching this
+ * mutation already required the Officer tier, and an officer who cannot fix a
+ * colleague's typo has to cancel and re-create the event to do it.
+ */
+test("an edit is sent as staff, with only the fields the form supplied", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.updateEvent(session(), "g1", {
+    eventId: "evt_1",
+    title: "  F7 carry night  ",
+    trackedMetrics: ["networth"],
+    pollIntervalMinutes: 15,
+    tracksProgression: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls[1], {
+    method: "updateEvent",
+    args: [
+      {
+        eventId: "evt_1",
+        actorDiscordId: "111",
+        isStaff: true,
+        title: "F7 carry night",
+        trackedMetrics: ["networth"],
+        pollIntervalMinutes: 15,
+        tracksProgression: true,
+      },
+    ],
+  });
+  // How the write was authorised is not what changed, and the trail records the
+  // actor of its own accord.
+  const change = recorded.audits[0]?.change as Record<string, unknown> | undefined;
+  assert.equal(change?.["actorDiscordId"], undefined);
+  assert.equal(change?.["isStaff"], undefined);
+  assert.equal(change?.["title"], "F7 carry night");
+});
+
+test("an edit is refused a metric nothing captures, and a description nobody could read", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const bad = async (over: Record<string, unknown>): Promise<string | undefined> =>
+    (await mutations.updateEvent(session(), "g1", { eventId: "evt_1", ...over })).error?.kind;
+
+  assert.equal(await bad({ trackedMetrics: ["dungeonSecrets"] }), "INVALID_INPUT");
+  assert.equal(await bad({ trackedMetrics: "networth" }), "INVALID_INPUT");
+  assert.equal(await bad({ title: "   " }), "INVALID_INPUT");
+  assert.equal(await bad({ startsAt: "next tuesday" }), "INVALID_INPUT");
+  assert.equal(await bad({ capacity: 0 }), "INVALID_INPUT");
+  assert.equal(await bad({ pollIntervalMinutes: 12.5 }), "INVALID_INPUT");
+  assert.equal(await bad({ tracksProgression: "yes" }), "INVALID_INPUT");
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "updateEvent"), []);
+});
+
+/**
+ * The service knows about events, not about which server is asking, so pasting
+ * another guild's event id into this guild's page has to fail here or nowhere.
+ */
+test("an event belonging to another guild is not editable from this one", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.updateEvent(session(), "g1", { eventId: "evt_other", title: "x" })).error?.kind, "INVALID_INPUT");
+  assert.equal((await mutations.completeEvent(session(), "g1", "evt_other")).error?.kind, "INVALID_INPUT");
+  assert.equal((await mutations.publishEventBoard(session(), "g1", "evt_other")).error?.kind, "INVALID_INPUT");
+  assert.deepEqual(recorded.calls.filter((c) => c.method !== "getEvent"), []);
+});
+
+test("an event id naming nothing is refused rather than written to", async () => {
+  const { mutations } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.updateEvent(session(), "g1", { eventId: "not an id!" })).error?.kind, "INVALID_INPUT");
+  assert.equal((await mutations.updateEvent(session(), "g1", { eventId: "evt_gone" })).error?.kind, "INVALID_INPUT");
+});
+
+test("finishing an event is staff work too, and names the actor", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.completeEvent(session(), "g1", "evt_1")).ok, true);
+  assert.deepEqual(recorded.calls[1], { method: "completeEvent", args: ["evt_1", "111", true] });
+});
+
+test("publishing the board hands the bot the event and the actor", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.publishEventBoard(session(), "g1", "evt_1")).ok, true);
+  assert.deepEqual(recorded.calls[1], { method: "publishBoard", args: ["g1", "evt_1", "111"] });
+});
+
+/** A panel with no bot behind it says so, rather than reporting a phantom post. */
+test("publishing with no bot connected is unavailable, not a success", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" }, noEventEffects: true });
+
+  const result = await mutations.publishEventBoard(session(), "g1", "evt_1");
+  assert.equal(result.error?.kind, "SERVICE_ERROR");
+  assert.match(String(result.error?.detail), /No bot is connected/);
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a bot that refuses the board reports the refusal", async () => {
+  const { mutations } = make({ roleMap: { "111": "OFFICER" }, eventEffectsThrow: true });
+
+  const result = await mutations.publishEventBoard(session(), "g1", "evt_1");
+  assert.equal(result.error?.kind, "SERVICE_ERROR");
+});
+
+test("editing, finishing and publishing are all Officer work", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "MODERATOR" } });
+
+  const edited = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", title: "x" });
+  const done = await mutations.completeEvent(session(), "g1", "evt_1");
+  const published = await mutations.publishEventBoard(session(), "g1", "evt_1");
+
+  assert.equal(edited.access.allowed, false);
+  assert.equal(done.access.allowed, false);
+  assert.equal(published.access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
 });
 
 test("events are Officer work — a moderator is refused both halves", async () => {

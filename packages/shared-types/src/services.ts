@@ -604,6 +604,16 @@ export interface CommunityService {
   createEvent(input: NewEvent): Promise<Result<EventDTO, EventError>>;
   getEvent(eventId: string): Promise<Result<EventDTO | null>>;
   cancelEvent(eventId: string, actorDiscordId: string): Promise<Result<EventDTO, EventError>>;
+  /** Change a scheduled event. Host, or staff acting on their behalf. */
+  updateEvent(input: EventEdit): Promise<Result<EventDTO, EventError>>;
+  /**
+   * End an event that has run, stamping `endsAt`.
+   *
+   * Separate from `cancelEvent` because the two mean opposite things to
+   * everyone downstream: a completed event's tracker board is rewritten once
+   * more as its result card, and a cancelled one's says it was called off.
+   */
+  completeEvent(eventId: string, actorDiscordId: string, isStaff?: boolean): Promise<Result<EventDTO, EventError>>;
   /** Records a response, downgrading GOING to WAITLIST when the event is full. */
   rsvp(eventId: string, discordId: string, state: RSVPState): Promise<Result<RsvpOutcome, EventError>>;
   getAttendance(eventId: string): Promise<Result<AttendanceDTO, EventError>>;
@@ -659,6 +669,30 @@ export interface NewEvent {
   readonly hostDiscordId: string;
   readonly description?: string | null;
   readonly capacity?: number | null;
+  readonly tracksProgression?: boolean;
+}
+
+/**
+ * A change to an event that has not happened yet.
+ *
+ * Every field but the id is optional and absent means "leave it alone", the
+ * same contract as `LfgEdit`: the panel's form submits only what the operator
+ * touched, so a host editing a start time cannot blank a description they never
+ * opened. `isStaff` exists for the same reason it does on LFG — the host owns
+ * their event, and staff act above that rather than around it.
+ */
+export interface EventEdit {
+  readonly eventId: string;
+  readonly actorDiscordId: string;
+  /** True when the actor may edit anybody's event. */
+  readonly isStaff?: boolean;
+  readonly title?: string;
+  readonly description?: string | null;
+  readonly startsAt?: string;
+  readonly capacity?: number | null;
+  /** Metric keys the tracker scores. An empty array turns scoring off. */
+  readonly trackedMetrics?: readonly string[];
+  readonly pollIntervalMinutes?: number;
   readonly tracksProgression?: boolean;
 }
 

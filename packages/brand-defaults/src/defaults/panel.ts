@@ -649,7 +649,9 @@ export const DEFAULT_PANEL = {
     tileGoing: "Going to next",
     cardCreate: "Schedule an event",
     cardUpcoming: "Upcoming",
-    /** `{title}` is the open event's own name. */
+    /** `{title}` is the open event's own name, in all three cards. */
+    cardManage: "Edit — {title}",
+    cardScores: "Scoreboard — {title}",
     cardRoster: "Who's coming — {title}",
     cardPast: "Finished and cancelled",
     titlePlaceholder: "Catacombs F7 carry night",
@@ -689,6 +691,39 @@ export const DEFAULT_PANEL = {
     colOutcome: "Outcome",
     colStarted: "Started",
     colWent: "Went",
+    colResult: "Result",
+    showResult: "View result",
+    hideResult: "Hide result",
+    /**
+     * What the tracker can score, keyed by the metric names stored on the
+     * event. A metric we later retire still has scores on old events, so the
+     * page falls back to the stored key rather than showing a blank column.
+     */
+    metric: {
+      skyblockLevel: "Skyblock level",
+      networth: "Networth",
+      skillAverage: "Skill average",
+      catacombsLevel: "Catacombs",
+      slayerXp: "Slayer XP",
+      senitherWeight: "Weight",
+    },
+    save: "Save changes",
+    metricsLabel: "Track",
+    metricsHint: "The first one ticked is what the Discord board sorts by. Ticking none turns scoring off without deleting the scores already collected.",
+    pollLabel: "Minutes between checks",
+    pollInline: "Check every (min)",
+    progressionLabel: "Count towards progression",
+    /** `{min}` and `{max}` are the domain's own polling bounds. */
+    errPoll: "Checks have to be between {min} and {max} minutes apart.",
+    complete: "Mark as run",
+    completeConfirm: "Confirm finish",
+    publishBoard: "Update board now",
+    boardNone: "No board has been posted to Discord yet.",
+    /** `{when}` is a relative time, e.g. "3 minutes ago". */
+    boardUpdated: "Board last updated {when}.",
+    noMetrics: "This event is not scoring anything.",
+    /** `{count}` people going, followed by their names. */
+    unlinkedWarning: "{count} going have no verified account, so nothing can score them: ",
   },
   /**
    * Moderation: what happens to a member, and who decided it.

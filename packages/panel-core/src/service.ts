@@ -83,6 +83,7 @@ import type {
   JoinAttempt,
   MembershipStats,
   PanelEvent,
+  EventStandingRow,
   PanelReads,
   RollupPeriod,
   RollupPoint,
@@ -262,12 +263,72 @@ export interface EventAttendance {
   readonly waitlist: readonly EventRsvp[];
 }
 
+/** One member's place on one metric's board, with a name where there is one. */
+export interface EventStanding {
+  readonly discordId: string;
+  readonly username: string | null;
+  readonly delta: number;
+}
+
+/**
+ * One tracked metric's board. A metric with no rows is still present: "nobody
+ * has gained anything yet" and "this metric is not being scored" are different
+ * facts, and an absent block would blur them.
+ */
+export interface EventMetricStandings {
+  readonly metric: string;
+  readonly entries: readonly EventStanding[];
+}
+
 export interface EventsVM {
   readonly events: readonly PanelEvent[];
   /** The event whose roster is attached, or "" when none was asked for. */
   readonly selected: string;
   /** Null when nothing is selected, or when the event vanished between reads. */
   readonly attendance: EventAttendance | null;
+  /**
+   * The open event's live scores, in the order the organiser listed the
+   * metrics — the first is the one the Discord board sorts by. Empty when
+   * nothing is selected or the event scores nothing.
+   */
+  readonly standings: readonly EventMetricStandings[];
+  /**
+   * People who said they are coming but have no verified Minecraft account.
+   *
+   * The tracker cannot score them — it has nothing to poll — so they would
+   * otherwise simply be missing from the board with no explanation. Naming them
+   * here is what turns a silent gap into something staff can fix.
+   */
+  readonly unlinked: readonly EventRsvp[];
+}
+
+/** What one roster read yields: the roster itself, and the two things derived from it. */
+interface EventDetail {
+  readonly attendance: EventAttendance;
+  readonly names: ReadonlyMap<string, string | null>;
+  readonly unlinked: readonly EventRsvp[];
+}
+
+/**
+ * Group the scores into one block per tracked metric.
+ *
+ * The order is the event's own metric order rather than the database's, because
+ * the first metric is the one the Discord board ranks by and the panel showing
+ * a different first column would make the two look like they disagree. Scores
+ * on a metric no longer tracked are dropped from the blocks but not from the
+ * database — untracking a metric is a change of what is shown, not a deletion.
+ */
+function standingsOf(
+  metrics: readonly string[],
+  scores: readonly EventStandingRow[],
+  names: ReadonlyMap<string, string | null>,
+): readonly EventMetricStandings[] {
+  return metrics.map((metric) => ({
+    metric,
+    entries: scores
+      .filter((score) => score.metric === metric)
+      .map((score) => ({ discordId: score.discordId, username: names.get(score.discordId) ?? null, delta: score.delta })),
+  }));
 }
 
 /**
@@ -763,25 +824,43 @@ export class PanelService {
 
     const events = await this.d.reads.listEvents(guildId);
     const selected = eventId.trim();
-    if (selected.length === 0 || !events.some((event) => event.id === selected)) {
+    const open = events.find((event) => event.id === selected) ?? null;
+    if (open === null) {
       // An unknown id is treated as no selection rather than an error: the id
       // comes from the URL, and a stale link should show the list, not a fault.
-      return { access, data: { events, selected: "", attendance: null } };
+      return { access, data: { events, selected: "", attendance: null, standings: [], unlinked: [] } };
     }
 
-    const attendance = await this.attendanceOf(guildId, selected);
-    return { access, data: { events, selected, attendance } };
+    const [detail, scores] = await Promise.all([
+      this.attendanceOf(guildId, selected),
+      // Asked for whether or not the event scores anything: an event whose
+      // metrics were cleared mid-run still has the scores it collected, and
+      // hiding them would look like the tracker had lost them.
+      this.d.reads.eventStandings(selected),
+    ]);
+
+    return {
+      access,
+      data: {
+        events,
+        selected,
+        attendance: detail?.attendance ?? null,
+        standings: standingsOf(open.trackedMetrics, scores, detail?.names ?? new Map()),
+        unlinked: detail?.unlinked ?? [],
+      },
+    };
   }
 
   /**
-   * One event's RSVPs with names attached.
+   * One event's RSVPs with names attached, plus the two things computed from
+   * the same roster read: who is unlinked, and the names the standings borrow.
    *
    * The roster stores Discord ids; the roster read supplies the usernames, so a
    * page whose whole job is "who is coming" shows people rather than snowflakes.
    * A member with no platform record still appears — unnamed is better than
    * missing from a list someone is about to count heads from.
    */
-  private async attendanceOf(guildId: string, eventId: string): Promise<EventAttendance | null> {
+  private async attendanceOf(guildId: string, eventId: string): Promise<EventDetail | null> {
     const [result, members] = await Promise.all([
       this.d.community.getAttendance(eventId),
       this.d.reads.listLinkedMembers(guildId),
@@ -789,6 +868,13 @@ export class PanelService {
     if (!result.ok) return null;
 
     const names = new Map(members.map((member) => [member.discordId, member.username ?? null]));
+    // Verified, not merely present: an unverified row has no account the
+    // tracker may poll, so counting it as linked would promise a score that
+    // never arrives.
+    const linked = new Set(
+      members.filter((member) => member.verification === "VERIFIED" && member.uuid !== null)
+        .map((member) => member.discordId),
+    );
     const roster = (entries: readonly RsvpEntryDTO[]): readonly EventRsvp[] =>
       entries.map((entry) => ({
         discordId: entry.discordId,
@@ -798,12 +884,19 @@ export class PanelService {
       }));
 
     const dto = result.value;
+    const going = roster(dto.going);
     return {
-      eventId,
-      going: roster(dto.going),
-      maybe: roster(dto.maybe),
-      declined: roster(dto.declined),
-      waitlist: roster(dto.waitlist),
+      attendance: {
+        eventId,
+        going,
+        maybe: roster(dto.maybe),
+        declined: roster(dto.declined),
+        waitlist: roster(dto.waitlist),
+      },
+      names,
+      // Only the people who said they are coming: a "maybe" who never linked is
+      // not a problem anybody has to fix before the event starts.
+      unlinked: going.filter((entry) => !linked.has(entry.discordId)),
     };
   }
 

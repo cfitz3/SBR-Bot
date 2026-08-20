@@ -21,6 +21,7 @@ import type {
   ModerationSurface,
   CommunityService,
   ConfigChannelSlot,
+  EventEdit,
   EventType,
   GuildConfigService,
   HypixelResult,
@@ -246,6 +247,10 @@ export const MUTATION_TIERS = {
   /** Events are Officer work in §3.8, both scheduling and calling one off. */
   "event.create": "OFFICER",
   "event.cancel": "OFFICER",
+  "event.update": "OFFICER",
+  "event.complete": "OFFICER",
+  /** Redrawing the tracker board edits a message in a members-visible channel. */
+  "event.board.publish": "OFFICER",
   "member.unlink": "OFFICER",
   /**
    * Admin, though §3.10 says Officer for member edits.
@@ -383,6 +388,19 @@ export interface TicketEffects {
   resendTranscript(guildId: string, ticketId: string, actorDiscordId: string): Promise<void>;
 }
 
+/**
+ * The Discord side of an event, done by whichever process holds a gateway.
+ *
+ * One method rather than "announce" and "remind" as well, because the tracker
+ * board is the only event message the panel can ask for on demand: the reminder
+ * and the announcement are the scheduler's, and a button that raced it would
+ * post the same thing twice.
+ */
+export interface EventEffects {
+  /** Post the tracker board into its channel, or edit the one already there. */
+  publishBoard(guildId: string, eventId: string, actorDiscordId: string): Promise<void>;
+}
+
 export interface PanelMutationsDeps {
   readonly roles: RoleResolver;
   readonly config: GuildConfigService;
@@ -406,6 +424,11 @@ export interface PanelMutationsDeps {
    * success for something that never happened.
    */
   readonly ticketEffects?: TicketEffects;
+  /**
+   * Optional like the ticket side: without a bridge the board still redraws on
+   * its half-hourly pass, and the button says so rather than pretending.
+   */
+  readonly eventEffects?: EventEffects;
   /** Optional like XP: absent refuses the write instead of crashing. */
   readonly wordlist?: WordlistService;
   /**
@@ -612,6 +635,24 @@ const DESCRIPTION_MAX = 2_000;
 
 /** A guild-sized ceiling. The floor (≥ 1) is CommunityService's own rule. */
 const MAX_CAPACITY = 1_000;
+
+/**
+ * The metrics an event can be scored on, mirroring `EVENT_METRICS` in
+ * `@sbr/jobs`.
+ *
+ * Mirrored rather than imported for the same reason `EVENT_TYPES` is: the panel
+ * does not depend on the worker package, and a metric the capture never writes
+ * would leave a leaderboard permanently empty with nothing to point at. The
+ * mirror is checked by the tracker's own tests, which use the real list.
+ */
+const EVENT_METRICS: readonly string[] = [
+  "skyblockLevel",
+  "networth",
+  "skillAverage",
+  "catacombsLevel",
+  "slayerXp",
+  "senitherWeight",
+];
 
 /**
  * Roles assignable from the panel.
@@ -2618,6 +2659,141 @@ export class PanelMutations {
         capacity,
       });
       return { result, change: { title, type, startsAt, capacity, description } };
+    });
+  }
+
+  /**
+   * Change an event that has not finished yet.
+   *
+   * Only the keys present in the body are sent on, so the page can submit the
+   * one section the operator opened. `isStaff` is true because reaching this
+   * mutation already required the Officer tier: the host rule inside
+   * `CommunityService` is there for command callers, and re-applying it here
+   * would mean an officer could not fix a colleague's typo.
+   */
+  async updateEvent(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "event.update", async (actorDiscordId) => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const eventId = body["eventId"];
+      if (typeof eventId !== "string" || !ENTITY_ID.test(eventId)) return invalid("eventId must be an event id");
+
+      const found = await this.d.community.getEvent(eventId);
+      if (!found.ok) return { result: found, change: { eventId } };
+      // Checked here rather than left to the service: the service knows about
+      // events, not about which server is asking, and an id from another guild
+      // must not be editable by pasting it into this one's page.
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such event");
+
+      const edit: Record<string, unknown> = { eventId, actorDiscordId, isStaff: true };
+
+      if (body["title"] !== undefined) {
+        const title = typeof body["title"] === "string" ? body["title"].trim() : "";
+        if (title.length === 0) return invalid("a title is required");
+        if (title.length > EVENT_TITLE_MAX) return invalid(`title must be under ${EVENT_TITLE_MAX} characters`);
+        edit["title"] = title;
+      }
+
+      if (body["description"] !== undefined) {
+        const raw = typeof body["description"] === "string" ? body["description"].trim() : "";
+        if (raw.length > DESCRIPTION_MAX) return invalid(`description must be under ${DESCRIPTION_MAX} characters`);
+        edit["description"] = raw.length === 0 ? null : raw;
+      }
+
+      if (body["startsAt"] !== undefined) {
+        const startsAt = body["startsAt"];
+        if (typeof startsAt !== "string" || Number.isNaN(Date.parse(startsAt))) {
+          return invalid("startsAt must be a date and time");
+        }
+        edit["startsAt"] = new Date(startsAt).toISOString();
+      }
+
+      if (body["capacity"] !== undefined) {
+        const raw = body["capacity"];
+        if (raw !== null) {
+          if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > MAX_CAPACITY) {
+            return invalid(`capacity must be a whole number between 1 and ${MAX_CAPACITY}`);
+          }
+        }
+        edit["capacity"] = raw;
+      }
+
+      if (body["trackedMetrics"] !== undefined) {
+        const raw = body["trackedMetrics"];
+        if (!Array.isArray(raw) || raw.some((metric) => typeof metric !== "string")) {
+          return invalid("trackedMetrics must be a list of metric names");
+        }
+        const unknown = (raw as string[]).filter((metric) => !EVENT_METRICS.includes(metric));
+        if (unknown.length > 0) return invalid(`unknown metric: ${unknown.join(", ")}`);
+        edit["trackedMetrics"] = raw as string[];
+      }
+
+      if (body["pollIntervalMinutes"] !== undefined) {
+        const raw = body["pollIntervalMinutes"];
+        if (typeof raw !== "number" || !Number.isInteger(raw)) return invalid("pollIntervalMinutes must be a number");
+        edit["pollIntervalMinutes"] = raw;
+      }
+
+      if (body["tracksProgression"] !== undefined) {
+        if (typeof body["tracksProgression"] !== "boolean") return invalid("tracksProgression must be true or false");
+        edit["tracksProgression"] = body["tracksProgression"];
+      }
+
+      const result = await this.d.community.updateEvent(edit as unknown as EventEdit);
+      // The actor and the staff flag are how the write was authorised, not what
+      // changed, and the audit trail records the actor of its own accord.
+      const { actorDiscordId: _actor, isStaff: _staff, ...changed } = edit;
+      return { result, change: changed };
+    });
+  }
+
+  /**
+   * Mark an event as run.
+   *
+   * Deliberately manual. The scheduler cannot know an event finished — it knows
+   * only that its start time has passed — and closing one automatically would
+   * write a result card in the middle of a run that went long.
+   */
+  async completeEvent(session: PanelSession | null, guildId: string, eventId: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "event.complete", async (actorDiscordId) => {
+      if (typeof eventId !== "string" || !ENTITY_ID.test(eventId)) {
+        return invalid("eventId must be an event id");
+      }
+      const found = await this.d.community.getEvent(eventId);
+      if (!found.ok) return { result: found, change: { eventId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such event");
+
+      const result = await this.d.community.completeEvent(eventId, actorDiscordId, true);
+      return { result, change: { eventId } };
+    });
+  }
+
+  /**
+   * Redraw the tracker board now, rather than waiting for the half-hourly pass.
+   *
+   * The button exists because the pass is the slowest thing about the feature:
+   * an organiser who has just corrected the metric list wants to see the board
+   * agree with it, and half an hour of a wrong board is half an hour of members
+   * asking why their score is missing.
+   */
+  async publishEventBoard(session: PanelSession | null, guildId: string, eventId: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "event.board.publish", async (actorDiscordId) => {
+      const effects = this.d.eventEffects;
+      if (effects === undefined) return unavailable("No bot is connected to post the board");
+      if (typeof eventId !== "string" || !ENTITY_ID.test(eventId)) {
+        return invalid("eventId must be an event id");
+      }
+      const found = await this.d.community.getEvent(eventId);
+      if (!found.ok) return { result: found, change: { eventId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such event");
+
+      try {
+        await effects.publishBoard(guildId, eventId, actorDiscordId);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return { result: { ok: true }, change: { eventId } };
     });
   }
 

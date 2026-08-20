@@ -66,6 +66,22 @@ export interface LfgInsert {
   readonly members: readonly string[];
 }
 
+/**
+ * A change to an event. Absent means "leave it alone"; `null` on a nullable
+ * field clears it.
+ */
+export interface EventPatch {
+  readonly title?: string;
+  readonly description?: string | null;
+  readonly startsAt?: Date;
+  readonly endsAt?: Date | null;
+  readonly capacity?: number | null;
+  readonly status?: EventStatus;
+  readonly trackedMetrics?: readonly string[];
+  readonly pollIntervalMinutes?: number;
+  readonly tracksProgression?: boolean;
+}
+
 /** A post edit. Absent means "leave it alone"; `null` on a nullable field clears it. */
 export interface LfgPatch {
   readonly title?: string | null;
@@ -112,6 +128,11 @@ export interface CommunityRepository {
   createEvent(input: NewEvent): Promise<EventDTO>;
   getEvent(eventId: string): Promise<EventDTO | null>;
   setEventStatus(eventId: string, status: EventStatus): Promise<EventDTO | null>;
+  /**
+   * Applies only the fields present, like `updateLfg`. Whether an edit is
+   * *allowed* is the service's decision, never this one's.
+   */
+  updateEvent(eventId: string, patch: EventPatch): Promise<EventDTO | null>;
   getAttendance(eventId: string): Promise<AttendanceDTO | null>;
 
   // ── LFG ──

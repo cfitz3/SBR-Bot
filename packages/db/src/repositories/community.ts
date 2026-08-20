@@ -18,7 +18,7 @@ import type {
   RSVPState,
   RsvpEntryDTO,
 } from "@sbr/shared-types";
-import type { LfgInsert, LfgPatch, TicketPatch } from "@sbr/community";
+import type { EventPatch, LfgInsert, LfgPatch, TicketPatch } from "@sbr/community";
 import { prisma } from "../client.js";
 import { ticketConfigRepository } from "./ticket-config.js";
 import { ticketRepository } from "./tickets.js";
@@ -225,6 +225,34 @@ export const communityRepository = {
   async setEventStatus(eventId: string, status: EventStatus): Promise<EventDTO | null> {
     const row = await prisma.event
       .update({ where: { id: eventId }, data: { status }, include: { _count: { select: { rsvps: true } } } })
+      .catch(() => null);
+    return row ? toEventDTO(row, row._count.rsvps) : null;
+  },
+
+  /**
+   * Applies whatever the patch carries.
+   *
+   * `undefined` keys are dropped by Prisma rather than written as null, so the
+   * "absent means leave it alone" contract is the driver's own behaviour and not
+   * something this function has to reconstruct field by field.
+   */
+  async updateEvent(eventId: string, patch: EventPatch): Promise<EventDTO | null> {
+    const row = await prisma.event
+      .update({
+        where: { id: eventId },
+        data: {
+          ...(patch.title === undefined ? {} : { title: patch.title }),
+          ...(patch.description === undefined ? {} : { description: patch.description }),
+          ...(patch.startsAt === undefined ? {} : { startsAt: patch.startsAt }),
+          ...(patch.endsAt === undefined ? {} : { endsAt: patch.endsAt }),
+          ...(patch.capacity === undefined ? {} : { capacity: patch.capacity }),
+          ...(patch.status === undefined ? {} : { status: patch.status }),
+          ...(patch.pollIntervalMinutes === undefined ? {} : { pollIntervalMinutes: patch.pollIntervalMinutes }),
+          ...(patch.tracksProgression === undefined ? {} : { tracksProgression: patch.tracksProgression }),
+          ...(patch.trackedMetrics === undefined ? {} : { trackedMetrics: [...patch.trackedMetrics] }),
+        },
+        include: { _count: { select: { rsvps: true } } },
+      })
       .catch(() => null);
     return row ? toEventDTO(row, row._count.rsvps) : null;
   },

@@ -37,6 +37,7 @@ import { createRedisAdapters, getRedis, RUNNABLE_JOBS, startHeartbeat } from "@s
 import { randomUUID } from "node:crypto";
 import { createBotDirectory, createDiscordEnforcer, MAX_TIMEOUT_SECONDS, type EnforceRequest } from "./directory.js";
 import { createTicketEffects } from "./ticket-effects.js";
+import { createEventEffects } from "./event-effects.js";
 import type { ModerationActionDTO } from "@sbr/shared-types";
 
 /**
@@ -294,6 +295,13 @@ export async function createPanelApp(): Promise<PanelApp> {
     // live where the *bridge* bot is, so this dials that process rather than
     // the admin one the pickers use.
     ticketEffects: createTicketEffects({
+      baseUrl: config.internalApi.bridgeBaseUrl,
+      token: config.internalApi.token,
+      logger: log,
+    }),
+    // Same bridge, same token: the tracker board lives in a guild channel the
+    // bridge bot is in, and redrawing it is one REST call there.
+    eventEffects: createEventEffects({
       baseUrl: config.internalApi.bridgeBaseUrl,
       token: config.internalApi.token,
       logger: log,

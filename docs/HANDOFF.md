@@ -1,4 +1,4 @@
-# Handoff — 19 August 2026
+# Handoff — 20 August 2026
 
 Where the build stands, what is safe to run in production right now, and what
 the next session picks up. Written at a deliberate stopping point: the tree
@@ -8,10 +8,10 @@ so out loud.
 ## State
 
 - **Build**: `npx tsc -b` and `npm run build -w @sbr/app-web-panel` both exit 0.
-- **Tests**: `npm test` — 1497 pass, 0 fail, 1 skipped (a POSIX file-mode
+- **Tests**: `npm test` — 1522 pass, 0 fail, 1 skipped (a POSIX file-mode
   assertion that cannot hold on Windows).
-- **Brand checker**: `npm run brand check` clean; 70 command descriptions within
-  Discord's cap, 43 theme tokens all with fallbacks, 60 gallery cards with no
+- **Brand checker**: `npm run brand check` clean; 80 command descriptions within
+  Discord's cap, 43 theme tokens all with fallbacks, 63 gallery cards with no
   error-severity issues.
 - **CSP**: no `innerHTML`, no inline `style=`, no off-origin host anywhere in
   `apps/web-panel/client/`. Every class literal in the client resolves to a rule
@@ -102,9 +102,24 @@ and edits, reached over `POST /internal/g/<guildId>/event-board`. `boardFinal`
 is the new column that makes the result card happen once. See `WORKERS.md
 §2.7c`.
 
-**Still to do in 15:** the panel events page (create/edit form, live leaderboard,
-RSVP roster with an unlinked warning, result view) and attendance aggregation —
-`EventRSVP` is still aggregated into nothing.
+**15d, the panel page.** `apps/web-panel/client/pages/events.ts` grew an edit
+card (title, start, capacity, description, tracked metrics, poll interval,
+progression flag) that submits as a unit through `event.update`, a scoreboard
+card with one column per tracked metric and the list of people going who have no
+verified account for the tracker to poll, "Update board now" (`event.board.publish`,
+through the bridge's loopback API), and "Mark as run" (`event.complete`). Rows in
+the history table open the same two cards, which is the result view. Behind it:
+`CommunityService.updateEvent` / `completeEvent`, `CommunityRepository.updateEvent`,
+`PanelReads.eventStandings`, and a widened `PanelEvent`. `WEB_PANEL.md §3.8`.
+
+Two decisions worth keeping: editing and finishing pass `isStaff: true` because
+reaching those mutations already required Officer, while `event.cancel` still
+refuses anyone but the host — calling an event off is the host's call in a way
+that fixing its start time is not. And un-ticking a metric hides its scores
+rather than deleting them, so it is reversible.
+
+**Still to do in 15:** attendance aggregation — `EventRSVP` is still aggregated
+into nothing, and marking who actually turned up has no record to write to.
 
 ## Deploying this commit
 
@@ -123,11 +138,9 @@ A fresh install still needs `/set-channel` before the relay speaks.
 
 ## Next session, in order
 
-1. **Phase 15d** — the panel events page: the create/edit form (metrics, poll
-   interval, channel target, Discord scheduled-event mirror), a live leaderboard
-   per metric, the RSVP roster with its unlinked warnings, and the per-event
-   result view. Then attendance aggregation, which feeds the profile card and a
-   Phase 16 achievement family.
+1. **Attendance aggregation** — the last of Phase 15. `EventRSVP` needs a record
+   of who actually turned up before the panel can mark it, and the aggregate
+   feeds the profile card and a Phase 16 achievement family.
 2. **Phase 16** — Milestones become achievements. `backfillMilestones` is the
    load-bearing piece; without it every existing member has zero on day one.
 3. **Phase 17** — the `enabled` flag on command specs, retiring the run

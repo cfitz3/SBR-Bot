@@ -15,6 +15,7 @@ import {
   type AttendanceDTO,
   type CommunityService,
   type EventDTO,
+  type EventEdit,
   type EventError,
   type LFGActivity,
   type LFGPostDTO,
@@ -45,10 +46,31 @@ import {
   type LifecycleResult,
 } from "@sbr/tickets";
 import type { Logger } from "@sbr/observability";
-import type { CommunityRepository, LfgPatch, PermRoster, PermRosterLookup, TicketPatch } from "./ports.js";
+import type {
+  CommunityRepository,
+  EventPatch,
+  LfgPatch,
+  PermRoster,
+  PermRosterLookup,
+  TicketPatch,
+} from "./ports.js";
 
 /** Retained for the pre-Stage-5 call sites; `EventError` is the current union. */
 export type RsvpError = EventError;
+
+/**
+ * How often the tracker may poll, in minutes.
+ *
+ * The floor is the Hypixel budget talking: every poll is one profile fetch per
+ * participant, and a five-minute cadence on a forty-person event is already the
+ * busiest thing the fleet does. The ceiling is a day, past which "tracked" and
+ * "not tracked" stop being different.
+ */
+const MIN_POLL_MINUTES = 5;
+const MAX_POLL_MINUTES = 1440;
+
+/** More columns than this and the board stops fitting in an embed. */
+const MAX_TRACKED_METRICS = 5;
 
 /** A post can be joined by at most this many people regardless of what was asked for. */
 const MAX_LFG_SLOTS = 20;
@@ -134,6 +156,106 @@ export class CommunityServiceImpl implements CommunityService {
     if (!cancelled) return err({ kind: "NOT_FOUND" });
     this.log.info("event cancelled", { eventId, actorDiscordId });
     return ok(cancelled);
+  }
+
+  /**
+   * Change an event that has not finished.
+   *
+   * The host rule is `cancelEvent`'s, for the same reason: an event belongs to
+   * whoever is running it, and staff pass `isStaff` to act above that rather
+   * than the panel quietly editing on someone else's behalf. Only the fields
+   * present are written, so two people editing different halves of the same
+   * event do not overwrite each other.
+   */
+  async updateEvent(input: EventEdit): Promise<Result<EventDTO, EventError>> {
+    const event = await this.repo.getEvent(input.eventId);
+    if (!event) return err({ kind: "NOT_FOUND" });
+    if (event.status === "CANCELLED" || event.status === "COMPLETED") return err({ kind: "CLOSED" });
+    if (!this.mayAct(event, input.actorDiscordId, input.isStaff)) return err({ kind: "NOT_HOST" });
+
+    const patch: EventPatch = {};
+    if (input.title !== undefined) {
+      const title = input.title.trim();
+      if (title.length === 0) return err({ kind: "INVALID_TIME", detail: "an event needs a title." });
+      Object.assign(patch, { title });
+    }
+    if (input.description !== undefined) Object.assign(patch, { description: input.description });
+
+    if (input.startsAt !== undefined) {
+      const startsAt = new Date(input.startsAt);
+      if (Number.isNaN(startsAt.getTime())) {
+        return err({ kind: "INVALID_TIME", detail: "I couldn't read that start time." });
+      }
+      // A LIVE event's start is in the past by definition, so the future rule
+      // only applies while it is still scheduled.
+      if (event.status === "SCHEDULED" && startsAt.getTime() <= this.now().getTime()) {
+        return err({ kind: "INVALID_TIME", detail: "that start time is in the past." });
+      }
+      Object.assign(patch, { startsAt });
+    }
+
+    if (input.capacity !== undefined) {
+      if (input.capacity !== null && (!Number.isInteger(input.capacity) || input.capacity < 1)) {
+        return err({ kind: "INVALID_TIME", detail: "capacity has to be at least 1." });
+      }
+      Object.assign(patch, { capacity: input.capacity });
+    }
+
+    if (input.pollIntervalMinutes !== undefined) {
+      const minutes = input.pollIntervalMinutes;
+      if (!Number.isInteger(minutes) || minutes < MIN_POLL_MINUTES || minutes > MAX_POLL_MINUTES) {
+        return err({
+          kind: "INVALID_TIME",
+          detail: `the tracker polls every ${MIN_POLL_MINUTES} to ${MAX_POLL_MINUTES} minutes.`,
+        });
+      }
+      Object.assign(patch, { pollIntervalMinutes: minutes });
+    }
+
+    if (input.trackedMetrics !== undefined) {
+      // Deduplicated in order: the first metric is the one the board sorts by,
+      // and a list with a repeat would otherwise render the same column twice.
+      const metrics = [...new Set(input.trackedMetrics.map((m) => m.trim()).filter((m) => m.length > 0))];
+      if (metrics.length > MAX_TRACKED_METRICS) {
+        return err({ kind: "INVALID_TIME", detail: `an event can score at most ${MAX_TRACKED_METRICS} metrics.` });
+      }
+      Object.assign(patch, { trackedMetrics: metrics });
+    }
+
+    if (input.tracksProgression !== undefined) Object.assign(patch, { tracksProgression: input.tracksProgression });
+
+    const updated = await this.repo.updateEvent(input.eventId, patch);
+    if (!updated) return err({ kind: "NOT_FOUND" });
+    this.log.info("event updated", { eventId: input.eventId, actorDiscordId: input.actorDiscordId });
+    return ok(updated);
+  }
+
+  /**
+   * Mark an event as run.
+   *
+   * `endsAt` is stamped here rather than left to the scheduler because it is
+   * what the tracker board reads to write its result card: an event with no end
+   * time is one that is still going, and the board would keep redrawing.
+   */
+  async completeEvent(eventId: string, actorDiscordId: string, isStaff?: boolean): Promise<Result<EventDTO, EventError>> {
+    const event = await this.repo.getEvent(eventId);
+    if (!event) return err({ kind: "NOT_FOUND" });
+    if (event.status === "CANCELLED" || event.status === "COMPLETED") return err({ kind: "CLOSED" });
+    if (!this.mayAct(event, actorDiscordId, isStaff)) return err({ kind: "NOT_HOST" });
+
+    const completed = await this.repo.updateEvent(eventId, { status: "COMPLETED", endsAt: this.now() });
+    if (!completed) return err({ kind: "NOT_FOUND" });
+    this.log.info("event completed", { eventId, actorDiscordId });
+    return ok(completed);
+  }
+
+  /**
+   * A null host means the event predates host tracking; anyone holding the
+   * command's capability may act on it rather than it becoming unmanageable.
+   */
+  private mayAct(event: EventDTO, actorDiscordId: string, isStaff?: boolean): boolean {
+    if (isStaff === true) return true;
+    return event.hostDiscordId == null || event.hostDiscordId === actorDiscordId;
   }
 
   /** RSVP to an event, applying capacity→waitlist. Returns the recorded state. */

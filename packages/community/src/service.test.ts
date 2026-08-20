@@ -3,7 +3,14 @@ import { test } from "node:test";
 import type { ApplicationDTO, EventDTO, LFGPostDTO, MemberSummaryDTO, RSVPState, TicketActor, TicketDTO } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { CommunityServiceImpl } from "./service.js";
-import type { CommunityRepository, EventRsvpInfo, LfgInsert, LfgPatch, PermRosterLookup } from "./ports.js";
+import type {
+  CommunityRepository,
+  EventPatch,
+  EventRsvpInfo,
+  LfgInsert,
+  LfgPatch,
+  PermRosterLookup,
+} from "./ports.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -59,6 +66,8 @@ interface Fake {
   created: LfgInsert[];
   /** What updateLfg was asked to change, so "left alone" can be asserted. */
   patches: Array<{ postId: string; patch: LfgPatch }>;
+  /** The same, for events: an edit must write only the fields it was given. */
+  eventPatches: Array<{ eventId: string; patch: EventPatch }>;
 }
 
 function repo(over: Partial<CommunityRepository> = {}): Fake {
@@ -66,11 +75,13 @@ function repo(over: Partial<CommunityRepository> = {}): Fake {
   const rosters: Fake["rosters"] = [];
   const created: Fake["created"] = [];
   const patches: Fake["patches"] = [];
+  const eventPatches: Fake["eventPatches"] = [];
   return {
     rsvps,
     rosters,
     created,
     patches,
+    eventPatches,
     repo: {
       async listUpcomingEvents() { return []; },
       async listMembers() { return []; },
@@ -81,6 +92,14 @@ function repo(over: Partial<CommunityRepository> = {}): Fake {
       async createEvent(input) { return anEvent({ ...input, id: "new", capacity: input.capacity ?? null }); },
       async getEvent() { return anEvent(); },
       async setEventStatus(_id, status) { return anEvent({ status }); },
+      async updateEvent(eventId, patch) {
+        eventPatches.push({ eventId, patch });
+        return anEvent({
+          ...(patch.title === undefined ? {} : { title: patch.title }),
+          ...(patch.status === undefined ? {} : { status: patch.status }),
+          ...(patch.endsAt === undefined ? {} : { endsAt: patch.endsAt?.toISOString() ?? null }),
+        });
+      },
       async getAttendance() { return null; },
       async createLfg(input) {
         created.push(input);
@@ -244,6 +263,89 @@ test("an already-cancelled event cannot be cancelled again", async () => {
   const r = await svcOf(repo({ async getEvent() { return anEvent({ status: "CANCELLED" }); } })).cancelEvent("e1", "111");
   assert.equal(r.ok, false);
   if (!r.ok) assert.equal(r.error.kind, "CLOSED");
+});
+
+// ── Event edits and completion ──
+
+test("an edit writes only the fields it was given", async () => {
+  const r = repo();
+  const result = await svcOf(r).updateEvent({ eventId: "e1", actorDiscordId: "111", title: "  F7 carries v2  " });
+  assert.equal(result.ok, true);
+  assert.deepEqual(r.eventPatches, [{ eventId: "e1", patch: { title: "F7 carries v2" } }]);
+});
+
+test("an edit by someone who is not the host is refused", async () => {
+  const r = await svcOf(repo()).updateEvent({ eventId: "e1", actorDiscordId: "999", title: "mine now" });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "NOT_HOST");
+});
+
+test("staff may edit somebody else's event", async () => {
+  const r = await svcOf(repo()).updateEvent({ eventId: "e1", actorDiscordId: "999", isStaff: true, title: "moved" });
+  assert.equal(r.ok, true);
+});
+
+test("a finished event cannot be edited", async () => {
+  const r = await svcOf(repo({ async getEvent() { return anEvent({ status: "COMPLETED" }); } }))
+    .updateEvent({ eventId: "e1", actorDiscordId: "111", title: "x" });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "CLOSED");
+});
+
+test("a scheduled event cannot be moved into the past", async () => {
+  const r = await svcOf(repo()).updateEvent({
+    eventId: "e1", actorDiscordId: "111", startsAt: "2026-07-01T00:00:00.000Z",
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "INVALID_TIME");
+});
+
+test("a live event's start time may be in the past, because it already is", async () => {
+  const r = await svcOf(repo({ async getEvent() { return anEvent({ status: "LIVE" }); } })).updateEvent({
+    eventId: "e1", actorDiscordId: "111", startsAt: "2026-07-01T00:00:00.000Z",
+  });
+  assert.equal(r.ok, true);
+});
+
+test("a repeated metric is written once, in the order it was first given", async () => {
+  const r = repo();
+  await svcOf(r).updateEvent({
+    eventId: "e1", actorDiscordId: "111", trackedMetrics: ["networth", "catacombsLevel", "networth", " "],
+  });
+  assert.deepEqual(r.eventPatches[0]?.patch.trackedMetrics, ["networth", "catacombsLevel"]);
+});
+
+test("an unreasonable poll interval is refused", async () => {
+  const r = await svcOf(repo()).updateEvent({ eventId: "e1", actorDiscordId: "111", pollIntervalMinutes: 1 });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "INVALID_TIME");
+});
+
+test("clearing the metric list is an edit like any other", async () => {
+  const r = repo();
+  await svcOf(r).updateEvent({ eventId: "e1", actorDiscordId: "111", trackedMetrics: [] });
+  assert.deepEqual(r.eventPatches[0]?.patch.trackedMetrics, []);
+});
+
+test("completing an event stamps the end time", async () => {
+  const r = repo();
+  const result = await svcOf(r).completeEvent("e1", "111");
+  assert.equal(result.ok && result.value.status, "COMPLETED");
+  assert.deepEqual(r.eventPatches, [{ eventId: "e1", patch: { status: "COMPLETED", endsAt: NOW() } }]);
+});
+
+test("a cancelled event cannot then be completed", async () => {
+  const r = await svcOf(repo({ async getEvent() { return anEvent({ status: "CANCELLED" }); } }))
+    .completeEvent("e1", "111");
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "CLOSED");
+});
+
+test("only the host, or staff, can complete an event", async () => {
+  const denied = await svcOf(repo()).completeEvent("e1", "999");
+  assert.equal(denied.ok === false && denied.error.kind, "NOT_HOST");
+  const allowed = await svcOf(repo()).completeEvent("e1", "999", true);
+  assert.equal(allowed.ok, true);
 });
 
 // ── LFG ──

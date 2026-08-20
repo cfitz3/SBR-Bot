@@ -1283,6 +1283,33 @@ a.guild-switch:hover {
   opacity: 0.45;
 }
 
+/* A checkbox that is part of a form submitted as a unit, rather than one that
+   writes on flip. It reuses `.switch-input`'s hidden input so the same focus and
+   disabled rules apply, but shows a plain box: a sliding switch reads as "this
+   is now on", which would be a lie until Save is pressed. */
+.switch-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.switch-check .switch-input {
+  /* Visible here — it is the control, not a proxy for a track. */
+  position: static;
+  width: auto;
+  height: auto;
+  opacity: 1;
+  accent-color: var(--color-accent);
+}
+
+/* Enough columns for six metrics on a wide card, one per line on a phone. */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-2) var(--space-5);
+}
+
 /* ── queues ────────────────────────────────────────────────────────────── */
 
 /* One card, many independently resolvable items. */

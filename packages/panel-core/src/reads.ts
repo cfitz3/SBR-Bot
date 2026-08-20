@@ -214,6 +214,7 @@ export interface DailyPoint {
 export interface PanelEvent {
   readonly id: string;
   readonly title: string;
+  readonly description: string | null;
   readonly type: string;
   readonly status: string;
   readonly startsAt: string;
@@ -223,6 +224,28 @@ export interface PanelEvent {
   readonly going: number;
   readonly maybe: number;
   readonly declined: number;
+  /** What the tracker scores. Empty means the event is run but not scored. */
+  readonly trackedMetrics: readonly string[];
+  readonly pollIntervalMinutes: number;
+  readonly tracksProgression: boolean;
+  /** Where the tracker board was published, and when it was last redrawn. */
+  readonly channelId: string | null;
+  readonly messageId: string | null;
+  readonly boardUpdatedAt: string | null;
+}
+
+/**
+ * One member's gain on one metric, as the board would rank it.
+ *
+ * `delta` rather than `current` for the same reason the board shows gains: a
+ * leaderboard of readings would rank whoever arrived richest, not whoever did
+ * the most during the event.
+ */
+export interface EventStandingRow {
+  readonly discordId: string;
+  readonly uuid: string;
+  readonly metric: string;
+  readonly delta: number;
 }
 
 // The ticket row used to be flattened into a `PanelTicket` shape declared here.
@@ -350,6 +373,13 @@ export interface PanelReads {
   /** One member's row, for the individual view. Null when they have no rows. */
   memberActivity(guildId: string, discordId: string, since: Date): Promise<ActiveMember | null>;
   listEvents(guildId: string, limit?: number): Promise<readonly PanelEvent[]>;
+  /**
+   * Every recorded score for one event, best first within each metric.
+   *
+   * All metrics in one read rather than one call per metric: an event scores at
+   * most a handful, and the page draws a column for each of them at once.
+   */
+  eventStandings(eventId: string, limit?: number): Promise<readonly EventStandingRow[]>;
   listTickets(guildId: string, limit?: number): Promise<readonly TicketDTO[]>;
   listJobHealth(): Promise<readonly JobHealth[]>;
 }

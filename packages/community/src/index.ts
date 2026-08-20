@@ -8,6 +8,7 @@ export { CommunityServiceImpl, type CommunityServiceDeps, type RsvpError } from 
 // applications to ask whether a member may open a ticket.
 export type {
   CommunityRepository,
+  EventPatch,
   EventRsvpInfo,
   LfgInsert,
   LfgPatch,

@@ -130,6 +130,7 @@ export interface DailyPointRow {
 export interface EventRow {
   readonly id: string;
   readonly title: string;
+  readonly description: string | null;
   readonly type: string;
   readonly status: string;
   readonly startsAt: string;
@@ -139,6 +140,20 @@ export interface EventRow {
   readonly going: number;
   readonly maybe: number;
   readonly declined: number;
+  readonly trackedMetrics: readonly string[];
+  readonly pollIntervalMinutes: number;
+  readonly tracksProgression: boolean;
+  readonly channelId: string | null;
+  readonly messageId: string | null;
+  readonly boardUpdatedAt: string | null;
+}
+
+/** One member's gain on one metric. Structurally `EventStandingRow` in the panel. */
+export interface EventStandingRow {
+  readonly discordId: string;
+  readonly uuid: string;
+  readonly metric: string;
+  readonly delta: number;
 }
 
 export interface JobHealthRow {
@@ -966,12 +981,19 @@ export const panelRepository = {
       select: {
         id: true,
         title: true,
+        description: true,
         type: true,
         status: true,
         startsAt: true,
         endsAt: true,
         capacity: true,
         hostDiscordId: true,
+        trackedMetrics: true,
+        pollIntervalMinutes: true,
+        tracksProgression: true,
+        channelId: true,
+        messageId: true,
+        boardUpdatedAt: true,
         rsvps: { select: { state: true } },
       },
     });
@@ -981,17 +1003,41 @@ export const panelRepository = {
       return {
         id: e.id,
         title: e.title,
+        description: e.description,
         type: e.type,
         status: e.status,
         startsAt: e.startsAt.toISOString(),
         endsAt: iso(e.endsAt),
         capacity: e.capacity,
         hostDiscordId: e.hostDiscordId,
+        trackedMetrics: e.trackedMetrics,
+        pollIntervalMinutes: e.pollIntervalMinutes,
+        tracksProgression: e.tracksProgression,
+        channelId: e.channelId,
+        messageId: e.messageId,
+        boardUpdatedAt: iso(e.boardUpdatedAt),
         going: tally("GOING"),
         maybe: tally("MAYBE"),
         declined: tally("NOT_GOING"),
       };
     });
+  },
+
+  /**
+   * One event's scores, ordered the way the board ranks them.
+   *
+   * The composite index is `(eventId, metric, delta)`, so metric-then-delta is
+   * the order the database already holds and the page can slice per metric
+   * without sorting anything itself.
+   */
+  async eventStandings(eventId: string, limit = 200): Promise<readonly EventStandingRow[]> {
+    const rows = await prisma.eventScore.findMany({
+      where: { eventId },
+      take: limit,
+      orderBy: [{ metric: "asc" }, { delta: "desc" }],
+      select: { discordId: true, uuid: true, metric: true, delta: true },
+    });
+    return rows;
   },
 
   /**

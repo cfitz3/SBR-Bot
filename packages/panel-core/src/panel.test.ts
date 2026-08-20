@@ -226,6 +226,7 @@ function reads(over: Partial<PanelReads> = {}): PanelReads {
     async gexpSeries() { return GEXP_SERIES; },
     async memberActivity() { return ACTIVE_MEMBERS[0] ?? null; },
     async listEvents() { return []; },
+    async eventStandings() { return []; },
     async listTickets() { return []; },
     async listJobHealth() { return []; },
   };
@@ -498,9 +499,11 @@ test("settings shows the screening policy in force, not an empty form", async ()
 // ── events + attendance ──
 
 const EVENT = {
-  id: "evt_1", title: "F7", type: "DUNGEON", status: "SCHEDULED",
+  id: "evt_1", title: "F7", description: null, type: "DUNGEON", status: "SCHEDULED",
   startsAt: "2026-09-01T18:00:00.000Z", endsAt: null, capacity: 5,
   hostDiscordId: "111", going: 1, maybe: 0, declined: 0,
+  trackedMetrics: [], pollIntervalMinutes: 30, tracksProgression: false,
+  channelId: null, messageId: null, boardUpdatedAt: null,
 } as const;
 
 /** A CommunityService whose attendance roster is two ids, one of them unknown. */
@@ -553,6 +556,60 @@ test("a selected event's roster arrives with names joined, and unknown ids kept"
     r.data?.attendance?.going.map((entry) => [entry.discordId, entry.username]),
     [["1", "a"], ["9", null]],
   );
+});
+
+/**
+ * The board sorts by the first tracked metric, so the page has to show the
+ * blocks in the event's own order — not the order the scores came back in.
+ */
+test("standings are grouped per tracked metric, in the event's order", async () => {
+  const tracking = { ...EVENT, trackedMetrics: ["networth", "catacombsLevel"] } as const;
+  const r = await svc({
+    community: withAttendance(),
+    reads: reads({
+      async listEvents() { return [tracking]; },
+      async eventStandings() {
+        return [
+          { discordId: "3", uuid: "v", metric: "catacombsLevel", delta: 2 },
+          { discordId: "1", uuid: "u", metric: "networth", delta: 500 },
+        ];
+      },
+    }),
+  }).loadEvents(session(), "g1", "evt_1");
+
+  assert.deepEqual(r.data?.standings.map((b) => b.metric), ["networth", "catacombsLevel"]);
+  assert.deepEqual(r.data?.standings[0]?.entries, [{ discordId: "1", username: "a", delta: 500 }]);
+});
+
+/**
+ * A score for a metric nobody tracks any more is hidden rather than deleted, so
+ * un-ticking a metric is reversible.
+ */
+test("scores for an untracked metric are not shown", async () => {
+  const r = await svc({
+    community: withAttendance(),
+    reads: reads({
+      async listEvents() { return [EVENT]; },
+      async eventStandings() {
+        return [{ discordId: "1", uuid: "u", metric: "networth", delta: 500 }];
+      },
+    }),
+  }).loadEvents(session(), "g1", "evt_1");
+
+  assert.deepEqual(r.data?.standings, []);
+});
+
+/**
+ * The point of the warning: nothing can poll an unverified member, so their
+ * absence from every leaderboard is a gap in the data rather than a bad night.
+ */
+test("people going with no verified account are listed as unlinked", async () => {
+  const r = await svc({
+    community: withAttendance(),
+    reads: reads({ async listEvents() { return [EVENT]; } }),
+  }).loadEvents(session(), "g1", "evt_1");
+
+  assert.deepEqual(r.data?.unlinked.map((e) => e.discordId), ["9"]);
 });
 
 test("settings and health stay closed to an OFFICER", async () => {
