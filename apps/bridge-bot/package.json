@@ -27,6 +27,7 @@
     "@sbr/pricing": "*",
     "@sbr/progression": "*",
     "@sbr/redis": "*",
+    "@sbr/roles": "*",
     "@sbr/screening": "*",
     "@sbr/skykings": "*",
     "@sbr/shared-types": "*",

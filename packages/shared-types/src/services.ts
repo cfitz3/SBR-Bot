@@ -540,6 +540,7 @@ export const CONFIG_CHANNEL_SLOTS = [
   "milestones",
   "leaderboard",
   "modlog",
+  "welcome",
 ] as const;
 
 export type ConfigChannelSlot = (typeof CONFIG_CHANNEL_SLOTS)[number];
@@ -559,6 +560,7 @@ export const CONFIG_CHANNEL_SLOT_LABELS: Readonly<Record<ConfigChannelSlot, stri
   lfg: "Looking for group",
   tickets: "Ticket panel",
   milestones: "Milestone announcements",
+  welcome: "Welcome & farewell",
   leaderboard: "Leaderboards",
   modlog: "Moderation log",
 };

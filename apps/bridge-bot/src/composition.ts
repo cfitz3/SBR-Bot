@@ -18,6 +18,7 @@ import {
   linkDirectory,
   memberProgressSource,
   milestoneAnnouncementRepository,
+  roleSyncRepository,
   permRepository,
   milestoneDefinitionRepository,
   moderationRepository,
@@ -91,6 +92,7 @@ import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapter
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
 import type { TicketGateway } from "./tickets.js";
 import type { EventBoardGateway } from "./event-board.js";
+import type { WelcomeProfile } from "./welcome.js";
 
 export interface BridgeApp {
   readonly config: AppConfig;
@@ -198,6 +200,26 @@ export interface BridgeApp {
    */
   setEventBoard(gateway: EventBoardGateway | null): void;
   readonly eventBoard: EventBoardGateway | null;
+  /**
+   * Arrivals and departures, published by the admin bot. This process greets
+   * them: a member is addressed by the bot they interact with.
+   */
+  readonly memberBus: ReturnType<typeof createRedisAdapters>["memberBus"];
+  /**
+   * The facts a welcome template can ask for beyond what Discord sends.
+   *
+   * Only called when a template actually uses `{ign}`, `{guildRank}` or
+   * `{level}` — the greeter checks before asking, so an ordinary welcome costs
+   * no queries at all.
+   */
+  welcomeProfile(guildId: string, discordId: string): Promise<WelcomeProfile | null>;
+  /**
+   * IGN → the Discord account that verified it, or null when nobody has.
+   *
+   * Guild-agnostic, like every other read of a link: a link is to a person,
+   * not to a server.
+   */
+  linkedDiscordIdForIgn(ign: string): Promise<string | null>;
   /**
    * Hand the composition somewhere to put moderation commands arriving on the
    * bus.
@@ -640,6 +662,23 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     dispatcher,
     handlerDeps,
     milestones: milestoneAnnouncementRepository,
+    memberBus: adapters.memberBus,
+    linkedDiscordIdForIgn: (ign) => identityRepository.findDiscordIdByIgn(ign).catch(() => null),
+    async welcomeProfile(guildId, discordId) {
+      const [link, snapshots, standing] = await Promise.all([
+        identityRepository.findPrimaryLinkByDiscordId(discordId).catch(() => null),
+        roleSyncRepository.loadSnapshots(guildId, [discordId]).catch(() => []),
+        xp.standing(guildId, discordId).catch(() => null),
+      ]);
+      // All three are optional on their own: an unlinked member still has a
+      // level, and a linked one need not be in the Hypixel guild. The renderer
+      // prints an absent token as nothing rather than as "undefined".
+      return {
+        ign: link?.ign ?? null,
+        guildRank: snapshots[0]?.facts.guildRank ?? null,
+        level: standing?.level ?? null,
+      };
+    },
     inGame,
     bridge,
     automod,

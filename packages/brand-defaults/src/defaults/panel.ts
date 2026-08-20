@@ -306,6 +306,10 @@ export const DEFAULT_PANEL = {
       hint: "Achievement and milestone announcements. Unset means they are recorded but never shown.",
     },
     leaderboard: { label: "Leaderboards", hint: "Where scheduled leaderboard posts are published." },
+    welcome: {
+      label: "Welcome & farewell",
+      hint: "Where join and leave messages are posted. Unset and the greeter stays quiet.",
+    },
     modlog: {
       label: "Moderation log",
       hint: "Per-action moderation record. Separate from Log so audit noise can stay out of a staff-visible channel.",

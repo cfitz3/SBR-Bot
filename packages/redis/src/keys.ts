@@ -27,6 +27,14 @@ export function createKeyFactory(prefix: string) {
     chanConfig: (guildId: string) => p(`chan:config:${guildId}`),
     chanMod: (guildId: string) => p(`chan:mod:${guildId}`),
     /**
+     * Discord members arriving and leaving, observed by the admin bot.
+     *
+     * A separate channel from `chan:bridge` because the audiences differ: the
+     * bridge inbox carries work for the member-facing bot to *do*, this carries
+     * a fact about the server that several listeners may each care about.
+     */
+    chanMember: (guildId: string) => p(`chan:member:${guildId}`),
+    /**
      * Manual job triggers, panel → workers. One channel for the whole platform
      * rather than one per guild: the subscriber is the worker fleet, which is
      * not scoped to a guild, and the guild a run is *for* travels in the payload

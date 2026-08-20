@@ -26,3 +26,4 @@ export {
   type RuleOutcome,
 } from "./resolve.js";
 export type { GrantRecord, RoleGrantRepository } from "./ports.js";
+export * from "./welcome.js";

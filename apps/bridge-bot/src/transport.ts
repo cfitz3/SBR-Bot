@@ -35,6 +35,7 @@ import {
 } from "@sbr/discord-kit";
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
 import { startMilestoneAnnouncer } from "./milestones.js";
+import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
 import { deliverEventReminder } from "./events.js";
 import { EventBoardGateway } from "./event-board.js";
 import type { BridgeApp } from "./composition.js";
@@ -572,6 +573,51 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     },
     log: app.log,
   });
+
+  // Arrivals and departures come from the admin bot, which holds the intent.
+  // Started here for the same reason as the announcer: it needs a live client.
+  const greeterDeps: GreeterDeps = {
+    readSetting: (guildId, key) => app.handlerDeps.config.getSetting(guildId, key),
+    getChannel: (guildId, slot) => app.handlerDeps.config.getChannel(guildId, slot),
+    lookupProfile: (guildId, discordId) => app.welcomeProfile(guildId, discordId),
+    async post(request) {
+      const channel = await discord.channels.fetch(request.channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+      // Belt and braces with the renderer's own escaping: the template is
+      // written by an admin and the nickname in it is chosen by the person
+      // being welcomed, so neither one gets to decide who the server pings.
+      const allowedMentions =
+        request.mentionDiscordId === null
+          ? { parse: [] as never[] }
+          : { parse: [] as never[], users: [request.mentionDiscordId] };
+      const payload =
+        request.mode === "EMBED"
+          ? { embeds: [toEmbed({ title: request.title, description: request.text, color: "SUCCESS" })], allowedMentions }
+          : { content: request.text, allowedMentions };
+      const message = await (channel as SendableChannel).send(payload).catch(() => null);
+      if (message === null) return false;
+
+      if (request.deleteAfterSeconds !== null) {
+        // Fire and forget, unref'd: a bot that restarts before the timer fires
+        // leaves one welcome message behind, which is a far smaller problem
+        // than a process kept alive by a queue of pending deletions.
+        const timer = setTimeout(() => {
+          void message.delete().catch(() => undefined);
+        }, request.deleteAfterSeconds * 1_000);
+        timer.unref?.();
+      }
+      return true;
+    },
+    async dm(discordId, text) {
+      const user = await discord.users.fetch(discordId).catch(() => null);
+      if (user === null) return false;
+      // Closed DMs are the common case, not an error worth a log line each time.
+      const sent = await user.send({ content: text, allowedMentions: { parse: [] } }).catch(() => null);
+      return sent !== null;
+    },
+    log: app.log,
+  };
+  const greeter = await startGreeter(app.memberBus, greeterDeps);
 
   // Reminders arrive from the workers on the bridge bus; the composition holds
   // the subscription and this is the end of it that can speak.
@@ -1189,6 +1235,17 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     if (event.kind === "JOINED") {
       await app.screening.decide(id, "JOINED", "AUTO");
       await postStaffReport(guildId, `**${resolved.ign} joined the guild.**\n${staffReport(screening)}`);
+      // The staff report is the record; this is the greeting, and it is the
+      // guild's to switch on. Best effort on purpose — a welcome that did not
+      // land must not make the platform think the join went unhandled.
+      const linkedDiscordId = await app.linkedDiscordIdForIgn(resolved.ign);
+      await greetGuildJoin(
+        { guildId, ign: resolved.ign, guildRank: null, discordId: linkedDiscordId },
+        greeterDeps,
+      ).catch((error: unknown) => {
+        app.log.warn("guild join greeting failed", { ign: resolved.ign, error: String(error) });
+        return false;
+      });
       return;
     }
 
@@ -1340,6 +1397,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // Stop reconnecting before closing anything, so the `end` this triggers
       // isn't answered with a fresh login.
       announcer.stop();
+      void greeter.stop().catch(() => undefined);
       // Detach first: the bus keeps delivering until the process exits, and a
       // sink pointing at a queue whose session is closing would just age out.
       app.setGameCommandSink(null);

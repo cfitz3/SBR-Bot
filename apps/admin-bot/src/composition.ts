@@ -55,6 +55,11 @@ export interface AdminApp {
   sweepSafety(): Promise<number>;
   /** Redis lock, so a second admin-bot instance doesn't double-run the sweep. */
   readonly lock: ReturnType<typeof createRedisAdapters>["lock"];
+  /**
+   * Members arriving and leaving, published for whoever greets them. This
+   * process observes because it holds the intent; SBR Bot does the talking.
+   */
+  readonly memberBus: ReturnType<typeof createRedisAdapters>["memberBus"];
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
    * Late-bound live gateway state for the heartbeat, set once the transport
@@ -251,6 +256,7 @@ export async function createAdminApp(): Promise<AdminApp> {
     effects,
     sweepSafety: () => safety.sweepExpired(),
     lock: adapters.lock,
+    memberBus: adapters.memberBus,
     resolveGuild: guildRepository.resolveInternalId,
     setStatusSource(source) {
       liveStatus = source;

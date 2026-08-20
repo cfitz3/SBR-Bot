@@ -15,6 +15,7 @@ import {
 } from "discord.js";
 import { buildAdminRegistry } from "@sbr/commands-admin";
 import { ComponentRouter, interactionArgs, respond, toSlashCommands } from "@sbr/discord-kit";
+import { attachMemberObserver } from "./member-observer.js";
 import type { AdminApp } from "./composition.js";
 
 /**
@@ -93,6 +94,13 @@ export async function startAdminGateway(
   // (application accept/deny). Namespaces are registered by their owning domain.
   const components = new ComponentRouter({
     onError: (namespace, error) => app.log.error("component handler threw", { namespace, error: String(error) }),
+  });
+
+  // Joins and leaves go straight onto the bus; nothing is rendered here.
+  attachMemberObserver(client, {
+    resolveGuild: (id) => app.resolveGuild(id),
+    publish: (message) => app.memberBus.publish(message),
+    logger: app.log,
   });
 
   client.on(Events.InteractionCreate, (i) => {

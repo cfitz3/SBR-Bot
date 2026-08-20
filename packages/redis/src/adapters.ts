@@ -635,6 +635,85 @@ export interface HeartbeatRecord {
 }
 
 /**
+ * One member arriving at, or leaving, a Discord server.
+ *
+ * Published by the admin bot, which already holds `GuildMembers` — observing is
+ * automated work, and adding a privileged intent to the shared member-facing
+ * application to watch for joins would be paying a permission for a message.
+ * The member-facing bot subscribes and does the talking, because a welcome from
+ * a staff bot most members cannot see is the platform speaking out of the wrong
+ * mouth.
+ *
+ * Everything the greeter needs to render is on the payload. The subscriber
+ * cannot fetch a member who has just left, and half a farewell is worse than
+ * none.
+ */
+export interface MemberBusMessage {
+  readonly kind: "member-join" | "member-leave";
+  readonly guildId: string;
+  readonly discordId: string;
+  /** Display name at the moment of the event, already stripped of mentions. */
+  readonly username: string;
+  readonly serverName: string;
+  /** Server member count after the event, or null when Discord did not say. */
+  readonly memberCount: number | null;
+}
+
+/**
+ * Validated, not cast: this payload decides who gets pinged in a public channel.
+ */
+export function parseMemberBusMessage(raw: string): MemberBusMessage | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const r = parsed as Record<string, unknown>;
+    const { kind, guildId, discordId, username, serverName, memberCount } = r;
+    if (kind !== "member-join" && kind !== "member-leave") return null;
+    if (typeof guildId !== "string" || guildId.length === 0) return null;
+    if (typeof discordId !== "string" || discordId.length === 0) return null;
+    return {
+      kind,
+      guildId,
+      discordId,
+      username: typeof username === "string" ? username : "",
+      serverName: typeof serverName === "string" ? serverName : "",
+      memberCount: typeof memberCount === "number" && Number.isFinite(memberCount) ? memberCount : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Pattern-subscribed, like the other buses: guilds appear as the process runs. */
+export class RedisMemberBus {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async publish(message: MemberBusMessage): Promise<void> {
+    await this.ctx.client.publish(this.ctx.keys.chanMember(message.guildId), JSON.stringify(message));
+  }
+
+  async subscribe(onMessage: (message: MemberBusMessage) => void): Promise<() => Promise<void>> {
+    const sub = this.ctx.client.duplicate();
+    sub.on("error", () => {
+      // node-redis reconnects on its own; an unhandled 'error' here would take
+      // the whole bot down over a blip on a channel it only listens to.
+    });
+    await sub.connect();
+
+    const pattern = this.ctx.keys.chanMember("*");
+    await sub.pSubscribe(pattern, (raw: string) => {
+      const parsed = parseMemberBusMessage(raw);
+      if (parsed !== null) onMessage(parsed);
+    });
+
+    return async () => {
+      await sub.pUnsubscribe(pattern).catch(() => undefined);
+      await sub.quit().catch(() => undefined);
+    };
+  }
+}
+
+/**
  * Marks members whose auto-roles may have gone out of date.
  *
  * Everything that changes a fact a rule can read — a link, a rank, a level, an
@@ -933,6 +1012,7 @@ export function createRedisAdapters(ctx: RedisContext) {
     modBus: new RedisModBus(ctx),
     bridgeBus: new RedisBridgeBus(ctx),
     jobTriggers: new RedisJobTriggerBus(ctx),
+    memberBus: new RedisMemberBus(ctx),
     rolesDirty: new RedisRoleDirtySet(ctx),
     heartbeat: new RedisHeartbeat(ctx),
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),

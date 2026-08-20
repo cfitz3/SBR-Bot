@@ -364,7 +364,7 @@ const filterTest: AdminHandler = async (ctx, deps) => {
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
-const CHANNEL_SLOTS = ["bridge", "staff", "log", "applications", "events"] as const;
+const CHANNEL_SLOTS = ["bridge", "staff", "log", "applications", "events", "welcome"] as const;
 type ChannelSlot = (typeof CHANNEL_SLOTS)[number];
 
 const setChannel: AdminHandler = async (ctx, deps) => {
