@@ -20,10 +20,19 @@ import {
   DiscordAPIError,
   GuildScheduledEventEntityType,
   GuildScheduledEventPrivacyLevel,
+  PermissionFlagsBits,
   type Client,
   type Guild,
+  type Role,
 } from "discord.js";
 import type { Logger } from "@sbr/observability";
+import {
+  describeRefusal,
+  refuseRole,
+  type BotFacts,
+  type RoleFacts,
+  type RoleRefusal,
+} from "./role-preflight.js";
 
 /** Loopback only. A LAN bind would hand the member list to the whole subnet. */
 const BIND_HOST = "127.0.0.1";
@@ -41,6 +50,12 @@ const MEMBER_CACHE_MS = 60_000;
 
 /** Guard rail on picker responses, so one request can't serialise 100k members. */
 const MAX_ROWS = 200;
+
+/**
+ * A member gaining or losing more than this in one call is a bug in the caller,
+ * not a guild with a lot of roles - the reconciler sends a diff, not a roster.
+ */
+const MAX_ROLES_PER_CALL = 25;
 
 export interface InternalApiDeps {
   /** Live gateway client. Supplied only once ready — see `startInternalApi`. */
@@ -65,6 +80,35 @@ interface RoleRow {
   readonly color: number;
   readonly position: number;
   readonly managed: boolean;
+  /**
+   * Whether a rule may hand this role out. Computed here rather than in the
+   * panel because the answer depends on the bot's own position in the
+   * hierarchy, which only this process can see.
+   */
+  readonly assignable: boolean;
+  /** Why not, in a sentence, or null when it is assignable. */
+  readonly blockedReason: string | null;
+}
+
+/** One role the caller asked for and did not get, and why. */
+interface RefusedRole {
+  readonly roleId: string;
+  readonly reason: RoleRefusal;
+  readonly detail: string;
+}
+
+interface RoleApplyResult {
+  readonly ok: boolean;
+  /**
+   * False when the user is not in the server at all. Not an error - people
+   * leave - but the caller must not record a grant for somebody who was never
+   * given anything.
+   */
+  readonly memberPresent: boolean;
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+  readonly refused: readonly RefusedRole[];
+  readonly error?: string;
 }
 
 interface MemberRow {
@@ -143,6 +187,33 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   }
   if (total === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+}
+
+/** Snowflakes from an untrusted body: strings only, deduplicated, capped. */
+function ids(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== "string") continue;
+    const id = raw.trim();
+    if (id !== "") seen.add(id);
+  }
+  return [...seen].slice(0, MAX_ROLES_PER_CALL);
+}
+
+/**
+ * A short code where we recognise the failure, and Discord's own words where we
+ * do not, since a human reads this in the panel. 10011 is an unknown role,
+ * which after a preflight means it was deleted in the milliseconds since - the
+ * next pass simply will not ask for it again.
+ */
+function describeError(error: unknown): string {
+  if (error instanceof DiscordAPIError) {
+    if (error.code === 10011) return "UNKNOWN_ROLE";
+    if (error.code === 50013 || error.code === 50001) return "MISSING_PERMISSION";
+    return error.message;
+  }
+  return error instanceof Error ? error.message : "FAILED";
 }
 
 function str(value: unknown): string | null {
@@ -226,7 +297,7 @@ export class InternalApi {
           sendJson(res, 200, { channels: this.channels(guild, url.searchParams.get("q") ?? "") });
           return;
         case "roles":
-          sendJson(res, 200, { roles: this.roles(guild, url.searchParams.get("q") ?? "") });
+          sendJson(res, 200, { roles: await this.roles(guild, url.searchParams.get("q") ?? "") });
           return;
         case "members":
           sendJson(res, 200, {
@@ -251,6 +322,9 @@ export class InternalApi {
           return;
         case "scheduled-event":
           sendJson(res, 200, await this.scheduledEvent(guild, body));
+          return;
+        case "roles":
+          sendJson(res, 200, await this.applyRoles(guild, body));
           return;
         default:
           sendJson(res, 404, { error: "NOT_FOUND" });
@@ -290,17 +364,54 @@ export class InternalApi {
     return rows.slice(0, MAX_ROWS);
   }
 
-  private roles(guild: Guild, query: string): readonly RoleRow[] {
+  /**
+   * What this bot can see and do, as the preflight needs it.
+   *
+   * `fetchMe` rather than `guild.members.me`, which is null until the member is
+   * cached - and a null there would present as "the bot has no permissions",
+   * greying out every role in the picker for no reason.
+   */
+  private async botFacts(guild: Guild): Promise<BotFacts> {
+    try {
+      const me = await guild.members.fetchMe();
+      return {
+        highestPosition: me.roles.highest.position,
+        canManageRoles: me.permissions.has(PermissionFlagsBits.ManageRoles),
+      };
+    } catch {
+      // Unknown is treated as powerless: refusing to offer a role we might not
+      // be able to grant is the recoverable half of that mistake.
+      return { highestPosition: 0, canManageRoles: false };
+    }
+  }
+
+  private facts(role: Role, guild: Guild): RoleFacts {
+    return {
+      id: role.id,
+      name: role.name,
+      position: role.position,
+      managed: role.managed,
+      isEveryone: role.id === guild.id,
+      permissions: role.permissions.bitfield,
+    };
+  }
+
+  private async roles(guild: Guild, query: string): Promise<readonly RoleRow[]> {
+    const bot = await this.botFacts(guild);
     const rows: RoleRow[] = [];
     for (const role of guild.roles.cache.values()) {
       if (role.id === guild.id) continue; // @everyone is never a useful pick
       if (!matches(query, role.name)) continue;
+      const facts = this.facts(role, guild);
+      const refusal = refuseRole(facts, bot);
       rows.push({
         id: role.id,
         name: role.name,
         color: role.color,
         position: role.position,
         managed: role.managed,
+        assignable: refusal === null,
+        blockedReason: refusal === null ? null : describeRefusal(refusal, facts),
       });
     }
     // Highest first: the role someone is looking for is nearly always near the top.
@@ -405,6 +516,94 @@ export class InternalApi {
       }
       return { ok: false, error: error instanceof Error ? error.message : "FAILED" };
     }
+  }
+
+  /**
+   * Grant and revoke roles, having first decided that we are allowed to.
+   *
+   * Idempotent by construction: a role the member already holds is not added
+   * again and one they do not hold is not removed, so a reconciler that runs
+   * every few minutes costs Discord nothing on the passes where nothing
+   * changed. The response reports what actually happened rather than what was
+   * asked for, because the caller writes a ledger from it and a ledger of
+   * intentions is worse than no ledger at all.
+   */
+  private async applyRoles(guild: Guild, body: unknown): Promise<RoleApplyResult> {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const userId = str(b["userId"]);
+    const reason = str(b["reason"]) ?? "Automatic role";
+    const wantAdd = ids(b["add"]);
+    const wantRemove = ids(b["remove"]);
+    if (userId === null) {
+      return { ok: false, memberPresent: false, added: [], removed: [], refused: [], error: "INVALID_USER" };
+    }
+    if (wantAdd.length === 0 && wantRemove.length === 0) {
+      return { ok: true, memberPresent: true, added: [], removed: [], refused: [] };
+    }
+
+    let member;
+    try {
+      member = await guild.members.fetch(userId);
+    } catch (error) {
+      if (error instanceof DiscordAPIError && error.code === 10007) {
+        // Left the server between the reconciler reading and this call. There
+        // is nothing to do and nothing went wrong.
+        return { ok: true, memberPresent: false, added: [], removed: [], refused: [] };
+      }
+      return {
+        ok: false,
+        memberPresent: false,
+        added: [],
+        removed: [],
+        refused: [],
+        error: describeError(error),
+      };
+    }
+
+    const bot = await this.botFacts(guild);
+    const refused: RefusedRole[] = [];
+    const held = new Set(member.roles.cache.keys());
+
+    const screen = (roleId: string, direction: "ADD" | "REMOVE"): boolean => {
+      const role = guild.roles.cache.get(roleId) ?? null;
+      const facts = role === null ? null : this.facts(role, guild);
+      const refusal = refuseRole(facts, bot);
+      // Removal is screened more loosely on purpose. Taking authority away is
+      // never the dangerous direction, and a role that was harmless when it was
+      // granted and has since been given Manage Roles is precisely the one we
+      // most need to be able to revoke.
+      if (refusal === "DANGEROUS_PERMISSION" && direction === "REMOVE") return true;
+      if (refusal === null) return true;
+      refused.push({ roleId, reason: refusal, detail: describeRefusal(refusal, facts) });
+      return false;
+    };
+
+    const toAdd = wantAdd.filter((id) => !held.has(id) && screen(id, "ADD"));
+    const toRemove = wantRemove.filter((id) => held.has(id) && screen(id, "REMOVE"));
+
+    try {
+      if (toAdd.length > 0) await member.roles.add(toAdd, reason);
+      if (toRemove.length > 0) await member.roles.remove(toRemove, reason);
+    } catch (error) {
+      this.log.warn("role apply failed", {
+        guildId: guild.id,
+        userId,
+        add: toAdd.length,
+        remove: toRemove.length,
+        error: describeError(error),
+      });
+      // Partial application is possible here - the add may have landed and the
+      // remove failed. Nothing is claimed in that case: the caller records no
+      // ledger rows, and the next reconcile sees the real state and finishes
+      // the job. Over-reporting would leave a grant recorded that never
+      // happened, which is the one error this ledger cannot heal from.
+      return { ok: false, memberPresent: true, added: [], removed: [], refused, error: describeError(error) };
+    }
+
+    if (toAdd.length > 0 || toRemove.length > 0) {
+      this.log.info("roles applied", { guildId: guild.id, userId, added: toAdd, removed: toRemove, reason });
+    }
+    return { ok: true, memberPresent: true, added: toAdd, removed: toRemove, refused };
   }
 
   /**

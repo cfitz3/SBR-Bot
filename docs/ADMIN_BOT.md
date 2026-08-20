@@ -230,12 +230,19 @@ The bot is the only process holding a Discord gateway cache, so it exposes that 
 | Route | Purpose |
 | --- | --- |
 | `GET /internal/g/{guildId}/channels` | `{id, name, type, parentName}[]` |
-| `GET /internal/g/{guildId}/roles` | `{id, name, color, position, managed}[]` |
+| `GET /internal/g/{guildId}/roles` | `{id, name, color, position, managed, assignable, blockedReason}[]` |
 | `GET /internal/g/{guildId}/members?q=` | `{id, username, globalName, nick, avatarHash, roleIds, joinedAt, bot}[]` |
 | `POST /internal/g/{guildId}/enforce` | KICK / BAN / UNBAN / TIMEOUT / UNTIMEOUT, through `DiscordGuildEffects` |
 | `POST /internal/g/{guildId}/scheduled-event` | Creates a Discord scheduled event, returns its id |
+| `POST /internal/g/{guildId}/roles` | `{userId, add[], remove[], reason}` — grants and revokes, after a preflight |
 
 `{guildId}` is the **platform** guild id; the bot resolves it to the Discord snowflake itself, so the panel never has to hold both.
+
+**Role writes are preflighted here, not only in the panel** (`apps/admin-bot/src/role-preflight.ts`). A role is refused before Discord is asked when the bot lacks Manage Roles, when the role no longer exists, when it is `@everyone` or integration-owned, when it sits **at or above** the bot's own highest role, or when it carries any of Administrator, Manage Server, Manage Roles, Manage Channels, Manage Webhooks, Ban Members, Kick Members or Timeout Members. That last rule is a deliberate limitation rather than an oversight: **a rule may not hand out authority**, so staff promotion stays a human act with a name attached to it. Revocation is screened more loosely — taking a dangerous role *away* is never the dangerous direction, and a role that has gained Manage Roles since it was granted is exactly the one we most need to be able to remove.
+
+`assignable` / `blockedReason` on the roles listing are the same decision, so a picker can grey a row out and say why instead of offering a role that would fail at the API as a bare 50013.
+
+The write is **idempotent and honest**. A role the member already holds is not added again and one they do not hold is not removed, so a reconciler pass where nothing changed costs Discord nothing. The response reports what *actually* happened — `{ok, memberPresent, added[], removed[], refused[]}` — because the caller writes a grant ledger from it, and a ledger of intentions is worse than no ledger. A member who has left the server is `ok: true, memberPresent: false`: nothing to do, nothing wrong. If the Discord call throws, nothing is claimed at all and the next reconcile finishes the job from real state.
 
 **Environment.**
 

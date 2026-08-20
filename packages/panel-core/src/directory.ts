@@ -33,6 +33,18 @@ export interface DirectoryRole {
   readonly position: number;
   /** Bot- and integration-owned roles, which a guild cannot assign by hand. */
   readonly managed: boolean;
+  /**
+   * Whether an automatic rule may hand this role out, as the admin bot sees it.
+   *
+   * Optional because a row cached by an older bot build will not carry it, and
+   * because the answer depends on the bot's own place in the hierarchy - which
+   * the panel cannot compute. Absent means unknown, and a picker should treat
+   * unknown as assignable rather than greying out every role for a minute after
+   * a deploy.
+   */
+  readonly assignable?: boolean;
+  /** Why not, in a sentence fit to show an operator. */
+  readonly blockedReason?: string | null;
 }
 
 export interface DirectoryMember {
