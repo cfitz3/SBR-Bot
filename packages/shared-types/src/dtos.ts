@@ -757,6 +757,17 @@ export interface MilestoneDTO {
  * that said "reached level 7" when they went from 5 to 7 would be quietly
  * wrong about the thing it exists to celebrate.
  */
+/** A reminder a member set for themselves, as every surface sees it. */
+export interface ReminderDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly discordId: string;
+  readonly channelId: string;
+  readonly text: string;
+  /** ISO. When it is meant to fire, not when it was set. */
+  readonly dueAt: string;
+}
+
 export interface PendingLevelUpDTO {
   readonly id: string;
   readonly guildId: string;

@@ -11,6 +11,7 @@ import type {
   CommandSurface,
   CommunityService,
   DiscordDirectory,
+  ReminderPort,
   EmbedView,
   GuildConfigService,
   GuildRosterSource,
@@ -39,6 +40,12 @@ export interface CommandContext {
    * the in-game surface resolves a player by IGN and has no username to pass.
    */
   readonly username?: string | undefined;
+  /**
+   * Where the command was typed, when the surface has a channel at all.
+   * `/remind` is the reason it exists: a reminder has to come back to the place
+   * it was set, and guild chat has no channel to come back to.
+   */
+  readonly channelId?: string | undefined;
   readonly surface: CommandSurface;
   readonly args: CommandArgs;
 }
@@ -124,6 +131,12 @@ export interface HandlerDeps {
    * answer it — in guild chat those commands say so rather than guessing.
    */
   readonly discord?: DiscordDirectory;
+  /**
+   * `/remind`. Optional like the rest of the client-dependent ports: a
+   * deployment without it says reminders are not set up rather than pretending
+   * to have taken one.
+   */
+  readonly reminders?: ReminderPort;
   /**
    * The chat filter, asked rather than edited. `!guildquote` says something a
    * staffer stored months ago, and this is how that line is held to the same

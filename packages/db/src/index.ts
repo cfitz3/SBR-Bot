@@ -60,6 +60,7 @@ export {
   memberProgressSource,
   linkDirectory,
 } from "./repositories/perms.js";
+export { reminderRepository } from "./repositories/reminders.js";
 export { xpRepository, activitySink, xpLevelUpAnnouncementRepository } from "./repositories/xp.js";
 export { leaderboardSource } from "./repositories/leaderboards.js";
 export { milestoneDefinitionRepository, milestoneAnnouncementRepository } from "./repositories/milestones.js";

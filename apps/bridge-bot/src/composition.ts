@@ -18,6 +18,7 @@ import {
   linkDirectory,
   memberProgressSource,
   milestoneAnnouncementRepository,
+  reminderRepository,
   xpLevelUpAnnouncementRepository,
   roleSyncRepository,
   permRepository,
@@ -87,6 +88,7 @@ import {
   type GuildRosterSource,
   type LevelUpAnnouncerPort,
   type MilestoneAnnouncerPort,
+  type ReminderPort,
   type PlayerLookup,
   type TextScreen,
 } from "@sbr/shared-types";
@@ -138,6 +140,8 @@ export interface BridgeApp {
   readonly milestones: MilestoneAnnouncerPort;
   /** The level-up queue, exposed for the same reason as `milestones`. */
   readonly levelUps: LevelUpAnnouncerPort;
+  /** The reminder store, exposed so the sweeper can be handed a fake. */
+  readonly reminders: ReminderPort;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
@@ -535,6 +539,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     screen,
     tallies: adapters.tallies,
     discord,
+    reminders: reminderRepository,
     logger: log,
   };
 
@@ -698,6 +703,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     handlerDeps,
     milestones: milestoneAnnouncementRepository,
     levelUps: xpLevelUpAnnouncementRepository,
+    reminders: reminderRepository,
     memberBus: adapters.memberBus,
     linkedDiscordIdForIgn: (ign) => identityRepository.findDiscordIdByIgn(ign).catch(() => null),
     async welcomeProfile(guildId, discordId) {

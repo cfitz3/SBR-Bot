@@ -318,6 +318,7 @@ model Guild {
   xpEvents         XpEvent[]
   xpBalances       XpBalance[]
   xpLevelUps       XpLevelUp[]
+  reminders        Reminder[]
   xpSources        XpSourceConfig[]
   activityDaily    ActivityDaily[]
   screenings       GuildJoinScreening[]
@@ -1130,6 +1131,31 @@ model XpLevelUp {
 
   @@unique([guildId, discordId, toLevel])
   @@index([announced, createdAt])
+}
+
+/// A reminder a member set for themselves with `/remind`.
+///
+/// Durable rather than an in-process timer: the useful reminders are hours or
+/// days out, and a deploy in the middle of one must not swallow it. The sweeper
+/// delivers what is due and flips `delivered` afterwards, so a crash mid-post
+/// repeats a reminder rather than losing it.
+///
+/// `channelId` is the channel it was set in. A channel that has since been
+/// deleted simply fails to deliver, which the sweeper reports and retries.
+model Reminder {
+  id        String   @id @default(cuid())
+  guildId   String
+  discordId String
+  channelId String
+  text      String
+  dueAt     DateTime
+  delivered Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@index([delivered, dueAt])
+  @@index([guildId, discordId, delivered])
 }
 
 model XpBalance {

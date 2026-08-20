@@ -377,6 +377,14 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       reason: "Why it is being closed",
     },
   },
+  remind: {
+    description: "Have me remind you about something later",
+    option: { when: "How long from now — 30m, 2h30m, 1w", about: "What to remind you about" },
+  },
+  reminders: {
+    description: "Your pending reminders",
+    option: { cancel: "The id of one to cancel" },
+  },
   levelalerts: {
     description: "Turn your own level-up announcements on or off",
     option: { state: "Leave it blank to see where you stand" },

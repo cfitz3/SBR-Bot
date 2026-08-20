@@ -46,6 +46,7 @@ import type {
   ModerationActionDTO,
   NetworthDTO,
   PendingLevelUpDTO,
+  ReminderDTO,
   PendingMilestoneDTO,
   PermGroupDTO,
   ProgressMetric,
@@ -308,6 +309,33 @@ export interface TicketConfigService {
  * they are announced into different channels and a guild may want one without
  * the other.
  */
+/**
+ * Reminders. Deliberately small, and member-scoped by every signature: a
+ * reminder is one person's note to themselves, so there is no "list everybody's"
+ * on this port at all.
+ */
+export interface ReminderPort {
+  create(input: {
+    readonly guildId: string;
+    readonly discordId: string;
+    readonly channelId: string;
+    readonly text: string;
+    readonly dueAt: Date;
+  }): Promise<ReminderDTO>;
+  /** Undelivered and due, oldest first. The sweeper's only read. */
+  listDue(now: Date, limit: number): Promise<readonly ReminderDTO[]>;
+  markDelivered(ids: readonly string[]): Promise<number>;
+  /** One member's own pending reminders, soonest first. */
+  listPendingFor(guildId: string, discordId: string): Promise<readonly ReminderDTO[]>;
+  /**
+   * Cancel one. Scoped to the owner on purpose — an id is guessable, and
+   * cancelling somebody else's reminder must not be one typo away.
+   */
+  cancel(guildId: string, discordId: string, id: string): Promise<boolean>;
+  /** How many pending reminders this member already has. Enforces the per-member cap. */
+  countPendingFor(guildId: string, discordId: string): Promise<number>;
+}
+
 export interface LevelUpAnnouncerPort {
   listPending(limit: number, excludeGuildIds?: readonly string[]): Promise<readonly PendingLevelUpDTO[]>;
   markAnnounced(ids: readonly string[]): Promise<number>;

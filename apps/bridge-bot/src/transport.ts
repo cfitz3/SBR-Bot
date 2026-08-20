@@ -37,6 +37,7 @@ import {
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
 import { startLevelAnnouncer } from "./levels.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
+import { startReminderSweeper } from "./reminders.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
 import { deliverEventReminder } from "./events.js";
 import { EventBoardGateway } from "./event-board.js";
@@ -124,6 +125,8 @@ export function createInteractionHandler(app: BridgeApp) {
       // `/link` matches this against the Hypixel social field, which stores a
       // username rather than a snowflake.
       username: i.user.username,
+      // Only when there is one: a command run in a DM has no guild channel.
+      ...(i.channelId === null ? {} : { channelId: i.channelId }),
       surface: "BRIDGE_BOT",
       args: interactionArgs(i),
     });
@@ -619,6 +622,25 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           embeds: [toEmbed(embed)],
           // The one person being congratulated, and nobody else.
           allowedMentions: { users: [mentionDiscordId] },
+        })
+        .catch(() => null);
+      return message !== null;
+    },
+    log: app.log,
+  });
+
+  // Reminders go back to the channel they were set in, so this needs no
+  // configuration at all — only a client to post with.
+  const reminderSweeper = startReminderSweeper({
+    reminders: app.reminders,
+    async post(reminder) {
+      const channel = await discord.channels.fetch(reminder.channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+      const message = await (channel as SendableChannel)
+        .send({
+          content: `<@${reminder.discordId}> — ${reminder.text}`,
+          // The text is the member's own words. They may address only themselves.
+          allowedMentions: { users: [reminder.discordId] },
         })
         .catch(() => null);
       return message !== null;
@@ -1450,6 +1472,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // isn't answered with a fresh login.
       announcer.stop();
       levelAnnouncer.stop();
+      reminderSweeper.stop();
       void greeter.stop().catch(() => undefined);
       // Detach first: the bus keeps delivering until the process exits, and a
       // sink pointing at a queue whose session is closing would just age out.
