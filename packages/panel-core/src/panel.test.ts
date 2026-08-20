@@ -517,7 +517,7 @@ function withAttendance(): CommunityService {
           { discordId: "1", state: "GOING" as const, respondedAt: "2026-08-07T10:00:00.000Z" },
           { discordId: "9", state: "GOING" as const, respondedAt: "2026-08-07T11:00:00.000Z" },
         ],
-        maybe: [], declined: [], waitlist: [],
+        maybe: [], declined: [], waitlist: [], attended: [],
       });
     },
   };
@@ -543,6 +543,38 @@ test("an unknown event id is dropped rather than reported as a fault", async () 
 
   assert.equal(r.data?.selected, "");
   assert.equal(r.data?.attendance, null);
+});
+
+/**
+ * Turnout is not a subset of the roster, so the VM must carry somebody who
+ * never answered — and must say which rows the tracker wrote, because those
+ * are shown as fact rather than as something to untick.
+ */
+test("who turned up is joined to names too, including people who never RSVP'd", async () => {
+  const community: Partial<CommunityService> = {
+    ...withAttendance(),
+    async getAttendance() {
+      return ok({
+        event: EVENT as never,
+        going: [{ discordId: "1", state: "GOING" as const, respondedAt: "2026-08-07T10:00:00.000Z" }],
+        maybe: [], declined: [], waitlist: [],
+        attended: [
+          { discordId: "1", source: "TRACKED" as const, recordedBy: null, recordedAt: "2026-08-07T12:00:00.000Z" },
+          { discordId: "9", source: "MARKED" as const, recordedBy: "111", recordedAt: "2026-08-07T12:30:00.000Z" },
+        ],
+      });
+    },
+  };
+
+  const r = await svc({
+    community: community as CommunityService,
+    reads: reads({ async listEvents() { return [EVENT]; } }),
+  }).loadEvents(session(), "g1", "evt_1");
+
+  assert.deepEqual(
+    r.data?.attendance?.attended.map((entry) => [entry.discordId, entry.username, entry.source]),
+    [["1", "a", "TRACKED"], ["9", null, "MARKED"]],
+  );
 });
 
 test("a selected event's roster arrives with names joined, and unknown ids kept", async () => {

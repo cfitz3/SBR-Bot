@@ -267,13 +267,68 @@ export const communityRepository = {
       respondedAt: r.respondedAt.toISOString(),
     }));
     const of = (state: RSVPState): RsvpEntryDTO[] => entries.filter((e) => e.state === state);
+
+    const attended = await prisma.eventAttendance.findMany({
+      where: { eventId },
+      orderBy: { recordedAt: "asc" },
+    });
+
     return {
       event,
       going: of("GOING"),
       maybe: of("MAYBE"),
       declined: of("NOT_GOING"),
       waitlist: of("WAITLIST"),
+      attended: attended.map((a) => ({
+        discordId: a.discordId,
+        source: a.source as "TRACKED" | "MARKED",
+        recordedBy: a.recordedBy,
+        recordedAt: a.recordedAt.toISOString(),
+      })),
     };
+  },
+
+  /**
+   * Replace the hand-marked list in one transaction.
+   *
+   * Deleting only `MARKED` rows is the whole point: the tracker watched the
+   * event and this list did not, so a hand-made correction may add people the
+   * poller could not see and remove people it never claimed — but it may not
+   * overrule an observation. Callers are expected to present TRACKED rows as
+   * fact rather than as something to untick.
+   */
+  async setAttendance(eventId: string, discordIds: readonly string[], recordedBy: string): Promise<void> {
+    await prisma.$transaction([
+      prisma.eventAttendance.deleteMany({
+        where: { eventId, source: "MARKED", discordId: { notIn: [...discordIds] } },
+      }),
+      prisma.eventAttendance.createMany({
+        data: discordIds.map((discordId) => ({ eventId, discordId, source: "MARKED" as const, recordedBy })),
+        skipDuplicates: true,
+      }),
+    ]);
+  },
+
+  /**
+   * Everyone the poller scored, recorded as having attended.
+   *
+   * `skipDuplicates` rather than an upsert loop: a member already marked by hand
+   * keeps their `MARKED` row and its `recordedBy`, because who said they were
+   * there is worth more than the fact that the poller agrees.
+   */
+  async recordTrackedAttendance(eventId: string): Promise<number> {
+    const scored = await prisma.eventScore.findMany({
+      where: { eventId },
+      distinct: ["discordId"],
+      select: { discordId: true },
+    });
+    if (scored.length === 0) return 0;
+
+    const written = await prisma.eventAttendance.createMany({
+      data: scored.map((s) => ({ eventId, discordId: s.discordId, source: "TRACKED" as const })),
+      skipDuplicates: true,
+    });
+    return written.count;
   },
 
   // ──────────────────────────────── LFG ────────────────────────────────

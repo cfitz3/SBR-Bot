@@ -8,7 +8,7 @@ so out loud.
 ## State
 
 - **Build**: `npx tsc -b` and `npm run build -w @sbr/app-web-panel` both exit 0.
-- **Tests**: `npm test` — 1522 pass, 0 fail, 1 skipped (a POSIX file-mode
+- **Tests**: `npm test` — 1532 pass, 0 fail, 1 skipped (a POSIX file-mode
   assertion that cannot hold on Windows).
 - **Brand checker**: `npm run brand check` clean; 80 command descriptions within
   Discord's cap, 43 theme tokens all with fallbacks, 63 gallery cards with no
@@ -118,8 +118,21 @@ refuses anyone but the host — calling an event off is the host's call in a way
 that fixing its start time is not. And un-ticking a metric hides its scores
 rather than deleting them, so it is reversible.
 
-**Still to do in 15:** attendance aggregation — `EventRSVP` is still aggregated
-into nothing, and marking who actually turned up has no record to write to.
+**15e, attendance.** `EventAttendance` is a new table keyed by
+`(eventId, discordId)` with a `source` of `TRACKED` or `MARKED`. Completing an
+event seeds it from `EventScore` — everyone the poller saw — and the events page
+grows a turnout card that shows those as fact and offers a tick box for everyone
+else, saving through `event.attendance` (Officer). `CommunityService.markAttendance`
+replaces the `MARKED` rows wholesale and never touches a `TRACKED` one: the
+poller watched the event and the person ticking boxes is remembering it. The
+attendance embed leads with "Turned up" once there is an answer.
+
+The reason it is its own table rather than a flag on `EventRSVP`: attendance is
+not a subset of the roster. A walk-in who never touched the buttons was still
+there, and a "going" who never showed was not.
+
+**Still to do in 15:** nothing. The attendance *report* and the aggregate that
+counts it wait on Phase 16, which is what would count against them.
 
 ## Deploying this commit
 
@@ -131,25 +144,22 @@ are unavailable and starts anyway.
 
 `npx prisma migrate deploy` before starting anything — the ticket rebuild drops
 the `TicketCategory` *enum* and seeds its five values as rows, and Phase 15 adds
-`EventScore` plus six columns on `Event`. Then the usual
+`EventScore` plus six columns on `Event`, and Phase 15e adds `EventAttendance`. Then the usual
 order: Postgres and Redis, admin bot, workers, bridge bot, panel.
 
 A fresh install still needs `/set-channel` before the relay speaks.
 
 ## Next session, in order
 
-1. **Attendance aggregation** — the last of Phase 15. `EventRSVP` needs a record
-   of who actually turned up before the panel can mark it, and the aggregate
-   feeds the profile card and a Phase 16 achievement family.
-2. **Phase 16** — Milestones become achievements. `backfillMilestones` is the
+1. **Phase 16** — Milestones become achievements. `backfillMilestones` is the
    load-bearing piece; without it every existing member has zero on day one.
-3. **Phase 17** — the `enabled` flag on command specs, retiring the run
+2. **Phase 17** — the `enabled` flag on command specs, retiring the run
    commands, and the `TICKET_MANAGE` capability.
-4. **Part I Phase 11** — the XP page.
-5. **Part II Phase C2** — bot reply and embed prose behind keys (waits on 17).
-6. **Part IV** — the progression planner/tracker, plus the in-game prefix
+3. **Part I Phase 11** — the XP page.
+4. **Part II Phase C2** — bot reply and embed prose behind keys (waits on 17).
+5. **Part IV** — the progression planner/tracker, plus the in-game prefix
    command visual overhaul.
-7. **Part V** — the VPS→Discord health monitor and logger, then a security pass
+6. **Part V** — the VPS→Discord health monitor and logger, then a security pass
    and a full stress test before the guild opens to the public.
 
 The full plan lives at `~/.claude/plans/typed-dreaming-torvalds.md`.

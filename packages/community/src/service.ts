@@ -13,6 +13,7 @@ import {
   type ApplicationDecision,
   type ApplicationError,
   type AttendanceDTO,
+  type AttendanceEdit,
   type CommunityService,
   type EventDTO,
   type EventEdit,
@@ -245,7 +246,14 @@ export class CommunityServiceImpl implements CommunityService {
 
     const completed = await this.repo.updateEvent(eventId, { status: "COMPLETED", endsAt: this.now() });
     if (!completed) return err({ kind: "NOT_FOUND" });
-    this.log.info("event completed", { eventId, actorDiscordId });
+
+    // Everyone the poller scored was demonstrably there, so the list starts
+    // populated rather than empty. It happens here rather than in the tracker
+    // because "the event is over" is the only moment the set stops growing —
+    // and a host who then corrects it is correcting something, not typing a
+    // roster from memory.
+    const tracked = await this.repo.recordTrackedAttendance(eventId);
+    this.log.info("event completed", { eventId, actorDiscordId, tracked });
     return ok(completed);
   }
 
@@ -277,6 +285,33 @@ export class CommunityServiceImpl implements CommunityService {
 
   async getAttendance(eventId: string): Promise<Result<AttendanceDTO, EventError>> {
     const attendance = await this.repo.getAttendance(eventId);
+    if (!attendance) return err({ kind: "NOT_FOUND" });
+    return ok(attendance);
+  }
+
+  async markAttendance(input: AttendanceEdit): Promise<Result<AttendanceDTO, EventError>> {
+    const event = await this.repo.getEvent(input.eventId);
+    if (!event) return err({ kind: "NOT_FOUND" });
+    if (event.status === "CANCELLED") return err({ kind: "CLOSED" });
+    if (!this.mayAct(event, input.actorDiscordId, input.isStaff)) return err({ kind: "NOT_HOST" });
+
+    // Ids are deduplicated and blanks dropped for the same reason the metric
+    // list is: the same person marked twice is one person who turned up, and a
+    // blank is a form artefact rather than a member.
+    const seen = new Set<string>();
+    for (const raw of input.discordIds) {
+      const id = raw.trim();
+      if (id.length > 0) seen.add(id);
+    }
+
+    await this.repo.setAttendance(input.eventId, [...seen], input.actorDiscordId);
+    this.log.info("attendance marked", {
+      eventId: input.eventId,
+      actorDiscordId: input.actorDiscordId,
+      marked: seen.size,
+    });
+
+    const attendance = await this.repo.getAttendance(input.eventId);
     if (!attendance) return err({ kind: "NOT_FOUND" });
     return ok(attendance);
   }

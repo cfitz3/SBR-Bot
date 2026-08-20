@@ -249,6 +249,8 @@ export const MUTATION_TIERS = {
   "event.cancel": "OFFICER",
   "event.update": "OFFICER",
   "event.complete": "OFFICER",
+  /** Marking turnout writes to the record achievements are counted from. */
+  "event.attendance": "OFFICER",
   /** Redrawing the tracker board edits a message in a members-visible channel. */
   "event.board.publish": "OFFICER",
   "member.unlink": "OFFICER",
@@ -634,6 +636,12 @@ const EVENT_TITLE_MAX = 120;
 const DESCRIPTION_MAX = 2_000;
 
 /** A guild-sized ceiling. The floor (≥ 1) is CommunityService's own rule. */
+/**
+ * A cap on one attendance submission. Generous enough for any event a Hypixel
+ * guild can hold and small enough that a malformed body cannot ask the database
+ * to write a novel.
+ */
+const MAX_ATTENDEES = 500;
 const MAX_CAPACITY = 1_000;
 
 /**
@@ -2766,6 +2774,45 @@ export class PanelMutations {
 
       const result = await this.d.community.completeEvent(eventId, actorDiscordId, true);
       return { result, change: { eventId } };
+    });
+  }
+
+  /**
+   * Record who actually turned up.
+   *
+   * The list replaces the hand-marked one wholesale, because the page submits
+   * the ticked boxes rather than a diff — what is on screen is what is stored.
+   * Rows the tracker wrote are untouched by this: the poller watched the event
+   * and the person ticking boxes is remembering it, so the observation wins.
+   */
+  async markAttendance(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "event.attendance", async (actorDiscordId) => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const eventId = body["eventId"];
+      if (typeof eventId !== "string" || !ENTITY_ID.test(eventId)) return invalid("eventId must be an event id");
+
+      const raw = body["discordIds"];
+      if (!Array.isArray(raw) || raw.some((id) => typeof id !== "string")) {
+        return invalid("discordIds must be a list of Discord ids");
+      }
+      const discordIds = raw as string[];
+      if (discordIds.length > MAX_ATTENDEES) return invalid(`at most ${MAX_ATTENDEES} people can be marked at once`);
+      const malformed = discordIds.filter((id) => !SNOWFLAKE.test(id));
+      if (malformed.length > 0) return invalid(`not a Discord id: ${malformed[0]}`);
+
+      const found = await this.d.community.getEvent(eventId);
+      if (!found.ok) return { result: found, change: { eventId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such event");
+
+      const result = await this.d.community.markAttendance({
+        eventId,
+        actorDiscordId,
+        isStaff: true,
+        discordIds,
+      });
+      return { result, change: { eventId, marked: discordIds.length } };
     });
   }
 

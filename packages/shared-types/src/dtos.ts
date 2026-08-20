@@ -425,8 +425,24 @@ export interface RsvpEntryDTO {
 }
 
 /**
- * `/attendance` — who answered an event and how. Counts are computed from the
- * roster rather than stored, so they cannot drift from the entries beneath them.
+ * One person who turned up. `TRACKED` means the poller scored them during the
+ * event; `MARKED` means somebody said so afterwards, which is the only way an
+ * unlinked member or a walk-in is ever recorded.
+ */
+export interface AttendedEntryDTO {
+  readonly discordId: string;
+  readonly source: "TRACKED" | "MARKED";
+  readonly recordedBy: string | null;
+  readonly recordedAt: string;
+}
+
+/**
+ * `/attendance` — who answered an event and how, and who actually came. Counts
+ * are computed from the roster rather than stored, so they cannot drift from the
+ * entries beneath them.
+ *
+ * `attended` is deliberately not a subset of `going`: somebody who never
+ * answered can still walk in, and somebody who said yes can still not show.
  */
 export interface AttendanceDTO {
   readonly event: EventDTO;
@@ -434,6 +450,7 @@ export interface AttendanceDTO {
   readonly maybe: readonly RsvpEntryDTO[];
   readonly declined: readonly RsvpEntryDTO[];
   readonly waitlist: readonly RsvpEntryDTO[];
+  readonly attended: readonly AttendedEntryDTO[];
 }
 
 /**

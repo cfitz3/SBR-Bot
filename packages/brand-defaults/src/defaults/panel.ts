@@ -649,10 +649,11 @@ export const DEFAULT_PANEL = {
     tileGoing: "Going to next",
     cardCreate: "Schedule an event",
     cardUpcoming: "Upcoming",
-    /** `{title}` is the open event's own name, in all three cards. */
+    /** `{title}` is the open event's own name, in all four cards. */
     cardManage: "Edit — {title}",
     cardScores: "Scoreboard — {title}",
     cardRoster: "Who's coming — {title}",
+    cardTurnout: "Who turned up — {title}",
     cardPast: "Finished and cancelled",
     titlePlaceholder: "Catacombs F7 carry night",
     titleLabel: "Event title",
@@ -724,6 +725,11 @@ export const DEFAULT_PANEL = {
     noMetrics: "This event is not scoring anything.",
     /** `{count}` people going, followed by their names. */
     unlinkedWarning: "{count} going have no verified account, so nothing can score them: ",
+    turnoutHint:
+      "Tick everyone who was there. The tracker already recorded anyone it scored, and those cannot be unticked.",
+    /** Sits beside a name the tracker scored, in place of a tick box. */
+    turnoutTracked: "tracked",
+    turnoutSave: "Save turnout",
   },
   /**
    * Moderation: what happens to a member, and who decided it.

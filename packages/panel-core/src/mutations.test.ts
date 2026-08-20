@@ -144,6 +144,7 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
     cancelEvent: record("cancelEvent"),
     updateEvent: record("updateEvent"),
     completeEvent: record("completeEvent"),
+    markAttendance: record("markAttendance"),
     // The one method here that has to answer with something rather than record:
     // every event mutation re-reads the event to check it belongs to this guild,
     // and `evt_other` is the id that does not.
@@ -1010,6 +1011,10 @@ test("an event belonging to another guild is not editable from this one", async 
   assert.equal((await mutations.updateEvent(session(), "g1", { eventId: "evt_other", title: "x" })).error?.kind, "INVALID_INPUT");
   assert.equal((await mutations.completeEvent(session(), "g1", "evt_other")).error?.kind, "INVALID_INPUT");
   assert.equal((await mutations.publishEventBoard(session(), "g1", "evt_other")).error?.kind, "INVALID_INPUT");
+  assert.equal(
+    (await mutations.markAttendance(session(), "g1", { eventId: "evt_other", discordIds: [] })).error?.kind,
+    "INVALID_INPUT",
+  );
   assert.deepEqual(recorded.calls.filter((c) => c.method !== "getEvent"), []);
 });
 
@@ -1051,16 +1056,61 @@ test("a bot that refuses the board reports the refusal", async () => {
   assert.equal(result.error?.kind, "SERVICE_ERROR");
 });
 
+test("marking turnout passes the ticked ids as staff work", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.markAttendance(session(), "g1", {
+    eventId: "evt_1",
+    discordIds: ["222222222222222222", "333333333333333333"],
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls[1], {
+    method: "markAttendance",
+    args: [
+      {
+        eventId: "evt_1",
+        actorDiscordId: "111",
+        isStaff: true,
+        discordIds: ["222222222222222222", "333333333333333333"],
+      },
+    ],
+  });
+});
+
+/**
+ * The ids come from a page the operator can edit, so a body naming something
+ * that is not a Discord id must not reach a table keyed by Discord ids.
+ */
+test("attendance refuses a body that is not a list of Discord ids", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const cases: readonly unknown[] = [
+    "not an object",
+    { eventId: "evt_1" },
+    { eventId: "evt_1", discordIds: "222222222222222222" },
+    { eventId: "evt_1", discordIds: [222222222222222222] },
+    { eventId: "evt_1", discordIds: ["nope"] },
+    { eventId: "not an id!", discordIds: [] },
+  ];
+  for (const body of cases) {
+    assert.equal((await mutations.markAttendance(session(), "g1", body)).error?.kind, "INVALID_INPUT", String(body));
+  }
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "markAttendance"), []);
+});
+
 test("editing, finishing and publishing are all Officer work", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "MODERATOR" } });
 
   const edited = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", title: "x" });
   const done = await mutations.completeEvent(session(), "g1", "evt_1");
   const published = await mutations.publishEventBoard(session(), "g1", "evt_1");
+  const marked = await mutations.markAttendance(session(), "g1", { eventId: "evt_1", discordIds: [] });
 
   assert.equal(edited.access.allowed, false);
   assert.equal(done.access.allowed, false);
   assert.equal(published.access.allowed, false);
+  assert.equal(marked.access.allowed, false);
   assert.deepEqual(recorded.calls, []);
 });
 

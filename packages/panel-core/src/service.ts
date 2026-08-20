@@ -255,12 +255,34 @@ export interface EventRsvp {
   readonly respondedAt: string;
 }
 
+/**
+ * One person recorded as having turned up.
+ *
+ * Deliberately not an `EventRsvp`: attendance is not a response, and somebody
+ * can appear here without ever having answered — a walk-in the host marked, or
+ * a member the tracker scored who never touched the buttons.
+ */
+export interface EventAttendee {
+  readonly discordId: string;
+  readonly username: string | null;
+  /** TRACKED is the poller's observation; MARKED is somebody's judgement. */
+  readonly source: "TRACKED" | "MARKED";
+  readonly recordedBy: string | null;
+  readonly recordedAt: string;
+}
+
 export interface EventAttendance {
   readonly eventId: string;
   readonly going: readonly EventRsvp[];
   readonly maybe: readonly EventRsvp[];
   readonly declined: readonly EventRsvp[];
   readonly waitlist: readonly EventRsvp[];
+  /**
+   * Who actually turned up. Empty until the event completes or a host marks
+   * somebody, and never inferred from `going` — the whole point of the list is
+   * that saying you will come and coming are different events.
+   */
+  readonly attended: readonly EventAttendee[];
 }
 
 /** One member's place on one metric's board, with a name where there is one. */
@@ -892,6 +914,13 @@ export class PanelService {
         maybe: roster(dto.maybe),
         declined: roster(dto.declined),
         waitlist: roster(dto.waitlist),
+        attended: dto.attended.map((entry) => ({
+          discordId: entry.discordId,
+          username: names.get(entry.discordId) ?? null,
+          source: entry.source,
+          recordedBy: entry.recordedBy,
+          recordedAt: entry.recordedAt,
+        })),
       },
       names,
       // Only the people who said they are coming: a "maybe" who never linked is

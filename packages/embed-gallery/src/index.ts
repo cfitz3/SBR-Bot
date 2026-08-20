@@ -240,7 +240,7 @@ export const GALLERY: readonly GalleryCard[] = [
   card("event-reminder", "The bus-delivered \"starting soon\" notice.", renderEventReminderEmbed, f.EVENT_REMINDER),
   card("event-board", "The tracker board, edited in place while the event runs.", renderEventBoardEmbed, f.EVENT_BOARD),
   card("event-board-final", "The same message, one last edit into a result card.", renderEventBoardEmbed, f.EVENT_BOARD_FINAL),
-  card("attendance", "Who is coming, split by state.", renderAttendanceEmbed, f.ATTENDANCE),
+  card("attendance", "Who turned up, then who said they were coming.", renderAttendanceEmbed, f.ATTENDANCE),
   card("lfg", "`/lfg` — a run looking for members.", renderLfgEmbed, f.LFG),
   card("lfg-list", "`/runs` — open and full.", renderLfgListEmbed, f.LFG_LIST),
   card("lfg-list-empty", "No runs open.", renderLfgListEmbed, []),

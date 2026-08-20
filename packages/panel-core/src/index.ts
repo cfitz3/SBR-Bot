@@ -31,6 +31,7 @@ export {
   type EventMetricStandings,
   type EventStanding,
   type EventAttendance,
+  type EventAttendee,
   type EventRsvp,
   type MembersVM,
   DIRECTORY_PAGE_SIZE,

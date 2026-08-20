@@ -15,6 +15,7 @@ import type {
   RsvpEntryDTO,
   TicketDTO,
 } from "@sbr/shared-types";
+import { padInlineRow } from "@sbr/shared-types";
 
 /**
  * Discord renders `<t:unix:R>` as a live relative timestamp in the viewer's own
@@ -216,7 +217,7 @@ export function rsvpButtons(eventId: string): readonly ActionRowView[] {
 }
 
 /** Caps the mention list: 40 pings in one field is a wall, and Discord's field limit is 1024 chars. */
-function mentionList(entries: readonly RsvpEntryDTO[]): string {
+function mentionList(entries: readonly { readonly discordId: string }[]): string {
   if (entries.length === 0) return "—";
   const shown = entries
     .slice(0, 20)
@@ -227,10 +228,25 @@ function mentionList(entries: readonly RsvpEntryDTO[]): string {
 
 export function renderAttendanceEmbed(attendance: AttendanceDTO): EmbedView {
   const { event } = attendance;
+  // Who turned up leads once there is an answer, because after the event that is
+  // the question being asked; before it there is no row and the field is absent
+  // rather than an empty promise.
+  const turnout =
+    attendance.attended.length === 0
+      ? []
+      : [
+          {
+            name: `Turned up (${attendance.attended.length})`,
+            value: mentionList(attendance.attended),
+            inline: false,
+          },
+        ];
+
   return {
     title: `${event.title} — attendance`,
     description: `${timestampTag(event.startsAt)} • ${capacityLabel(event)}`,
     fields: [
+      ...turnout,
       { name: `Going (${attendance.going.length})`, value: mentionList(attendance.going), inline: false },
       { name: `Maybe (${attendance.maybe.length})`, value: mentionList(attendance.maybe), inline: false },
       { name: `Waitlist (${attendance.waitlist.length})`, value: mentionList(attendance.waitlist), inline: false },
@@ -311,17 +327,23 @@ export function renderLfgListEmbed(posts: readonly LFGPostDTO[]): EmbedView {
 
 export function renderTicketEmbed(ticket: TicketDTO): EmbedView {
   const topic = ticket.topic ?? ticket.subject;
+  // The inline run is padded on its own rather than at the end of the list: a
+  // claimed ticket has four of them, and the full-width fields below mean
+  // `padInlineRow` would otherwise see no trailing run to complete.
+  const summary = padInlineRow([
+    // Null when the guild has deleted the category since. "—" rather than a
+    // guess: the ticket really has no category any more.
+    { name: "Category", value: ticket.categoryName ?? "—", inline: true },
+    { name: "Status", value: ticket.status.toLowerCase(), inline: true },
+    { name: "Opened by", value: `<@${ticket.openerDiscordId}>`, inline: true },
+    ...(ticket.claimedByDiscordId === null
+      ? []
+      : [{ name: "Claimed by", value: `<@${ticket.claimedByDiscordId}>`, inline: true }]),
+  ]);
   return {
     title: `Ticket #${ticket.number}`,
     fields: [
-      // Null when the guild has deleted the category since. "—" rather than a
-      // guess: the ticket really has no category any more.
-      { name: "Category", value: ticket.categoryName ?? "—", inline: true },
-      { name: "Status", value: ticket.status.toLowerCase(), inline: true },
-      { name: "Opened by", value: `<@${ticket.openerDiscordId}>`, inline: true },
-      ...(ticket.claimedByDiscordId === null
-        ? []
-        : [{ name: "Claimed by", value: `<@${ticket.claimedByDiscordId}>`, inline: true }]),
+      ...summary,
       ...(topic === null ? [] : [{ name: "Topic", value: topic, inline: false }]),
       ...(ticket.closeReason === null ? [] : [{ name: "Closed because", value: ticket.closeReason, inline: false }]),
     ],

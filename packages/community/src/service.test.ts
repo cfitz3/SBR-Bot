@@ -68,6 +68,8 @@ interface Fake {
   patches: Array<{ postId: string; patch: LfgPatch }>;
   /** The same, for events: an edit must write only the fields it was given. */
   eventPatches: Array<{ eventId: string; patch: EventPatch }>;
+  /** Attendance writes, hand-marked and tracked alike, in the order they landed. */
+  attendanceWrites: Array<{ eventId: string; discordIds: readonly string[]; recordedBy: string | null }>;
 }
 
 function repo(over: Partial<CommunityRepository> = {}): Fake {
@@ -76,18 +78,27 @@ function repo(over: Partial<CommunityRepository> = {}): Fake {
   const created: Fake["created"] = [];
   const patches: Fake["patches"] = [];
   const eventPatches: Fake["eventPatches"] = [];
+  const attendanceWrites: Fake["attendanceWrites"] = [];
   return {
     rsvps,
     rosters,
     created,
     patches,
     eventPatches,
+    attendanceWrites,
     repo: {
       async listUpcomingEvents() { return []; },
       async listMembers() { return []; },
       async listApplications() { return []; },
       async setMemberRole() { return null; },
       async getEventForRsvp() { return null; },
+      async setAttendance(eventId, discordIds, recordedBy) {
+        attendanceWrites.push({ eventId, discordIds: [...discordIds], recordedBy });
+      },
+      async recordTrackedAttendance(eventId) {
+        attendanceWrites.push({ eventId, discordIds: ["tracked"], recordedBy: null });
+        return 1;
+      },
       async upsertRsvp(eventId, discordId, state) { rsvps.push({ eventId, discordId, state }); },
       async createEvent(input) { return anEvent({ ...input, id: "new", capacity: input.capacity ?? null }); },
       async getEvent() { return anEvent(); },
@@ -346,6 +357,75 @@ test("only the host, or staff, can complete an event", async () => {
   assert.equal(denied.ok === false && denied.error.kind, "NOT_HOST");
   const allowed = await svcOf(repo()).completeEvent("e1", "999", true);
   assert.equal(allowed.ok, true);
+});
+
+test("completing an event records everyone the tracker scored", async () => {
+  const r = repo();
+  await svcOf(r).completeEvent("e1", "111");
+  assert.deepEqual(r.attendanceWrites, [{ eventId: "e1", discordIds: ["tracked"], recordedBy: null }]);
+});
+
+// ── attendance ──
+
+/** A repo whose roster read succeeds, so markAttendance can get past its re-read. */
+function attendanceRepo(over: Partial<CommunityRepository> = {}): Fake {
+  return repo({
+    async getAttendance(eventId: string) {
+      return { event: anEvent({ id: eventId }), going: [], maybe: [], declined: [], waitlist: [], attended: [] };
+    },
+    ...over,
+  });
+}
+
+test("marking attendance writes the list and hands back the fresh roster", async () => {
+  const r = attendanceRepo();
+  const result = await svcOf(r).markAttendance({
+    eventId: "e1",
+    actorDiscordId: "111",
+    discordIds: ["222", "333"],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(r.attendanceWrites, [{ eventId: "e1", discordIds: ["222", "333"], recordedBy: "111" }]);
+});
+
+test("the same person ticked twice is one person, and blanks are not people", async () => {
+  const r = attendanceRepo();
+  await svcOf(r).markAttendance({
+    eventId: "e1",
+    actorDiscordId: "111",
+    discordIds: ["222", " 222 ", "", "   ", "333"],
+  });
+  assert.deepEqual(r.attendanceWrites[0]?.discordIds, ["222", "333"]);
+});
+
+test("an empty list clears the hand-marked roster rather than being refused", async () => {
+  const r = attendanceRepo();
+  const result = await svcOf(r).markAttendance({ eventId: "e1", actorDiscordId: "111", discordIds: [] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(r.attendanceWrites[0]?.discordIds, []);
+});
+
+test("a cancelled event has no turnout to record", async () => {
+  const r = await svcOf(attendanceRepo({ async getEvent() { return anEvent({ status: "CANCELLED" }); } }))
+    .markAttendance({ eventId: "e1", actorDiscordId: "111", discordIds: ["222"] });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "CLOSED");
+});
+
+test("only the host, or staff, can mark attendance", async () => {
+  const denied = await svcOf(attendanceRepo())
+    .markAttendance({ eventId: "e1", actorDiscordId: "999", discordIds: ["222"] });
+  assert.equal(denied.ok === false && denied.error.kind, "NOT_HOST");
+  const allowed = await svcOf(attendanceRepo())
+    .markAttendance({ eventId: "e1", actorDiscordId: "999", isStaff: true, discordIds: ["222"] });
+  assert.equal(allowed.ok, true);
+});
+
+test("marking attendance on an event that is gone is not found", async () => {
+  const r = await svcOf(attendanceRepo({ async getEvent() { return null; } }))
+    .markAttendance({ eventId: "e1", actorDiscordId: "111", discordIds: ["222"] });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "NOT_FOUND");
 });
 
 // ── LFG ──

@@ -617,6 +617,15 @@ export interface CommunityService {
   /** Records a response, downgrading GOING to WAITLIST when the event is full. */
   rsvp(eventId: string, discordId: string, state: RSVPState): Promise<Result<RsvpOutcome, EventError>>;
   getAttendance(eventId: string): Promise<Result<AttendanceDTO, EventError>>;
+  /**
+   * Replace the hand-marked attendance list for an event.
+   *
+   * Wholesale rather than one id at a time because the question being answered
+   * is "who was there", and an add/remove pair would let two people editing the
+   * same list each win half of it. Rows the tracker wrote are left alone: a
+   * correction should never quietly discard what the poller actually observed.
+   */
+  markAttendance(input: AttendanceEdit): Promise<Result<AttendanceDTO, EventError>>;
 
   // ── Looking for group (`/lfg`, `/runs`, `/joinrun`, `/leaverun`) ──
   createLfg(input: NewLfgPost): Promise<Result<LFGPostDTO, LfgError>>;
@@ -681,6 +690,16 @@ export interface NewEvent {
  * opened. `isStaff` exists for the same reason it does on LFG — the host owns
  * their event, and staff act above that rather than around it.
  */
+/** Who was actually there, as decided by a person rather than by the poller. */
+export interface AttendanceEdit {
+  readonly eventId: string;
+  readonly actorDiscordId: string;
+  /** True when the actor may mark anybody's event. */
+  readonly isStaff?: boolean;
+  /** The complete hand-marked list. An empty array clears it. */
+  readonly discordIds: readonly string[];
+}
+
 export interface EventEdit {
   readonly eventId: string;
   readonly actorDiscordId: string;

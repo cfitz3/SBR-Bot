@@ -404,6 +404,7 @@ function community(over: Partial<CommunityService> = {}): CommunityService {
       return ok({
         event: anEvent,
         going: [{ discordId: "111", state: "GOING", respondedAt: "2026-08-01T00:00:00.000Z" }],
+        attended: [],
         maybe: [],
         declined: [],
         waitlist: [],

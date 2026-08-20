@@ -134,6 +134,16 @@ export interface CommunityRepository {
    */
   updateEvent(eventId: string, patch: EventPatch): Promise<EventDTO | null>;
   getAttendance(eventId: string): Promise<AttendanceDTO | null>;
+  /**
+   * Replace the `MARKED` attendance rows for an event, leaving `TRACKED` ones
+   * alone. Whether the actor may do this is the service's decision.
+   */
+  setAttendance(eventId: string, discordIds: readonly string[], recordedBy: string): Promise<void>;
+  /**
+   * Record everyone the poller scored during an event as having attended,
+   * without disturbing rows that already exist. Returns how many were added.
+   */
+  recordTrackedAttendance(eventId: string): Promise<number>;
 
   // ── LFG ──
   createLfg(input: LfgInsert): Promise<LFGPostDTO>;

@@ -831,10 +831,45 @@ model Event {
   guild     Guild             @relation(fields: [guildId], references: [id], onDelete: Cascade)
   rsvps     EventRSVP[]
   scores    EventScore[]
+  attendees EventAttendance[]
   snapshots ProfileSnapshot[]
 
   @@index([guildId, status, startsAt])
   @@index([status, boardUpdatedAt])
+}
+
+/// One person who actually turned up, which is a different question from what
+/// they said they would do — `EventRSVP` records the promise, this records the
+/// event.
+///
+/// Two sources, and the distinction is load-bearing. `TRACKED` rows are written
+/// when the event finishes, from the participants the poller actually scored:
+/// free, objective, and blind to anyone without a verified account. `MARKED`
+/// rows are a person's judgement from the panel, which is the only way an
+/// unlinked member or a walk-in who never RSVP'd is ever recorded. Re-marking
+/// replaces the `MARKED` set and leaves the `TRACKED` rows alone, so a correction
+/// never silently discards what the tracker saw.
+///
+/// Keyed by Discord id rather than uuid: attendance is a fact about a member of
+/// this server, and the achievement family it feeds counts people, not profiles.
+model EventAttendance {
+  id         String           @id @default(cuid())
+  eventId    String
+  discordId  String
+  source     AttendanceSource @default(MARKED)
+  /// Who marked it, for a `MARKED` row. Null when the tracker wrote it.
+  recordedBy String?
+  recordedAt DateTime         @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, discordId])
+  @@index([discordId])
+}
+
+enum AttendanceSource {
+  TRACKED
+  MARKED
 }
 
 /// One participant's standing in one metric of one event.

@@ -15,13 +15,18 @@
  * for it to poll. The second is the more useful half — a missing name on a
  * leaderboard is otherwise indistinguishable from a member who did nothing.
  *
- * Two parts of §3.8 are still not here because they are not in the domain:
- * marking who actually turned up, and posting the announcement or the
- * reminders on demand. Attendance has no record to write to, and the reminders
- * belong to the scheduler — a button racing it would post twice.
+ * Once an event has started the roster gains a turnout card: the tracker's own
+ * observations, which the page shows as fact, plus a tick box for everybody it
+ * could not see. That is the half a poller cannot do — a member with no linked
+ * account was still in the lobby.
+ *
+ * One part of §3.8 is still not here because it is not in the domain: posting
+ * the announcement or the reminders on demand. The reminders belong to the
+ * scheduler, and a button racing it would post twice.
  */
 import type {
   EventAttendance,
+  EventAttendee,
   EventMetricStandings,
   EventRsvp,
   EventsVM,
@@ -152,6 +157,12 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
       open ? card(t("cardScores").replace("{title}", open.title), scoresBody(open, data.standings, data.unlinked)) : null,
       open && data.attendance
         ? card(t("cardRoster").replace("{title}", open.title), rosterBody(data.attendance))
+        : null,
+      open && data.attendance && showTurnout(open, data.attendance)
+        ? card(
+            t("cardTurnout").replace("{title}", open.title),
+            turnoutBody(guildId, data.attendance, rerender),
+          )
         : null,
       card(t("cardPast"), pastBody(past, rerender)),
     ),
@@ -640,6 +651,99 @@ function rosterEntry(entry: EventRsvp): HTMLElement {
     {},
     entry.username ? h("span", {}, entry.username) : h("code", {}, entry.discordId),
     h("span", { class: "muted" }, ` ${countdown(entry.respondedAt)}`),
+  );
+}
+
+// ─────────────────────────── turnout ───────────────────────────
+
+/**
+ * Turnout is a question you can only answer after the fact, so the card stays
+ * away until the event has started — or until something has already been
+ * recorded, which can happen on an event whose start was later corrected.
+ */
+function showTurnout(event: PanelEvent, attendance: EventAttendance): boolean {
+  if (event.status === "CANCELLED") return false;
+  return attendance.attended.length > 0 || Date.parse(event.startsAt) <= Date.now();
+}
+
+/**
+ * Everyone who might have been there, each with a box.
+ *
+ * The candidate list is the union of the RSVPs and whoever is already recorded,
+ * because attendance is not a subset of the roster: the tracker scores members
+ * who never touched the buttons, and hosts mark walk-ins.
+ *
+ * Rows the tracker wrote are shown as fact rather than as a box. The poller
+ * watched the event and the person reading this page is remembering it, so
+ * offering to untick an observation would be offering a lie.
+ */
+function turnoutBody(guildId: string, attendance: EventAttendance, rerender: () => void): HTMLElement {
+  const status = statusSlot();
+
+  const names = new Map<string, string | null>();
+  const order: string[] = [];
+  const consider = (discordId: string, username: string | null): void => {
+    if (names.has(discordId)) {
+      if (names.get(discordId) === null) names.set(discordId, username);
+      return;
+    }
+    names.set(discordId, username);
+    order.push(discordId);
+  };
+  for (const entry of attendance.attended) consider(entry.discordId, entry.username);
+  for (const entry of attendance.going) consider(entry.discordId, entry.username);
+  for (const entry of attendance.waitlist) consider(entry.discordId, entry.username);
+  for (const entry of attendance.maybe) consider(entry.discordId, entry.username);
+  for (const entry of attendance.declined) consider(entry.discordId, entry.username);
+
+  if (order.length === 0) return emptyState("eventsRsvp");
+
+  const recorded = new Map<string, EventAttendee>(
+    attendance.attended.map((entry) => [entry.discordId, entry]),
+  );
+
+  const rows = order.map((discordId) => {
+    const found = recorded.get(discordId) ?? null;
+    const label = names.get(discordId) ?? null;
+    const who = label === null ? h("code", {}, discordId) : h("span", {}, label);
+
+    if (found?.source === "TRACKED") {
+      return {
+        discordId,
+        box: null,
+        el: h("span", { class: "switch-check" }, badge(t("turnoutTracked"), "ok"), who),
+      };
+    }
+
+    const box = h("input", {
+      class: "switch-input",
+      type: "checkbox",
+      ...(found === null ? {} : { checked: true }),
+      "aria-label": label ?? discordId,
+    }) as HTMLInputElement;
+    return { discordId, box, el: h("label", { class: "switch-check" }, box, who) };
+  });
+
+  const save = actionButton({
+    label: t("turnoutSave"),
+    tone: "primary",
+    status,
+    run: () =>
+      postAction(guildId, "event.attendance", {
+        eventId: attendance.eventId,
+        // Tracked rows are not submitted: they are not this list's to keep or
+        // drop, and the write leaves them alone either way.
+        discordIds: rows.filter((row) => row.box?.checked === true).map((row) => row.discordId),
+      }),
+    onDone: rerender,
+  });
+
+  return h(
+    "div",
+    { class: "fields" },
+    h("p", { class: "field-hint" }, t("turnoutHint")),
+    h("div", { class: "field-row metric-grid" }, ...rows.map((row) => row.el)),
+    h("div", { class: "field-row" }, save, status.el),
   );
 }
 

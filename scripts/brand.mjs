@@ -253,8 +253,8 @@ async function check() {
   const issues = kit.checkEmbeds(GALLERY);
   const errors = issues.filter((i) => i.severity === "error");
   const warnings = issues.filter((i) => i.severity !== "error");
-  for (const issue of errors) problem(`${issue.name}: ${issue.message} [${issue.rule}]`);
-  for (const issue of warnings) caution(`${issue.name}: ${issue.message} [${issue.rule}]`);
+  for (const issue of errors) problem(`${issue.card} ${issue.where}: ${issue.detail} [${issue.rule}]`);
+  for (const issue of warnings) caution(`${issue.card} ${issue.where}: ${issue.detail} [${issue.rule}]`);
   if (errors.length === 0) good(`${GALLERY.length} cards, no error-severity issues`);
 
   // 4. Keys nobody reads, and reads that name no key.

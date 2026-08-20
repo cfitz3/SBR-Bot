@@ -761,6 +761,12 @@ export const EVENTS: readonly EventDTO[] = [
 
 export const ATTENDANCE: AttendanceDTO = {
   event: EVENT,
+  // One of the two who said yes turned up, and one person who never answered
+  // did: the card has to be able to show both, or it flatters the RSVP list.
+  attended: [
+    { discordId: "100000000000000001", source: "TRACKED", recordedBy: null, recordedAt: iso(0) },
+    { discordId: "100000000000000009", source: "MARKED", recordedBy: "100000000000000002", recordedAt: iso(0) },
+  ],
   going: [
     { discordId: "100000000000000001", state: "GOING", respondedAt: iso(-2 * 86_400_000) },
     { discordId: "100000000000000002", state: "GOING", respondedAt: iso(-1 * 86_400_000) },
