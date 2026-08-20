@@ -33,12 +33,32 @@ already fire.
 
 ## 1. Governing decisions
 
-**1. Role writes go through the admin bot's internal API.** A second token
-holding Manage Roles is a second thing to leak. The admin bot already owns the
-privileged Discord write path (`/enforce`), already has the `GuildMembers`
-intent, and is already the process the panel calls for anything that has to
-*reach* Discord. Granting a role is a permission grant, so it belongs on the
-same audited chokepoint as a ban — not on the member-facing bridge token.
+**0. Which bot does what is settled, and it is the rule everything else obeys.**
+
+| | Application | Owns |
+| --- | --- | --- |
+| **SBR Bot / SBR Bridge** | one Discord application, one token, two surfaces (`apps/bridge-bot`) | **every member interaction** — anything a member sees, clicks, or is addressed by |
+| **SBR Admin** | a separate application (`apps/admin-bot`) | **staff-facing surfaces and automated work** — including every privileged write to Discord |
+
+The dividing line is *audience*, not mechanism. A welcome message is a member
+interaction and is spoken by SBR Bot even though a machine decided to send it. A
+role grant is automated work and is performed by SBR Admin even though a member
+is the one who ends up with the role. Where a feature has both halves — a button
+a member presses that results in a privileged write — the member-facing half
+lives in the bridge bot and calls the admin bot's internal API for the write.
+
+One consequence worth writing down: **SBR Bot and SBR Bridge share an
+application**, so they share intents, permissions and rate limits. An intent
+added for one surface is added for both, which is a reason to keep new intents
+on the admin bot wherever the work is automated anyway.
+
+**1. Role writes go through the admin bot's internal API.** This follows from
+decision 0 — role assignment is automated work — and it is also the safer
+arrangement on its own terms. A second token holding Manage Roles is a second
+thing to leak. The admin bot already owns the privileged Discord write path
+(`/enforce`), already has the `GuildMembers` intent, and is already the process
+the panel calls for anything that has to *reach* Discord. Granting a role is a
+permission grant, so it belongs on the same audited chokepoint as a ban.
 
 **2. Desired state, not events.** Every rule resolves to *the set of roles this
 member should hold right now*, and the effector diffs that against what they do
@@ -195,9 +215,11 @@ tests green.
 ### D4 — Welcome and farewell
 - The admin bot subscribes to `GuildMemberAdd`/`GuildMemberRemove` (it already
   holds the intent) and publishes to a **member bus** on Redis, mirroring
-  `RedisModBus`.
-- The bridge bot subscribes and posts, because it is the voice members already
-  see in that server.
+  `RedisModBus`. Observing is automated work, so it sits there rather than
+  adding a privileged intent to the shared member-facing application.
+- SBR Bot posts the message. Per decision 0 a member is addressed by the bot
+  they interact with, and a welcome from a staff bot most members cannot see or
+  message would be the platform speaking out of the wrong mouth.
 - Template renderer with the closed token set from decision 5, `allowedMentions`
   locked to the joining user.
 - **Tests:** unknown tokens render literally; no `@everyone` escape; an unbound
@@ -213,7 +235,9 @@ tests green.
 
 ### D6 — Self-service role menus
 - A button-driven picker posted to a channel (`/rolemenu` plus a panel editor),
-  reusing the ticket panel's picker component and its custom-id routing.
+  reusing the ticket panel's picker component and its custom-id routing. The
+  message, the buttons and the interaction handler are SBR Bot's; the grant
+  itself is a D1 call, exactly as ticket actions already split.
 - Restricted to roles the guild has whitelisted as self-assignable, behind the
   same preflight as D1 — so a self-service menu can never offer a staff role.
 
@@ -246,18 +270,22 @@ tests green.
 2. **Rate limits.** A first full sweep of a 400-member server is 400 role edits.
    The reconciler batches, paces, and is resumable — `LANE.bulk`, capped per
    pass, dirty set drained rather than the whole roster re-walked.
-3. **Two bots, one server.** A guild that invited only the bridge bot has no
-   effector. The panel must say so plainly instead of silently doing nothing.
+3. **Two bots, one server.** A guild that invited only SBR Bot has no effector,
+   and one that invited SBR Admin without Manage Roles has an effector that
+   refuses everything. The panel must say which of the two it is, plainly,
+   instead of silently doing nothing.
 4. **Revocation blast radius.** Mitigated by decision 3 and the D5 dry run, but
    the first production enable is worth watching.
 
 ## 6. Open questions
 
-1. **Is the admin bot in the member-facing server, or a staff-only one?**
-   `ADMIN_BOT.md` says "invited only to staff-relevant scopes". If it is not in
-   the member server, the effector moves to the bridge bot and that token gains
-   Manage Roles; nothing else in this plan changes. *This is the one answer that
-   changes the shape of D1.*
+1. ~~Is the admin bot in the member-facing server, or a staff-only one?~~
+   **Answered 2026-08-20:** SBR Admin is present and owns staff-facing and
+   automated work, including the role effector; SBR Bot / SBR Bridge — one
+   application — owns every member interaction. Recorded as decision 0. The one
+   thing left to confirm operationally is that SBR Admin's Manage Roles
+   permission and role position are actually in place in the member server;
+   D1's preflight reports it rather than assuming it.
 2. Should `GUILD_RANK` match one rank exactly, or "this rank or above"?
    Recommendation: **or above**, with an exact-match flag.
 3. Should a welcome message wait for a link before firing? Recommendation:
