@@ -65,6 +65,11 @@ export interface AdminHandlerDeps {
   readonly joinQueue?: JoinQueueService;
   /** The bridge bot's ticket effects. Absent means `/tickets close` says so. */
   readonly ticketBridge?: TicketBridge;
+  /**
+   * Self-service role menus, which live in the community server. Absent means
+   * `/rolemenu` says so rather than half-working.
+   */
+  readonly roleMenuBridge?: RoleMenuBridge;
   readonly logger: Logger;
 }
 
@@ -91,6 +96,35 @@ export interface TicketBridge {
     guildId: string,
     ticketId: string,
   ): Promise<{ readonly name: string; readonly content: string } | null>;
+}
+
+/** One configured role menu, as `/rolemenu list` shows it. */
+export interface RoleMenuSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly optionCount: number;
+  /** Where it currently lives, or null if it has never been posted. */
+  readonly channelId: string | null;
+}
+
+/**
+ * Self-service role menus, seen from the staff bot.
+ *
+ * The menus are edited on the panel and pressed in the community server, so
+ * this bot neither owns the document nor holds the gateway that posts it. What
+ * it offers is the staff verb — put this menu in this channel — which is why
+ * only publishing and listing are here.
+ *
+ * Optional for the same reason `ticketBridge` is: a deployment without a bridge
+ * should say so rather than fail to start.
+ */
+export interface RoleMenuBridge {
+  list(guildId: string): Promise<readonly RoleMenuSummary[]>;
+  publish(
+    guildId: string,
+    menuId: string,
+    channelId: string | null,
+  ): Promise<{ readonly ok: true; readonly edited: boolean } | { readonly ok: false; readonly detail: string }>;
 }
 
 export type AdminHandler = (ctx: AdminContext, deps: AdminHandlerDeps) => Promise<AdminReply>;

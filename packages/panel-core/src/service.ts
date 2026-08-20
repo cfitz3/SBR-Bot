@@ -51,10 +51,13 @@ import {
 } from "@sbr/screening";
 import {
   AUTO_ROLES_SETTING_KEY,
+  ROLE_MENUS_SETTING_KEY,
   WELCOME_SETTING_KEY,
   parseAutoRoles,
+  parseRoleMenus,
   parseWelcome,
   type AutoRolePolicy,
+  type RoleMenuDoc,
   type WelcomePolicy,
 } from "@sbr/roles";
 import {
@@ -500,6 +503,20 @@ export interface RolesVM {
   readonly welcome: WelcomePolicy;
   /** Null when not installed; see above. */
   readonly health: RolesHealthVM | null;
+  /**
+   * The self-service menus, in the order the page shows them.
+   *
+   * Read unconditionally, unlike the health card: a menu is a settings row, so
+   * it renders and saves on a deployment with no roster port at all. Only
+   * posting one needs a bot.
+   */
+  readonly menus: RoleMenuDoc;
+  /**
+   * False when no bot is wired to post a menu. The editor still works; the
+   * Publish button says why it cannot, rather than being absent for a reason
+   * nobody can see.
+   */
+  readonly canPublishMenus: boolean;
 }
 
 export interface TicketsVM {
@@ -663,6 +680,14 @@ export interface PanelServiceDeps {
    * they are settings — but reports the dry run and the health card unavailable.
    */
   readonly rolesInsight?: RolesInsight;
+  /**
+   * Whether a bot is wired to post a self-service role menu.
+   *
+   * A flag rather than the port itself: the read side never posts anything, it
+   * only needs to know whether the Publish button can promise anything. The
+   * port lives on the mutation deps, where the posting happens.
+   */
+  readonly roleMenuPublisher?: boolean;
   /** Optional: absent means the Tickets page reports itself not installed. */
   readonly tickets?: TicketConfigService;
   /** Optional: absent means the Wordlist page reports itself not installed. */
@@ -1112,15 +1137,20 @@ export class PanelService {
     // Tolerant on read, per the settings convention: a blob somebody hand-edited
     // into nonsense renders as the defaults and can be fixed on this page,
     // rather than making the page that fixes it the one page that will not load.
-    const [autoRaw, welcomeRaw] = await Promise.all([
+    const [autoRaw, welcomeRaw, menuRaw] = await Promise.all([
       this.d.config.getSetting(guildId, AUTO_ROLES_SETTING_KEY),
       this.d.config.getSetting(guildId, WELCOME_SETTING_KEY),
+      this.d.config.getSetting(guildId, ROLE_MENUS_SETTING_KEY),
     ]);
     const autoRoles = parseAutoRoles(autoRaw);
     const welcome = parseWelcome(welcomeRaw);
+    const menus = parseRoleMenus(menuRaw);
+    const canPublishMenus = this.d.roleMenuPublisher === true;
 
     const insight = this.d.rolesInsight;
-    if (insight === undefined) return { access, data: { installed: false, autoRoles, welcome, health: null } };
+    if (insight === undefined) {
+      return { access, data: { installed: false, autoRoles, welcome, health: null, menus, canPublishMenus } };
+    }
 
     const [pendingDirty, refusals, jobs] = await Promise.all([
       insight.pendingDirty(guildId).catch(() => 0),
@@ -1143,6 +1173,8 @@ export class PanelService {
           lastSyncAt: sync?.lastRunAt ?? null,
           lastSyncStatus: sync?.lastStatus ?? null,
         },
+        menus,
+        canPublishMenus,
       },
     };
   }

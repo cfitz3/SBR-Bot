@@ -49,6 +49,7 @@ async function main(): Promise<void> {
     ? new BridgeApi({
         tickets: () => app.tickets,
         eventBoard: () => app.eventBoard,
+        roleMenus: () => app.roleMenus,
         toDiscordGuildId: guildRepository.resolveDiscordId,
         token: app.config.internalApi.token,
         port: app.config.internalApi.bridgePort,

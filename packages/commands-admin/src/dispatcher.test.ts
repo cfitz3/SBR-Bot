@@ -31,7 +31,7 @@ import type { Logger } from "@sbr/observability";
 import { AdminDispatcher } from "./dispatcher.js";
 import { buildAdminRegistry } from "./handlers.js";
 import { parseDurationSeconds } from "./util.js";
-import type { AdminContext, RoleResolver, TicketBridge } from "./types.js";
+import type { AdminContext, RoleMenuBridge, RoleResolver, TicketBridge } from "./types.js";
 
 // A real Discord snowflake: `getUser` rejects anything that is not one, so the
 // fixture has to look like an id rather than the word "target".
@@ -172,6 +172,7 @@ const analytics: AnalyticsService = { async capture() {}, async emit() {} };
 interface Overrides {
   moderation?: ModerationService;
   ticketBridge?: TicketBridge;
+  roleMenuBridge?: RoleMenuBridge;
   roles?: RoleResolver;
   community?: CommunityService;
   config?: GuildConfigService;
@@ -194,6 +195,7 @@ function make(over: Overrides = {}) {
       effects: over.effects ?? effects(),
       analytics,
       ...(over.ticketBridge === undefined ? {} : { ticketBridge: over.ticketBridge }),
+      ...(over.roleMenuBridge === undefined ? {} : { roleMenuBridge: over.roleMenuBridge }),
       logger: silent,
     },
     logger: silent,
@@ -787,6 +789,75 @@ test("/tickets transcript comes back as a file", async () => {
     ticketBridge: bridge,
   }).dispatch("tickets", ctx({ args: recordArgs({ action: "transcript", id: "tkt-1" }) }));
   assert.equal(r.file?.name, "ticket-12.md");
+});
+
+// ── /rolemenu ─────────────────────────────────────────────────────────────────
+
+function menuBridge(over: Partial<RoleMenuBridge> = {}): RoleMenuBridge {
+  return {
+    async list() {
+      return [{ id: "colours", title: "Pick a colour", optionCount: 2, channelId: null }];
+    },
+    async publish() {
+      return { ok: true, edited: false };
+    },
+    ...over,
+  };
+}
+
+test("/rolemenu list names the menus and where they live", async () => {
+  const r = await make({ roles: roles({ actor: "OFFICER" }), roleMenuBridge: menuBridge() }).dispatch(
+    "rolemenu",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /colours/);
+  assert.match(r.text, /not posted/);
+});
+
+test("/rolemenu post defaults to the channel it was typed in", async () => {
+  const seen: (string | null)[] = [];
+  const r = await make({
+    roles: roles({ actor: "OFFICER" }),
+    roleMenuBridge: menuBridge({
+      async publish(_guildId, _menuId, channelId) {
+        seen.push(channelId);
+        return { ok: true, edited: true };
+      },
+    }),
+  }).dispatch("rolemenu", ctx({ args: recordArgs({ action: "post", id: "colours" }) }));
+  assert.deepEqual(seen, ["333333333333333333"]);
+  assert.match(r.text, /Updated/);
+});
+
+test("/rolemenu post reports the bridge's own words when it refuses", async () => {
+  const r = await make({
+    roles: roles({ actor: "OFFICER" }),
+    roleMenuBridge: menuBridge({
+      async publish() {
+        return { ok: false, detail: "I cannot post in that channel" };
+      },
+    }),
+  }).dispatch("rolemenu", ctx({ args: recordArgs({ action: "post", id: "colours" }) }));
+  assert.match(r.text, /cannot post in that channel/);
+});
+
+test("/rolemenu without a bridge says so rather than pretending", async () => {
+  const r = await make({ roles: roles({ actor: "OFFICER" }) }).dispatch(
+    "rolemenu",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /bridge bot isn't running/);
+});
+
+test("/rolemenu is not a moderator command", async () => {
+  // Posting a menu puts a message in front of the whole server, and the roles
+  // it hands out were chosen by an admin — a moderator publishing one is a
+  // wider act than moderating a channel.
+  const r = await make({ roles: roles({ actor: "MODERATOR" }), roleMenuBridge: menuBridge() }).dispatch(
+    "rolemenu",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /requires OFFICER/);
 });
 
 test("/tickets is not a member command", async () => {

@@ -33,7 +33,7 @@ import { ROLE_POLICY_SETTING_KEY } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import type { PanelSession, RoleResolver } from "./access.js";
 import type { PermissionExceptionStore, RolesInsight } from "./reads.js";
-import type { EventEffects, TicketEffects } from "./mutations.js";
+import type { EventEffects, RoleMenuEffects, TicketEffects } from "./mutations.js";
 import {
   MANUAL_JOB_COOLDOWN_MS,
   MUTATION_COOLDOWN_MS,
@@ -325,6 +325,16 @@ function eventEffectsRecorder(recorded: Recorded, throws = false): EventEffects 
   };
 }
 
+/** The bot that posts a self-service role menu. */
+function roleMenuEffectsRecorder(recorded: Recorded, throws = false): RoleMenuEffects {
+  return {
+    async publishMenu(guildId, menuId, channelId, actorDiscordId) {
+      if (throws) throw new Error("the bridge is not connected");
+      recorded.calls.push({ method: "publishMenu", args: [guildId, menuId, channelId, actorDiscordId] });
+    },
+  };
+}
+
 /**
  * The chat filter, recorded the same way. `refuse` stands in for the service's
  * own validation — an unparseable regex or a pattern that already exists — which
@@ -416,6 +426,10 @@ function make(
     noEventEffects?: boolean;
     /** The bot refused the board publish. */
     eventEffectsThrow?: boolean;
+    /** Same, for a panel process with no bot to post a role menu. */
+    noRoleMenuEffects?: boolean;
+    /** The bot refused the menu publish. */
+    roleMenuEffectsThrow?: boolean;
     /** Same, for a deployment without the chat filter. */
     noWordlist?: boolean;
     /** What the filter service refuses with, when it refuses. */
@@ -464,6 +478,9 @@ function make(
     ...(over.noEventEffects === true
       ? {}
       : { eventEffects: eventEffectsRecorder(recorded, over.eventEffectsThrow === true) }),
+    ...(over.noRoleMenuEffects === true
+      ? {}
+      : { roleMenuEffects: roleMenuEffectsRecorder(recorded, over.roleMenuEffectsThrow === true) }),
     ...(over.noWordlist === true
       ? {}
       : {
@@ -3117,3 +3134,150 @@ test("with nothing recording refusals, clearing says so rather than pretending",
 
   assert.equal((await mutations.clearRoleRefusals(session(), "g1")).ok, false);
 });
+
+// ── self-service role menus ──────────────────────────────────────────────────
+
+/** A stored menu, already posted, for the reads the mutations do first. */
+function storedMenus(over: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> {
+  return {
+    "roles.menus": {
+      menus: [
+        {
+          id: "colours",
+          title: "Pick a colour",
+          body: "One each.",
+          channelId: "chan-1",
+          messageId: "msg-1",
+          exclusive: false,
+          options: [{ key: "red", roleId: "role-red", label: "Red", description: null, emoji: null }],
+          ...over,
+        },
+      ],
+    },
+  };
+}
+
+test("saving the menus stores them, and the audit row counts rather than lists them", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.saveRoleMenus(session(), "g1", {
+    menus: [
+      {
+        id: "colours",
+        title: "Pick a colour",
+        options: [{ key: "red", roleId: "role-red", label: "Red" }],
+      },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  const call = recorded.calls.find((c) => c.method === "setSetting");
+  assert.equal(call?.args[1], "roles.menus");
+  const audit = recorded.audits.at(-1);
+  assert.deepEqual(audit?.change, { menus: 1, options: 1 });
+  assert.equal(JSON.stringify(audit?.change ?? {}).includes("role-red"), false);
+});
+
+test("a menu offering the same role twice is refused rather than stored", async () => {
+  const { mutations, recorded } = make();
+
+  const result = await mutations.saveRoleMenus(session(), "g1", {
+    menus: [
+      {
+        id: "colours",
+        title: "Pick a colour",
+        options: [
+          { key: "red", roleId: "role-red", label: "Red" },
+          { key: "crimson", roleId: "role-red", label: "Crimson" },
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(recorded.calls.some((c) => c.method === "setSetting"), false);
+});
+
+test("a menu id with a colon is refused: it would break the button it travels in", async () => {
+  const { mutations } = make();
+
+  const result = await mutations.saveRoleMenus(session(), "g1", {
+    menus: [{ id: "a:b", title: "Nope", options: [{ key: "red", roleId: "role-red", label: "Red" }] }],
+  });
+
+  assert.equal(result.ok, false);
+});
+
+test("a save that omits the posted message keeps it, so an edit is not orphaned", async () => {
+  const { mutations, recorded } = make({ settings: storedMenus() });
+
+  const result = await mutations.saveRoleMenus(session(), "g1", {
+    menus: [
+      {
+        id: "colours",
+        title: "Pick a colour",
+        options: [{ key: "red", roleId: "role-red", label: "Scarlet" }],
+      },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  const call = recorded.calls.find((c) => c.method === "setSetting");
+  const stored = call?.args[2] as { menus: readonly { messageId: string | null; channelId: string | null }[] };
+  assert.equal(stored.menus[0]?.messageId, "msg-1");
+  assert.equal(stored.menus[0]?.channelId, "chan-1");
+});
+
+test("publishing hands the bot the menu, the channel and who asked", async () => {
+  const { mutations, recorded } = make({ settings: storedMenus() });
+
+  const result = await mutations.publishRoleMenu(session(), "g1", { menuId: "colours", channelId: "chan-2" });
+
+  assert.equal(result.ok, true);
+  const call = recorded.calls.find((c) => c.method === "publishMenu");
+  assert.deepEqual(call?.args, ["g1", "colours", "chan-2", "111"]);
+});
+
+test("publishing a menu nobody has saved never reaches the bot", async () => {
+  const { mutations, recorded } = make({ settings: storedMenus() });
+
+  const result = await mutations.publishRoleMenu(session(), "g1", { menuId: "staff", channelId: "chan-1" });
+
+  assert.equal(result.ok, false);
+  assert.equal(recorded.calls.some((c) => c.method === "publishMenu"), false);
+});
+
+test("a menu with no roles on it is refused before it is posted", async () => {
+  const { mutations, recorded } = make({ settings: storedMenus({ options: [] }) });
+
+  const result = await mutations.publishRoleMenu(session(), "g1", { menuId: "colours", channelId: null });
+
+  assert.equal(result.ok, false);
+  assert.equal(recorded.calls.some((c) => c.method === "publishMenu"), false);
+});
+
+test("a menu that has never had a channel is asked for one rather than guessed at", async () => {
+  const { mutations } = make({ settings: storedMenus({ channelId: null, messageId: null }) });
+
+  const result = await mutations.publishRoleMenu(session(), "g1", { menuId: "colours", channelId: null });
+
+  assert.equal(result.ok, false);
+});
+
+test("with no bot wired, publishing says so rather than reporting a post", async () => {
+  const { mutations, recorded } = make({ settings: storedMenus(), noRoleMenuEffects: true });
+
+  const result = await mutations.publishRoleMenu(session(), "g1", { menuId: "colours", channelId: null });
+
+  assert.equal(result.ok, false);
+  assert.equal(recorded.calls.some((c) => c.method === "publishMenu"), false);
+});
+
+test("a bot that refuses the post is surfaced, not swallowed", async () => {
+  const { mutations } = make({ settings: storedMenus(), roleMenuEffectsThrow: true });
+
+  const result = await mutations.publishRoleMenu(session(), "g1", { menuId: "colours", channelId: null });
+
+  assert.equal(result.ok, false);
+});
+

@@ -26,6 +26,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { Logger } from "@sbr/observability";
 import type { TicketGateway } from "./tickets.js";
 import type { EventBoardGateway } from "./event-board.js";
+import type { RoleMenuGateway } from "./role-menus.js";
 
 const BIND_HOST = "127.0.0.1";
 
@@ -45,6 +46,12 @@ export interface BridgeApiDeps {
    * is up should be told to come back rather than crash.
    */
   readonly eventBoard: () => EventBoardGateway | null;
+  /**
+   * Self-service role menus, resolved per request for the same reason as the
+   * other two: the panel's Publish button arriving while the client is still
+   * connecting should be told to come back rather than crash on a null.
+   */
+  readonly roleMenus: () => RoleMenuGateway | null;
   /** Platform guild id → Discord snowflake, so callers never map ids themselves. */
   readonly toDiscordGuildId: (internalGuildId: string) => Promise<string | null>;
   readonly token: string;
@@ -160,6 +167,17 @@ export class BridgeApi {
       return;
     }
 
+    // Answered before the ticket gateway is required, like the board: a role
+    // menu has nothing to do with tickets.
+    if (resource === "role-menu") {
+      if ((req.method ?? "GET") !== "POST") {
+        sendJson(res, 405, { problem: "METHOD_NOT_ALLOWED", detail: "use POST" });
+        return;
+      }
+      await this.roleMenu(res, guildId, await readBody(req));
+      return;
+    }
+
     const tickets = this.d.tickets();
     if (tickets === null) {
       // 503, not 500: the caller should say "the bot is starting up", and a
@@ -234,6 +252,34 @@ export class BridgeApi {
       edited: result.edited,
       final: result.final,
     });
+  }
+
+  /**
+   * Post or update one self-service role menu.
+   *
+   * `channelId` is optional and means "move it here"; without one the menu goes
+   * back where it already lives, which is what the panel's Publish means.
+   */
+  private async roleMenu(res: ServerResponse, guildId: string, body: Record<string, unknown>): Promise<void> {
+    const menuId = str(body["menuId"]);
+    if (menuId === null) {
+      sendJson(res, 400, { problem: "BAD_REQUEST", detail: "menuId is required" });
+      return;
+    }
+    const menus = this.d.roleMenus();
+    if (menus === null) {
+      sendJson(res, 503, { problem: "NOT_READY", detail: "the bridge bot is still connecting" });
+      return;
+    }
+    const result = await menus.publish(guildId, menuId, str(body["channelId"]));
+    if (!result.ok) {
+      // 404 for a menu this server does not have, so the caller can tell "it is
+      // gone" from "I could not post it" without reading the problem string.
+      const status = result.problem === "NO_MENU" ? 404 : 422;
+      sendJson(res, status, { problem: result.problem, detail: result.detail });
+      return;
+    }
+    sendJson(res, 200, { channelId: result.channelId, messageId: result.messageId, edited: result.edited });
   }
 
   private async publish(

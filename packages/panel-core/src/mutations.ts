@@ -77,11 +77,15 @@ import {
 import {
   AUTO_ROLES_SETTING_KEY,
   MAX_RULES,
+  ROLE_MENUS_SETTING_KEY,
   WELCOME_SETTING_KEY,
+  findRoleMenu,
   parseAutoRoles,
+  parseRoleMenus,
   parseWelcome,
   previewRoleChanges,
   validateAutoRoles,
+  validateRoleMenus,
   validateWelcome,
 } from "@sbr/roles";
 import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
@@ -225,6 +229,14 @@ export const MUTATION_TIERS = {
   "roles.welcome.save": "ADMIN",
   /** Dismiss the refusal list once the underlying permission is fixed. */
   "roles.refusals.clear": "ADMIN",
+  /**
+   * Self-service role menus. Admin for the same reason the auto-rules are: the
+   * menu document *is* the whitelist of roles members may hand themselves, so
+   * editing it is editing who can become what without anyone in the loop.
+   */
+  "roles.menus.save": "ADMIN",
+  /** Posting one is the same authority as writing it, and usually the same click. */
+  "roles.menu.publish": "ADMIN",
   /**
    * How often a member may speak or run a command before the gate holds them.
    * Admin because the same numbers bound the XP earned from talking: a lower
@@ -435,6 +447,30 @@ export interface EventEffects {
   publishBoard(guildId: string, eventId: string, actorDiscordId: string): Promise<void>;
 }
 
+/**
+ * Port: posting a self-service role menu into a channel.
+ *
+ * Separate from `TicketEffects` even though both are "post a message with
+ * buttons", because they are not the same authority: a ticket panel opens a
+ * private channel, and a role menu hands out roles. Keeping them apart means a
+ * deployment can wire one without silently gaining the other, and it keeps the
+ * refusal text honest about which feature is missing.
+ */
+export interface RoleMenuEffects {
+  /**
+   * Post the menu into its channel, or edit the message already there.
+   *
+   * `channelId` null means "wherever it is already posted" — the bridge owns
+   * that memory, so the panel does not have to guess and cannot disagree.
+   */
+  publishMenu(
+    guildId: string,
+    menuId: string,
+    channelId: string | null,
+    actorDiscordId: string,
+  ): Promise<void>;
+}
+
 export interface PanelMutationsDeps {
   readonly roles: RoleResolver;
   readonly config: GuildConfigService;
@@ -463,6 +499,12 @@ export interface PanelMutationsDeps {
    * its half-hourly pass, and the button says so rather than pretending.
    */
   readonly eventEffects?: EventEffects;
+  /**
+   * Optional like the two above. Absent, the menu document still saves — it is
+   * a settings row — but Publish refuses rather than reporting a message that
+   * was never posted.
+   */
+  readonly roleMenuEffects?: RoleMenuEffects;
   /** Optional like XP: absent refuses the write instead of crashing. */
   readonly wordlist?: WordlistService;
   /**
@@ -2258,6 +2300,101 @@ export class PanelMutations {
       if (insight === undefined) return unavailable("this deployment records no role refusals");
       await insight.clearRefusals(guildId);
       return { result: { ok: true }, change: { cleared: true }, note: "Cleared. Any that recur will reappear." };
+    });
+  }
+
+  /**
+   * Save every self-service role menu at once.
+   *
+   * A whole-document write for the same reason the auto-rules are: the page
+   * edits a list whose order is part of the meaning, and a per-menu write could
+   * not express a deletion or a reorder without inventing a second vocabulary
+   * for it. Last save wins, which is the honest behaviour for a document.
+   *
+   * `validateRoleMenus` is strict where `parseRoleMenus` is lenient, and this is
+   * the gate: anything the reader would quietly drop is refused here, so a menu
+   * can never be saved and then read back missing an option somebody added.
+   */
+  async saveRoleMenus(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.menus.save", async () => {
+      const problem = validateRoleMenus(input);
+      if (problem !== null) return invalid(problem);
+      const doc = parseRoleMenus(input);
+
+      // Posted menus keep their channel and message ids across a save, so an
+      // edit to a label re-uses the message the bridge already posted rather
+      // than orphaning it. The client round-trips them; this is the backstop
+      // for a client that does not.
+      const before = parseRoleMenus(await this.d.config.getSetting(guildId, ROLE_MENUS_SETTING_KEY));
+      const merged = {
+        menus: doc.menus.map((menu) => {
+          if (menu.messageId !== null) return menu;
+          const old = findRoleMenu(before, menu.id);
+          if (old === null || old.messageId === null) return menu;
+          return { ...menu, channelId: menu.channelId ?? old.channelId, messageId: old.messageId };
+        }),
+      };
+
+      const result = await this.d.config.setSetting(guildId, ROLE_MENUS_SETTING_KEY, merged);
+      const options = merged.menus.reduce((sum, menu) => sum + menu.options.length, 0);
+      return {
+        result,
+        // Ids and counts, never the roles: which roles a menu offers is readable
+        // from the setting, and the audit row is about what changed.
+        change: { menus: merged.menus.length, options },
+        note:
+          merged.menus.length === 0
+            ? "Saved. This server has no self-service menus."
+            : `Saved — ${String(merged.menus.length)} menu(s) offering ${String(options)} role(s). ` +
+              `Press Publish to post or refresh one.`,
+      };
+    });
+  }
+
+  /**
+   * Post a menu into a channel, or refresh the message already there.
+   *
+   * The panel process has no gateway connection, so the bridge bot does it and
+   * this waits for the answer. With no bridge wired it refuses: a menu reported
+   * as published with no buttons in the channel is the worst of the three
+   * possible outcomes, because nobody goes looking for it.
+   */
+  async publishRoleMenu(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "roles.menu.publish", async (actorDiscordId) => {
+      const effects = this.d.roleMenuEffects;
+      if (effects === undefined) return unavailable("No bot is connected to post the menu");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const menuId = body["menuId"];
+      if (typeof menuId !== "string" || menuId === "") return invalid("menuId must be a menu id");
+      const rawChannel = body["channelId"];
+      if (rawChannel !== undefined && rawChannel !== null && typeof rawChannel !== "string") {
+        return invalid("channelId must be a channel id or null");
+      }
+      const channelId = typeof rawChannel === "string" && rawChannel !== "" ? rawChannel : null;
+
+      // Checked here because this is where somebody is waiting for an answer.
+      // The bridge checks again — it owns the stored document — but a menu that
+      // was renamed in another tab should say so on the page, not in a log.
+      const doc = parseRoleMenus(await this.d.config.getSetting(guildId, ROLE_MENUS_SETTING_KEY));
+      const menu = findRoleMenu(doc, menuId);
+      if (menu === null) return invalid("no such menu — save your changes first");
+      if (menu.options.length === 0) return invalid("give the menu at least one role before posting it");
+      if (channelId === null && menu.channelId === null) {
+        return invalid("choose a channel to post it in");
+      }
+
+      try {
+        await effects.publishMenu(guildId, menuId, channelId, actorDiscordId);
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return {
+        result: { ok: true },
+        change: { menuId, channelId: channelId ?? menu.channelId },
+        note: "Posted. The buttons work from now on, restarts included.",
+      };
     });
   }
 

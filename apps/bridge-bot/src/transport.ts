@@ -65,6 +65,9 @@ import {
   ticketConfigPort,
   ticketDiscordPort,
 } from "./tickets-discord.js";
+import { RoleMenuGateway } from "./role-menus.js";
+import { registerRoleMenuComponents, roleMenuMessagePort } from "./role-menus-discord.js";
+import { createBridgeRoleEffector } from "./role-effector.js";
 
 export interface GuildChatLine {
   readonly name: string;
@@ -513,6 +516,26 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   };
   registerTicketComponents(components, ticketRouting);
   app.setTickets(tickets);
+
+  // Self-service role menus. The message and the press are this bot's, because
+  // members interact with this bot; the grant is a call to the admin bot's
+  // effector, which is the only process permitted to write roles.
+  const roleMenus = new RoleMenuGateway({
+    config: app.handlerDeps.config,
+    messages: roleMenuMessagePort(discord, app.log),
+    roles: createBridgeRoleEffector({
+      baseUrl: app.config.internalApi.baseUrl,
+      token: app.config.internalApi.token,
+      logger: app.log,
+    }),
+    log: app.log,
+  });
+  registerRoleMenuComponents(components, {
+    menus: () => roleMenus,
+    resolveGuild: (discordGuildId: string) => app.resolveGuild(discordGuildId),
+    log: app.log,
+  });
+  app.setRoleMenus(roleMenus);
 
   // The tracker board. Like the tickets gateway it needs the live client, and
   // like the reminder sink it posts into the guild's `events` channel — but

@@ -687,6 +687,69 @@ const ticketNames: NonNullable<AdminCommandSpec["autocomplete"]> = async (focuse
     }));
 };
 
+/**
+ * `/rolemenu` — put a self-service role menu in a channel, or see what exists.
+ *
+ * The menus themselves are built on the panel; this is only the staff verb that
+ * publishes one. The message and its buttons belong to the member-facing bot,
+ * which is why every action here goes over the bridge rather than being posted
+ * from this process: a menu posted by the staff bot would be a menu members are
+ * asked to interact with from a bot that never speaks to them.
+ */
+const rolemenu: AdminHandler = async (ctx, deps) => {
+  if (!deps.roleMenuBridge) return noRoleMenuBridge();
+  const action = ctx.args.getString("action") ?? "list";
+
+  if (action === "list") {
+    const menus = await deps.roleMenuBridge.list(ctx.guildId);
+    if (menus.length === 0) {
+      return { ephemeral: true, text: "No role menus yet — build one on the panel, then post it here." };
+    }
+    const lines = menus.map((menu) => {
+      const where = menu.channelId === null ? "not posted" : `<#${menu.channelId}>`;
+      return `\`${menu.id}\` — ${menu.title} · ${String(menu.optionCount)} roles · ${where}`;
+    });
+    return { ephemeral: true, text: lines.join("\n").slice(0, 1900) };
+  }
+
+  if (action !== "post") return { ephemeral: true, text: "Pick list or post." };
+
+  const id = ctx.args.getString("id");
+  if (!id) return { ephemeral: true, text: "Usage: /rolemenu action:post id:<menu>" };
+
+  // Defaults to here, like `/lockdown` and `/set-channel`: a staffer typing it
+  // in the channel they want it in should not have to name that channel.
+  const channelId = ctx.args.getChannel("channel") ?? ctx.channelId ?? null;
+  const result = await deps.roleMenuBridge.publish(ctx.guildId, id, channelId);
+  if (!result.ok) return { ephemeral: true, text: `I couldn't post that — ${result.detail}.` };
+  return {
+    ephemeral: true,
+    text: result.edited ? `Updated **${id}** where it was already posted.` : `Posted **${id}**.`,
+  };
+};
+
+/** The member-facing bot owns the message; without it, posting would do nothing. */
+function noRoleMenuBridge(): AdminReply {
+  return {
+    ephemeral: true,
+    text: "Role menus aren't reachable from here — the bridge bot isn't running or isn't wired to this one.",
+  };
+}
+
+/**
+ * Menu ids, so nobody has to remember one. The label carries the title because
+ * the id is a slug and the title is what staff called it.
+ */
+const roleMenuIds: NonNullable<AdminCommandSpec["autocomplete"]> = async (focused, ctx, deps) => {
+  if (!deps.roleMenuBridge) return [];
+  const needle = focused.value.toLowerCase();
+  const menus = await deps.roleMenuBridge.list(ctx.guildId);
+  return menus
+    .filter((menu) => needle === "" || menu.id.includes(needle) || menu.title.toLowerCase().includes(needle))
+    .slice(0, 25)
+    .map((menu) => ({ name: `${menu.id} — ${menu.title}`.slice(0, 100), value: menu.id }));
+};
+
 const applicationReview: AdminHandler = async (ctx, deps) => {
   const id = ctx.args.getString("id");
   if (id) {
@@ -1104,6 +1167,26 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       minRole: "MODERATOR",
       handler: tickets,
       autocomplete: ticketNames,
+    },
+    {
+      name: "rolemenu",
+      description: "Post a self-service role menu, or list the ones this server has",
+      options: [
+        {
+          name: "action",
+          description: "What to do",
+          type: "string",
+          choices: [
+            { name: "list", value: "list" },
+            { name: "post", value: "post" },
+          ],
+        },
+        { name: "id", description: "Which menu", type: "string", autocomplete: true },
+        { name: "channel", description: "Where to post it (defaults to here)", type: "channel" },
+      ],
+      minRole: "OFFICER",
+      handler: rolemenu,
+      autocomplete: roleMenuIds,
     },
     {
       name: "join-queue",

@@ -18,6 +18,26 @@ export {
   type AutoRoleTriggerKind,
 } from "./policy.js";
 export {
+  DEFAULT_ROLE_MENUS,
+  MAX_MENUS,
+  MAX_MENU_BODY,
+  MAX_MENU_OPTIONS,
+  MAX_MENU_TITLE,
+  MAX_OPTION_DESCRIPTION,
+  MAX_OPTION_LABEL,
+  MAX_ROLE_MENU_KEY,
+  ROLE_MENUS_SETTING_KEY,
+  ROLE_MENU_KEY_SHAPE,
+  decideMenuPress,
+  findRoleMenu,
+  parseRoleMenus,
+  validateRoleMenus,
+  type RoleMenu,
+  type RoleMenuDoc,
+  type RoleMenuOption,
+  type RoleMenuPress,
+} from "./menus.js";
+export {
   diffGrants,
   resolveDesiredRoles,
   type GrantRow,

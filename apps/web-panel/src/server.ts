@@ -683,6 +683,14 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.saveWelcome(session, guildId, b));
       case "roles.refusals.clear":
         return sendMutation(res, await m.clearRoleRefusals(session, guildId));
+      // Self-service role menus: the document, and posting one. Two actions for
+      // the same reason the ticket panel has two — saving is this process's
+      // work, posting is the bridge bot's, and a failure in one must not be
+      // reported as a failure in the other.
+      case "roles.menus.save":
+        return sendMutation(res, await m.saveRoleMenus(session, guildId, b));
+      case "roles.menu.publish":
+        return sendMutation(res, await m.publishRoleMenu(session, guildId, b));
       case "config.cooldowns":
         return sendMutation(res, await m.setCooldowns(session, guildId, b));
       // Permissions. Six writes because the page edits four independent stores

@@ -267,6 +267,7 @@ function svc(
     permissionExceptions?: PermissionExceptionStore;
     commands?: CommandCatalog;
     rolesInsight?: RolesInsight;
+    roleMenuPublisher?: boolean;
   } = {},
 ) {
   return new PanelService({
@@ -283,6 +284,7 @@ function svc(
     ...(over.permissionExceptions ? { permissionExceptions: over.permissionExceptions } : {}),
     ...(over.commands ? { commands: over.commands } : {}),
     ...(over.rolesInsight ? { rolesInsight: over.rolesInsight } : {}),
+    ...(over.roleMenuPublisher === undefined ? {} : { roleMenuPublisher: over.roleMenuPublisher }),
     logger: silent,
   });
 }
@@ -1229,4 +1231,37 @@ test("a guild that has saved nothing gets the defaults, switched off", async () 
   assert.deepEqual(r.data?.autoRoles.rules, []);
   assert.equal(r.data?.welcome.join.enabled, false);
   assert.equal(r.data?.welcome.guildJoin.enabled, false);
+});
+
+test("role menus come back on a deployment with no roster port at all", async () => {
+  // They are a settings row, not a roster read: an admin must be able to write
+  // and read one even where the health card reports itself uninstalled.
+  const r = await svc({
+    roles: admin(),
+    config: settingsConfig({
+      "roles.menus": {
+        menus: [
+          {
+            id: "colours",
+            title: "Pick a colour",
+            options: [{ key: "red", roleId: "role-red", label: "Red" }],
+          },
+        ],
+      },
+    }),
+  }).loadRoles(session(), "g1");
+
+  assert.equal(r.data?.installed, false);
+  assert.equal(r.data?.menus.menus[0]?.id, "colours");
+  assert.equal(r.data?.menus.menus[0]?.options[0]?.roleId, "role-red");
+});
+
+test("without a bot the page says publishing is unavailable rather than hiding it", async () => {
+  const withBot = await svc({ roles: admin(), roleMenuPublisher: true }).loadRoles(session(), "g1");
+  const without = await svc({ roles: admin() }).loadRoles(session(), "g1");
+
+  assert.equal(withBot.data?.canPublishMenus, true);
+  assert.equal(without.data?.canPublishMenus, false);
+  // Either way the editor has a document to edit — an empty one is not an error.
+  assert.deepEqual(without.data?.menus.menus, []);
 });

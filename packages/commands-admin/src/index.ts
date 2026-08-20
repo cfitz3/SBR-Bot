@@ -27,6 +27,8 @@ export type {
   AdminHandlerDeps,
   AdminOptionSpec,
   Choice,
+  RoleMenuBridge,
+  RoleMenuSummary,
   RoleResolver,
   TicketBridge,
 } from "./types.js";

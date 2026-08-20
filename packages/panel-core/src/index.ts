@@ -71,6 +71,7 @@ export {
   type JobTrigger,
   type TicketEffects,
   type EventEffects,
+  type RoleMenuEffects,
   MANUAL_JOB_COOLDOWN_MS,
   type PanelMutationsDeps,
   type ConfigAuditEntry,

@@ -23,6 +23,7 @@ import { count, dateTime, relativeTime } from "../format.js";
 import {
   actionButton,
   attempt,
+  channelPicker,
   fieldGroup,
   idChooser,
   isSnowflake,
@@ -34,6 +35,16 @@ import {
 } from "../forms.js";
 import { h, replace } from "../dom.js";
 import { channelSlotCopy } from "./channel-slots.js";
+import {
+  MAX_MENUS,
+  MAX_MENU_BODY,
+  MAX_MENU_OPTIONS,
+  MAX_MENU_TITLE,
+  MAX_OPTION_DESCRIPTION,
+  MAX_OPTION_LABEL,
+  MAX_ROLE_MENU_KEY,
+  ROLE_MENU_KEY_SHAPE,
+} from "./role-menu-limits.js";
 import { SAMPLE_VALUES, WELCOME_TOKENS, renderPreview } from "./welcome-preview.js";
 
 const t = scope("roles");
@@ -45,6 +56,12 @@ type Rule = AutoPolicy["rules"][number];
 type Trigger = Rule["trigger"];
 type TriggerKind = Trigger["kind"];
 type Welcome = RolesVM["welcome"];
+type RoleMenu = RolesVM["menus"]["menus"][number];
+type RoleMenuOption = RoleMenu["options"][number];
+
+/** Mutable working copies, same document-at-a-time contract as the rules. */
+type MutableOption = { -readonly [K in keyof RoleMenuOption]: RoleMenuOption[K] };
+type MutableMenu = { -readonly [K in keyof RoleMenu]: K extends "options" ? MutableOption[] : RoleMenu[K] };
 
 /** Mutable working copies. The server is sent a whole document either way. */
 type MutableRule = { -readonly [K in keyof Rule]: Rule[K] };
@@ -102,6 +119,7 @@ export async function renderRoles(host: HTMLElement, guildId: string): Promise<v
       ...policy.rules.map((rule, index) => ruleCard(guildId, policy, rule, index, saveAuto, reload)),
       addCard(guildId, policy, saveAuto, reload),
       welcomeCards(guildId, vm.welcome),
+      ...menuSection(guildId, vm, reload),
     ),
   );
 }
@@ -749,4 +767,377 @@ function welcomeCards(guildId: string, welcome: Welcome): HTMLElement {
   );
 
   return h("div", {}, joinCard, leaveCard, guildJoinCard);
+}
+
+// ──────────────────────── self-service role menus ────────────────────────
+
+/**
+ * The menus members hand roles to themselves from.
+ *
+ * The document *is* the whitelist. A button press carries a menu id and an
+ * option key and nothing else — never a role id — so the roles this page lists
+ * are exactly the roles a member can reach, and a forged press can only name
+ * something already published. That is why the editor is here, on the page that
+ * already governs what happens to a member with nobody in the loop, rather than
+ * on a page of its own.
+ *
+ * Saved whole, like the rules above and for the same reason: the option list is
+ * ordered and removable, and merging it server-side would make "I removed that
+ * colour" indistinguishable from "I never offered it".
+ *
+ * Posting is separate from saving. Saving is this process's work; posting is the
+ * bridge bot's, and a menu whose text saved but whose message did not post must
+ * say so rather than reporting one outcome for two different things.
+ */
+function menuSection(guildId: string, vm: RolesVM, reload: () => void): readonly HTMLElement[] {
+  const menus: MutableMenu[] = vm.menus.menus.map((menu) => ({
+    ...menu,
+    options: menu.options.map((option) => ({ ...option })),
+  }));
+  const save = (): Promise<WriteResult> =>
+    postAction(guildId, "roles.menus.save", {
+      menus: menus.map((menu) => ({
+        id: menu.id,
+        title: menu.title,
+        body: menu.body,
+        channelId: menu.channelId,
+        messageId: menu.messageId,
+        exclusive: menu.exclusive,
+        options: menu.options.map((option) => ({
+          key: option.key,
+          roleId: option.roleId,
+          label: option.label,
+          description: option.description,
+          emoji: option.emoji,
+        })),
+      })),
+    });
+
+  return [
+    menuIntroCard(vm, menus.length),
+    ...menus.map((menu, index) => menuCard(guildId, vm, menus, menu, index, save, reload)),
+    addMenuCard(menus, save, reload),
+  ];
+}
+
+/** What the feature is, and — when no bot is wired — what it cannot do. */
+function menuIntroCard(vm: RolesVM, total: number): HTMLElement {
+  return card(
+    t("menuCard"),
+    h(
+      "div",
+      {},
+      h("p", { class: "field-hint" }, t("menuIntro")),
+      vm.canPublishMenus ? null : h("p", { class: "field-hint" }, t("menuNoBot")),
+    ),
+    badge(`${count(total)} / ${String(MAX_MENUS)}`, total === 0 ? "neutral" : "ok"),
+  );
+}
+
+/** One menu: its text, where it lives, and the roles it offers. */
+function menuCard(
+  guildId: string,
+  vm: RolesVM,
+  menus: MutableMenu[],
+  menu: MutableMenu,
+  index: number,
+  save: () => Promise<WriteResult>,
+  reload: () => void,
+): HTMLElement {
+  const status = statusSlot();
+
+  const optionRole = idChooser({
+    guildId,
+    kind: "role",
+    ariaLabel: t("menuOptionRoleLabel"),
+    placeholder: t("addRolePlaceholder"),
+  });
+  let optionKey = "";
+  let optionLabel = "";
+
+  return card(
+    menu.title,
+    h(
+      "div",
+      {},
+      fieldGroup(
+        textField({
+          label: t("menuTitleLabel"),
+          hint: t("menuTitleHint"),
+          value: menu.title,
+          validate: (raw) =>
+            raw.trim().length === 0 || raw.trim().length > MAX_MENU_TITLE ? t("errMenuTitle") : null,
+          save: (raw) => {
+            menu.title = raw.trim();
+            return save();
+          },
+        }),
+        textField({
+          label: t("menuBodyLabel"),
+          hint: t("menuBodyHint"),
+          value: menu.body,
+          validate: (raw) => (raw.length > MAX_MENU_BODY ? t("errMenuBody") : null),
+          save: (raw) => {
+            menu.body = raw;
+            return save();
+          },
+        }),
+        toggleField({
+          label: t("menuExclusiveLabel"),
+          hint: t("menuExclusiveHint"),
+          checked: menu.exclusive,
+          save: (exclusive) => {
+            menu.exclusive = exclusive;
+            return save();
+          },
+        }),
+        channelPicker({
+          label: t("menuChannelLabel"),
+          hint: t("menuChannelHint"),
+          guildId,
+          value: menu.channelId ?? "",
+          save: (channelId) => {
+            // Moving a menu drops the remembered message: the bridge posts anew
+            // rather than editing a message in the channel it has left, which is
+            // what stops live buttons being abandoned where nobody maintains them.
+            const next = channelId === "" ? null : channelId;
+            if (next !== menu.channelId) menu.messageId = null;
+            menu.channelId = next;
+            return save();
+          },
+        }),
+      ),
+      // The roles themselves. Listed rather than tabled: each row is a picker
+      // and two text fields, which a table would only make narrower.
+      menu.options.length === 0
+        ? h("p", { class: "field-hint" }, t("menuNoOptions"))
+        : h(
+            "div",
+            {},
+            ...menu.options.map((option, optionIndex) =>
+              menuOptionRow(guildId, menu, option, optionIndex, save, reload),
+            ),
+          ),
+      h("div", { class: "field-row" }, h("label", { class: "field-label" }, t("menuOptionAdd")), optionRole.el),
+      fieldGroup(
+        textField({
+          label: t("menuOptionKeyLabel"),
+          hint: t("menuOptionKeyHint"),
+          value: "",
+          validate: (raw) => (menuKeyOk(raw) ? null : t("errMenuKey")),
+          save: async (raw) => {
+            optionKey = raw.trim().toLowerCase();
+            return { kind: "ok" };
+          },
+        }),
+        textField({
+          label: t("menuOptionLabelLabel"),
+          value: "",
+          save: async (raw) => {
+            optionLabel = raw.trim();
+            return { kind: "ok" };
+          },
+        }),
+      ),
+      h(
+        "div",
+        { class: "field-row" },
+        actionButton({
+          label: t("menuOptionAddButton"),
+          tone: "primary",
+          status,
+          run: async () => {
+            const roleId = optionRole.value().trim();
+            if (menu.options.length >= MAX_MENU_OPTIONS) return { kind: "error", message: t("errMenuFull") };
+            if (!menuKeyOk(optionKey)) return { kind: "error", message: t("errMenuKey") };
+            if (!isSnowflake(roleId)) return { kind: "error", message: t("errRole") };
+            if (menu.options.some((option) => option.roleId === roleId)) {
+              return { kind: "error", message: t("errMenuDuplicateRole") };
+            }
+            menu.options.push({
+              key: optionKey,
+              roleId,
+              label: optionLabel.length > 0 ? optionLabel.slice(0, MAX_OPTION_LABEL) : optionKey,
+              description: null,
+              emoji: null,
+            });
+            const written = await save();
+            // A refused add must not leave a row the server has never heard of.
+            if (written.kind !== "ok") menu.options.pop();
+            return written;
+          },
+          onDone: reload,
+        }),
+        // Posting is the bridge bot's work, so it is its own button and its own
+        // outcome: a saved menu that failed to post has to say which half failed.
+        actionButton({
+          label: menu.messageId === null ? t("menuPublish") : t("menuRepublish"),
+          tone: "primary",
+          status,
+          run: async () => {
+            if (!vm.canPublishMenus) return { kind: "error", message: t("menuNoBot") };
+            return postAction(guildId, "roles.menu.publish", { menuId: menu.id, channelId: menu.channelId });
+          },
+          onDone: reload,
+        }),
+        actionButton({
+          label: t("menuRemove"),
+          tone: "danger",
+          confirm: t("menuRemoveConfirm"),
+          status,
+          run: () => {
+            menus.splice(index, 1);
+            return save();
+          },
+          onDone: reload,
+        }),
+      ),
+      h("p", { class: "field-hint" }, t("menuRemoveHint")),
+      status.el,
+    ),
+    badge(
+      menu.messageId === null ? t("menuNotPosted") : t("menuPosted"),
+      menu.messageId === null ? "neutral" : "ok",
+    ),
+  );
+}
+
+/** One offered role, and the button that stops offering it. */
+function menuOptionRow(
+  guildId: string,
+  menu: MutableMenu,
+  option: MutableOption,
+  index: number,
+  save: () => Promise<WriteResult>,
+  reload: () => void,
+): HTMLElement {
+  const status = statusSlot();
+
+  return h(
+    "div",
+    { class: "field" },
+    fieldGroup(
+      textField({
+        label: t("menuOptionLabelLabel"),
+        value: option.label,
+        validate: (raw) =>
+          raw.trim().length === 0 || raw.trim().length > MAX_OPTION_LABEL ? t("errMenuOptionLabel") : null,
+        save: (raw) => {
+          option.label = raw.trim();
+          return save();
+        },
+      }),
+      textField({
+        label: t("menuOptionDescriptionLabel"),
+        hint: t("menuOptionDescriptionHint"),
+        value: option.description ?? "",
+        validate: (raw) => (raw.trim().length > MAX_OPTION_DESCRIPTION ? t("errMenuOptionDescription") : null),
+        save: (raw) => {
+          option.description = raw.trim().length === 0 ? null : raw.trim();
+          return save();
+        },
+      }),
+      rolePicker({
+        label: t("menuOptionRoleLabel"),
+        guildId,
+        value: option.roleId,
+        save: (roleId) => {
+          option.roleId = roleId;
+          return save();
+        },
+      }),
+    ),
+    h(
+      "div",
+      { class: "field-row" },
+      actionButton({
+        label: t("menuOptionRemove"),
+        tone: "danger",
+        status,
+        run: () => {
+          menu.options.splice(index, 1);
+          return save();
+        },
+        onDone: reload,
+      }),
+    ),
+    status.el,
+    // The key never changes: it is what the posted buttons carry, so renaming
+    // one would break every button already in the channel until a republish.
+    h("p", { class: "field-hint" }, `${t("menuOptionKeyLabel")}: ${option.key}`),
+  );
+}
+
+/** Nothing here is stored until "Add menu"; the fields only record the choice. */
+function addMenuCard(
+  menus: MutableMenu[],
+  save: () => Promise<WriteResult>,
+  reload: () => void,
+): HTMLElement {
+  const status = statusSlot();
+  let id = "";
+  let title = "";
+
+  return card(
+    t("menuAddCard"),
+    h(
+      "div",
+      {},
+      fieldGroup(
+        textField({
+          label: t("menuIdLabel"),
+          hint: t("menuIdHint"),
+          value: "",
+          validate: (raw) => (menuKeyOk(raw) ? null : t("errMenuKey")),
+          save: async (raw) => {
+            id = raw.trim().toLowerCase();
+            return { kind: "ok" };
+          },
+        }),
+        textField({
+          label: t("menuTitleLabel"),
+          value: "",
+          save: async (raw) => {
+            title = raw.trim();
+            return { kind: "ok" };
+          },
+        }),
+      ),
+      h(
+        "div",
+        { class: "field-row" },
+        actionButton({
+          label: t("menuAddButton"),
+          tone: "primary",
+          status,
+          run: async () => {
+            if (menus.length >= MAX_MENUS) return { kind: "error", message: t("errMenuLimit") };
+            if (!menuKeyOk(id)) return { kind: "error", message: t("errMenuKey") };
+            if (menus.some((menu) => menu.id === id)) return { kind: "error", message: t("errMenuDuplicateId") };
+            menus.push({
+              id,
+              title: title.length > 0 ? title.slice(0, MAX_MENU_TITLE) : id,
+              body: "",
+              channelId: null,
+              messageId: null,
+              exclusive: false,
+              options: [],
+            });
+            const written = await save();
+            if (written.kind !== "ok") menus.pop();
+            return written;
+          },
+          onDone: reload,
+        }),
+      ),
+      h("p", { class: "field-hint" }, t("menuAddHint")),
+      status.el,
+    ),
+  );
+}
+
+/** The shape a menu id and an option key share — no colons; see the limits file. */
+function menuKeyOk(raw: string): boolean {
+  const key = raw.trim().toLowerCase();
+  return key.length > 0 && key.length <= MAX_ROLE_MENU_KEY && ROLE_MENU_KEY_SHAPE.test(key);
 }

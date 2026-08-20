@@ -91,6 +91,7 @@ import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
 import type { TicketGateway } from "./tickets.js";
+import type { RoleMenuGateway } from "./role-menus.js";
 import type { EventBoardGateway } from "./event-board.js";
 import type { WelcomeProfile } from "./welcome.js";
 
@@ -200,6 +201,13 @@ export interface BridgeApp {
    */
   setEventBoard(gateway: EventBoardGateway | null): void;
   readonly eventBoard: EventBoardGateway | null;
+  /**
+   * Self-service role menus, late-bound for the same reason: publishing one is
+   * a message in the community server, and the panel asks for it over the
+   * loopback API rather than through Discord.
+   */
+  setRoleMenus(gateway: RoleMenuGateway | null): void;
+  readonly roleMenus: RoleMenuGateway | null;
   /**
    * Arrivals and departures, published by the admin bot. This process greets
    * them: a member is addressed by the bot they interact with.
@@ -453,6 +461,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   let liveBoard: LfgBoard | null = null;
   let liveTickets: TicketGateway | null = null;
   let liveEventBoard: EventBoardGateway | null = null;
+  let liveRoleMenus: RoleMenuGateway | null = null;
   const lfgBoard: LfgBoard = {
     async publish(post) {
       await liveBoard?.publish(post);
@@ -720,6 +729,12 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     get eventBoard() {
       return liveEventBoard;
+    },
+    setRoleMenus(gateway) {
+      liveRoleMenus = gateway;
+    },
+    get roleMenus() {
+      return liveRoleMenus;
     },
     setGameCommandSink(sink) {
       gameCommandSink = sink;

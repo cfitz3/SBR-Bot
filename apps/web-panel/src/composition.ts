@@ -40,6 +40,7 @@ import { createRolesInsight } from "./roles-insight.js";
 import { createBotDirectory, createDiscordEnforcer, MAX_TIMEOUT_SECONDS, type EnforceRequest } from "./directory.js";
 import { createTicketEffects } from "./ticket-effects.js";
 import { createEventEffects } from "./event-effects.js";
+import { createRoleMenuEffects } from "./role-menu-effects.js";
 import type { ModerationActionDTO } from "@sbr/shared-types";
 
 /**
@@ -238,6 +239,10 @@ export async function createPanelApp(): Promise<PanelApp> {
     // empty answer rather than throwing, and a Roles page that cannot show a
     // preview is still a Roles page.
     rolesInsight,
+    // Whether Publish on a role menu can promise anything. The token is what
+    // decides it: without one the effects client refuses at press time, and the
+    // page should say so up front rather than offering a button that cannot work.
+    roleMenuPublisher: config.internalApi.token !== undefined,
     // The command table on the Permissions page is the admin bot's own
     // registry, read for its metadata only — the panel never dispatches these.
     // Building it here rather than hardcoding a list is what stops the page
@@ -321,6 +326,13 @@ export async function createPanelApp(): Promise<PanelApp> {
     // Same bridge, same token: the tracker board lives in a guild channel the
     // bridge bot is in, and redrawing it is one REST call there.
     eventEffects: createEventEffects({
+      baseUrl: config.internalApi.bridgeBaseUrl,
+      token: config.internalApi.token,
+      logger: log,
+    }),
+    // And again for self-service role menus: the message members press lives in
+    // the community server, so the member-facing bot posts it.
+    roleMenuEffects: createRoleMenuEffects({
       baseUrl: config.internalApi.bridgeBaseUrl,
       token: config.internalApi.token,
       logger: log,

@@ -377,6 +377,14 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       reason: "Why it is being closed",
     },
   },
+  rolemenu: {
+    description: "Post a self-service role menu, or list the ones this server has",
+    option: {
+      action: "What to do",
+      id: "Which menu",
+      channel: "Where to post it (defaults to here)",
+    },
+  },
   "join-queue": { description: "Live in-game join requests and how long is left to answer them" },
   "join-accept": {
     description: "Admit somebody who asked to join in-game",
