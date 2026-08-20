@@ -47,12 +47,14 @@ import {
   renderProfileListEmbed,
   renderProgressEmbed,
   renderRosterEmbed,
+  renderServerInfoEmbed,
   renderSkillsEmbed,
   renderSlayersEmbed,
   renderStandingEmbed,
   renderStatsEmbed,
   renderTicketEmbed,
   renderTicketListEmbed,
+  renderUserInfoEmbed,
 } from "@sbr/commands-bridge";
 import type { EmbedView } from "@sbr/shared-types";
 
@@ -216,6 +218,14 @@ export const GALLERY: readonly GalleryCard[] = [
 
   // ── Guild ─────────────────────────────────────────────────────────────────
   card("roster", "`/online` — the in-game roster by rank.", renderRosterEmbed, f.ROSTER, f.NOW),
+  card("userinfo", "`/userinfo` — a member with more roles than fit.", renderUserInfoEmbed, f.DISCORD_USER),
+  card(
+    "userinfo-outsider",
+    "An account Discord knows and this server does not.",
+    renderUserInfoEmbed,
+    f.DISCORD_USER_OUTSIDER,
+  ),
+  card("serverinfo", "`/serverinfo` — the server at a glance.", renderServerInfoEmbed, f.DISCORD_GUILD),
   card("standing", "`/xp` — a member's guild XP and where it came from.", renderStandingEmbed, IGN, f.STANDING),
   card(
     "standing-new",

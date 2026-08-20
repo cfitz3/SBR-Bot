@@ -33,6 +33,7 @@ export {
   renderStatsEmbed,
 } from "./render.js";
 export { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
+export { infoSpecs, renderServerInfoEmbed, renderUserInfoEmbed } from "./handlers-info.js";
 export { funSpecs, parseDice, readQuotes, rpsOutcome, vibeRank, QUOTES_SETTING_KEY } from "./fun.js";
 export {
   lfgButtons,

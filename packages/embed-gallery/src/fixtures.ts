@@ -16,6 +16,8 @@ import type {
   AccessoryReportDTO,
   AuctionListingDTO,
   AchievementsDTO,
+  DiscordGuildInfo,
+  DiscordUserInfo,
   AdviceDTO,
   ApplicationDTO,
   AttendanceDTO,
@@ -924,4 +926,50 @@ export const MILESTONE_UNLINKED: PendingMilestoneDTO = {
   type: "SKILL_LEVEL",
   metric: "skillAverage",
   thresholdValue: 55,
+};
+
+/**
+ * `/userinfo` on a long-standing member: a nickname, a boost, and more roles
+ * than the card lists, which is where the "+N more" tail comes from.
+ */
+export const DISCORD_USER: DiscordUserInfo = {
+  id: "900000000000000001",
+  username: "nettleandsage",
+  displayName: "Nettle",
+  bot: false,
+  avatarUrl: "https://cdn.discordapp.com/avatars/900000000000000001/abc.png?size=512",
+  createdAt: Date.parse("2019-11-02T09:14:00.000Z"),
+  member: {
+    nickname: "Nettle",
+    joinedAt: Date.parse("2023-02-17T20:41:00.000Z"),
+    boostingSince: Date.parse("2025-12-01T12:00:00.000Z"),
+    roleIds: Array.from({ length: 15 }, (_, i) => `70000000000000000${String(i)}`),
+    timedOutUntil: null,
+  },
+};
+
+/** Somebody Discord knows and this server does not — a different card, not a blank one. */
+export const DISCORD_USER_OUTSIDER: DiscordUserInfo = {
+  id: "900000000000000002",
+  username: "passerby",
+  displayName: "passerby",
+  bot: false,
+  avatarUrl: null,
+  createdAt: Date.parse("2026-08-01T00:00:00.000Z"),
+  member: null,
+};
+
+/** `/serverinfo` on a server with an owner, boosts and no icon set. */
+export const DISCORD_GUILD: DiscordGuildInfo = {
+  id: "800000000000000001",
+  name: "Skyblock and Relax",
+  iconUrl: null,
+  createdAt: Date.parse("2021-06-09T15:30:00.000Z"),
+  ownerId: "900000000000000009",
+  memberCount: 1_482,
+  channelCount: 47,
+  roleCount: 31,
+  emojiCount: 88,
+  boostTier: 2,
+  boostCount: 9,
 };

@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 import { communitySpecs } from "./handlers-community.js";
 import { permSpecs } from "./handlers-perms.js";
+import { infoSpecs } from "./handlers-info.js";
 import { funSpecs } from "./fun.js";
 import {
   renderAccessoriesEmbed,
@@ -1001,6 +1002,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       autocomplete: itemAutocomplete,
     },
     ...communitySpecs(),
+    ...infoSpecs(),
     ...permSpecs(),
     ...funSpecs(),
   ];

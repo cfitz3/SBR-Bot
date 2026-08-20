@@ -377,6 +377,15 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       reason: "Why it is being closed",
     },
   },
+  userinfo: {
+    description: "Discord account details for a member",
+    option: { member: "Whose card to show (defaults to you)" },
+  },
+  serverinfo: { description: "This Discord server at a glance" },
+  avatar: {
+    description: "Someone's Discord avatar, full size",
+    option: { member: "Whose card to show (defaults to you)" },
+  },
   rolemenu: {
     description: "Post a self-service role menu, or list the ones this server has",
     option: {

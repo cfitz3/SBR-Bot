@@ -10,6 +10,7 @@ import type {
   CommandArgs,
   CommandSurface,
   CommunityService,
+  DiscordDirectory,
   EmbedView,
   GuildConfigService,
   GuildRosterSource,
@@ -117,6 +118,12 @@ export interface HandlerDeps {
    * access simply shows a card without the section.
    */
   readonly record?: MemberRecordSource;
+  /**
+   * What the server itself looks like, for `/userinfo`, `/serverinfo` and
+   * `/avatar`. Optional because only a surface with a gateway connection can
+   * answer it — in guild chat those commands say so rather than guessing.
+   */
+  readonly discord?: DiscordDirectory;
   /**
    * The chat filter, asked rather than edited. `!guildquote` says something a
    * staffer stored months ago, and this is how that line is held to the same

@@ -1324,3 +1324,77 @@ export interface HealthAggregator {
 export interface RoleDirtyMarker {
   mark(guildId: string, discordIds: readonly string[]): Promise<void>;
 }
+
+/**
+ * One Discord account, as this server sees it.
+ *
+ * Deliberately a flat snapshot rather than a live object: the handler layer is
+ * transport-agnostic and must never hold a discord.js structure, which would
+ * tie a pure function to a gateway connection it cannot have in a test.
+ *
+ * `member` is null for a user Discord knows but this server does not — someone
+ * who has left, or an id typed in from elsewhere. That is a different answer
+ * from "no such user", and the card says so.
+ */
+export interface DiscordUserInfo {
+  readonly id: string;
+  readonly username: string;
+  /** The name the server shows: nickname, then display name, then username. */
+  readonly displayName: string;
+  readonly bot: boolean;
+  readonly avatarUrl: string | null;
+  /** Account creation, epoch ms. Derived from the snowflake, so always known. */
+  readonly createdAt: number;
+  readonly member: DiscordMemberInfo | null;
+}
+
+/** The same account's membership of *this* server. */
+export interface DiscordMemberInfo {
+  readonly nickname: string | null;
+  /** Epoch ms. Null when Discord itself has no record — rare, but it happens. */
+  readonly joinedAt: number | null;
+  readonly boostingSince: number | null;
+  /** Highest first, `@everyone` excluded — it is on everybody and says nothing. */
+  readonly roleIds: readonly string[];
+  /** Timed out until, epoch ms; null when not. */
+  readonly timedOutUntil: number | null;
+}
+
+/** The server itself, for `/serverinfo`. */
+export interface DiscordGuildInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly iconUrl: string | null;
+  readonly createdAt: number;
+  readonly ownerId: string | null;
+  /**
+   * Counts rather than lists. A card cannot show 900 members, and asking the
+   * gateway to page every one of them to print a number it already has is the
+   * kind of request that gets a bot rate-limited.
+   */
+  readonly memberCount: number;
+  readonly channelCount: number;
+  readonly roleCount: number;
+  readonly emojiCount: number;
+  readonly boostTier: number;
+  readonly boostCount: number;
+}
+
+/**
+ * What the member bot can see of the Discord server it is sitting in.
+ *
+ * A port on the handler layer because only a surface with a gateway connection
+ * can answer it: the in-game bridge and the panel wire the same handlers and
+ * have no Discord client, so this is optional and its commands say "not here"
+ * rather than inventing an answer.
+ *
+ * Read-only by construction. Handing member commands a way to *look up* a
+ * member is not the same authority as handing them a way to change one, and
+ * keeping the port to two questions is what makes that obvious at the wiring.
+ */
+export interface DiscordDirectory {
+  /** Null when Discord has no such user at all. */
+  lookupUser(guildId: string, userId: string): Promise<DiscordUserInfo | null>;
+  /** Null when the bot is not in that server — a fresh install mid-restart. */
+  guildInfo(guildId: string): Promise<DiscordGuildInfo | null>;
+}

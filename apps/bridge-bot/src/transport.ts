@@ -68,6 +68,7 @@ import {
 import { RoleMenuGateway } from "./role-menus.js";
 import { registerRoleMenuComponents, roleMenuMessagePort } from "./role-menus-discord.js";
 import { createBridgeRoleEffector } from "./role-effector.js";
+import { createDiscordDirectory } from "./directory.js";
 
 export interface GuildChatLine {
   readonly name: string;
@@ -574,6 +575,11 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // The board needs the client, and the client is built from the app, so it is
   // handed over here rather than composed in.
   app.setLfgBoard(createLfgBoard(app, discord));
+
+  // Read-only, and the last of the late-bound ports: `/userinfo`, `/serverinfo`
+  // and `/avatar` are a view of Discord itself, so they can only be answered on
+  // this side of the line.
+  app.setDiscordDirectory(createDiscordDirectory(discord));
 
   // The announcer needs a live client, so like the board it is built here and
   // torn down with the transport.

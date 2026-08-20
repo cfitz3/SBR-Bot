@@ -82,6 +82,7 @@ import {
   err,
   MemberRole,
   ok,
+  type DiscordDirectory,
   type GuildRosterSource,
   type MilestoneAnnouncerPort,
   type PlayerLookup,
@@ -208,6 +209,12 @@ export interface BridgeApp {
    */
   setRoleMenus(gateway: RoleMenuGateway | null): void;
   readonly roleMenus: RoleMenuGateway | null;
+  /**
+   * What the bot can see of the Discord server, for `/userinfo`, `/serverinfo`
+   * and `/avatar`. Late-bound like the rest; until it is set those three
+   * commands report that they cannot answer rather than answering emptily.
+   */
+  setDiscordDirectory(directory: DiscordDirectory | null): void;
   /**
    * Arrivals and departures, published by the admin bot. This process greets
    * them: a member is addressed by the bot they interact with.
@@ -462,6 +469,20 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   let liveTickets: TicketGateway | null = null;
   let liveEventBoard: EventBoardGateway | null = null;
   let liveRoleMenus: RoleMenuGateway | null = null;
+  let liveDirectory: DiscordDirectory | null = null;
+  // A thrown error rather than a null answer while unattached — the window is
+  // the few hundred ms between composition and login, and "Discord has no such
+  // account" would be a claim about the world instead of about our own wiring.
+  const discord: DiscordDirectory = {
+    async lookupUser(guildId, userId) {
+      if (liveDirectory === null) throw new Error("discord directory not attached yet");
+      return liveDirectory.lookupUser(guildId, userId);
+    },
+    async guildInfo(guildId) {
+      if (liveDirectory === null) throw new Error("discord directory not attached yet");
+      return liveDirectory.guildInfo(guildId);
+    },
+  };
   const lfgBoard: LfgBoard = {
     async publish(post) {
       await liveBoard?.publish(post);
@@ -509,6 +530,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     record,
     screen,
     tallies: adapters.tallies,
+    discord,
     logger: log,
   };
 
@@ -732,6 +754,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setRoleMenus(gateway) {
       liveRoleMenus = gateway;
+    },
+    setDiscordDirectory(directory) {
+      liveDirectory = directory;
     },
     get roleMenus() {
       return liveRoleMenus;
