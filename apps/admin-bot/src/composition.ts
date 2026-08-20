@@ -12,6 +12,7 @@ import {
   disconnectDb,
   guildConfigRepository,
   guildRepository,
+  memberRoleDirtyMarker,
   identityRepository,
   moderationRepository,
   rankResolver,
@@ -131,9 +132,16 @@ export async function createAdminApp(): Promise<AdminApp> {
     // Capability floors are the guild's to set on the panel; without this the
     // service falls back to its own compiled-in defaults.
     floors: rolePolicyReader,
+    // Auto-roles hear about links and completed events promptly rather than
+    // waiting for the reconciler's daily sweep to notice.
+    rolesDirty: memberRoleDirtyMarker(adapters.rolesDirty),
     logger: log,
   });
-  const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
+  const community = new CommunityServiceImpl({
+    repo: communityRepository,
+    rolesDirty: adapters.rolesDirty,
+    logger: log,
+  });
   // Publishes so a `/set-channel` here reaches the bridge and the panel, and
   // subscribes (below) so their writes reach this process.
   const guildConfig = new GuildConfigServiceImpl({

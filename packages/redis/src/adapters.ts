@@ -534,6 +534,7 @@ export const RUNNABLE_JOBS: readonly string[] = [
   "ticket-sweep",
   "event-tracking",
   "event-board",
+  "role-sync",
   "config-cache-invalidation",
 ];
 
@@ -631,6 +632,33 @@ export interface HeartbeatRecord {
   readonly pid: number;
   /** Service-specific liveness detail — gateway latency, session state, etc. */
   readonly details: Readonly<Record<string, string | number | boolean | null>>;
+}
+
+/**
+ * Marks members whose auto-roles may have gone out of date.
+ *
+ * Everything that changes a fact a rule can read — a link, a rank, a level, an
+ * achievement, an attendance — calls this, and `role-sync` drains the set. It is
+ * a hint, not a queue: the daily full sweep reconciles everyone regardless, so
+ * losing a mark to a Redis flush or a crash between the write and the mark costs
+ * latency and never correctness. That is the whole reason it is allowed to be a
+ * fire-and-forget set in Redis instead of an outbox table.
+ *
+ * Marking is therefore never worth failing a caller over. A guild scan that
+ * cannot reach Redis has still done its real work.
+ */
+export class RedisRoleDirtySet {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async mark(guildId: string, discordIds: readonly string[]): Promise<void> {
+    const ids = [...new Set(discordIds)].filter((id) => id.length > 0);
+    if (ids.length === 0) return;
+    try {
+      await this.ctx.client.sAdd(this.ctx.keys.rolesDirty(guildId), ids);
+    } catch {
+      // Swallowed deliberately: see the class comment. The sweep is the floor.
+    }
+  }
 }
 
 /**
@@ -905,6 +933,7 @@ export function createRedisAdapters(ctx: RedisContext) {
     modBus: new RedisModBus(ctx),
     bridgeBus: new RedisBridgeBus(ctx),
     jobTriggers: new RedisJobTriggerBus(ctx),
+    rolesDirty: new RedisRoleDirtySet(ctx),
     heartbeat: new RedisHeartbeat(ctx),
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),
     automodCounters: new RedisAutomodCounters(ctx),

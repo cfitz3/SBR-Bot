@@ -15,12 +15,15 @@ import {
   moderationRepository,
   snapshotJobRepository,
   milestoneDefinitionRepository,
+  guildConfigRepository,
   guildRepository,
   guildScanRepository,
   discordSyncRepository,
   xpRepository,
   activitySink,
   ticketRepository,
+  roleGrantRepository,
+  roleSyncRepository,
 } from "@sbr/db";
 import {
   defineAnalyticsIngestJob,
@@ -41,6 +44,7 @@ import {
   definePunishmentExpiryJob,
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
+  defineRoleSyncJob,
   defineRosterSyncJob,
   defineTicketSweepJob,
   defineXpAggregateJob,
@@ -60,6 +64,8 @@ import {
   sweepAuctions,
   sweepTickets,
   syncDiscordMembers,
+  syncRoles,
+  MAX_MEMBERS_PER_PASS,
   syncRoster,
   publishEventBoards,
   transitionEvents,
@@ -67,9 +73,11 @@ import {
   type DiscordMemberRow,
   type MilestoneDefinition,
 } from "@sbr/jobs";
+import { AUTO_ROLES_SETTING_KEY, parseAutoRoles } from "@sbr/roles";
 import { XpService } from "@sbr/xp";
 import { createWorkerTicketBridge } from "./ticket-bridge.js";
 import { createWorkerEventBoard } from "./event-board-bridge.js";
+import { createWorkerRoleEffector } from "./role-bridge.js";
 import type { WorkerContext } from "./composition.js";
 
 /** How long a swept BIN reading stays readable before the key expires. */
@@ -81,6 +89,15 @@ const SALES_TTL_SECONDS = 2 * 60 * 60;
 const RESOURCE_TTL_SECONDS = 12 * 60 * 60;
 /** Reference endpoints worth keeping warm; each is independent of the others. */
 const RESOURCE_NAMES = ["skills", "collections", "items"] as const;
+/**
+ * How long a claimed auto-role full sweep stays claimed.
+ *
+ * A day. The sweep exists so that a rule written this afternoon reaches members
+ * who qualified last year, and so that a dirty mark lost to a Redis flush costs
+ * at most a day of staleness. Any shorter and every guild pays a full-roster
+ * pass for work the dirty set already handles.
+ */
+const ROLE_SWEEP_TTL_SECONDS = 24 * 60 * 60;
 /**
  * How long a "this ticket has been warned" flag lives.
  *
@@ -296,6 +313,12 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           record: async (candidate) => {
             const isNew = await snapshotJobRepository.record(candidate, target.guildId, target.discordId);
             if (!isNew) return false;
+
+            // Covers both achievement rules and the level rules the reward
+            // below may push somebody over. One mark, either way.
+            if (target.guildId !== null && target.discordId !== null) {
+              await ctx.adapters.rolesDirty.mark(target.guildId, [target.discordId]);
+            }
 
             // Paid at detection, not at announcement: `announce` governs
             // whether the guild sees it, and a milestone a guild chose to
@@ -589,6 +612,14 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           });
           continue;
         }
+        // Membership and rank are two of the auto-role triggers, and this scan
+        // is the only thing that ever learns they changed. Marking is best
+        // effort by design: the daily sweep is the floor under it.
+        const touched = [...result.joined, ...result.left, ...result.rankChanged];
+        if (touched.length > 0) {
+          const discordIds = await roleSyncRepository.discordIdsForUuids(touched);
+          await ctx.adapters.rolesDirty.mark(guild.id, discordIds);
+        }
         ctx.log.info("guild scanned", {
           guildId: guild.id,
           members: result.memberCount,
@@ -703,6 +734,69 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("event-board"),
   };
 
+  /**
+   * Auto-roles. The reconcile decides, the admin bot acts: this process has the
+   * database and Redis, and the one holding a gateway to the member server is
+   * the only one that can touch a role.
+   *
+   * The dirty set lives in Redis and is drained, not read — `sPop` takes the
+   * ids out, so two workers racing cannot both act on the same member, and a
+   * member whose pass fails is put back explicitly rather than left behind.
+   */
+  const roleSync: JobDefinition<number> = {
+    ...defineRoleSyncJob(async () => {
+      const effector = createWorkerRoleEffector({
+        baseUrl: ctx.config.internalApi.baseUrl,
+        token: ctx.config.internalApi.token,
+        logger: ctx.log,
+      });
+      return syncRoles({
+        async listGuilds() {
+          const guilds = await guildRepository.listActive();
+          return guilds.map((g) => g.id);
+        },
+        async loadPolicy(guildId) {
+          return parseAutoRoles(await guildConfigRepository.getSetting(guildId, AUTO_ROLES_SETTING_KEY));
+        },
+        async claimFullSweep(guildId) {
+          // NX makes the claim the same operation as the check, so two workers
+          // arriving together produce one sweep rather than two.
+          const claimed = await client.set(keys.rolesSweep(guildId), "1", {
+            NX: true,
+            EX: ROLE_SWEEP_TTL_SECONDS,
+          });
+          return claimed !== null;
+        },
+        listMemberIds: (guildId) => roleSyncRepository.listMemberIds(guildId),
+        async markDirty(guildId, discordIds) {
+          if (discordIds.length === 0) return;
+          await client.sAdd(keys.rolesDirty(guildId), [...discordIds]);
+        },
+        async drainDirty(guildId, limit) {
+          // `sPopCount`, not `sPop`: the uncounted form returns a single member,
+          // which would reconcile one member per pass and look like a hang.
+          return await client.sPopCount(keys.rolesDirty(guildId), limit);
+        },
+        loadSnapshots: (guildId, ids) => roleSyncRepository.loadSnapshots(guildId, ids),
+        openGrants: (guildId, discordId) => roleGrantRepository.openGrants(guildId, discordId),
+        apply: (guildId, discordId, add, remove) =>
+          effector.apply(guildId, discordId, add, remove, "Automatic role rule"),
+        recordGrants: (guildId, discordId, rows, reason) =>
+          roleGrantRepository.recordGrants(guildId, discordId, rows, reason),
+        closeGrants: (guildId, discordId, rows) => roleGrantRepository.closeGrants(guildId, discordId, rows),
+        onRefusal(guildId, roleId, detail) {
+          // Warn, not error: a refusal is a configuration problem the guild's
+          // staff fix in the panel, and the Health card is where they see it.
+          ctx.log.warn("auto-role refused", { guildId, roleId, detail });
+        },
+        onError(scope, error) {
+          ctx.log.warn("role sync failed", { scope, error: String(error) });
+        },
+      });
+    }),
+    lockKey: keys.lockJob("role-sync"),
+  };
+
   // ───────────────────────────── analytics ─────────────────────────────
 
   const analyticsIngest: JobDefinition<number> = {
@@ -807,6 +901,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     ticketSweep,
     eventTracking,
     eventBoard,
+    roleSync,
     xpAggregate,
     analyticsIngest,
     analyticsRollup,

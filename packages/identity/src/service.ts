@@ -23,6 +23,18 @@ import {
 import type { Logger } from "@sbr/observability";
 
 /**
+ * "This member's auto-roles may be stale" — without naming a guild.
+ *
+ * Identity is deliberately guild-agnostic: a link is one person and one
+ * Minecraft account, not a membership. The adapter fans this out to whichever
+ * guilds the member is actually in, which is a question identity has no
+ * business answering.
+ */
+export interface MemberRoleDirtyMarker {
+  markMember(discordId: string): Promise<void>;
+}
+
+/**
  * Reads a guild's configured capability floors.
  *
  * Declared as a port rather than imported so identity keeps depending on
@@ -77,6 +89,12 @@ export interface IdentityServiceDeps {
   readonly social: HypixelSocialLookup;
   readonly roles: MemberRoleReader;
   readonly floors?: CapabilityFloorReader;
+  /**
+   * Told when a link appears or disappears, because "has linked" is an
+   * auto-role trigger and linking is the one people notice the delay on.
+   * Guild-agnostic here — the adapter knows which guilds the member is in.
+   */
+  readonly rolesDirty?: MemberRoleDirtyMarker;
   readonly logger: Logger;
 }
 
@@ -85,6 +103,7 @@ export class IdentityServiceImpl implements IdentityService {
   private readonly social: HypixelSocialLookup;
   private readonly roles: MemberRoleReader;
   private readonly floors: CapabilityFloorReader | null;
+  private readonly rolesDirty: MemberRoleDirtyMarker | undefined;
   private readonly log: Logger;
 
   constructor(deps: IdentityServiceDeps) {
@@ -92,6 +111,7 @@ export class IdentityServiceImpl implements IdentityService {
     this.social = deps.social;
     this.roles = deps.roles;
     this.floors = deps.floors ?? null;
+    this.rolesDirty = deps.rolesDirty;
     this.log = deps.logger.child({ service: "identity" });
   }
 
@@ -139,12 +159,16 @@ export class IdentityServiceImpl implements IdentityService {
       ign: social.ign,
     });
     this.log.info("link verified", { discordId, ign: social.ign, uuid: social.uuid });
+    await this.rolesDirty?.markMember(discordId).catch(() => undefined);
     return ok(link);
   }
 
   async unlink(discordId: string, minecraftUuid: string): Promise<Result<void>> {
     const removed = await this.repo.unlink(discordId, minecraftUuid);
     this.log.info("unlink", { discordId, minecraftUuid, removed });
+    // Marked even when nothing was removed: the cheap case is a wasted
+    // reconcile, and the expensive one is a "linked" role nobody takes back.
+    await this.rolesDirty?.markMember(discordId).catch(() => undefined);
     return ok(undefined);
   }
 

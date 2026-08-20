@@ -41,6 +41,7 @@ export {
   isRunnableJob,
   RUNNABLE_JOBS,
   type JobTriggerMessage,
+  RedisRoleDirtySet,
   RedisHeartbeat,
   startHeartbeat,
   type HeartbeatRecord,

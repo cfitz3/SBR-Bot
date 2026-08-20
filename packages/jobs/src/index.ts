@@ -23,6 +23,7 @@ export {
   definePunishmentExpiryJob,
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
+  defineRoleSyncJob,
   defineRosterSyncJob,
   defineSafetyExpiryJob,
   defineTicketSweepJob,
@@ -30,6 +31,13 @@ export {
   defineEventTrackingJob,
   defineXpAggregateJob,
 } from "./jobs.js";
+export {
+  MAX_MEMBERS_PER_PASS,
+  syncRoles,
+  type RoleApplyOutcome,
+  type RoleMemberSnapshot,
+  type RoleSyncDeps,
+} from "./role-sync.js";
 export {
   blendEstimate,
   ingestEndedAuctions,

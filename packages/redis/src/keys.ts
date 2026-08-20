@@ -94,6 +94,17 @@ export function createKeyFactory(prefix: string) {
 
     // 8. Worker locks
     lockJob: (name: string, scope?: string) => p(`lock:job:${name}${scope ? `:${scope}` : ""}`),
+    /**
+     * Members whose auto-roles may be out of date, drained by `role-sync`.
+     *
+     * A set, so marking somebody five times between passes is one unit of work.
+     * Losing it to a flush costs one day of latency — the daily full sweep
+     * re-marks everyone — and never costs correctness, which is the trade that
+     * lets it live in Redis at all.
+     */
+    rolesDirty: (guildId: string) => p(`roles:dirty:${guildId}`),
+    /** Held for a day by whichever worker claimed this guild's full sweep. */
+    rolesSweep: (guildId: string) => p(`roles:sweep:${guildId}`),
     lockSingleFlight: (cacheKey: string) => p(`lock:hypixel:${cacheKey}`),
 
     // 9. Deduplication keys

@@ -33,6 +33,14 @@ export interface ScannedMember {
 export interface CachedMemberRow {
   readonly uuid: string;
   readonly ign: string | null;
+  /**
+   * The rank we last recorded, used only to notice a promotion.
+   *
+   * Optional because a caller that does not select it simply gets no rank-change
+   * signal, which degrades to "the auto-role sweep will find it" rather than to
+   * a wrong answer.
+   */
+  readonly guildRank?: string | null;
 }
 
 export interface MemberCacheWrite {
@@ -55,6 +63,13 @@ export interface GuildScanResult {
   readonly memberCount: number;
   readonly joined: readonly string[];
   readonly left: readonly string[];
+  /**
+   * Members whose in-game rank differs from the one we had cached.
+   *
+   * Joiners are not listed here — they are in `joined`, and everything that
+   * consumes a rank change treats a join as one too.
+   */
+  readonly rankChanged: readonly string[];
   readonly gexpRows: number;
   /** Set when the scan did nothing; the caller logs it and moves to the next guild. */
   readonly skipped?: "no-hypixel-guild" | "fetch-failed";
@@ -129,6 +144,7 @@ export async function scanGuild(guildId: string, deps: GuildScanDeps): Promise<G
       memberCount: 0,
       joined: [],
       left: [],
+      rankChanged: [],
       gexpRows: 0,
       skipped: "fetch-failed",
       reason,
@@ -144,6 +160,13 @@ export async function scanGuild(guildId: string, deps: GuildScanDeps): Promise<G
 
   const joined = roster.filter((m) => !cachedByUuid.has(m.uuid)).map((m) => m.uuid);
   const left = cached.filter((row) => !live.has(row.uuid)).map((row) => row.uuid);
+  const rankChanged = roster
+    .filter((m) => {
+      const before = cachedByUuid.get(m.uuid);
+      // `undefined` is "the caller did not tell us", which is not a change.
+      return before !== undefined && before.guildRank !== undefined && before.guildRank !== m.rank;
+    })
+    .map((m) => m.uuid);
 
   // Only look up names we do not already have. Joiners first: they are the ones
   // whose absence is actually visible, in a perm roster or a leaderboard.
@@ -171,7 +194,7 @@ export async function scanGuild(guildId: string, deps: GuildScanDeps): Promise<G
 
   const gexpRows = await deps.writeGexp(guildId, collectGexp(roster));
 
-  const result: GuildScanResult = { memberCount: roster.length, joined, left, gexpRows };
+  const result: GuildScanResult = { memberCount: roster.length, joined, left, rankChanged, gexpRows };
   await deps.recordScan(guildId, result, null);
   return result;
 }

@@ -202,6 +202,23 @@ lock:hypixel:cache:...     SET <token> NX PX 5000     (single-flight)
 
 ---
 
+## 8b. Auto-Role Reconciliation (`roles:`)
+
+| Key | Type | TTL | Written by | Read by |
+|-----|------|-----|-----------|---------|
+| `roles:dirty:<guildId>` | Set of Discord ids | none (drained) | anything that changes a fact a rule reads — link/unlink, `guild-scan` join/leave/rank, milestone detection, event completion | `role-sync`, via `SPOP` with a count |
+| `roles:sweep:<guildId>` | String `"1"` | 24 h | `role-sync`, with `SET NX` | `role-sync` |
+
+**Both are safe to lose.** The dirty set is a promptness hint: `role-sync` runs a
+full sweep of every member once a day regardless, so a flush costs up to a day of
+latency and never costs correctness. That is the whole reason this is allowed to
+be a fire-and-forget Redis set instead of an outbox table, and why every writer
+swallows its own failures rather than failing the user action that caused them.
+
+Drained with `SPOP`, not read with `SMEMBERS`: taking the ids out is what stops
+two workers acting on the same member, and a member whose pass fails is put back
+explicitly rather than left behind by accident.
+
 ## 9. Deduplication Keys (`dedup:`)
 
 - **Naming:** by purpose — relay `dedup:relay:{guildId}:{hash(author+content)}`, announcements `dedup:milestone:{accountId}:{type}:{threshold}`, news `dedup:news:{eventId}`, reminders `dedup:reminder:{eventId}:{offset}`, analytics `dedup:event:{eventId}`.

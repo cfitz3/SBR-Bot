@@ -17,6 +17,7 @@
     "@sbr/db": "*",
     "@sbr/hypixel": "*",
     "@sbr/jobs": "*",
+    "@sbr/roles": "*",
     "@sbr/observability": "*",
     "@sbr/pricing": "*",
     "@sbr/progression": "*",

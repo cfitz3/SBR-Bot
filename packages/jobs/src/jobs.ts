@@ -244,6 +244,28 @@ export function defineEventBoardJob(publish: () => Promise<number>): JobDefiniti
   };
 }
 
+/**
+ * role-sync: make Discord's roles match what the guild's rules say.
+ *
+ * `community`, not `progression`: the work is Discord writes over the admin
+ * bot's loopback API and a handful of local queries, none of it against the
+ * Hypixel budget the progression queue exists to pace.
+ *
+ * One retry. A failed pass leaves its members in the dirty set, so the next
+ * scheduled run picks up exactly where this one stopped — retrying hard would
+ * mean hammering Discord during precisely the outage that caused the failure.
+ */
+export function defineRoleSyncJob(sync: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "role-sync",
+    queue: "community",
+    lockKey: "lock:job:role-sync",
+    lockTtlMs: 5 * 60_000,
+    maxRetries: 1,
+    handler: sync,
+  };
+}
+
 /** guild-roster-sync: reconcile the Hypixel guild roster against ours. */
 export function defineRosterSyncJob(sync: () => Promise<number>): JobDefinition<number> {
   return {

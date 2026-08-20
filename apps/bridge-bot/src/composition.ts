@@ -12,6 +12,7 @@ import {
   guildConfigRepository,
   guildMemberDirectory,
   guildRepository,
+  memberRoleDirtyMarker,
   identityRepository,
   leaderboardSource,
   linkDirectory,
@@ -271,6 +272,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     social: hypixel,
     roles: rankResolver,
     floors: rolePolicyReader,
+    // Auto-roles hear about links and completed events promptly rather than
+    // waiting for the reconciler's daily sweep to notice.
+    rolesDirty: memberRoleDirtyMarker(adapters.rolesDirty),
     logger: log,
   });
 
@@ -354,7 +358,11 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     catalog: new ItemCatalog({ resources: hypixel }),
     logger: log,
   });
-  const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
+  const community = new CommunityServiceImpl({
+    repo: communityRepository,
+    rolesDirty: adapters.rolesDirty,
+    logger: log,
+  });
   // Roster enrichment reads the Phase 2 member cache and stored snapshots, never
   // Hypixel: `/perm info` on a five-stack would otherwise be five live calls.
   const perms = new PermServiceImpl({

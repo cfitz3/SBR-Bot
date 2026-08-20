@@ -12,6 +12,7 @@
     { "path": "../../packages/db" },
     { "path": "../../packages/hypixel" },
     { "path": "../../packages/jobs" },
+    { "path": "../../packages/roles" },
     { "path": "../../packages/pricing" },
     { "path": "../../packages/progression" },
     { "path": "../../packages/redis" },

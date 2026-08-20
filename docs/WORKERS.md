@@ -29,6 +29,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
 | `event-tracking` | Repeatable (cron) | every 10 min (`8-59/10 * * * *`), per-event interval on top | `EventScore` upsert on `(eventId,uuid,metric)`; baselines written once | 1 retry; global lock, 10 min TTL | Live event leaderboards age; recorded scores are unaffected |
 | `event-board` | Repeatable (cron) | every 30 min (`13,43 * * * *`) | The board is one message, edited in place; `boardFinal` stops a finished card being rewritten | 1 retry; global lock, 5 min TTL | Live boards show older numbers than the database holds; nothing is duplicated |
+| `role-sync` | Repeatable (cron) | every 15 min (`11-59/15 * * * *`) | Reconciles against current facts; only roles Discord confirmed are recorded, and only recorded grants are ever revoked | 1 retry; global lock, 5 min TTL | Auto-roles are applied late; nothing is granted or taken away wrongly |
 | `ticket-sweep` | Repeatable (cron) | every 6 min (`5-59/6 * * * *`) | The warned flag is a Redis key with a 24 h TTL; a close is refused on an already-closed row | 2 retries; global lock, 5 min TTL | Quiet tickets are warned and auto-closed late; nothing is closed that should not be |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
@@ -159,6 +160,44 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Idempotency:** each reminder marks itself sent; a re-fire checks state and no-ops if already dispatched.
 - **Retry:** backoff; if the event was cancelled/rescheduled, the job re-validates against current truth before sending.
 - **Failure impact:** a reminder is late or missed; the event itself is unaffected.
+
+### 2.7d `role-sync`
+- **Trigger / frequency:** cron, every fifteen minutes (`11-59/15 * * * *`),
+  **bulk** lane. Offset from the roster jobs, whose writes are what usually make
+  a member dirty.
+- **Inputs:** the guild's `roles.auto` policy, the dirty set
+  `roles:dirty:<guildId>`, and one facts bundle per member (guild membership and
+  rank, verified link, XP level, achievement keys, attendance count).
+- **Outputs:** one `POST /internal/g/<guildId>/roles` per member with work to do,
+  and `RoleGrant` rows recording what landed.
+- **Reconciliation, not event handling.** Nothing here reacts to an event. It
+  asks what should be true for one member, compares it to what is true, and
+  fixes the difference. That is what makes a gateway event dropped during a
+  deploy heal itself, a rule written today apply to members who qualified last
+  year, and a role somebody removed by hand come back.
+- **The dirty set is promptness, not correctness.** Link, unlink, a rank change,
+  an achievement and a completed event all mark members dirty so the change lands
+  within a quarter of an hour. Losing those marks — a Redis flush, a crash
+  between the write and the mark — costs latency only: a **daily full sweep**
+  per guild marks everybody, and that sweep is the floor under the whole design.
+  It is claimed with `SET NX EX 86400` on `roles:sweep:<guildId>` so two workers
+  produce one sweep rather than two.
+- **A pass acts on at most 200 members per guild.** The remainder stays in the
+  dirty set for the next pass, which bounds both Discord writes and how long one
+  guild can hold the bulk lane.
+- **Never revokes what it did not grant.** A removal requires an open `RoleGrant`
+  row for that member, role *and rule*. A role given by hand, by another bot, or
+  by a rule that has since been deleted is left alone. `MANUAL` rules are never
+  auto-revoked at all.
+- **Claims only what Discord confirmed.** Asking for three roles and getting two
+  is ordinary — one may have been deleted or moved above the bot since the rule
+  was written. Only `added` is recorded; a failed call claims nothing and puts
+  the member back in the dirty set, because a ledger row for a grant that never
+  happened would authorise a later revoke of a role we never gave.
+- **XP level changes have no dirty mark of their own.** Awards happen on several
+  paths, and the daily sweep is what makes `XP_LEVEL` rules land — up to a day
+  late. Milestone rewards are the exception: they mark, because the milestone
+  itself does.
 
 ### 2.7c `event-board`
 - **Trigger / frequency:** cron, every thirty minutes (`13,43 * * * *`), **timely** lane.

@@ -35,6 +35,7 @@ import {
   type TicketCategoryDTO,
   type TicketDTO,
   type TicketError,
+  type RoleDirtyMarker,
 } from "@sbr/shared-types";
 import {
   canAct,
@@ -79,6 +80,11 @@ const MAX_LFG_SLOTS = 20;
 export interface CommunityServiceDeps {
   readonly repo: CommunityRepository;
   readonly logger: Logger;
+  /**
+   * Told when an event completes, because attendance is an auto-role trigger.
+   * Optional: without it the reconciler's daily sweep still catches up.
+   */
+  readonly rolesDirty?: RoleDirtyMarker;
   /** Injected so tests can pin "now" when validating event start times. */
   readonly now?: () => Date;
   /**
@@ -93,12 +99,14 @@ export class CommunityServiceImpl implements CommunityService {
   private readonly log: Logger;
   private readonly now: () => Date;
   private readonly perms: PermRosterLookup | undefined;
+  private readonly rolesDirty: RoleDirtyMarker | undefined;
 
   constructor(deps: CommunityServiceDeps) {
     this.repo = deps.repo;
     this.log = deps.logger.child({ service: "community" });
     this.now = deps.now ?? ((): Date => new Date());
     this.perms = deps.perms;
+    this.rolesDirty = deps.rolesDirty;
   }
 
   async listUpcomingEvents(guildId: string): Promise<Result<readonly EventDTO[]>> {
@@ -253,6 +261,14 @@ export class CommunityServiceImpl implements CommunityService {
     // and a host who then corrects it is correcting something, not typing a
     // roster from memory.
     const tracked = await this.repo.recordTrackedAttendance(eventId);
+    // Completion is the moment an attendance count changes, so it is the moment
+    // an "attended N events" rule can start qualifying. Best effort: a host does
+    // not get an error because Redis was busy.
+    if (this.rolesDirty !== undefined && tracked > 0) {
+      const attendance = await this.repo.getAttendance(eventId).catch(() => null);
+      const ids = attendance?.attended.map((a) => a.discordId) ?? [];
+      if (ids.length > 0) await this.rolesDirty.mark(completed.guildId, ids).catch(() => undefined);
+    }
     this.log.info("event completed", { eventId, actorDiscordId, tracked });
     return ok(completed);
   }

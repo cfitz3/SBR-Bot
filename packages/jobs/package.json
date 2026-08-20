@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@sbr/observability": "*",
+    "@sbr/roles": "*",
     "@sbr/shared-types": "*"
   }
 }

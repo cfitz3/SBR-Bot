@@ -12,6 +12,7 @@ import {
   disconnectDb,
   guildConfigRepository,
   guildRepository,
+  memberRoleDirtyMarker,
   identityRepository,
   milestoneDefinitionRepository,
   ticketConfigRepository,
@@ -75,7 +76,11 @@ export async function createPanelApp(): Promise<PanelApp> {
 
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
   const metrics = createDomainMetrics({ analytics, surface: "WEB_PANEL", logger: log });
-  const community = new CommunityServiceImpl({ repo: communityRepository, logger: log });
+  const community = new CommunityServiceImpl({
+    repo: communityRepository,
+    rolesDirty: adapters.rolesDirty,
+    logger: log,
+  });
   // Every config write announces itself, so a bot picks the change up in the
   // second it lands instead of after its own cache TTL. This is the panel's half
   // of "the panel commands, it doesn't bypass": the write goes through the same
@@ -182,6 +187,9 @@ export async function createPanelApp(): Promise<PanelApp> {
     social: hypixel,
     roles: rankResolver,
     floors: rolePolicyReader,
+    // Auto-roles hear about links and completed events promptly rather than
+    // waiting for the reconciler's daily sweep to notice.
+    rolesDirty: memberRoleDirtyMarker(adapters.rolesDirty),
     logger: log,
   });
 

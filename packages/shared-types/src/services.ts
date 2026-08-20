@@ -1309,3 +1309,16 @@ export interface HealthAggregator {
   register(check: HealthCheck): void;
   run(): Promise<HealthReportDTO>;
 }
+
+/**
+ * Somewhere to say "this member's auto-roles may be stale".
+ *
+ * Declared here because half a dozen services need it and none of them should
+ * have to know it is a Redis set. Implementations must be forgiving: a mark is
+ * a promptness hint, and the auto-role reconciler's daily full sweep is what
+ * makes the answer correct regardless of whether the mark ever landed. Nothing
+ * should fail a user's action because this failed.
+ */
+export interface RoleDirtyMarker {
+  mark(guildId: string, discordIds: readonly string[]): Promise<void>;
+}

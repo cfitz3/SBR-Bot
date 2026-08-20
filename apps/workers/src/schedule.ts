@@ -90,6 +90,11 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // for everyone already past it — forever, not just until they next play.
   { name: "milestone-backfill", repeat: { pattern: "41 4 * * *" }, priority: LANE.bulk },
   { name: "guild-roster-sync", repeat: { pattern: "9,39 * * * *" }, priority: LANE.bulk },
+  // Auto-roles. Every fifteen minutes is the promptness floor for somebody who
+  // just linked their account; the pass itself is a no-op for any guild whose
+  // dirty set is empty, which is most guilds most of the time. Offset from the
+  // roster jobs above, whose writes are what usually make members dirty.
+  { name: "role-sync", repeat: { pattern: "11-59/15 * * * *" }, priority: LANE.bulk },
   // The in-game roster cache, on the 6-hour cadence its TTL is written against —
   // offset from midnight so a scan lands shortly *before* the cache goes stale
   // rather than at the same instant as every other daily job on the box.
