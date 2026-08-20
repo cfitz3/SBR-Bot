@@ -18,6 +18,7 @@ import {
   linkDirectory,
   memberProgressSource,
   milestoneAnnouncementRepository,
+  xpLevelUpAnnouncementRepository,
   roleSyncRepository,
   permRepository,
   milestoneDefinitionRepository,
@@ -84,6 +85,7 @@ import {
   ok,
   type DiscordDirectory,
   type GuildRosterSource,
+  type LevelUpAnnouncerPort,
   type MilestoneAnnouncerPort,
   type PlayerLookup,
   type TextScreen,
@@ -134,6 +136,8 @@ export interface BridgeApp {
    * transport so the sweeper can be handed a fake in tests without a database.
    */
   readonly milestones: MilestoneAnnouncerPort;
+  /** The level-up queue, exposed for the same reason as `milestones`. */
+  readonly levelUps: LevelUpAnnouncerPort;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
@@ -693,6 +697,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     dispatcher,
     handlerDeps,
     milestones: milestoneAnnouncementRepository,
+    levelUps: xpLevelUpAnnouncementRepository,
     memberBus: adapters.memberBus,
     linkedDiscordIdForIgn: (ign) => identityRepository.findDiscordIdByIgn(ign).catch(() => null),
     async welcomeProfile(guildId, discordId) {

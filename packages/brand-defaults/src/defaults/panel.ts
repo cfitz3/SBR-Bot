@@ -321,6 +321,10 @@ export const DEFAULT_PANEL = {
       label: "Moderation log",
       hint: "Per-action moderation record. Separate from Log so audit noise can stay out of a staff-visible channel.",
     },
+    levels: {
+      label: "Level-up announcements",
+      hint: "Where level-ups are posted. Unset and nobody is announced — the XP is still earned either way.",
+    },
   },
 
   /** Guild selector — the one page with no guild in scope. */

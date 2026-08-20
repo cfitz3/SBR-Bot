@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { XpService } from "./service.js";
-import type { ActivityRow, ActivitySink, BalanceRow, LedgerRow, XpRepository } from "./ports.js";
+import type { ActivityRow, ActivitySink, BalanceRow, LedgerRow, LevelClimb, XpRepository } from "./ports.js";
 import type { ActivityCounters, XpAward, XpSource, XpSourcePolicy } from "./types.js";
 import { NO_ACTIVITY } from "./types.js";
 
@@ -23,6 +23,7 @@ interface Fakes {
   readonly bumps: { discordId: string; day: string; field: keyof ActivityCounters; by: number }[];
   readonly recorded: XpAward[];
   readonly saved: BalanceRow[][];
+  readonly climbs: LevelClimb[];
   ledger: LedgerRow[];
 }
 
@@ -33,12 +34,13 @@ function makeService(over: {
   tenure?: readonly { discordId: string; days: number }[];
   events?: readonly { discordId: string; count: number }[];
   ledger?: LedgerRow[];
+  levels?: readonly { discordId: string; level: number }[];
   allowCooldown?: boolean;
   logger?: unknown;
   brokenSink?: boolean;
   now?: () => Date;
 } = {}): { svc: XpService; fakes: Fakes } {
-  const fakes: Fakes = { bumps: [], recorded: [], saved: [], ledger: over.ledger ?? [] };
+  const fakes: Fakes = { bumps: [], recorded: [], saved: [], climbs: [], ledger: over.ledger ?? [] };
 
   const repo: XpRepository = {
     async policy() {
@@ -46,6 +48,12 @@ function makeService(over: {
     },
     async setSourcePolicy(_g, p) {
       return p;
+    },
+    async levels() {
+      return over.levels ?? [];
+    },
+    async recordLevelUps(_g, climbs) {
+      fakes.climbs.push(...climbs);
     },
     async activityForDay() {
       return over.activity ?? [];

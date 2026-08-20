@@ -34,6 +34,7 @@ export {
 } from "./render.js";
 export { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
 export { infoSpecs, renderServerInfoEmbed, renderUserInfoEmbed } from "./handlers-info.js";
+export { LEVEL_OPT_OUT_KEY, levelAlertSpecs, readLevelOptOuts } from "./handlers-levels.js";
 export { funSpecs, parseDice, readQuotes, rpsOutcome, vibeRank, QUOTES_SETTING_KEY } from "./fun.js";
 export {
   lfgButtons,
@@ -50,6 +51,7 @@ export {
   renderEventsEmbed,
   renderLfgEmbed,
   renderLfgListEmbed,
+  renderLevelUpEmbed,
   renderMilestoneEmbed,
   renderTicketEmbed,
   renderTicketListEmbed,

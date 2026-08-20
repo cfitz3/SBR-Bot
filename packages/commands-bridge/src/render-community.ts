@@ -11,6 +11,7 @@ import type {
   EmbedView,
   EventDTO,
   LFGPostDTO,
+  PendingLevelUpDTO,
   PendingMilestoneDTO,
   RsvpEntryDTO,
   TicketDTO,
@@ -375,6 +376,35 @@ export function renderTicketListEmbed(tickets: readonly TicketDTO[]): EmbedView 
  * notification rather than as recognition. An unlinked account still gets an
  * announcement, just without the mention.
  */
+/**
+ * A level-up announcement.
+ *
+ * The mention leads here, unlike a milestone: levels are earned in this Discord
+ * by being present in it, so the person being congratulated is a Discord member
+ * first and the notification is the point rather than a side effect.
+ *
+ * `fromLevel` is carried rather than assumed to be one below: a rebuild after a
+ * backfill can move somebody several levels at once, and "12 → 15" is the true
+ * story where "reached 15" would quietly hide two of them.
+ */
+export function renderLevelUpEmbed(levelUp: PendingLevelUpDTO): EmbedView {
+  const jumped = levelUp.toLevel - levelUp.fromLevel > 1;
+  return {
+    title: "Level up",
+    description: `<@${levelUp.discordId}> reached **level ${String(levelUp.toLevel)}**.`,
+    fields: [
+      {
+        name: jumped ? "Levels" : "Level",
+        value: `${String(levelUp.fromLevel)} → ${String(levelUp.toLevel)}`,
+        inline: true,
+      },
+      { name: "Total XP", value: levelUp.totalXp.toLocaleString("en-US"), inline: true },
+      { name: "When", value: timestampTag(levelUp.achievedAt, "R"), inline: true },
+    ],
+    color: "SUCCESS",
+  };
+}
+
 export function renderMilestoneEmbed(milestone: PendingMilestoneDTO): EmbedView {
   const who = milestone.ign ?? "A guild member";
   const mention = milestone.discordId === null ? "" : ` (<@${milestone.discordId}>)`;

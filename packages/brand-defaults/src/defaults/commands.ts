@@ -377,6 +377,10 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       reason: "Why it is being closed",
     },
   },
+  levelalerts: {
+    description: "Turn your own level-up announcements on or off",
+    option: { state: "Leave it blank to see where you stand" },
+  },
   userinfo: {
     description: "Discord account details for a member",
     option: { member: "Whose card to show (defaults to you)" },

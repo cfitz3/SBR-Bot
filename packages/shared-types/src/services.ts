@@ -45,6 +45,7 @@ import type {
   MilestoneDefinitionInput,
   ModerationActionDTO,
   NetworthDTO,
+  PendingLevelUpDTO,
   PendingMilestoneDTO,
   PermGroupDTO,
   ProgressMetric,
@@ -298,6 +299,20 @@ export interface TicketConfigService {
  * bot that dies mid-post re-posts on the next pass rather than losing the
  * milestone entirely. Duplicated praise is the better failure.
  */
+/**
+ * Port: the level-up announcement queue, implemented by `@sbr/db`.
+ *
+ * Same shape and same reasoning as `MilestoneAnnouncerPort` — recorded by the
+ * pass that rebuilds balances, posted by the member bot, handed over through a
+ * durable flag. Kept as its own port rather than folded into that one because
+ * they are announced into different channels and a guild may want one without
+ * the other.
+ */
+export interface LevelUpAnnouncerPort {
+  listPending(limit: number, excludeGuildIds?: readonly string[]): Promise<readonly PendingLevelUpDTO[]>;
+  markAnnounced(ids: readonly string[]): Promise<number>;
+}
+
 export interface MilestoneAnnouncerPort {
   /**
    * Unannounced milestones for guilds, oldest first.
@@ -541,6 +556,7 @@ export const CONFIG_CHANNEL_SLOTS = [
   "leaderboard",
   "modlog",
   "welcome",
+  "levels",
 ] as const;
 
 export type ConfigChannelSlot = (typeof CONFIG_CHANNEL_SLOTS)[number];
@@ -563,6 +579,7 @@ export const CONFIG_CHANNEL_SLOT_LABELS: Readonly<Record<ConfigChannelSlot, stri
   welcome: "Welcome & farewell",
   leaderboard: "Leaderboards",
   modlog: "Moderation log",
+  levels: "Level-up announcements",
 };
 
 export interface GuildRuntimeConfig {

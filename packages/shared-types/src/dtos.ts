@@ -749,6 +749,24 @@ export interface MilestoneDTO {
  * it. `discordId` is null for an account with no verified link — still worth
  * announcing, just without a mention.
  */
+/**
+ * A level a member has climbed to, waiting to be announced.
+ *
+ * `fromLevel` is carried rather than assumed to be `toLevel - 1`: a milestone
+ * award or a backfilled day can move somebody two levels at once, and a card
+ * that said "reached level 7" when they went from 5 to 7 would be quietly
+ * wrong about the thing it exists to celebrate.
+ */
+export interface PendingLevelUpDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly discordId: string;
+  readonly fromLevel: number;
+  readonly toLevel: number;
+  readonly totalXp: number;
+  readonly achievedAt: string;
+}
+
 export interface PendingMilestoneDTO {
   readonly id: string;
   readonly guildId: string;

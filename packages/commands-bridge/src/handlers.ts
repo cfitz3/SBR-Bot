@@ -17,6 +17,7 @@ import type {
 import { communitySpecs } from "./handlers-community.js";
 import { permSpecs } from "./handlers-perms.js";
 import { infoSpecs } from "./handlers-info.js";
+import { levelAlertSpecs } from "./handlers-levels.js";
 import { funSpecs } from "./fun.js";
 import {
   renderAccessoriesEmbed,
@@ -1003,6 +1004,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     ...communitySpecs(),
     ...infoSpecs(),
+    ...levelAlertSpecs(),
     ...permSpecs(),
     ...funSpecs(),
   ];

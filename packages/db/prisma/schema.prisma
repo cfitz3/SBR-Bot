@@ -317,6 +317,7 @@ model Guild {
   perms            PermGroup[]
   xpEvents         XpEvent[]
   xpBalances       XpBalance[]
+  xpLevelUps       XpLevelUp[]
   xpSources        XpSourceConfig[]
   activityDaily    ActivityDaily[]
   screenings       GuildJoinScreening[]
@@ -1108,6 +1109,29 @@ model XpEvent {
 /// Denormalized standing, rebuilt from the ledger by the xp-aggregate job. This
 /// is what `/standing` and the leaderboards read: a command must never sum the
 /// ledger live, or a busy guild turns a 60 ms reply into a table scan.
+/// A level a member has climbed to, queued for announcement.
+///
+/// A row rather than an event, for the same reason milestones are: detection
+/// happens in the workers and the announcement happens in the member bot, so a
+/// bot that is down during the nightly pass must find the backlog waiting
+/// rather than have missed a broadcast. The unique key is the level reached —
+/// a rebuild that recomputes the same climb writes the same row.
+model XpLevelUp {
+  id        String   @id @default(cuid())
+  guildId   String
+  discordId String
+  fromLevel Int
+  toLevel   Int
+  totalXp   Int
+  announced Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, discordId, toLevel])
+  @@index([announced, createdAt])
+}
+
 model XpBalance {
   id          String    @id @default(cuid())
   guildId     String

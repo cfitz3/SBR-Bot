@@ -16,6 +16,7 @@ import type {
   XpSource,
   XpSourcePolicy,
 } from "@sbr/xp";
+import type { LevelUpAnnouncerPort, PendingLevelUpDTO } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
 /** `YYYY-MM-DD` → the midnight-UTC Date a `@db.Date` column stores. */
@@ -201,6 +202,31 @@ export const xpRepository: XpRepository = {
     }
   },
 
+  async levels(guildId): Promise<readonly { discordId: string; level: number }[]> {
+    return prisma.xpBalance.findMany({ where: { guildId }, select: { discordId: true, level: true } });
+  },
+
+  async recordLevelUps(guildId, climbs): Promise<void> {
+    for (const climb of climbs) {
+      // Upsert on the level reached, and leave `announced` alone on update: a
+      // rebuild recomputes climbs that were posted weeks ago, and resetting the
+      // flag would announce every one of them again.
+      await prisma.xpLevelUp.upsert({
+        where: {
+          guildId_discordId_toLevel: { guildId, discordId: climb.discordId, toLevel: climb.toLevel },
+        },
+        create: {
+          guildId,
+          discordId: climb.discordId,
+          fromLevel: climb.fromLevel,
+          toLevel: climb.toLevel,
+          totalXp: climb.totalXp,
+        },
+        update: { totalXp: climb.totalXp },
+      });
+    }
+  },
+
   async balance(guildId, discordId): Promise<BalanceRow | null> {
     const row = await prisma.xpBalance.findUnique({ where: { guildId_discordId: { guildId, discordId } } });
     if (row === null) return null;
@@ -259,5 +285,46 @@ export const activitySink: ActivitySink = {
       create: { guildId, discordId, day: toDay(day), [field]: by },
       update: { [field]: { increment: by } },
     });
+  },
+};
+
+/**
+ * The level-up announcement queue.
+ *
+ * Separate object from the repository above because it is read by a different
+ * process: the workers rebuild balances and write these rows, and the member
+ * bot drains them. Excluding guilds works exactly as it does for milestones —
+ * a guild with no `levels` channel keeps its rows rather than blocking the
+ * queue for everyone behind it.
+ */
+export const xpLevelUpAnnouncementRepository: LevelUpAnnouncerPort = {
+  async listPending(limit: number, excludeGuildIds: readonly string[] = []): Promise<readonly PendingLevelUpDTO[]> {
+    const rows = await prisma.xpLevelUp.findMany({
+      where: {
+        announced: false,
+        ...(excludeGuildIds.length === 0 ? {} : { guildId: { notIn: [...excludeGuildIds] } }),
+      },
+      orderBy: { createdAt: "asc" },
+      take: limit,
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      guildId: row.guildId,
+      discordId: row.discordId,
+      fromLevel: row.fromLevel,
+      toLevel: row.toLevel,
+      totalXp: row.totalXp,
+      achievedAt: row.createdAt.toISOString(),
+    }));
+  },
+
+  async markAnnounced(ids: readonly string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const { count } = await prisma.xpLevelUp.updateMany({
+      where: { id: { in: [...ids] } },
+      data: { announced: true },
+    });
+    return count;
   },
 };

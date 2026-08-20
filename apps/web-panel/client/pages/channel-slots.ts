@@ -36,6 +36,7 @@ export const CHANNEL_SLOT_ORDER = [
   "leaderboard",
   "modlog",
   "welcome",
+  "levels",
 ] as const satisfies readonly ChannelSlot[];
 
 /**

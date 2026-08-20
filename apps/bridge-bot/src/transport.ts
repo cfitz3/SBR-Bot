@@ -20,6 +20,7 @@ import {
   communityButtonReplies,
   lfgButtons,
   parseRsvpState,
+  readLevelOptOuts,
   renderLfgEmbed,
   type LfgBoard,
 } from "@sbr/commands-bridge";
@@ -34,6 +35,7 @@ import {
   toSlashCommands,
 } from "@sbr/discord-kit";
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
+import { startLevelAnnouncer } from "./levels.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
 import { deliverEventReminder } from "./events.js";
@@ -596,6 +598,27 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           // from guild configuration, and a role or everyone mention typed into
           // one must not become a server-wide ping.
           allowedMentions: mentionDiscordId === null ? { parse: [] } : { users: [mentionDiscordId] },
+        })
+        .catch(() => null);
+      return message !== null;
+    },
+    log: app.log,
+  });
+
+  // Level-ups ride the same pattern, with one addition: the opt-out list is a
+  // guild setting, read once per pass rather than once per row.
+  const levelAnnouncer = startLevelAnnouncer({
+    levels: app.levelUps,
+    getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "levels"),
+    mutedIds: (guildId) => readLevelOptOuts(app.handlerDeps.config, guildId),
+    async post(channelId, embed, mentionDiscordId) {
+      const channel = await discord.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+      const message = await (channel as SendableChannel)
+        .send({
+          embeds: [toEmbed(embed)],
+          // The one person being congratulated, and nobody else.
+          allowedMentions: { users: [mentionDiscordId] },
         })
         .catch(() => null);
       return message !== null;
@@ -1426,6 +1449,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // Stop reconnecting before closing anything, so the `end` this triggers
       // isn't answered with a fresh login.
       announcer.stop();
+      levelAnnouncer.stop();
       void greeter.stop().catch(() => undefined);
       // Detach first: the bus keeps delivering until the process exits, and a
       // sink pointing at a queue whose session is closing would just age out.

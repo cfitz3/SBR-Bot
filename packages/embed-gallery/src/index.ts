@@ -38,6 +38,7 @@ import {
   renderLfgEmbed,
   renderLfgListEmbed,
   renderLowestBinEmbed,
+  renderLevelUpEmbed,
   renderMilestoneEmbed,
   renderNetworthEmbed,
   renderPermEmbed,
@@ -271,6 +272,13 @@ export const GALLERY: readonly GalleryCard[] = [
     "Crossed by somebody with no Discord link — no mention is possible.",
     renderMilestoneEmbed,
     f.MILESTONE_UNLINKED,
+  ),
+  card("level-up", "Posted in the `levels` channel when a member climbs a level.", renderLevelUpEmbed, f.LEVEL_UP),
+  card(
+    "level-up-jump",
+    "Several levels at once, as a rebuild after a backfill can produce.",
+    renderLevelUpEmbed,
+    f.LEVEL_UP_JUMP,
   ),
 
   // ── Staff ─────────────────────────────────────────────────────────────────

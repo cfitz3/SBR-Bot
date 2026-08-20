@@ -17,6 +17,7 @@ import type {
   AuctionListingDTO,
   AchievementsDTO,
   DiscordGuildInfo,
+  PendingLevelUpDTO,
   DiscordUserInfo,
   AdviceDTO,
   ApplicationDTO,
@@ -972,4 +973,24 @@ export const DISCORD_GUILD: DiscordGuildInfo = {
   emojiCount: 88,
   boostTier: 2,
   boostCount: 9,
+};
+
+/** A single-level climb, the ordinary case. */
+export const LEVEL_UP: PendingLevelUpDTO = {
+  id: "levelup-1",
+  guildId: "guild-1",
+  discordId: "900000000000000001",
+  fromLevel: 11,
+  toLevel: 12,
+  totalXp: 18_400,
+  achievedAt: "2026-08-19T21:04:00.000Z",
+};
+
+/** A rebuild after a backfill: several levels at once, which the card must say. */
+export const LEVEL_UP_JUMP: PendingLevelUpDTO = {
+  ...LEVEL_UP,
+  id: "levelup-2",
+  fromLevel: 12,
+  toLevel: 15,
+  totalXp: 31_250,
 };

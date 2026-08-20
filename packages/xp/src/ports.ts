@@ -25,6 +25,14 @@ export interface LedgerRow {
   readonly createdAt: Date;
 }
 
+/** One member crossing a level boundary, as the rebuild noticed it. */
+export interface LevelClimb {
+  readonly discordId: string;
+  readonly fromLevel: number;
+  readonly toLevel: number;
+  readonly totalXp: number;
+}
+
 /** A stored balance. */
 export interface BalanceRow {
   readonly discordId: string;
@@ -71,6 +79,21 @@ export interface XpRepository {
   ledger(guildId: string): Promise<readonly LedgerRow[]>;
   /** Replace the stored balances wholesale. */
   saveBalances(guildId: string, balances: readonly BalanceRow[]): Promise<void>;
+
+  /**
+   * Everyone's current level, before a rebuild overwrites it.
+   *
+   * Two columns rather than whole balances: this is read once per rebuild for
+   * the sole purpose of noticing who climbed, and a guild's worth of `bySource`
+   * blobs is a lot of bytes to move to compare a pair of integers.
+   */
+  levels(guildId: string): Promise<readonly { readonly discordId: string; readonly level: number }[]>;
+  /**
+   * Queue climbs for announcement. Upserts on (guild, member, level reached),
+   * so a rebuild that recomputes the same climb writes the same row instead of
+   * announcing it a second time.
+   */
+  recordLevelUps(guildId: string, climbs: readonly LevelClimb[]): Promise<void>;
 
   balance(guildId: string, discordId: string): Promise<BalanceRow | null>;
   /** 1-based position by total XP. Null when the member has no balance. */

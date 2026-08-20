@@ -270,7 +270,10 @@ export class XpService {
 
   /** Recompute every balance from the ledger. Returns how many were written. */
   async rebuildBalances(guildId: string, tenure?: ReadonlyMap<string, number>): Promise<number> {
-    const ledger = await this.repo.ledger(guildId);
+    // Read before the write: `saveBalances` replaces the stored level, so this
+    // is the only moment the previous one still exists to compare against.
+    const [ledger, before] = await Promise.all([this.repo.ledger(guildId), this.repo.levels(guildId)]);
+    const previousLevel = new Map(before.map((row) => [row.discordId, row.level]));
     const byMember = new Map<string, { rows: typeof ledger; last: Date }>();
 
     for (const row of ledger) {
@@ -302,7 +305,39 @@ export class XpService {
     }
 
     await this.repo.saveBalances(guildId, balances);
+    await this.recordClimbs(guildId, balances, previousLevel);
     return balances.length;
+  }
+
+  /**
+   * Queue whoever crossed a level boundary in this rebuild.
+   *
+   * A member with no previous balance row is recorded silently and never
+   * announced. The first rebuild after XP is switched on — or after a member is
+   * backfilled — computes everybody's level from scratch, and a card reading
+   * "Nettle reached level 12" for somebody who has been level 12 all along is
+   * not a celebration, it is a false claim made to the whole server at once.
+   *
+   * Failure is swallowed. A queue that cannot be written costs an announcement;
+   * letting it throw would cost the balances the caller has already saved.
+   */
+  private async recordClimbs(
+    guildId: string,
+    balances: readonly BalanceRow[],
+    previousLevel: ReadonlyMap<string, number>,
+  ): Promise<void> {
+    const climbs = balances.flatMap((balance) => {
+      const from = previousLevel.get(balance.discordId);
+      if (from === undefined || balance.level <= from) return [];
+      return [{ discordId: balance.discordId, fromLevel: from, toLevel: balance.level, totalXp: balance.totalXp }];
+    });
+    if (climbs.length === 0) return;
+
+    try {
+      await this.repo.recordLevelUps(guildId, climbs);
+    } catch (error) {
+      this.logger.warn("xp.recordLevelUps failed", { guildId, climbs: climbs.length, error: String(error) });
+    }
   }
 
   // ─────────────────────────── internals ───────────────────────────
