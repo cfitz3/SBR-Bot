@@ -406,6 +406,59 @@ one piece of configuration that has to be readable in a single sitting.
 
 ---
 
+### 3.17 Roles & Welcome
+
+The auto-role policy, the greeter and the self-service role menus, under
+**Configure**. An auto-role policy is a write into somebody else's Discord
+server across their whole roster, so the page leads with the two things worth
+knowing before saving one and puts the editor underneath.
+
+**Health card, first.** Whether SBR Admin can manage roles at all, how many
+members are waiting in the dirty set, when `role-sync` last ran, and **every
+rule the preflight refused, with its reason**. Until this card existed a role we
+could not apply failed silently: the sync reported success, the member never got
+the role, and the only trace was a line in a worker log no member of staff
+reads. Refusals can be cleared once addressed (`roles.refusals.clear`).
+
+**Dry run, before saving.** "This would grant 214 and revoke 3", computed by the
+reconciler's own resolver over real open-grant rows — not a second estimate that
+could disagree with what actually happens. A deployment with no roster to look
+at **refuses** rather than reporting zeroes.
+
+**Rule editor.** One card per rule (label, trigger, role, revoke-when-unqualified,
+enabled) plus an add card. The trigger dropdown repaints without saving, so
+somebody can pick "They hold a guild rank" before knowing which rank. Roles come
+from the shared picker and anything the preflight would refuse is not offered.
+
+**Welcome editor.** Three cards — join, leave, in-game guild join — each with a
+channel slot, the template, and for the join message a DM and an optional
+delete-after. It previews as it is typed through a browser copy of the greeter's
+renderer that `welcome-preview.test.ts` holds character-for-character against
+the real one: a preview that renders differently from the greeter is a wrong
+answer given confidently at the one moment somebody is checking their work.
+
+**Role menus.** A card per menu with its options, plus an add card;
+`roles.menu.publish` asks SBR Bot to post it. Editing here and posting from
+`/rolemenu` are the same document.
+
+**Every control posts the whole policy**, because the mutation stores the whole
+policy — merging a rule list on the server would make "I deleted that rule" and
+"I never had that rule" indistinguishable.
+
+**Mutations:** `roles.auto.save`, `roles.preview`, `roles.welcome.save`,
+`roles.refusals.clear`, `roles.menus.save`, `roles.menu.publish`.
+
+**Access: Admin+, including the read** — the same tier as §3.16 and for the same
+reason. A role grant is authority, and a page that can bind a Discord role to a
+rule can bind one to the person editing it. The dry run goes through the write
+channel even though it writes nothing: it needs the same authorization and the
+same body a save would take, and answering "what would this do" from the read
+side would be a second way to send a policy.
+
+Stickies (`/sticky`) have **no panel surface**; they are managed from Discord.
+
+---
+
 ## 4. Data Sources per Page
 
 | Page | Reads from | Writes to |
@@ -422,6 +475,7 @@ one piece of configuration that has to be readable in a single sitting.
 | Milestones | `milestones` (`MilestoneDefinition` layered over built-in defaults) | `MilestoneDefinition` + audit |
 | Tickets | DB (`Ticket`, open queue) + `tickets` (`TicketTypeConfig` layered over built-in defaults, `TicketPanelConfig`) | `ticket.close`; `TicketTypeConfig`, `TicketPanelConfig` + audit |
 | Filter | `wordlist` (`WordlistEntry`) + `GuildSetting['moderation.escalation']` and `['moderation.relay-sync']` layered over built-in defaults | `WordlistEntry`, `GuildSetting` + audit |
+| Roles & Welcome | `GuildSetting['roles.auto'|'discord.welcome'|'roles.menus']`, `RoleGrant` (open grants, for the dry run), admin-bot role preflight + refusal log | `GuildSetting` + audit; bridge internal API (post a menu) |
 | Permissions | `GuildConfig.roleMappings` (level → Discord role ids), `GuildSetting['roles.policy']` (rank map, capability floors, command overrides) layered over platform defaults, `BridgePermission` (exceptions), admin-bot command registry (metadata only) | `GuildConfig.roleMappings`, `GuildSetting['roles.policy']`, `BridgePermission` + audit |
 
 ---

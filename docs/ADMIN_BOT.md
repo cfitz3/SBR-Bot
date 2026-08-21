@@ -65,6 +65,8 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/set-recruitment` | Admin | Open/close + thresholds. |
 | `/wordlist-add` / `-remove` | Officer | Regex validated; recompiles filter. |
 | `/filter-test` | Staff | Dry-run, no state change. |
+| `/rolemenu` | Officer | `list` reads the document here and works with the bridge down; `post` asks SBR Bot to put the menu up. A menu can only offer roles the preflight would grant. |
+| `/sticky` | Officer | Saves here, applied by SBR Bot. An unreachable bridge means "not yet", not a failed command — the configuration is stored either way. |
 
 ### Onboarding
 | Command | Tier | Safety notes |
@@ -218,6 +220,21 @@ The Admin bot and the panel are **two clients of the same moderation/governance 
 - **Panel for depth, bot for immediacy:** the panel is better for review, bulk queries, config forms, and reporting; the bot is better for in-context, in-Discord fast actions. They intentionally overlap on core actions so staff can use whichever is at hand.
 - **Bot presence gates panel config:** the panel disables enforcement-dependent config when the Admin bot is absent/under-permissioned (see `WEB_PANEL.md`), because the bot is what actually enforces it.
 - **Consistency stance:** writes are durable-first (Postgres) then propagated; surfaces show a brief "pending" state until the responsible surface acknowledges enforcement, so staff never assume an action landed before it did.
+
+---
+
+## 7a. Member observation (the greeter's other half)
+
+The bot holds the `GuildMembers` intent, so it — not the member-facing bot — is
+what sees `GuildMemberAdd` and `GuildMemberRemove`. It publishes each one on the
+Redis member bus (`chan:member:<guildId>`) and SBR Bot does the talking, because
+a welcome from a staff bot most members cannot see or message would be the
+platform speaking out of the wrong mouth.
+
+The payload carries everything the greeter needs to render — display name,
+server name, member count after the event — because a member who has just left
+cannot be fetched, and half a farewell is worse than none. See
+[`DISCORD_QOL.md` §3](DISCORD_QOL.md).
 
 ---
 

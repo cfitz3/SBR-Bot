@@ -26,6 +26,7 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | RoleGrant | Postgres | Persistent (append-only in effect; revoked, never deleted) |
 | GuildChannelBinding | Postgres (cached with GuildConfig) | Persistent |
 | GuildSetting | Postgres | Persistent |
+| Reminder | Postgres | Persistent until delivered (then a delivered row, kept) |
 | BridgePermission | Postgres (cached in Redis) | Persistent |
 | Infraction | Postgres | Persistent (audit) |
 | ModerationAction | Postgres | Persistent (audit) |
@@ -302,6 +303,14 @@ panel-editable knobs out of `.env` without a migration per knob.
 | `key` | dotted namespace, unique per guild |
 | `value` | JSON; an absent row means "use the code default" |
 
+Keys in use include `xp.weights`, `roles.policy`, `roles.auto` (the auto-role
+rules), `roles.menus` (self-service role menus), `discord.welcome` (the greeter),
+`discord.sticky` (sticky messages), `levels.optOut`, `config.cooldowns`,
+`moderation.*`, `screening.policy` and `fun.quotes`. Each has a tolerant `parseX`
+for the read path and a strict `validateX` for the write path, so a hand-edited
+blob reads as "not configured" rather than throwing on a hot path, and a
+misspelled field cannot save cleanly and then read back as silence.
+
 `roles.policy` is worth naming here because three of the panel's four permission
 dimensions share it: the in-game-rank → level map, the capability floors and the
 per-command overrides all live in one document, so "what is this guild's
@@ -546,6 +555,26 @@ the index would cost writes to serve no read.
 *Closure vs. expiry:* both end a run, but only one was a decision, which is why
 `closedByDiscordId` exists and the embed names a closer but never an expirer.
 *Note:* durable record in Postgres, but active/open posts are mirrored in Redis with a TTL so expiry and live listings are cheap.
+
+#### Reminder
+One member's note to themselves, set with `/remind`. A row and a sweeper rather
+than a `setTimeout`, because the reminders worth setting are hours or days out
+and a deploy in between must not swallow them.
+
+| Field | Notes |
+|-------|-------|
+| `guildId`, `discordId` | whose it is; nobody may set or read another member's |
+| `channelId` | where it was set, and where it goes back |
+| `text` | at most 280 characters, so a listing stays readable |
+| `dueAt` | one minute to one year out |
+| `delivered` | flipped **after** the post, so a crash mid-post repeats a reminder rather than losing one |
+
+Indexed on (`delivered`, `dueAt`) for the sweep and on (`guildId`, `discordId`,
+`delivered`) for the listing and the ten-pending cap. A reminder whose channel
+has been deleted simply fails to deliver; the sweeper retries and gives up after
+24 hours past due, rather than occupying a slot in every batch forever.
+
+**Relationships:** N—1 `Guild`.
 
 #### PermGroup
 A **perm** — a standing party a member runs with repeatedly. Where `LFGPost` is

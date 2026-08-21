@@ -233,6 +233,8 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 | `/set-role` | Map a platform role → Discord role, or set a member's role | Admin | `type` (mapping/member), `role`, `target` | Confirmation | Role not found; would elevate above actor | DB (`GuildConfig`/`GuildMember`) + Cache (perms) |
 | `/set-channel` | Assign a functional channel (bridge/log/staff/etc.) | Admin | `purpose`, `channel` | Confirmation | Channel not in guild; bad type | DB (`GuildConfig`) + Cache |
 | `/feature-toggle` | Enable/disable a platform feature per guild | Admin | `feature`, `state` | Confirmation + effective flags | Unknown feature | DB (`GuildConfig.features`) + Cache |
+| `/rolemenu` | Post a self-service role menu, or list the ones this server has | Officer | `action` (list/post), `id?` (autocomplete), `channel?` | `list`: the menus and their options. `post`: confirmation that SBR Bot put it up | Unknown menu; bridge bot unreachable (the menu still exists — `list` works either way) | `GuildSetting` `roles.menus` + bridge internal API |
+| `/sticky` | Keep a message at the bottom of a channel | Officer | `action` (list/set/clear), `message?`, `channel?` (defaults to here) | `list`: channel → first line. `set`/`clear`: confirmation, and whether it was applied now or will be next time somebody talks | Over 1,000 characters; already 15 stickies; channel has no sticky to clear | `GuildSetting` `discord.sticky` + bridge internal API |
 
 ---
 
@@ -502,6 +504,40 @@ should be designed as one rather than added as a side effect of a dice roller.
 **Shipped quotes are about the game, not about players.** A shipped quote list
 that made jokes at a type of player would be the platform picking on someone in
 a room where nobody chose it.
+
+---
+
+## 21. Member Bot — Discord Conveniences
+
+The general-bot layer: things members expect from any Discord bot, spoken by the
+bot they interact with. [`DISCORD_QOL.md`](DISCORD_QOL.md) covers the operator
+side — configuration, limits and failure modes.
+
+| Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
+|---------|---------|-------|------------------|--------|-------------------------|------|
+| `/userinfo` | Discord account details for a member | Public | `member?` (default you) | Embed: account age, joined, roles | Member not in this server | Discord (gateway cache) |
+| `/serverinfo` | This Discord server at a glance | Public | — | Embed: members, channels, roles, created | — | Discord (gateway cache) |
+| `/avatar` | Someone's Discord avatar, full size | Public | `member?` (default you) | Embed with the image | Member not in this server | Discord (gateway cache) |
+| `/levelalerts` | Turn your own level-up announcements on or off | Member | `state?` (`on`/`off`; blank shows where you stand) | Ephemeral confirmation | — | `GuildSetting` `levels.optOut` |
+| `/remind` | Have the bot remind you later | Member | `when` (`30m`, `2h30m`, `1w2d`), `about` | Ephemeral confirmation with a live `<t:…:R>` timestamp | Unparseable duration; under a minute or over a year; already 10 pending; over 280 characters | DB (`Reminder`) |
+| `/reminders` | Your pending reminders | Member | `cancel?` (id) | Ephemeral list, or confirmation of a cancellation | Unknown id; not yours | DB (`Reminder`) |
+| `/tag` | Post one of this server's canned replies | Member | `name` (required, autocomplete) | The reply, posted publicly | No reply by that name (a disabled tag reads as absent); tags not set up on this deployment | DB (ticket tag store) |
+
+**Reminders are yours alone.** There is no "remind someone else" — that would be
+a way to make the bot ping a person on command — and no way to list or cancel
+another member's reminders. Delivery is a row plus a one-minute sweeper rather
+than a timer, so a deploy between setting and firing does not swallow one; a
+reminder more than 24 hours past due is given up on, by which point the channel
+is almost certainly gone.
+
+**Tags answer in two ways.** `/tag` is an explicit ask and ignores scope —
+naming a tag is always deliberate. A tag with an `autoPattern` also fires on its
+own, but only where its scope allows (`TICKET`, `SERVER` or `ANY`), at most once
+per channel per minute, and never on a message over 500 characters.
+
+**Level-up announcements** go to the guild's `levels` channel, drained every
+five minutes from what the XP rebuild recorded. Opting out stops the
+announcement, not the XP.
 
 ---
 

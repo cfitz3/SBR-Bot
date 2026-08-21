@@ -7,7 +7,15 @@ Discord and writes Postgres. This is the first body of work that makes it write
 Discord back, which is why most of the decisions below are about restraint
 rather than features.
 
-Status: **planned, not started.** Written 2026-08-20, after Phase 16b.
+Status: **shipped.** Written 2026-08-20 after Phase 16b; D1–D8 landed
+2026-08-20/21. This file is kept as the record of *why* each decision went
+the way it did — the operator-facing description of what was built is
+[`DISCORD_QOL.md`](DISCORD_QOL.md).
+
+Deferred as planned: starboard (needs `GuildMessageReactions` on the shared
+member-facing token) and birthdays (storing a date of birth for minors is a
+privacy decision). `/rank` was dropped rather than built: the name is already
+taken by a joke command, and `/me` plus `/standing` already answer it.
 
 ---
 

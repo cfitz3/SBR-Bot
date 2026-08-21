@@ -29,6 +29,9 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 | F12 | **Bridge health & degradation** | Detects in-game disconnects, reconnects with backoff, and switches to a documented degraded mode. |
 | F13 | **Live guild roster** | `/online` reads `/g online` through the in-game session and reports who's on, grouped by guild rank. |
 | F14 | **Join screening & auto-accept** | Every `/g join` request is screened against the scammer list, the applicant's stats and this guild's own history, recorded, reported to staff, and — if the guild opts in — accepted automatically. |
+| F15 | **Greeting** | Welcome, farewell and guild-join messages, rendered from a guild-configured template and spoken by this bot because a member is addressed by the bot they interact with (§6D). |
+| F16 | **Member conveniences** | `/userinfo`, `/serverinfo`, `/avatar`, `/remind` + `/reminders`, `/tag`, `/levelalerts`, plus level-up announcements, autoresponders and sticky messages (§6D). |
+| F17 | **Self-service role menus** | The message, the buttons and the interaction handler are this bot's; the grant itself is an admin-bot effector call (§6D). |
 
 ---
 
@@ -481,6 +484,48 @@ counter counts as zero, never as a match.
 A member with no linked Discord account cannot be punished by the guild-chat
 side — there is no account to act on — so the runner logs the refusal and stops
 rather than inventing a target.
+
+## 6D. The Discord QoL layer (F15–F17)
+
+Full operator guide: [`DISCORD_QOL.md`](DISCORD_QOL.md). What matters here is
+which of it runs inside this process, and on what schedule.
+
+**Subscribers.**
+
+- **Greeter** — subscribes to the Redis member bus (`chan:member:<guildId>`),
+  which the admin bot publishes to from `GuildMemberAdd` / `GuildMemberRemove`.
+  Observing is automated work and needs the `GuildMembers` intent, so it happens
+  over there; the talking happens here. The renderer interpolates a closed token
+  set and never executes, `@everyone` is neutered in the renderer *as well as*
+  by `allowedMentions`, and the DM is sent independently of the channel post so
+  one member's closed DMs cannot cost the server its welcome.
+- **Config bus** — invalidates the cached sticky document and guild config when
+  the panel or the admin bot writes.
+
+**Sweepers**, all in-process, all bounded per pass so a cold start after an
+outage cannot become a flood:
+
+| Sweeper | Every | Batch | Notes |
+| --- | --- | --- | --- |
+| Level-up announcer | 5 min | 25 | Drains what the XP rebuild recorded into the `levels` channel; an opted-out row is marked announced without being posted, so the queue cannot grow forever with messages nobody will receive |
+| Reminder sweeper | 1 min | 25 | Delivers, *then* flips `delivered`, so a crash mid-post repeats rather than loses; gives up 24 h past due |
+| Sticky keeper | on message | — | Posts before it deletes, and leaves a channel alone for 15 s after a repost — checked before any settings read |
+| Autoresponder | on message | — | Skips anything over 500 characters before reading anything; one answer per tag per channel per minute |
+
+**Message-path cost is the design constraint.** Every hop above runs on
+`messageCreate`, so each one checks its cheapest condition first and each holds
+a per-guild cache with a one-minute TTL that falls back to the last good
+document when a read fails — a database blip must not silently stop every
+sticky and tag in the fleet. Bot-authored messages are skipped, so nothing here
+can react to its own output.
+
+**Role menus** are posted here on request from `/rolemenu` (admin bot) or the
+panel, over this bot's loopback internal API. The button interaction is handled
+here and the grant itself is an admin-bot effector call — the same split ticket
+actions already use, and the reason a menu can never offer a role the preflight
+would refuse.
+
+---
 
 ## 7. Example Message Flows
 
