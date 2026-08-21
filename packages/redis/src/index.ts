@@ -15,6 +15,8 @@ export { createKeyFactory, type KeyFactory } from "./keys.js";
 export { pingRedis, type RedisPingResult } from "./health.js";
 export {
   createRedisAdapters,
+  type RedisAdapterOptions,
+  RedisPlayerRateLimiter,
   RedisLock,
   RedisCooldownGate,
   RedisHypixelCache,

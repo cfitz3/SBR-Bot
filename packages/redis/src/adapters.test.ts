@@ -18,6 +18,7 @@ import {
   RedisHeartbeat,
   RedisHypixelCache,
   RedisLock,
+  RedisPlayerRateLimiter,
   RedisPriceSource,
   RedisRateGate,
   RedisRoleDirtySet,
@@ -578,4 +579,36 @@ test("a tally counts up and keeps its window fresh", async () => {
   assert.equal(await tallies.bump("g", "cringe", "user"), 1);
   assert.equal(await tallies.bump("g", "cringe", "user"), 2);
   assert.equal(await tallies.bump("g", "cringe", "other"), 1, "tallies are per subject");
+});
+
+// ─────────────────────── the per-player Hypixel window ──────────────────────
+
+test("a player window admits one claim and refuses the rest until it rolls", async () => {
+  const { redis, ctx } = harness();
+  const limiter = new RedisPlayerRateLimiter(ctx, 60 * 60_000);
+
+  assert.equal(await limiter.claim("uuid-aria:player"), true);
+  assert.equal(await limiter.claim("uuid-aria:player"), false);
+  assert.equal(await limiter.claim("uuid-aria:player"), false);
+
+  // Subjects are independent — a claim on one player says nothing about another,
+  // and a claim on one endpoint says nothing about the same player's others.
+  assert.equal(await limiter.claim("uuid-bex:player"), true);
+  assert.equal(await limiter.claim("uuid-aria:museum"), true);
+
+  redis.now += 60 * 60_000 + 1;
+  assert.equal(await limiter.claim("uuid-aria:player"), true);
+});
+
+test("an unreachable Redis errs open rather than failing the lookup", async () => {
+  // The cache TTL is a second floor underneath this one, so erring open costs
+  // freshness discipline, not the cap. Erring closed would cost the feature.
+  const failing = {
+    client: {
+      set: () => Promise.reject(new Error("connection lost")),
+    } as unknown as RedisClientType,
+    keys: createKeyFactory("sbr:"),
+  };
+  const limiter = new RedisPlayerRateLimiter(failing, 60 * 60_000);
+  assert.equal(await limiter.claim("uuid-aria:player"), true);
 });

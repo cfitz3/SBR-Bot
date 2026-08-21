@@ -76,7 +76,7 @@ export async function createPanelApp(): Promise<PanelApp> {
   // show up later as an endless drip of failing queries. Check once, up front.
   await assertDatabaseReady();
   const redis = await getRedis();
-  const adapters = createRedisAdapters(redis);
+  const adapters = createRedisAdapters(redis, { playerWindowMs: config.hypixel.playerWindowMs });
 
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
   const metrics = createDomainMetrics({ analytics, surface: "WEB_PANEL", logger: log });
@@ -173,6 +173,9 @@ export async function createPanelApp(): Promise<PanelApp> {
   const hypixel = new HypixelClient({
     ...(config.hypixel.apiKey ? { apiKey: config.hypixel.apiKey } : {}),
     cache: adapters.hypixelCache,
+    // The self-imposed per-player floor. Absent in production mode, where the
+    // cache TTL is the only floor and the client falls back to `unlimitedPlayers`.
+    ...(adapters.playerLimiter ? { playerLimiter: adapters.playerLimiter } : {}),
     rateGate: adapters.rateGate,
     logger: log,
   });

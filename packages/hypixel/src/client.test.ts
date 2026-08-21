@@ -419,3 +419,151 @@ test("a 403 on any endpoint is API_DISABLED and is not retried", async () => {
   if (!result.ok) assert.equal(result.error.state, "API_DISABLED");
   assert.equal(f.count("hypixel"), 1);
 });
+
+// ── Caching and the per-player floor (docs/HYPIXEL_COMPLIANCE.md) ───────────
+//
+// These are the tests that keep the compliance document true. The TTLs and the
+// limiter are the two controls the guild-activity exception is satisfied by, and
+// neither is visible in any feature's output — without a test, a well-meaning
+// change to "make /profile feel fresher" would quietly undo both.
+
+/** A cache that stores nothing, so a test can isolate the limiter from the TTL. */
+class NullCache implements HypixelCache {
+  async get<T>(): Promise<CacheEntry<T> | null> {
+    return null;
+  }
+  async set(): Promise<void> {}
+}
+
+/** Stores like any cache, but every entry reads as lapsed: the TTL, expired. */
+class LapsedCache implements HypixelCache {
+  private readonly store = new Map<string, unknown>();
+  async get<T>(key: string): Promise<CacheEntry<T> | null> {
+    if (!this.store.has(key)) return null;
+    return { data: this.store.get(key) as T, fetchedAt: "2020-01-01T00:00:00.000Z", expired: true };
+  }
+  async set<T>(key: string, data: T): Promise<void> {
+    this.store.set(key, data);
+  }
+}
+
+/** One claim per subject, ever — the window compressed to the test's lifetime. */
+class OnceLimiter {
+  readonly seen = new Set<string>();
+  async claim(subject: string): Promise<boolean> {
+    if (this.seen.has(subject)) return false;
+    this.seen.add(subject);
+    return true;
+  }
+}
+
+test("two player reads inside the TTL cost one upstream request", async () => {
+  const f = fakeFetcher(() => hypixelPlayer());
+  const c = new HypixelClient({ logger: silentLogger, http: f.fetcher, sleep: noopSleep });
+
+  await c.getPlayer("uuid-aria");
+  await c.getPlayer("uuid-aria");
+
+  assert.equal(f.count("hypixel"), 1);
+});
+
+test("a player read after the TTL lapses goes upstream again", async () => {
+  const f = fakeFetcher(() => hypixelPlayer());
+  // A cache that reports every entry as lapsed is the TTL rolling over, without
+  // a fake clock. Stale-if-error does not cover this: it only applies once the
+  // refetch has failed, and here it succeeds.
+  const c = new HypixelClient({
+    logger: silentLogger,
+    http: f.fetcher,
+    sleep: noopSleep,
+    cache: new LapsedCache(),
+  });
+
+  await c.getPlayer("uuid-aria");
+  await c.getPlayer("uuid-aria");
+
+  assert.equal(f.count("hypixel"), 2);
+});
+
+test("the per-player window blocks a second read of the same player", async () => {
+  const f = fakeFetcher(() => hypixelPlayer());
+  const c = new HypixelClient({
+    logger: silentLogger,
+    http: f.fetcher,
+    sleep: noopSleep,
+    cache: new NullCache(),
+    playerLimiter: new OnceLimiter(),
+  });
+
+  const first = await c.getPlayer("uuid-aria");
+  const second = await c.getPlayer("uuid-aria");
+
+  assert.equal(first.ok, true);
+  assert.equal(f.count("hypixel"), 1);
+  // No cache entry to fall back on, so a refused claim surfaces honestly rather
+  // than as a missing player.
+  assert.equal(second.ok, false);
+  if (!second.ok) assert.equal(second.error.state, "RATE_LIMITED");
+});
+
+test("one player's window does not consume another player's", async () => {
+  const f = fakeFetcher(() => hypixelPlayer());
+  const limiter = new OnceLimiter();
+  const c = new HypixelClient({
+    logger: silentLogger,
+    http: f.fetcher,
+    sleep: noopSleep,
+    cache: new NullCache(),
+    playerLimiter: limiter,
+  });
+
+  await c.getPlayer("uuid-aria");
+  const other = await c.getPlayer("uuid-bex");
+
+  assert.equal(other.ok, true);
+  assert.equal(f.count("hypixel"), 2);
+  assert.deepEqual([...limiter.seen].sort(), ["uuid-aria:player", "uuid-bex:player"]);
+});
+
+test("a player's profiles and museum claims are separate from their player claim", async () => {
+  // The interpretation the cap rests on: one read per player *per endpoint*.
+  // Sharing a single claim would mean reading someone's profile locked out
+  // reading their museum, and a networth needs both.
+  const limiter = new OnceLimiter();
+  const f = fakeFetcher((url) =>
+    url.includes("/museum")
+      ? res(200, { success: true, members: { "uuid-aria": { items: {} } } })
+      : url.includes("/profiles")
+        ? res(200, { success: true, profiles: [{ profile_id: "p1", cute_name: "Mango", selected: true, members: { "uuid-aria": {} } }] })
+        : hypixelPlayer(),
+  );
+  const c = new HypixelClient({
+    logger: silentLogger,
+    http: f.fetcher,
+    sleep: noopSleep,
+    cache: new NullCache(),
+    playerLimiter: limiter,
+  });
+
+  await c.getPlayer("uuid-aria");
+  await c.getSkyblockProfiles("uuid-aria");
+  await c.getMuseum("p1");
+
+  assert.deepEqual([...limiter.seen].sort(), ["p1:museum", "uuid-aria:player", "uuid-aria:profiles"]);
+});
+
+test("an explicit refresh is the only route below the TTL", async () => {
+  const cache = new PreloadCache();
+  // Fresh by the TTL's reckoning, but PreloadCache stamps everything 2020.
+  cache.preload("player:uuid-aria", { uuid: "uuid-aria", displayName: "Aria" }, false);
+  const f = fakeFetcher(() => hypixelPlayer());
+  const c = new HypixelClient({ logger: silentLogger, http: f.fetcher, sleep: noopSleep, cache });
+
+  // A scheduled read takes the cached copy.
+  await c.getPlayer("uuid-aria");
+  assert.equal(f.count("hypixel"), 0);
+
+  // A user pressing refresh does not.
+  await c.getPlayer("uuid-aria", { maxAgeMs: 60_000 });
+  assert.equal(f.count("hypixel"), 1);
+});

@@ -117,3 +117,27 @@ test("panelOrigin falls back to the redirect URI, then to the bind address", () 
   const bare = load({ WEB_PANEL_SCHEME: "http", WEB_PANEL_PORT: "8080" });
   assert.equal(panelOrigin(bare), "http://localhost:8080");
 });
+
+// ── Hypixel key mode (docs/HYPIXEL_COMPLIANCE.md) ───────────────────────────
+
+test("an install that never sets HYPIXEL_KEY_MODE gets the restrictive one", () => {
+  // The default has to be `personal`, not `production`: forgetting a variable
+  // should not be how a deployment gains permission to poll harder.
+  const cfg = load();
+  assert.equal(cfg.hypixel.keyMode, "personal");
+  assert.equal(cfg.hypixel.playerWindowMs, 60 * 60_000);
+});
+
+test("production mode drops the per-player window", () => {
+  const cfg = load({ HYPIXEL_KEY_MODE: "production", HYPIXEL_API_KEY: "k" });
+  assert.equal(cfg.hypixel.keyMode, "production");
+  assert.equal(cfg.hypixel.playerWindowMs, 0);
+});
+
+test("claiming production tier with no key on file is a boot failure", () => {
+  assert.match(loadError({ HYPIXEL_KEY_MODE: "production" }), /HYPIXEL_KEY_MODE/);
+});
+
+test("an unrecognised key mode is rejected rather than defaulted", () => {
+  assert.match(loadError({ HYPIXEL_KEY_MODE: "personal-plus" }), /HYPIXEL_KEY_MODE/);
+});

@@ -52,6 +52,12 @@ export function createKeyFactory(prefix: string) {
     // 4. Rate-limit buckets
     rlHypixel: () => p(`rl:hypixel`),
     rlHypixelEndpoint: (endpoint: string) => p(`rl:hypixel:${endpoint}`),
+    /**
+     * The self-imposed per-player window (docs/HYPIXEL_COMPLIANCE.md). Subject
+     * is `<uuid>:<endpoint family>`; the key's existence *is* the claim, so it
+     * is written with NX and an expiry and never read back.
+     */
+    rlPlayer: (subject: string) => p(`rl:player:${subject}`),
 
     // 5. Bridge flood counters
     floodUser: (guildId: string, userId: string) => p(`flood:user:${guildId}:${userId}`),

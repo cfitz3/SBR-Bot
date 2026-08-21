@@ -236,6 +236,49 @@ export class RedisRateGate {
   }
 }
 
+/**
+ * PlayerRateLimiter — the self-imposed floor of one upstream read per player per
+ * window (docs/HYPIXEL_COMPLIANCE.md).
+ *
+ * `SET NX EX` is the whole mechanism: the key's existence is the claim, so there
+ * is no read-then-write race of the kind `RedisRateGate.acquire` tolerates. Two
+ * processes racing the same subject produce exactly one winner, which matters
+ * here in a way it does not for the soft shared budget — this cap is a promise
+ * made to Hypixel, not an optimisation.
+ *
+ * The claim is spent on the *attempt*. Nothing releases it if the request then
+ * fails, and that is deliberate: releasing on failure would let a flapping
+ * endpoint be retried without limit, which is the pattern the cap exists to
+ * prevent.
+ */
+export class RedisPlayerRateLimiter {
+  private readonly windowSeconds: number;
+
+  constructor(
+    private readonly ctx: RedisContext,
+    windowMs: number,
+  ) {
+    // A sub-second window is not a window; it is the caller asking for no cap,
+    // and `createRedisAdapters` already expresses that by not constructing one.
+    this.windowSeconds = Math.max(1, Math.ceil(windowMs / 1000));
+  }
+
+  async claim(subject: string): Promise<boolean> {
+    // An unreachable Redis must not turn into a failed player lookup. Erring
+    // open is safe because the cache TTL (hours) is a second floor underneath
+    // this one — losing the limiter does not uncork per-minute polling.
+    try {
+      const ok = await this.ctx.client.set(this.ctx.keys.rlPlayer(subject), "1", {
+        NX: true,
+        EX: this.windowSeconds,
+      });
+      return ok !== null;
+    } catch {
+      return true;
+    }
+  }
+}
+
 /** AnalyticsBuffer — append events to the Redis Stream drained by workers. */
 export class RedisAnalyticsBuffer {
   constructor(private readonly ctx: RedisContext) {}
@@ -1123,7 +1166,19 @@ export class RedisSafetyStore {
   }
 }
 
-export function createRedisAdapters(ctx: RedisContext) {
+/** Options that adapters cannot derive from the connection alone. */
+export interface RedisAdapterOptions {
+  /**
+   * The per-player Hypixel window, from `config.hypixel.playerWindowMs`. Zero
+   * (production mode) means no per-player cap, and the limiter is omitted
+   * entirely rather than constructed with a window of nothing — the client's
+   * `unlimitedPlayers` default is the clearer way to say "no cap".
+   */
+  readonly playerWindowMs?: number;
+}
+
+export function createRedisAdapters(ctx: RedisContext, opts: RedisAdapterOptions = {}) {
+  const playerWindowMs = opts.playerWindowMs ?? 0;
   return {
     bins: new RedisBinSource(ctx),
     safety: new RedisSafetyStore(ctx),
@@ -1131,6 +1186,7 @@ export function createRedisAdapters(ctx: RedisContext) {
     cooldowns: new RedisCooldownGate(ctx),
     hypixelCache: new RedisHypixelCache(ctx),
     rateGate: new RedisRateGate(ctx),
+    playerLimiter: playerWindowMs > 0 ? new RedisPlayerRateLimiter(ctx, playerWindowMs) : undefined,
     analyticsBuffer: new RedisAnalyticsBuffer(ctx),
     analyticsDrain: new RedisAnalyticsDrain(ctx),
     enforcement: new RedisEnforcementMirror(ctx),

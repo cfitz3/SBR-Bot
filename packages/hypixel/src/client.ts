@@ -22,7 +22,15 @@ import type { Logger } from "@sbr/observability";
 import { InMemoryHypixelCache, InMemoryRateGate } from "./memory.js";
 import { fetchHttp } from "./http.js";
 import { decodeItemBytes } from "./nbt.js";
-import { realSleep, type HttpFetcher, type HypixelCache, type RateGate, type Sleeper } from "./ports.js";
+import {
+  realSleep,
+  unlimitedPlayers,
+  type HttpFetcher,
+  type HypixelCache,
+  type PlayerRateLimiter,
+  type RateGate,
+  type Sleeper,
+} from "./ports.js";
 import type {
   AuctionDTO,
   AuctionPageDTO,
@@ -61,14 +69,31 @@ const MOJANG_SESSION_URL = "https://sessionserver.mojang.com/session/minecraft/p
 const API = "https://api.hypixel.net/v2";
 
 /**
- * Endpoint TTLs, from HYPIXEL_DATA_LAYER.md §3. Global datasets are refreshed by
- * workers, so the client's TTL here is a floor that keeps a live read from
- * re-fetching a snapshot the worker is already maintaining.
+ * Endpoint TTLs. Global datasets are refreshed by workers, so the client's TTL
+ * here is a floor that keeps a live read from re-fetching a snapshot the worker
+ * is already maintaining.
+ *
+ * Two regimes, and the split is the policy's own:
+ *
+ * - **Player data — hours.** The Hypixel API policy asks for aggressive caching
+ *   of player-specific data, and this is the control that actually delivers it:
+ *   at a 6-hour TTL a member viewed twenty times a day costs four upstream
+ *   reads, not twenty. The per-player limiter is a floor underneath this, not a
+ *   substitute for it. These were 3–10 minutes, which is a freshness nobody
+ *   asked for — a SkyBlock level does not move meaningfully inside an hour, let
+ *   alone three minutes.
+ * - **Market data — seconds to minutes.** Bazaar and auction-page reads are
+ *   public, guild-agnostic, and one request serves every member at once, so they
+ *   are not player polling in any sense and stay as short as the feature needs.
+ *
+ * `playerAuctions` sits in the first group despite being about the market: it is
+ * addressed by player, so it counts as a read of that player.
  */
 const TTL = {
-  player: 5 * 60_000,
-  profile: 3 * 60_000,
-  museum: 10 * 60_000,
+  player: 6 * 60 * 60_000,
+  profile: 6 * 60 * 60_000,
+  museum: 12 * 60 * 60_000,
+  playerAuctions: 6 * 60 * 60_000,
   guild: 5 * 60_000,
   resource: 6 * 60 * 60_000,
   bazaar: 90_000,
@@ -92,10 +117,38 @@ export interface HypixelClientOptions {
   readonly http?: HttpFetcher;
   readonly cache?: HypixelCache;
   readonly rateGate?: RateGate;
+  /**
+   * The self-imposed per-player floor. Omitted means unlimited, which is the
+   * right default for a unit test and the wrong one for a deployment — the
+   * composition roots pass the configured limiter.
+   */
+  readonly playerLimiter?: PlayerRateLimiter;
   readonly logger: Logger;
   readonly sleep?: Sleeper;
   readonly maxRetries?: number;
   readonly playerTtlMs?: number;
+}
+
+/**
+ * Per-call options on a player-scoped read.
+ *
+ * This is the *only* route to data fresher than the endpoint's TTL, and it
+ * exists for one case: a member or an operator explicitly asking for a refresh.
+ * Nothing scheduled passes it — a worker takes the default, because a worker
+ * asking for fresher data than the cache holds is the polling pattern the TTLs
+ * were raised to prevent.
+ *
+ * It relaxes the cache, not the cap: the per-player limiter still gates the
+ * request that results, so a refresh button pressed twenty times in a minute
+ * costs one upstream call at most.
+ */
+export interface PlayerReadOptions {
+  /**
+   * Accept a cached entry only if it was fetched within this many milliseconds.
+   * Older than that and the read goes upstream even though the TTL has not
+   * lapsed. Larger than the TTL has no effect — the TTL is still the ceiling.
+   */
+  readonly maxAgeMs?: number;
 }
 
 /** One cached endpoint read. `normalize` returning null means MISSING_PROFILE. */
@@ -105,11 +158,29 @@ interface CachedRequest<T> {
   readonly ttlMs: number;
   /** Used in error messages so a failure names the thing that failed. */
   readonly label: string;
+  /**
+   * Set on player-scoped reads, and only those. Its presence is what makes the
+   * per-player limiter apply, so a new endpoint opts into the cap by naming the
+   * player it is about rather than by remembering to call something.
+   */
+  readonly playerUuid?: string;
+  /** See `PlayerReadOptions.maxAgeMs`. Absent means the TTL alone decides. */
+  readonly maxAgeMs?: number;
   normalize(raw: unknown): T | null;
 }
 
 function envelope<T>(data: T, freshness: "LIVE" | "STALE", source: "LIVE" | "CACHE", fetchedAt?: string): DataEnvelope<T> {
   return { data, freshness, source, fetchedAt: fetchedAt ?? new Date().toISOString() };
+}
+
+/**
+ * Whether a cache entry predates an explicit freshness request. Unparseable
+ * timestamps read as fresh: a bad `fetchedAt` should not force an upstream call.
+ */
+function olderThan(fetchedAt: string, maxAgeMs: number | undefined): boolean {
+  if (maxAgeMs === undefined) return false;
+  const at = Date.parse(fetchedAt);
+  return Number.isFinite(at) && Date.now() - at > maxAgeMs;
 }
 
 function backoffMs(attempt: number): number {
@@ -131,6 +202,7 @@ export class HypixelClient implements HypixelSocialLookup {
   private readonly http: HttpFetcher;
   private readonly cache: HypixelCache;
   private readonly rateGate: RateGate;
+  private readonly playerLimiter: PlayerRateLimiter;
   private readonly log: Logger;
   private readonly sleep: Sleeper;
   private readonly maxRetries: number;
@@ -148,6 +220,7 @@ export class HypixelClient implements HypixelSocialLookup {
     this.http = opts.http ?? fetchHttp;
     this.cache = opts.cache ?? new InMemoryHypixelCache();
     this.rateGate = opts.rateGate ?? new InMemoryRateGate();
+    this.playerLimiter = opts.playerLimiter ?? unlimitedPlayers;
     this.log = opts.logger.child({ service: "hypixel" });
     this.sleep = opts.sleep ?? realSleep;
     this.maxRetries = opts.maxRetries ?? 3;
@@ -158,7 +231,9 @@ export class HypixelClient implements HypixelSocialLookup {
 
   private async cached<T>(req: CachedRequest<T>): Promise<HypixelResult<T>> {
     const hit = await this.cache.get<T>(req.key);
-    if (hit && !hit.expired) return ok(envelope(hit.data, "LIVE", "CACHE", hit.fetchedAt));
+    if (hit && !hit.expired && !olderThan(hit.fetchedAt, req.maxAgeMs)) {
+      return ok(envelope(hit.data, "LIVE", "CACHE", hit.fetchedAt));
+    }
 
     const running = this.inflight.get(req.key);
     if (running) return running as Promise<HypixelResult<T>>;
@@ -177,6 +252,28 @@ export class HypixelClient implements HypixelSocialLookup {
     /** Stale-if-error: last-known data beats an error whenever we have it. */
     const stale = (): HypixelResult<T> | null =>
       hit ? ok(envelope(hit.data, "STALE", "CACHE", hit.fetchedAt)) : null;
+
+    // The per-player floor comes first, and deliberately so. The shared gate is
+    // about the fleet's budget; this is about a promise made to Hypixel that
+    // does not bend when there happens to be budget going spare.
+    //
+    // A claim is spent on the *attempt*, not on a successful response: if the
+    // request then fails, the slot stays consumed until the window rolls. That
+    // is the conservative direction, and the only one that keeps the cap true —
+    // releasing on failure would let a flapping endpoint be retried without
+    // limit, which is exactly the pattern the cap exists to prevent. Stale cache
+    // covers the user-visible cost.
+    if (req.playerUuid !== undefined) {
+      const claimed = await this.playerLimiter.claim(req.playerUuid).catch(() => true);
+      if (!claimed) {
+        const fallback = stale();
+        if (fallback) {
+          this.log.debug("serving stale data (per-player window)", { key: req.key });
+          return fallback;
+        }
+        return hypixelFailure("RATE_LIMITED");
+      }
+    }
 
     const gate = await this.rateGate.acquire();
     if (!gate.allowed) {
@@ -302,12 +399,14 @@ export class HypixelClient implements HypixelSocialLookup {
 
   // ── Player-scoped (live, cached on demand) ────────────────────────────────
 
-  async getPlayer(uuid: string): Promise<HypixelResult<HypixelPlayerDTO>> {
+  async getPlayer(uuid: string, opts?: PlayerReadOptions): Promise<HypixelResult<HypixelPlayerDTO>> {
     return this.cached<HypixelPlayerDTO>({
       key: `player:${uuid}`,
       url: `${API}/player?uuid=${uuid}`,
       ttlMs: this.playerTtlMs,
       label: `player ${uuid}`,
+      playerUuid: `${uuid}:player`,
+      ...(opts?.maxAgeMs !== undefined ? { maxAgeMs: opts.maxAgeMs } : {}),
       normalize: (raw) => {
         const body = raw as RawHypixelPlayerResponse;
         return body.success && body.player ? normalizePlayer(uuid, body.player) : null;
@@ -322,12 +421,17 @@ export class HypixelClient implements HypixelSocialLookup {
    * the list lets `/profile`, `/setprofile` and a plain `/stats` share a single
    * upstream call instead of one each.
    */
-  async getSkyblockProfiles(uuid: string): Promise<HypixelResult<readonly SkyblockProfileDTO[]>> {
+  async getSkyblockProfiles(
+    uuid: string,
+    opts?: PlayerReadOptions,
+  ): Promise<HypixelResult<readonly SkyblockProfileDTO[]>> {
     return this.cached<readonly SkyblockProfileDTO[]>({
       key: `sbprofiles:${uuid}`,
       url: `${API}/skyblock/profiles?uuid=${uuid}`,
       ttlMs: TTL.profile,
       label: `skyblock profiles ${uuid}`,
+      playerUuid: `${uuid}:profiles`,
+      ...(opts?.maxAgeMs !== undefined ? { maxAgeMs: opts.maxAgeMs } : {}),
       normalize: (raw) => {
         const body = raw as RawSkyblockProfilesResponse;
         const profiles = body.success ? body.profiles ?? [] : [];
@@ -343,8 +447,12 @@ export class HypixelClient implements HypixelSocialLookup {
    * One profile: the named one if `profileId` is given (id or cute name, since
    * that is what a member types), otherwise the account's selected profile.
    */
-  async getSkyblockProfile(uuid: string, profileId?: string): Promise<HypixelResult<SkyblockProfileDTO>> {
-    const all = await this.getSkyblockProfiles(uuid);
+  async getSkyblockProfile(
+    uuid: string,
+    profileId?: string,
+    opts?: PlayerReadOptions,
+  ): Promise<HypixelResult<SkyblockProfileDTO>> {
+    const all = await this.getSkyblockProfiles(uuid, opts);
     if (!all.ok) return err(all.error);
 
     const list = all.value.data;
@@ -362,12 +470,17 @@ export class HypixelClient implements HypixelSocialLookup {
    * needs an exact valuation — it is the difference between "≥ X" and an exact
    * networth, and it costs a second call per profile.
    */
-  async getMuseum(profileId: string): Promise<HypixelResult<MuseumDTO>> {
+  async getMuseum(profileId: string, opts?: PlayerReadOptions): Promise<HypixelResult<MuseumDTO>> {
     return this.cached<MuseumDTO>({
       key: `museum:${profileId}`,
       url: `${API}/skyblock/museum?profile=${profileId}`,
       ttlMs: TTL.museum,
       label: `museum ${profileId}`,
+      // Keyed by profile because that is the only identifier this endpoint
+      // takes. A profile belongs to one account, so the claim is still
+      // per-player in effect.
+      playerUuid: `${profileId}:museum`,
+      ...(opts?.maxAgeMs !== undefined ? { maxAgeMs: opts.maxAgeMs } : {}),
       normalize: (raw) => {
         const body = raw as RawMuseumResponse;
         if (!body.success || !body.members) return null;
@@ -466,8 +579,13 @@ export class HypixelClient implements HypixelSocialLookup {
     return this.cached<readonly AuctionDTO[]>({
       key: `auctions:player:${uuid}`,
       url: `${API}/skyblock/auction?player=${uuid}`,
-      ttlMs: TTL.auctionPage,
+      // A player-scoped read despite being about the market, so it takes the
+      // player TTL rather than the auction-page one. `ah-sweep` is where
+      // market-wide freshness comes from; this endpoint answers "what has *this
+      // person* listed", which is a question about a player.
+      ttlMs: TTL.playerAuctions,
       label: `player auctions ${uuid}`,
+      playerUuid: `${uuid}:auctions`,
       normalize: (raw) => {
         const body = raw as RawAuctionsResponse;
         if (!body.success) return null;

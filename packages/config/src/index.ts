@@ -19,6 +19,32 @@ const LOG_LEVELS: readonly LogLevel[] = ["trace", "debug", "info", "warn", "erro
 const NODE_ENVS: readonly NodeEnv[] = ["development", "test", "production"];
 const WEB_SCHEMES: readonly WebScheme[] = ["http", "https"];
 
+/**
+ * Which Hypixel API policy regime this install runs under.
+ *
+ * - `personal` — the guild-activity exception: one personal key, registered by
+ *   the guild owner, non-production use, and at most one request per player per
+ *   hour. This is what this deployment runs, and it is the default so that an
+ *   install which never sets the variable is the *restrictive* one rather than
+ *   the permissive one.
+ * - `production` — a granted production-tier key. The enforcement points are
+ *   wired for it so the switch is a config change rather than a rewrite, but
+ *   nothing ships in this mode today.
+ *
+ * See docs/HYPIXEL_COMPLIANCE.md for the clause-by-clause mapping.
+ */
+export type HypixelKeyMode = "personal" | "production";
+
+const HYPIXEL_KEY_MODES: readonly HypixelKeyMode[] = ["personal", "production"];
+
+/**
+ * The per-player request floor the guild-activity exception sets, in
+ * milliseconds. Enforced in `@sbr/hypixel` against our own clock rather than
+ * against upstream's headers — the point of a self-imposed cap is that it holds
+ * even when Hypixel would have allowed the request.
+ */
+export const PERSONAL_PLAYER_WINDOW_MS = 60 * 60_000;
+
 export interface AppConfig {
   readonly nodeEnv: NodeEnv;
   readonly isProduction: boolean;
@@ -62,7 +88,15 @@ export interface AppConfig {
     readonly bridgePort: number;
     readonly bridgeBaseUrl: string;
   };
-  readonly hypixel: { readonly apiKey: string | undefined };
+  readonly hypixel: {
+    readonly apiKey: string | undefined;
+    readonly keyMode: HypixelKeyMode;
+    /**
+     * Minimum gap between two requests for the *same* player, derived from the
+     * mode. Zero in production mode, where the cache TTL is the only floor.
+     */
+    readonly playerWindowMs: number;
+  };
   /**
    * SkyKings — the third-party scammer database consulted when screening join
    * requests. Optional: without it screening still runs and still records, it
@@ -224,7 +258,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       sessionSecret: v.optionalString("SESSION_SECRET"),
     },
     internalApi: internalApiConfig(v),
-    hypixel: { apiKey: v.optionalString("HYPIXEL_API_KEY") },
+    hypixel: hypixelConfig(v),
     skykings: { apiKey: v.optionalString("SKYKINGS_API_KEY") },
     ops: {
       alertChannelId: v.optionalString("OPS_ALERT_CHANNEL_ID"),
@@ -243,6 +277,33 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   v.throwIfInvalid();
   cached = config;
   return config;
+}
+
+/**
+ * Resolve the Hypixel key and the policy regime it is used under.
+ *
+ * The mode is not decoration: it sets `playerWindowMs`, which the client
+ * enforces on every player-scoped read. Defaulting to `personal` means the
+ * strict window is what you get by forgetting to configure anything, which is
+ * the right direction for a limit whose whole purpose is to be hard to exceed
+ * by accident.
+ */
+function hypixelConfig(v: Validator): AppConfig["hypixel"] {
+  const apiKey = v.optionalString("HYPIXEL_API_KEY");
+  const keyMode = v.enum("HYPIXEL_KEY_MODE", HYPIXEL_KEY_MODES, "personal");
+
+  // `production` is an assertion that a production-tier key has been granted.
+  // Asserting it with no key at all is always a mistake, and a loud one here is
+  // better than a silent fleet of unauthenticated requests.
+  if (keyMode === "production" && apiKey === undefined) {
+    v.push('HYPIXEL_KEY_MODE=production requires HYPIXEL_API_KEY — set the key, or use the default "personal"');
+  }
+
+  return {
+    apiKey,
+    keyMode,
+    playerWindowMs: keyMode === "personal" ? PERSONAL_PLAYER_WINDOW_MS : 0,
+  };
 }
 
 /**
