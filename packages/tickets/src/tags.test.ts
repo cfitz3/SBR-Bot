@@ -64,3 +64,26 @@ test("findTag is case-insensitive and forgives surrounding space", () => {
   assert.equal(findTag(tags, "  RULES ")?.id, "2");
   assert.equal(findTag(tags, "missing"), null);
 });
+
+test("scope decides where a pattern may fire on its own", () => {
+  const compiled = compileTags([
+    tag({ id: "t", name: "Ticket", autoPattern: "link", scope: "TICKET" }),
+    tag({ id: "s", name: "Server", autoPattern: "link", scope: "SERVER" }),
+  ]);
+
+  // The default is where the feature started: a ticket channel.
+  assert.equal(matchTag(compiled, "link")?.id, "t");
+  assert.equal(matchTag(compiled, "link", "TICKET")?.id, "t");
+  assert.equal(matchTag(compiled, "link", "SERVER")?.id, "s");
+});
+
+test("an ANY tag answers in both places", () => {
+  const compiled = compileTags([tag({ id: "a", autoPattern: "link", scope: "ANY" })]);
+  assert.equal(matchTag(compiled, "link", "TICKET")?.id, "a");
+  assert.equal(matchTag(compiled, "link", "SERVER")?.id, "a");
+});
+
+test("findTag ignores scope — asking for a tag by name is always deliberate", () => {
+  const tags = [tag({ id: "1", name: "Welcome", scope: "TICKET" })];
+  assert.equal(findTag(tags, "welcome")?.id, "1");
+});

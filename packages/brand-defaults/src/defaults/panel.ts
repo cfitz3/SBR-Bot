@@ -1265,7 +1265,7 @@ export const DEFAULT_PANEL = {
 
     // ── tags ──
     tagsNote:
-      "A canned reply staff can drop into a ticket. Give it a pattern and the bot posts it itself when a message matches.",
+      "A canned reply staff can drop into a ticket, or an autoresponder for the whole server. Give it a pattern and the bot posts it itself when a message matches; \"Fires in\" decides where.",
     tagNameLabel: "Name",
     tagNameHint: "What staff type to use it.",
     errTagName: "Enter a name up to 40 characters.",
@@ -1275,6 +1275,11 @@ export const DEFAULT_PANEL = {
     tagPatternLabel: "Auto-reply pattern",
     tagPatternHint: "A regular expression. Blank means staff-triggered only.",
     errTagPattern: "That is not a valid regular expression.",
+    tagScopeLabel: "Fires in",
+    tagScopeHint: "Where the pattern is allowed to answer. Members only see it where you allow it.",
+    tagScopeTicket: "Ticket channels",
+    tagScopeServer: "Open channels",
+    tagScopeAny: "Both",
     tagEnabledLabel: "Enabled",
     tagEnabledHint: "Off keeps the reply but stops it firing.",
     createTag: "Add reply",

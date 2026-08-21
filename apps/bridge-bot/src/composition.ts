@@ -19,6 +19,7 @@ import {
   memberProgressSource,
   milestoneAnnouncementRepository,
   reminderRepository,
+  ticketConfigRepository,
   xpLevelUpAnnouncementRepository,
   roleSyncRepository,
   permRepository,
@@ -89,6 +90,7 @@ import {
   type LevelUpAnnouncerPort,
   type MilestoneAnnouncerPort,
   type ReminderPort,
+  type TicketConfigService,
   type PlayerLookup,
   type TextScreen,
 } from "@sbr/shared-types";
@@ -142,6 +144,8 @@ export interface BridgeApp {
   readonly levelUps: LevelUpAnnouncerPort;
   /** The reminder store, exposed so the sweeper can be handed a fake. */
   readonly reminders: ReminderPort;
+  /** The guild's canned replies, for `/tag` and the autoresponder. */
+  readonly tags: Pick<TicketConfigService, "listTags">;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
@@ -540,6 +544,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     tallies: adapters.tallies,
     discord,
     reminders: reminderRepository,
+    tags: ticketConfigRepository,
     logger: log,
   };
 
@@ -704,6 +709,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     milestones: milestoneAnnouncementRepository,
     levelUps: xpLevelUpAnnouncementRepository,
     reminders: reminderRepository,
+    tags: ticketConfigRepository,
     memberBus: adapters.memberBus,
     linkedDiscordIdForIgn: (ign) => identityRepository.findDiscordIdByIgn(ign).catch(() => null),
     async welcomeProfile(guildId, discordId) {

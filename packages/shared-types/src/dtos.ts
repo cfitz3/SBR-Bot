@@ -698,8 +698,23 @@ export interface TicketTagDTO {
   readonly name: string;
   readonly content: string;
   readonly autoPattern: string | null;
+  /**
+   * Where `autoPattern` may fire. `TICKET` for a staff canned reply, `SERVER`
+   * for an autoresponder in open channels, `ANY` for both.
+   *
+   * Named by scope rather than by a pair of booleans because the three states
+   * are the whole space, and two booleans would admit a fourth that means
+   * "compiled, enabled, and fires nowhere".
+   */
+  readonly scope: TagScope;
   readonly enabled: boolean;
 }
+
+/** @see TicketTagDTO.scope */
+export type TagScope = "TICKET" | "SERVER" | "ANY";
+
+/** For an exhaustive selector; the panel renders them in this order. */
+export const TAG_SCOPES: readonly TagScope[] = ["TICKET", "SERVER", "ANY"];
 
 /** What the panel may set. `name` identifies the tag and is never edited. */
 export type TicketTagInput = Omit<TicketTagDTO, "id" | "guildId">;

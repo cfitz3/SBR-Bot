@@ -52,15 +52,24 @@ export function compileTags(tags: readonly TicketTagDTO[]): readonly CompiledTag
 }
 
 /**
- * The first enabled tag whose pattern matches, or null.
+ * The first enabled tag whose pattern matches in `where`, or null.
  *
  * First rather than all: a member asking one question should get one canned
  * answer, not four. Ordering is the caller's — the repository returns tags by
  * name, so the choice is at least stable and explicable.
  */
-export function matchTag(compiled: readonly CompiledTag[], text: string): TicketTagDTO | null {
+export function matchTag(
+  compiled: readonly CompiledTag[],
+  text: string,
+  where: "TICKET" | "SERVER" = "TICKET",
+): TicketTagDTO | null {
   for (const c of compiled) {
     if (!c.tag.enabled || c.pattern === null) continue;
+    // A tag fires where it was scoped to and nowhere else. `ANY` is the only
+    // way one pattern answers both a ticket and an open channel, and it has to
+    // be chosen — widening by default would turn every existing staff shortcut
+    // into a public autoresponder the day this shipped.
+    if (c.tag.scope !== "ANY" && c.tag.scope !== where) continue;
     // `lastIndex` is irrelevant without /g, but resetting keeps this safe if a
     // future flag change adds it.
     c.pattern.lastIndex = 0;

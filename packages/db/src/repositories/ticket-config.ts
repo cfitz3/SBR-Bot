@@ -400,13 +400,19 @@ export const ticketConfigRepository = {
       name: r.name,
       content: r.content,
       autoPattern: r.autoPattern,
+      scope: r.scope,
       enabled: r.enabled,
     }));
   },
 
   /** Create or update by `(guildId, name)`. The name is how staff call it. */
   async upsertTag(guildId: string, input: TicketTagInput): Promise<TicketTagDTO> {
-    const data = { content: input.content, autoPattern: input.autoPattern, enabled: input.enabled };
+    const data = {
+      content: input.content,
+      autoPattern: input.autoPattern,
+      scope: input.scope,
+      enabled: input.enabled,
+    };
     const row = await prisma.ticketTag.upsert({
       where: { guildId_name: { guildId, name: input.name } },
       create: { guildId, name: input.name, ...data },
@@ -418,6 +424,7 @@ export const ticketConfigRepository = {
       name: row.name,
       content: row.content,
       autoPattern: row.autoPattern,
+      scope: row.scope,
       enabled: row.enabled,
     };
   },

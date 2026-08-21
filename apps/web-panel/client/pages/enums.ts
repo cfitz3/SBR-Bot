@@ -77,3 +77,11 @@ export const WordAction = {
   SHADOW_MUTE: "SHADOW_MUTE",
 } as const;
 export type WordAction = (typeof WordAction)[keyof typeof WordAction];
+
+/** Where a canned reply's auto-pattern is allowed to fire. */
+export const TagScope = {
+  TICKET: "TICKET",
+  SERVER: "SERVER",
+  ANY: "ANY",
+} as const;
+export type TagScope = (typeof TagScope)[keyof typeof TagScope];

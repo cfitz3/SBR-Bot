@@ -96,7 +96,7 @@ export function panel(over: Partial<TicketPanelDTO> = {}): TicketPanelDTO {
 }
 
 export function tag(over: Partial<TicketTagDTO> = {}): TicketTagDTO {
-  return { id: "g1t", guildId: GUILD, name: "Welcome", content: "Hi!", autoPattern: null, enabled: true, ...over };
+  return { id: "g1t", guildId: GUILD, name: "Welcome", content: "Hi!", autoPattern: null, scope: "TICKET", enabled: true, ...over };
 }
 
 export function message(over: Partial<TicketMessageDTO> = {}): TicketMessageDTO {

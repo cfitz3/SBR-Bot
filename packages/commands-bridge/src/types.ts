@@ -12,6 +12,8 @@ import type {
   CommunityService,
   DiscordDirectory,
   ReminderPort,
+  TicketConfigService,
+  TicketTagDTO,
   EmbedView,
   GuildConfigService,
   GuildRosterSource,
@@ -137,6 +139,12 @@ export interface HandlerDeps {
    * to have taken one.
    */
   readonly reminders?: ReminderPort;
+  /**
+   * The guild's canned replies, read-only. Narrowed to the one method `/tag`
+   * needs: editing them is the panel's job, and a member command has no
+   * business holding a port that could.
+   */
+  readonly tags?: Pick<TicketConfigService, "listTags">;
   /**
    * The chat filter, asked rather than edited. `!guildquote` says something a
    * staffer stored months ago, and this is how that line is held to the same

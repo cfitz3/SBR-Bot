@@ -23,6 +23,7 @@ import type {
   TicketSettingsDTO,
   TicketTagDTO,
 } from "@sbr/shared-types";
+import { TagScope } from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
 import { scope } from "../copy.js";
@@ -646,6 +647,21 @@ function createPanelForm(guildId: string, reload: () => void): HTMLElement {
 
 // ──────────────────────────────── Tags ────────────────────────────────
 
+/**
+ * The scope dropdown's options, words and all.
+ *
+ * A function because the labels are copy and copy does not exist until the
+ * bootstrap fetch resolves; the *values* come from the mirrored enum, which
+ * `enums.test.ts` holds to the platform's list.
+ */
+function TAG_SCOPE_OPTIONS(): readonly (readonly [string, string])[] {
+  return [
+    [TagScope.TICKET, t("tagScopeTicket")],
+    [TagScope.SERVER, t("tagScopeServer")],
+    [TagScope.ANY, t("tagScopeAny")],
+  ];
+}
+
 function tagsBody(guildId: string, tags: readonly TicketTagDTO[], reload: () => void): HTMLElement {
   return h(
     "div",
@@ -667,6 +683,7 @@ function tagEditor(guildId: string, tag: TicketTagDTO, reload: () => void): HTML
       name: current.name,
       content: current.content,
       autoPattern: current.autoPattern,
+      scope: current.scope,
       enabled: current.enabled,
     });
   };
@@ -714,6 +731,13 @@ function tagEditor(guildId: string, tag: TicketTagDTO, reload: () => void): HTML
           }
         },
         save: (raw) => write({ autoPattern: raw.trim() === "" ? null : raw.trim() }),
+      }),
+      selectField({
+        label: t("tagScopeLabel"),
+        hint: t("tagScopeHint"),
+        value: tag.scope,
+        options: TAG_SCOPE_OPTIONS(),
+        save: (raw) => write({ scope: raw as TagScope }),
       }),
     ),
     h(

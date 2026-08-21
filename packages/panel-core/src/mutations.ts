@@ -17,6 +17,7 @@ import {
   isUpstreamUnavailable,
   MILESTONE_METRICS,
   MilestoneType as MILESTONE_TYPES,
+  TAG_SCOPES,
 } from "@sbr/shared-types";
 import type {
   AnalyticsService,
@@ -40,6 +41,7 @@ import type {
   TicketPanelStyle,
   TicketQuestionDTO,
   TicketSettingsInput,
+  TagScope,
   TicketTagInput,
   TicketWorkingHoursDTO,
   ViewColor,
@@ -1679,10 +1681,18 @@ export class PanelMutations {
         }
       }
 
+      // Absent means TICKET: the field arrived after the tags did, and a panel
+      // or script that predates it must not silently widen a tag's reach.
+      const rawScope = body["scope"] ?? "TICKET";
+      if (typeof rawScope !== "string" || !TAG_SCOPES.includes(rawScope as TagScope)) {
+        return invalid(`scope must be one of ${TAG_SCOPES.join(", ")}`);
+      }
+
       const tag: TicketTagInput = {
         name,
         content,
         autoPattern: autoPattern as string | null,
+        scope: rawScope as TagScope,
         enabled: body["enabled"],
       };
       try {

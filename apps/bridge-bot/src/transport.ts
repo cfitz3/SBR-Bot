@@ -37,6 +37,7 @@ import {
 import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
 import { startLevelAnnouncer } from "./levels.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
+import { createAutoresponder } from "./autoresponder.js";
 import { startReminderSweeper } from "./reminders.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
 import { deliverEventReminder } from "./events.js";
@@ -629,6 +630,10 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     log: app.log,
   });
 
+  // Canned replies, cached per guild: this reads the same store the panel edits
+  // and `/tag` posts from.
+  const autoresponder = createAutoresponder({ listTags: (guildId) => app.tags.listTags(guildId) });
+
   // Reminders go back to the channel they were set in, so this needs no
   // configuration at all — only a client to post with.
   const reminderSweeper = startReminderSweeper({
@@ -1190,7 +1195,31 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     // captured too — the greeting is part of the conversation — but never count
     // as a staff reply, which is what `fromBot` is for.
     relay("tickets:capture", async () => {
-      await tickets.capture(capturedFrom(msg));
+      // Capture and autorespond share a hop because they share the expensive
+      // half: `capture` already resolves whether this channel is a ticket, and
+      // that answer is exactly what decides which tags are allowed to fire
+      // here. Asking twice would double the per-message database work for a
+      // feature most messages never touch.
+      const inTicket = await tickets.capture(capturedFrom(msg));
+      const guildId = await resolveInternalGuild();
+      if (!guildId) return;
+      const answer = await autoresponder.respond(
+        guildId,
+        msg.channelId,
+        msg.content,
+        inTicket ? "TICKET" : "SERVER",
+      );
+      if (answer === null) return;
+      await msg
+        .reply({
+          content: answer,
+          // The reply text is written by staff in the panel. It answers a
+          // member, so it may ping the one it is replying to and nobody else.
+          allowedMentions: { repliedUser: true, parse: [] },
+        })
+        .catch((error: unknown) => {
+          app.log.warn("autoresponse did not land", { messageId: msg.id, error: String(error) });
+        });
     });
 
     relay("discord→game", async () => {

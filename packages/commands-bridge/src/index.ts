@@ -43,6 +43,7 @@ export {
   parseReminderDelay,
   reminderSpecs,
 } from "./handlers-remind.js";
+export { tagSpecs } from "./handlers-tags.js";
 export { funSpecs, parseDice, readQuotes, rpsOutcome, vibeRank, QUOTES_SETTING_KEY } from "./fun.js";
 export {
   lfgButtons,

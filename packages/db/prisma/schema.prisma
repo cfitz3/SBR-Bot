@@ -69,6 +69,17 @@ enum BridgeCapability {
   ADMIN
 }
 
+/// Where a canned reply's auto-pattern is allowed to fire.
+///
+/// `TICKET` is the default so that every tag written before this existed keeps
+/// its old blast radius. Opting one into `SERVER` is a deliberate act: it turns
+/// a staff shortcut into something that answers members in open channels.
+enum TagScope {
+  TICKET
+  SERVER
+  ANY
+}
+
 enum WordMatchType {
   EXACT
   SUBSTRING
@@ -1544,6 +1555,7 @@ model TicketTag {
   /// Case-insensitive, multiline regex. Compiled defensively — a pattern that
   /// no longer compiles disables the tag rather than breaking message capture.
   autoPattern String?
+  scope       TagScope @default(TICKET)
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

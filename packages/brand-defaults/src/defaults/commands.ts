@@ -377,6 +377,10 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       reason: "Why it is being closed",
     },
   },
+  tag: {
+    description: "Post one of this server's canned replies",
+    option: { name: "Which reply to post" },
+  },
   remind: {
     description: "Have me remind you about something later",
     option: { when: "How long from now — 30m, 2h30m, 1w", about: "What to remind you about" },
