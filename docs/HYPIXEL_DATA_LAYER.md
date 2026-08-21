@@ -118,7 +118,7 @@ Redis is the single cache tier (see `DOMAIN_MODEL.md` Redis categories). Keys ca
 | `ah-ended-ingest` | 1–2 min | `lock:job:ah-ended` | sold-price feed → into pricing blend | Idempotent by auction id |
 | `pricing-recompute` | after bazaar/ah | `lock:job:pricing` | `cache:pricing:item:*` (blend bazaar+BIN+sold) | Recompute from latest indexes |
 | `guild-roster-sync` | 5–15 min | `lock:job:guild:{id}` | Guild roster/ranks → DB + cache | Diff-based; reconciles `GuildMember` |
-| `profile-snapshot` | scheduled/backfill | `lock:job:snapshot:{uuid}` | `ProfileSnapshot` rows + milestone detection | Rate-limit-aware queue; spread over window |
+| `profile-refresh` | scheduled/backfill | `lock:job:snapshot:{uuid}` | `ProfileCurrent` upsert + milestone detection | Rate-limit-aware queue; spread over window |
 | `resources-refresh` | daily | `lock:job:resources` | `cache:hypixel:res:*` | Static-ish; safe to retry |
 | `election/firesale/bingo-refresh` | few min | per-job lock | global caches | Serve last on failure |
 
@@ -179,7 +179,7 @@ flowchart TB
         WBZ[bazaar-refresh]
         WAH[ah-sweep + ended]
         WPR[pricing-recompute]
-        WSNAP[profile-snapshot]
+        WSNAP[profile-refresh]
         WGLOB[election/firesale/bingo]
         WGUILD[guild-roster-sync]
     end

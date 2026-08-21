@@ -41,7 +41,8 @@ The conceptual data model for the platform: entities, relationships, key fields,
 | LFGPost | Postgres (+ Redis TTL mirror) | Persistent record, ephemeral visibility |
 | PermGroup | Postgres | Persistent (disbanded, never deleted) |
 | PermMember | Postgres | Persistent |
-| ProfileSnapshot | Postgres | Persistent (time-series) |
+| ProfileCurrent | Postgres | Persistent (one row per profile, upserted) |
+| ProfileSnapshot | Postgres | Persistent (member-saved + event boundaries) |
 | Milestone | Postgres | Persistent |
 | MilestoneDefinition | Postgres | Persistent (config; layered over built-in defaults) |
 | XpEvent | Postgres | Persistent (ledger; the source of truth for XP) |
@@ -632,24 +633,53 @@ unknown rather than as "left the guild" when the cache is cold.
 
 ### Progression & Analytics
 
+#### ProfileCurrent
+The member's **current** reading of a Skyblock profile — one row per
+`(minecraftAccountId, profileId)`, upserted in place and never appended to.
+
+This is deliberately not a time-series. Continuous polling to build a per-player
+stat history is prohibited by the Hypixel Developer API Policy, so the platform
+keeps one reading and the single reading it displaced — enough for milestone
+detection, which compares two values, and for leaderboards and profile cards,
+which read the newest. See docs/HYPIXEL_COMPLIANCE.md §1.
+
+| Field | Notes |
+|-------|-------|
+| `minecraftAccountId`, `profileId` | FK + Skyblock profile uuid; unique together |
+| `capturedAt` | when the reading was taken (indexed with the account) |
+| metric columns + `metrics` | as `ProfileSnapshot` below |
+| `previousMetrics` | the whole displaced reading as JSON. Nothing queries inside it — detection reads it whole and compares — so columns would buy nothing. Empty on a first capture |
+| `previousCapturedAt` | when that displaced reading was taken; null on a first capture |
+
+**Written by:** `profile-refresh` only.
+**Relationships:** N—1 `MinecraftAccount`.
+
 #### ProfileSnapshot
-A point-in-time capture of a Skyblock profile's stats (time-series for progression tracking).
+A reading somebody asked for: a marker a member saved, or one of the two
+boundaries of an event. **Not** the output of any schedule.
 
 | Field | Notes |
 |-------|-------|
 | `minecraftAccountId` | FK |
 | `profileId` | Skyblock profile uuid |
-| `captureDate`, `seq` | day bucket + intra-day sequence; normal snapshots are seq 0 (one/day), the event-tracked cohort writes many |
-| `capturedAt` | timestamp (indexed) |
+| `capturedAt` | when the copied reading was taken — the refresh's time, not the moment save was pressed |
+| `savedBy`, `label` | Discord id of whoever pressed save and what they called it; both null for event boundaries, which no person asked for individually |
 | `networth` | BigInt, nullable |
 | `skillAverage`, `catacombsLevel`, `senitherWeight` | Float, nullable |
 | `skyblockLevel` | Float, nullable — fractional SkyBlock Level (`leveling.experience / 100`), the headline progression figure |
 | `slayerXp` | BigInt, nullable — total slayer XP across all bosses |
 | `metrics` | JSON blob for everything not promoted to a column — the widened catalog (`JSON_METRICS`) lives here |
-| `source`, `eventId` | see enum; `eventId` set for event-tracked captures |
+| `source`, `eventId` | see enum; `eventId` set on the two event boundaries, null on a member's own save |
 
-**Enum — `SnapshotSource`:** `SCHEDULED`, `ON_DEMAND`, `EVENT_TRIGGERED`, `BACKFILL`.
-**Relationships:** N—1 `MinecraftAccount`. Append-only; drives milestone detection and progression charts.
+**Enum — `SnapshotSource`:** `USER_SAVED`, `EVENT_BASELINE`, `EVENT_FINAL`.
+
+**Bounded on both paths.** `@@unique([minecraftAccountId, eventId, source])` makes
+two rows per participant per event a structural ceiling — a third will not
+insert. Member saves have a null `eventId`, which Postgres treats as distinct, so
+they are capped instead by `SAVED_SNAPSHOT_LIMIT` (24), trimmed in the same
+transaction as the insert.
+
+**Relationships:** N—1 `MinecraftAccount`. Drives `/progress` and `/goal` pace.
 
 **Why the promoted columns.** The ranked figures — networth, skill average,
 catacombs, slayer — are columns rather than keys inside `metrics` because the
@@ -947,6 +977,6 @@ erDiagram
 
 - **DiscordUser vs GuildMember split** lets one Discord user belong to multiple guilds with distinct roles/status — keep global identity separate from per-guild membership.
 - **Infraction vs ModerationAction split** cleanly separates "what happened" from "what staff did," supporting proactive actions (no infraction) and multiple actions per infraction (warn → later ban).
-- **ProfileSnapshot** is deliberately time-series and append-only; retention/rollup policy (e.g. keep dailies, thin older) is a worker concern to decide later.
+- **ProfileCurrent** is deliberately *not* a time-series — see docs/HYPIXEL_COMPLIANCE.md §1. **ProfileSnapshot** holds only what somebody asked for, and is capped per account rather than left to a retention policy.
 - **CommandUsage** volume argues for buffering; if volume is low in v1, direct writes are acceptable and the buffer can be added later.
 - **SelectedSkyblockProfile** guild-scoping is nullable so selection can be global or per-guild — confirm which the product wants before schema.

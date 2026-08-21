@@ -6,6 +6,7 @@
 import {
   err,
   ok,
+  SAVED_SNAPSHOT_LIMIT,
   type AccessoryReportDTO,
   type AchievementsDTO,
   type AdviceDTO,
@@ -28,6 +29,8 @@ import {
   type SlayersDTO,
   type ProgressionRepository,
   type MilestoneDefinitionReader,
+  type SavedSnapshotDTO,
+  type SaveSnapshotError,
   type SelectProfileError,
 } from "@sbr/shared-types";
 import type { NetworthService } from "@sbr/pricing";
@@ -100,6 +103,15 @@ const GOAL_PACE_DAYS = 14;
  * precision anyway.
  */
 const MAX_TARGET = Number.MAX_SAFE_INTEGER;
+
+/**
+ * How long a snapshot label may be.
+ *
+ * Long enough for "before the dungeon grind", short enough that a field name in
+ * an embed does not wrap. Truncated rather than rejected: a member who typed
+ * an essay meant the first few words of it.
+ */
+const MAX_SNAPSHOT_LABEL = 60;
 
 /**
  * Change and pace over a series, from the readings that exist.
@@ -279,10 +291,40 @@ export class ProgressionServiceImpl implements ProgressionService {
     const rows = await this.repo.listSnapshots(uuid, since);
     if (rows.length === 0) return ok(empty);
 
-    const points = rows.map((r) => ({ date: r.capturedAt, value: r[metric] }));
+    const points = rows.map((r) => ({ date: r.capturedAt, label: r.label, value: r[metric] }));
     const { change, perDay } = paceOf(points);
 
     return ok({ metric, rangeDays, points, change, perDay });
+  }
+
+  /**
+   * Pin the current reading as a marker the member owns.
+   *
+   * Every failure is a state the member can act on — refresh not run yet, or
+   * this reading already saved — so each gets its own kind rather than a shared
+   * "couldn't". The label is theirs, trimmed and bounded but not otherwise
+   * inspected.
+   */
+  async saveSnapshot(
+    uuid: string,
+    savedBy: string,
+    label: string | null,
+  ): Promise<Result<SavedSnapshotDTO, SaveSnapshotError>> {
+    if (!this.repo) return err({ kind: "UNAVAILABLE" });
+
+    const trimmed = label?.trim().slice(0, MAX_SNAPSHOT_LABEL) ?? "";
+    const result = await this.repo.saveSnapshot(uuid, savedBy, trimmed.length > 0 ? trimmed : null);
+    if (result.kind === "NO_READING") return err({ kind: "NO_READING" });
+    if (result.kind === "ALREADY_SAVED") {
+      return err({ kind: "ALREADY_SAVED", capturedAt: result.capturedAt });
+    }
+
+    return ok({
+      capturedAt: result.capturedAt,
+      label: trimmed.length > 0 ? trimmed : null,
+      savedCount: result.savedCount,
+      limit: SAVED_SNAPSHOT_LIMIT,
+    });
   }
 
   async setGoal(

@@ -76,9 +76,10 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/slayer` | **Deprecated** alias of `/slayers`, kept for one release | Public | as `/slayers` | Same answer, prefixed with the new name | — | Cache→Live |
 | `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
 | `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
-| `/progress` | Progression over time, with the pace it implies | Linked | `metric?`, `range?` | Embed: change over the window, both endpoints, per-day pace, snapshot count | No snapshots yet for account | DB (`ProfileSnapshot`) |
-| `/goal` | Set a target on one of the four tracks and watch it | Linked | `action?` (list/set/clear), `metric?`, `target?` | Embed: bar, current/target, days at recent pace | Goal storage unwired → says so; target already met → says where they are | DB (`ProgressionGoal`, `ProfileSnapshot`) |
-| `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned grouped by category (rarest tier first, tier badge or icon, XP paid) + the four closest unearned w/ progress bars, `n/total` headline, hidden-locked count, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet"; hidden achievements counted, never named | DB (`Milestone`, `MilestoneDefinition`, `ProfileSnapshot`) |
+| `/progress` | Progression over time, with the pace it implies | Linked | `metric?`, `range?` | Embed: change over the window, both endpoints (named, if the member named them), per-day pace, snapshot count | Fewer than two saved snapshots → says to run `/snapshot` | DB (`ProfileSnapshot`, user-saved rows only) |
+| `/goal` | Set a target on one of the four tracks and watch it | Linked | `action?` (list/set/clear), `metric?`, `target?` | Embed: bar, current/target, days at recent pace | Goal storage unwired → says so; target already met → says where they are | DB (`ProgressionGoal`, `ProfileSnapshot`, `ProfileCurrent`) |
+| `/snapshot` | Pin your current stats so `/progress` has something to compare against | Linked | `label?` | Text: saved, how many of the 24 you hold, the name if you gave one | Not read yet → says so; same reading already saved → says to wait for the next refresh | DB (`ProfileCurrent` → `ProfileSnapshot`); **no Hypixel request** |
+| `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned grouped by category (rarest tier first, tier badge or icon, XP paid) + the four closest unearned w/ progress bars, `n/total` headline, hidden-locked count, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet"; hidden achievements counted, never named | DB (`Milestone`, `MilestoneDefinition`, `ProfileCurrent`) |
 
 ---
 
@@ -129,7 +130,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/editrun` | Change a run you host | Linked (owner or staff) | `id`, `title?`, `details?`, `slots?` | Updated embed | Nothing to change; not yours; run finished; slots below the current party | DB |
 | `/closerun` | End a run | Linked (owner or staff) | `id` | Embed marked closed, buttons disabled | Not yours; already closed | DB |
 | `/rsvp` | RSVP to a scheduled event | Public | `event_id`, `state` (going/maybe/no) | Updated RSVP + counts | Event full→waitlist; event past | DB (`EventRSVP`) |
-| `/perm` | Standing parties — the group you always run with | Linked | `action` (info/list/create/roster-add/roster-remove/disband/default), `perm?`, `name?`, `activity?`, `ign?`, `role?`, `slot?`, `notes?` | Roster embed: seat, IGN, linked mention, cata/SA | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileSnapshot` for enrichment |
+| `/perm` | Standing parties — the group you always run with | Linked | `action` (info/list/create/roster-add/roster-remove/disband/default), `perm?`, `name?`, `activity?`, `ign?`, `role?`, `slot?`, `notes?` | Roster embed: seat, IGN, linked mention, cata/SA | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileCurrent` for enrichment |
 
 ### `/lfg` — runs
 
@@ -173,7 +174,7 @@ Three properties are worth stating because they are load-bearing:
   when they can be resolved and their absence is never an error. Perms are formed
   in-game, and most of a Hypixel guild has never linked an account.
 - **Enrichment never calls Hypixel.** The in-guild marking comes from the 6 h
-  member cache and the cata/SA columns from the newest stored `ProfileSnapshot`,
+  member cache and the cata/SA columns from the member's stored `ProfileCurrent` row,
   one query each for the whole roster. `inGuild` is three-valued: a cold or
   unreachable cache renders as *nothing*, not as "left the guild".
 
@@ -426,7 +427,7 @@ how old its numbers are.
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/leaderboard` | Guild rankings across nine categories (SkyBlock Level leads) | Member | `category?` (choice, default `xp`), `page?`, `days?` (1–365, activity boards only) | Embed: ranked page with 🥇🥈🥉, the viewer's own row appended, footer with page, total ranked, window and staleness | Leaderboards not enabled; unknown category (lists the real ones) | DB (`ProfileSnapshot`, `GuildMember`, `ActivityDaily`, `XpBalance`) |
+| `/leaderboard` | Guild rankings across nine categories (SkyBlock Level leads) | Member | `category?` (choice, default `xp`), `page?`, `days?` (1–365, activity boards only) | Embed: ranked page with 🥇🥈🥉, the viewer's own row appended, footer with page, total ranked, window and staleness | Leaderboards not enabled; unknown category (lists the real ones) | DB (`ProfileCurrent`, `GuildMember`, `ActivityDaily`, `XpBalance`) |
 
 **The catalog is closed.** `wealth`, `tenure`, `skill-average`, `catacombs`,
 `slayer`, `discord-activity`, `guild-chat`, `xp`. A leaderboard is a claim about
@@ -439,7 +440,7 @@ have to type the canonical id.
 
 | Family | Source | How fresh |
 |--------|--------|-----------|
-| `SNAPSHOT` — wealth, skill average, catacombs, slayer | newest `ProfileSnapshot` per linked account | up to one snapshot cycle behind (~6–12h) — the *only* family that can be stale |
+| `SNAPSHOT` — wealth, skill average, catacombs, slayer | `ProfileCurrent` per linked account | up to one snapshot cycle behind (~6–12h) — the *only* family that can be stale |
 | `TENURE` — tenure | `GuildMember.joinedAt` | exact, derived at read time |
 | `ACTIVITY` — Discord activity, guild chat | summed `ActivityDaily` over a rolling window (default 30d) | same counters XP is derived from |
 | `XP` — guild XP | `XpBalance`, rebuilt by `xp-aggregate` | up to three hours behind |

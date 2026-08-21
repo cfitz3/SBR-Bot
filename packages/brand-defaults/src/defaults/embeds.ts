@@ -218,9 +218,27 @@ export const DEFAULT_EMBEDS = {
     /** `{subject}` is the item or player searched for. */
     noAuctions: "No active auctions for {subject}.",
     networthHidden: "Unknown — the profile's API settings hide the data this needs.",
-    /** `{n}` is the window in days. */
-    noSnapshots: "No snapshots in the last {n} days.",
-    oneSnapshot: "Only one reading so far — come back after the next snapshot.",
+    /**
+     * `{n}` is the window in days.
+     *
+     * Both of these name the way out, because the empty state is now something
+     * the member fixes rather than something they wait through: the platform
+     * keeps one current reading per member, and a chart is built from markers
+     * they save (docs/HYPIXEL_COMPLIANCE.md §1).
+     */
+    noSnapshots: "No saved snapshots in the last {n} days. Run /snapshot to pin where you are now.",
+    oneSnapshot: "Only one saved snapshot — run /snapshot again later and this will show the change.",
+
+    /* ── saved snapshots ── */
+    /** `{n}` saved, `{limit}` the cap. */
+    snapshotSaved: "Saved. You're holding {n} of {limit} — /progress charts them.",
+    /** `{n}` is the label they gave it. */
+    snapshotSavedNamed: 'Saved as "{name}". You\'re holding {n} of {limit} — /progress charts them.',
+    snapshotUnchanged:
+      "You've already saved this reading. Your numbers refresh about once an hour — try again after the next one.",
+    snapshotNoReading:
+      "Nothing to save yet — your profile hasn't been read. Link your account and give it an hour.",
+    snapshotUnavailable: "Snapshots aren't switched on here.",
 
     /**
      * Not a staleness footer: standing is recomputed on a cadence rather than

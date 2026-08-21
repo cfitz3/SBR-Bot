@@ -19,6 +19,7 @@ import { permSpecs } from "./handlers-perms.js";
 import { infoSpecs } from "./handlers-info.js";
 import { levelAlertSpecs } from "./handlers-levels.js";
 import { goalSpecs } from "./handlers-goals.js";
+import { snapshotSpecs } from "./handlers-snapshot.js";
 import { reminderSpecs } from "./handlers-remind.js";
 import { tagSpecs } from "./handlers-tags.js";
 import { funSpecs } from "./fun.js";
@@ -1057,6 +1058,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     ...infoSpecs(),
     ...levelAlertSpecs(),
     ...goalSpecs(),
+    ...snapshotSpecs(),
     ...reminderSpecs(),
     ...tagSpecs(),
     ...permSpecs(),

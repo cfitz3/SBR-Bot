@@ -32,6 +32,7 @@ import type {
   PriceDTO,
   ProfileSummaryDTO,
   GoalDTO,
+  ProgressPointDTO,
   ProgressSeriesDTO,
   SkillsDTO,
   SlayersDTO,
@@ -1104,7 +1105,7 @@ export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): Emb
 
   const measured =
     data.measuredAt === null
-      ? "No snapshot yet — progress appears after the next daily capture."
+      ? "Not measured yet — your reading appears once the next refresh covers you."
       : `Measured <t:${Math.floor(Date.parse(data.measuredAt) / 1000)}:R>`;
 
   // Named in the description rather than a field, so it reads as a property of
@@ -1144,6 +1145,10 @@ export function renderProgressEmbed(ign: string, series: ProgressSeriesDTO): Emb
 
   const first = series.points[0];
   const last = series.points[series.points.length - 1];
+  // A member's own name for a save beats the date they made it: "before dungeon
+  // grind" says what the number means, and 2026-08-21 does not.
+  const nameOf = (p: ProgressPointDTO | undefined, fallback: string): string =>
+    p === undefined ? fallback : (p.label ?? p.date.slice(0, 10));
   return {
     title: titleFor(ign, series.metric),
     description:
@@ -1151,8 +1156,8 @@ export function renderProgressEmbed(ign: string, series: ProgressSeriesDTO): Emb
         ? C.oneSnapshot
         : `**${series.change >= 0 ? "+" : "−"}${fmt(Math.abs(series.change))}** over ${series.rangeDays} days`,
     fields: [
-      { name: first?.date ?? "start", value: fmt(first?.value ?? null), inline: true },
-      { name: last?.date ?? "now", value: fmt(last?.value ?? null), inline: true },
+      { name: nameOf(first, "start"), value: fmt(first?.value ?? null), inline: true },
+      { name: nameOf(last, "now"), value: fmt(last?.value ?? null), inline: true },
       // Pace, not another total: the two dates above already say where they
       // started and finished, and what a member actually wants from a month of
       // history is the rate they can plan against.

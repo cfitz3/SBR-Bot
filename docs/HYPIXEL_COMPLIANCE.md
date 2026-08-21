@@ -61,33 +61,75 @@ owner. That is a config change at the dispatcher, not a rewrite.
 
 > Continuous polling of a player's stats to build a history shown back to users.
 
-**Status: not yet satisfied. Remediation in progress.**
+**Status: satisfied. The series it describes no longer exists.**
 
 This is the one clause that survives every key route — it is unconditional, and
 not part of the guild-activity carve-out. It is stated first because it is the
-one this codebase actually violates today.
+one this codebase used to violate.
 
-`ProfileSnapshot` (`packages/db/prisma/schema.prisma`) is an append-only
-per-player stat series, fed by the `profile-snapshot` job on a twice-hourly cron
-and by `event-tracking` every ten minutes. Five features read it: `/progress`
-charts, `/goal` pace projections, milestone detection, five leaderboard
-categories, and event stat-scoring. The append-a-reading-per-member-forever shape
-is the prohibited pattern regardless of how slowly it appends.
+### What it used to be
 
-**The remediation**, which is the substance of the current work:
+`ProfileSnapshot` was an append-only per-player stat series, fed by a
+`profile-snapshot` job twice an hour and by `event-tracking` every ten minutes.
+Five features read it: `/progress` charts, `/goal` pace projections, milestone
+detection, five leaderboard categories, and event stat-scoring. The
+append-a-reading-per-member-forever shape is the prohibited pattern regardless of
+how slowly it appends.
 
-- `ProfileCurrent` replaces the series — one row per `(account, profile)`,
-  upserted in place, carrying its own `previousMetrics` mirror. Milestone
-  detection reads two values and leaderboards read the newest; neither needs a
-  series, so four of the five features keep identical output.
-- `ProfileSnapshot` narrows to **rows a user explicitly saved**, capped per
-  account. `/progress` and `/goal` compare those. Under two saved snapshots they
-  return "save a snapshot to start comparing", not an empty chart.
-- Event tracking becomes **baseline plus final** rather than a poll every ten
-  minutes, with the configurable poll interval clamped to a 60-minute floor.
+### What replaced it
 
-Until that lands, this deployment should not be presented to Hypixel as
-compliant with this clause.
+**`ProfileCurrent`** (`packages/db/prisma/schema.prisma`) — one row per
+`(minecraftAccountId, profileId)`, upserted in place, never appended. It carries
+the current reading plus a `previousMetrics` mirror of the single reading it
+displaced. Two values, not a series, and the second exists only so a milestone
+crossing can be noticed at all.
+
+That was possible because none of the four automatic features needed a history in
+the first place: milestone detection reads two values
+(`packages/jobs/src/progression.ts`, `recentReadings`), and leaderboards, the
+perms roster and profile cards read the newest. All four keep identical output.
+
+`profile-refresh` (`apps/workers/src/schedule.ts`, hourly at `7 * * * *`)
+performs the upsert. It is a guild-activity refresh keeping the roster and the
+boards current, not a history: nothing it writes accumulates, and no query can
+reconstruct a member's past from what it leaves behind.
+
+**Event tracking** writes a **baseline and a final**, and nothing between them.
+The final is an overwrite, so the last pass before an event completes *is* the
+final and no lookahead is needed. Two rows per participant per event is a
+structural ceiling rather than a job-level convention — the unique index
+`@@unique([minecraftAccountId, eventId, source])` means a third row will not
+insert. `pollIntervalMinutes` is clamped to a 60-minute floor in `trackEvents`
+itself (`EVENT_POLL_FLOOR_MINUTES`), not only in the panel, because rows carrying
+the older 5- and 10-minute values are still in the database.
+
+### The history that remains is one members build themselves
+
+`ProfileSnapshot` narrows to rows a member explicitly saved. `/snapshot`
+(`packages/commands-bridge/src/handlers-snapshot.ts`) copies their current
+reading into a row they own, optionally named. `/progress` and `/goal` chart
+those and only those — `listSnapshots` filters `source: "USER_SAVED"`, so event
+boundaries sharing the table are excluded and a member cannot find a chart of
+themselves appearing because they RSVP'd to something.
+
+Three properties make this an explicit feature rather than the same tracking by a
+slower route:
+
+- **A save costs no upstream request.** It copies the reading the refresh job
+  already holds. That is enforced by construction — the repository method reads
+  `ProfileCurrent` and never the Hypixel client — and asserted by a test whose
+  profile provider throws if it is called at all.
+- **It is bounded.** `SAVED_SNAPSHOT_LIMIT` is 24 per account, trimmed inside the
+  same transaction as the insert rather than by a nightly sweep, so the cap holds
+  from the moment it is exceeded.
+- **It is self-only.** The command takes no player argument; the uuid comes from
+  the caller's own link. There is no way to build a history about somebody else.
+
+Under two saved snapshots the reply says to save one, rather than drawing an
+empty chart (`copy.embed.card.noSnapshots` / `oneSnapshot`).
+
+There is deliberately **no panel button** for this. Member-facing interaction
+belongs on the bot; the panel is the staff surface.
 
 ---
 
@@ -247,3 +289,7 @@ CSV export.
 
 - **2026-08-21** — First version. §2, §3, §5 satisfied and tested; §1 documented
   as outstanding with the remediation in progress.
+- **2026-08-21** — §1 satisfied. `ProfileCurrent` replaces the stat series,
+  `profile-refresh` replaces `profile-snapshot`, event tracking narrows to a
+  baseline and a final behind a 60-minute floor, and the charted history becomes
+  the member-saved snapshots `/snapshot` writes.

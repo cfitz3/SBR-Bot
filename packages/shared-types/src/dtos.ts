@@ -1011,9 +1011,31 @@ export interface AchievementsDTO {
 export type ProgressMetric = "skyblockLevel" | "networth" | "skillAverage" | "catacombsLevel";
 
 export interface ProgressPointDTO {
-  /** Snapshot day, `YYYY-MM-DD`. */
+  /** ISO-8601 of the moment the reading was taken. */
   readonly date: string;
+  /** What the member called this save, when they named it. */
+  readonly label: string | null;
   readonly value: number | null;
+}
+
+/**
+ * How many saved snapshots one account keeps.
+ *
+ * A cap rather than a sweep interval: the explicit path has to be bounded too,
+ * or "save it yourself" becomes the same unbounded history by a slower route
+ * (docs/HYPIXEL_COMPLIANCE.md §1). Two dozen is more comparison points than any
+ * member has asked a chart for, and the oldest falls off on the next save.
+ */
+export const SAVED_SNAPSHOT_LIMIT = 24;
+
+/** The confirmation `/snapshot` reads back after storing one. */
+export interface SavedSnapshotDTO {
+  /** ISO-8601 of the reading that was saved — the refresh's time, not now. */
+  readonly capturedAt: string;
+  readonly label: string | null;
+  /** How many the member now holds, after the cap was applied. */
+  readonly savedCount: number;
+  readonly limit: number;
 }
 
 export interface ProgressSeriesDTO {

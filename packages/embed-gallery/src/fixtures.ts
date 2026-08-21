@@ -268,12 +268,12 @@ export const PROGRESS: ProgressSeriesDTO = {
   perDay: 1_250_000,
   change: 1_240_000_000,
   points: [
-    { date: "2026-07-14", value: 7_000_000_000 },
-    { date: "2026-07-21", value: 7_400_000_000 },
+    { date: "2026-07-14", label: null, value: 7_000_000_000 },
+    { date: "2026-07-21", label: null, value: 7_400_000_000 },
     // A day with no snapshot is a gap, never a zero.
-    { date: "2026-07-28", value: null },
-    { date: "2026-08-04", value: 8_100_000_000 },
-    { date: "2026-08-11", value: 8_240_000_000 },
+    { date: "2026-07-28", label: null, value: null },
+    { date: "2026-08-04", label: null, value: 8_100_000_000 },
+    { date: "2026-08-11", label: null, value: 8_240_000_000 },
   ],
 };
 

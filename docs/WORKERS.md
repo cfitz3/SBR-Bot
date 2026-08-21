@@ -20,8 +20,8 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `ah-ended-ingest` | Repeatable | 1–2 min | Dedup by auction id | Backoff; idempotent replay | Sold-price signal lags; pricing slightly stale |
 | `pricing-recompute` | Event (after bazaar/ah) + fallback cron | on upstream update / 2 min | Deterministic recompute from latest indexes | Recompute from source | Item prices `STALE` |
 | `resources-refresh` | Repeatable | daily | Overwrite resource keys by name | Backoff; safe to replay | Reference data stale (low impact) |
-| `profile-snapshot` | Repeatable + on-demand | tracked members ~6–12 h, spread; **event-tracked cohort sub-hourly** (see §2.5) | Upsert by `(uuid,profileId,captureDate[,seq])` | Backoff; per-member requeue | Progression/milestones lag; **event leaderboards go stale** |
-| `milestone-detect` | Event (after snapshot) | per snapshot | Guard by `Milestone` unique + `announced` flag | Backoff; dedup on unique | Missed/late announcements only |
+| `profile-refresh` | Repeatable + on-demand | hourly, spread; each member at most once per 6 h | Upsert by `(uuid,profileId)` — one row, replaced | Backoff; per-member requeue | Leaderboards and milestones lag |
+| `milestone-detect` | Event (after refresh) | per refreshed reading | Guard by `Milestone` unique + `announced` flag | Backoff; dedup on unique | Missed/late announcements only |
 | `milestone-backfill` | Cron | daily 04:41 | Guard by `Milestone` unique; writes pre-announced | No retry; lock 30 min | New definitions unreflected for a day |
 | `reminder-dispatch` | Scheduled (delayed jobs) | at offsets before events | Mark reminder sent (`reminderState`) | Backoff; skip if already sent | Missed/late reminder pings |
 | `event-transition` | Repeatable + delayed | every 1–5 min / at boundaries | Idempotent state guard (only valid transitions) | Backoff; re-evaluate from truth | Event status lags (SCHEDULED→LIVE→COMPLETED) |
@@ -82,11 +82,12 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Idempotency:** overwrite by name.
 - **Failure impact:** low — reference data changes rarely; last copy remains valid.
 
-### 2.5 `profile-snapshot`
-- **Trigger / frequency:** repeatable (tracked members every ~6–12 h, spread across the window) + on-demand backfill.
+### 2.5 `profile-refresh`
+- **Trigger / frequency:** repeatable, hourly, spread across the window; each member refreshed at most once per 6 h. Plus on-demand backfill.
 - **Inputs:** tracked `MinecraftAccount`/`SelectedSkyblockProfile`, Hypixel profile (+museum) via the client.
-- **Outputs:** `ProfileSnapshot` rows (append-only time-series) in Postgres; warms profile cache.
-- **Idempotency:** upsert keyed by `(uuid, profileId, captureDate)` so a re-run for the same window doesn't duplicate.
+- **Outputs:** one `ProfileCurrent` row per `(account, profile)`, upserted in place, carrying the reading it displaced in `previousMetrics`; warms profile cache.
+- **Not a history, and that is a policy constraint rather than a design preference** — see docs/HYPIXEL_COMPLIANCE.md §1. The charted series is `ProfileSnapshot`, written only by `/snapshot` and by event boundaries.
+- **Idempotency:** upsert keyed by `(uuid, profileId)`, so a re-run replaces rather than duplicates.
 - **Retry:** per-member requeue with backoff; rate-budget-aware low-priority queue so it never beats live commands to a token.
 - **Logging:** members processed, skipped (API disabled/rate), snapshots written.
 - **Failure impact:** progression (`/progress`, `/whatnext`) and milestone detection lag; no user-facing error.

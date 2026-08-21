@@ -359,9 +359,11 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // Lookups (§17).
     "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
     "networth", "perm", "price", "profile", "skills", "slayer", "slayers", "standing", "stats",
-    // Progression (§17, Part IV). Both are the caller's own history, which is
-    // why both are "linked" below rather than open to any name typed in chat.
-    "goal", "progress",
+    // Progression (§17, Part IV). All three are the caller's own numbers, which
+    // is why all three are "linked" below rather than open to any name typed in
+    // chat. `/snapshot` is the only write of the three, and it writes a row
+    // about nobody but the caller.
+    "goal", "progress", "snapshot",
   ].sort());
 
   // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
@@ -371,7 +373,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // attributed to a Discord account, and an IGN that resolves to none has no
   // standing to report — the link *is* the lookup key, not a permission.
   assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), [
-    "goal", "perm", "progress", "standing",
+    "goal", "perm", "progress", "snapshot", "standing",
   ].sort());
 
   // And the identity commands stay Discord-only: `/link` in guild chat would

@@ -6,6 +6,8 @@ import {
   type DataEnvelope,
   type HypixelResult,
   type NetworthDTO,
+  type ProgressionRepository,
+  SAVED_SNAPSHOT_LIMIT,
 } from "@sbr/shared-types";
 import type { NetworthService, NetworthRequest } from "@sbr/pricing";
 import type { Logger } from "@sbr/observability";
@@ -107,4 +109,96 @@ test("getNetworth propagates RATE_LIMITED from the profile read", async () => {
   const r = await svc.getNetworth("uuid-aria");
   assert.equal(r.ok, false);
   if (!r.ok) assert.equal(r.error.state, "RATE_LIMITED");
+});
+
+// ── saveSnapshot ────────────────────────────────────────────────────────────
+
+/** A repository that records what it was asked and answers as told. */
+function saveRepo(
+  answer: Awaited<ReturnType<ProgressionRepository["saveSnapshot"]>>,
+  calls: { uuid: string; savedBy: string; label: string | null }[],
+): ProgressionRepository {
+  return {
+    async listMilestones() { return []; },
+    async listSnapshots() { return []; },
+    async latestSnapshot() { return null; },
+    async saveSnapshot(uuid, savedBy, label) {
+      calls.push({ uuid, savedBy, label });
+      return answer;
+    },
+    async getSelectedProfileId() { return null; },
+    async setSelectedProfile() {},
+  };
+}
+
+/** Any read of this fails the test: saving must cost no upstream request. */
+const noUpstream: ProfileProvider = {
+  async getSelectedProfile(): Promise<HypixelResult<SkyblockProfileData>> {
+    throw new Error("saveSnapshot must not fetch from Hypixel");
+  },
+  async listProfiles(): Promise<HypixelResult<readonly SkyblockProfileData[]>> {
+    throw new Error("saveSnapshot must not fetch from Hypixel");
+  },
+};
+
+function saveService(repo: ProgressionRepository): ProgressionServiceImpl {
+  return new ProgressionServiceImpl({
+    profiles: noUpstream,
+    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {}, topItems: {} }),
+    repo,
+    logger: silent,
+  });
+}
+
+test("saving a snapshot copies a stored reading and never fetches", async () => {
+  // The provider throws on any call, so reaching the assertion at all is the
+  // proof: an explicit, member-triggered save is not a way to poll Hypixel on
+  // demand (docs/HYPIXEL_COMPLIANCE.md §1).
+  const calls: { uuid: string; savedBy: string; label: string | null }[] = [];
+  const svc = saveService(saveRepo({ kind: "SAVED", capturedAt: "2026-08-21T10:00:00.000Z", savedCount: 5 }, calls));
+
+  const r = await svc.saveSnapshot("uuid-aria", "111", null);
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.value.savedCount, 5);
+    assert.equal(r.value.limit, SAVED_SNAPSHOT_LIMIT);
+    assert.equal(r.value.capturedAt, "2026-08-21T10:00:00.000Z");
+  }
+  assert.deepEqual(calls, [{ uuid: "uuid-aria", savedBy: "111", label: null }]);
+});
+
+test("a label is trimmed and bounded, and blank is the same as none", async () => {
+  const calls: { uuid: string; savedBy: string; label: string | null }[] = [];
+  const svc = saveService(saveRepo({ kind: "SAVED", capturedAt: "t", savedCount: 1 }, calls));
+
+  await svc.saveSnapshot("u", "111", "   ");
+  await svc.saveSnapshot("u", "111", "  before dungeon grind  ");
+  await svc.saveSnapshot("u", "111", "x".repeat(200));
+
+  assert.equal(calls[0]?.label, null, "whitespace is not a name");
+  assert.equal(calls[1]?.label, "before dungeon grind");
+  // Truncated rather than rejected — somebody who typed an essay meant its start.
+  assert.equal(calls[2]?.label?.length, 60);
+});
+
+test("each way a save can fail keeps its own kind", async () => {
+  const calls: { uuid: string; savedBy: string; label: string | null }[] = [];
+  const none = await saveService(saveRepo({ kind: "NO_READING" }, calls)).saveSnapshot("u", "1", null);
+  assert.equal(none.ok, false);
+  if (!none.ok) assert.equal(none.error.kind, "NO_READING");
+
+  const dup = await saveService(saveRepo({ kind: "ALREADY_SAVED", capturedAt: "t" }, calls))
+    .saveSnapshot("u", "1", null);
+  assert.equal(dup.ok, false);
+  if (!dup.ok) assert.equal(dup.error.kind, "ALREADY_SAVED");
+
+  // No repository at all is a deployment fact, not a member's problem.
+  const off = new ProgressionServiceImpl({
+    profiles: noUpstream,
+    networth: networthStub({ total: 1, exact: true, missing: [], breakdown: {}, topItems: {} }),
+    logger: silent,
+  });
+  const unavailable = await off.saveSnapshot("u", "1", null);
+  assert.equal(unavailable.ok, false);
+  if (!unavailable.ok) assert.equal(unavailable.error.kind, "UNAVAILABLE");
 });

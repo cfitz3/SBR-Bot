@@ -142,6 +142,7 @@ function progression(over: Partial<ProgressionService> = {}): ProgressionService
     async setGoal() { return err({ kind: "UNAVAILABLE" as const }); },
     async listGoals() { return ok([]); },
     async clearGoal() { return ok(false); },
+    async saveSnapshot() { return err({ kind: "UNAVAILABLE" as const }); },
     async getProfileSummary() { return live(summary); },
     async listProfiles() { return live([summary]); },
     async getSkills() {
@@ -211,8 +212,8 @@ function progression(over: Partial<ProgressionService> = {}): ProgressionService
         metric,
         rangeDays,
         points: [
-          { date: "2026-01-01", value: 1_000_000_000 },
-          { date: "2026-01-31", value: 3_000_000_000 },
+          { date: "2026-01-01", label: null, value: 1_000_000_000 },
+          { date: "2026-01-31", label: null, value: 3_000_000_000 },
         ],
         change: 2_000_000_000,
         // 2b over the 30 days the fixture spans.
@@ -908,14 +909,14 @@ test("progress with a single reading refuses to imply zero change", async () => 
     async getProgress(_u, metric, rangeDays) {
       return ok<ProgressSeriesDTO>({
         metric, rangeDays,
-        points: [{ date: "2026-01-01", value: 1_000_000_000 }],
+        points: [{ date: "2026-01-01", label: null, value: 1_000_000_000 }],
         change: null,
         perDay: null,
       });
     },
   });
   const r = await makeDispatcher({ progression: one }).dispatch("progress", ctx());
-  assert.match(r.embed?.description ?? "", /Only one reading/);
+  assert.match(r.embed?.description ?? "", /Only one saved snapshot/);
   assert.doesNotMatch(r.embed?.description ?? "", /\+0/);
 });
 

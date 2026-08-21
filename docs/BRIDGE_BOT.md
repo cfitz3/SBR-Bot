@@ -132,7 +132,7 @@ duplicate, which is the cheaper of the two failures by a wide margin.
 - The gate lives in `BridgeGuardImpl.canRelay` (`apps/bridge-bot/src/adapters.ts`) and has its own test file. It has been wrong three times — open to everyone, closed to everyone, then open to the whole Discord server — and all three failures were silent, so its database reads are injected rather than imported. The third was the subtlest: the capability check was not bypassed, it was *satisfied*, which is why no amount of fixing the permission stack reached it.
 
 ### 3.4 Announcements, reminders & news (F9–F10)
-- **Milestones (F9):** the `profile-snapshot` worker detects crossings (skill/cata/slayer/networth thresholds) and publishes an event; the bot announces to the configured channel (`🎉 Steve just hit Catacombs 45!`) and optionally to guild chat. Deduped via `Milestone.announced`.
+- **Milestones (F9):** the `profile-refresh` worker detects crossings (skill/cata/slayer/networth thresholds) and publishes an event; the bot announces to the configured channel (`🎉 Steve just hit Catacombs 45!`) and optionally to guild chat. Deduped via `Milestone.announced`.
 - **News/mayor/firesale/bingo (F10):** global workers refresh caches and publish; the bot posts to subscribers (`/subscribe` categories) or the news channel. Deduped by event id so restarts don't repost.
 - **Event reminders (F8):** workers enqueue reminders at offsets before `Event.startsAt`; the bot pings RSVP'd `GOING`/`MAYBE` members.
 
@@ -570,7 +570,7 @@ Discord #guild-bridge:  Mallory: BUY COINS CHEAP www.badsite.xyz
 
 ### 7.5 Milestone announcement
 ```
-worker profile-snapshot: detects Steve Catacombs 44 → 45
+worker profile-refresh: detects Steve Catacombs 44 → 45
   → publish milestone event (Milestone.announced = false)
   → bot posts #guild-announcements: "🎉 Steve just reached Catacombs 45!"
   → (optional) /gc mirror; mark announced = true (dedup)

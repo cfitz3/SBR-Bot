@@ -224,6 +224,12 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       range: "Days to look back (default 30)",
     },
   },
+  snapshot: {
+    description: "Save your current stats so /progress can chart the change",
+    option: {
+      label: 'What to call it — "before dungeon grind"',
+    },
+  },
   rank: {
     description: "Your entirely unofficial vibe rank",
     option: {

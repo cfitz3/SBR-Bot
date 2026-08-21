@@ -53,6 +53,7 @@ import type {
   PermGroupDTO,
   ProgressMetric,
   ProgressSeriesDTO,
+  SavedSnapshotDTO,
   PriceDTO,
   ProfileSummaryDTO,
   SafetyStatusDTO,
@@ -187,6 +188,20 @@ export interface ProgressionService {
   getAchievements(uuid: string, guildId: string): Promise<Result<AchievementsDTO>>;
   getProgress(uuid: string, metric: ProgressMetric, rangeDays: number): Promise<Result<ProgressSeriesDTO>>;
   /**
+   * `/snapshot` — pin the member's current reading so a later one has something
+   * to be compared against.
+   *
+   * The platform no longer keeps a history to chart, so a member who wants one
+   * builds it deliberately, a marker at a time (docs/HYPIXEL_COMPLIANCE.md §1).
+   * `savedBy` is the Discord id of whoever pressed save, which is always the
+   * member themselves — there is no way to save on somebody else's behalf.
+   */
+  saveSnapshot(
+    uuid: string,
+    savedBy: string,
+    label: string | null,
+  ): Promise<Result<SavedSnapshotDTO, SaveSnapshotError>>;
+  /**
    * `/goal set` — one target per member per metric, replacing any earlier one.
    *
    * Replacing rather than accumulating is the honest model of what a goal is: a
@@ -224,6 +239,13 @@ export interface ProgressionService {
    */
   getNextSteps(uuid: string, goal: string, profileId?: string): Promise<HypixelResult<AdviceDTO>>;
 }
+
+export type SaveSnapshotError =
+  /** Nothing has read this account yet, so there is nothing to pin. */
+  | { readonly kind: "NO_READING" }
+  /** Their newest save is already this same reading. */
+  | { readonly kind: "ALREADY_SAVED"; readonly capturedAt: string }
+  | { readonly kind: "UNAVAILABLE" };
 
 export type SelectProfileError =
   | { readonly kind: "NO_SUCH_PROFILE" }
@@ -462,6 +484,27 @@ export interface ProgressionRepository {
    * including `slayerXp`, which the charted series has no use for.
    */
   latestSnapshot(minecraftUuid: string): Promise<SnapshotMetricsDTO | null>;
+  /**
+   * Copy the member's current reading into a snapshot they own.
+   *
+   * A copy rather than a fetch: saving a marker costs no upstream request at
+   * all, because the value being pinned is the one the hourly refresh already
+   * holds. That is what keeps an explicit, member-triggered feature from being
+   * a way to poll Hypixel on demand.
+   *
+   * `ALREADY_SAVED` when the current reading is already the newest saved one —
+   * two identical rows would chart as a flat line the member did not earn.
+   * `NO_READING` when the account has never been refreshed.
+   */
+  saveSnapshot(
+    minecraftUuid: string,
+    savedBy: string,
+    label: string | null,
+  ): Promise<
+    | { readonly kind: "SAVED"; readonly capturedAt: string; readonly savedCount: number }
+    | { readonly kind: "ALREADY_SAVED"; readonly capturedAt: string }
+    | { readonly kind: "NO_READING" }
+  >;
   /** The member's `/setprofile` choice, or null to follow their in-game selection. */
   getSelectedProfileId(minecraftUuid: string): Promise<string | null>;
   setSelectedProfile(minecraftUuid: string, profile: ProfileSummaryDTO): Promise<void>;
