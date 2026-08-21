@@ -39,6 +39,7 @@ import { randomUUID } from "node:crypto";
 import { DiscordGuildEffects } from "./effects.js";
 import { createTicketBridge } from "./ticket-bridge.js";
 import { createRoleMenuBridge } from "./role-menu-bridge.js";
+import { createStickyBridge } from "./sticky-bridge.js";
 
 /** Per-boot identity in the heartbeat keyspace; see the panel's copy for why. */
 const INSTANCE_ID = randomUUID().slice(0, 8);
@@ -236,6 +237,14 @@ export async function createAdminApp(): Promise<AdminApp> {
       // Same split for `/rolemenu`: the menus are read from this database, and
       // the message they are published as belongs to the member-facing bot.
       roleMenuBridge: createRoleMenuBridge({
+        baseUrl: config.internalApi.bridgeBaseUrl,
+        token: config.internalApi.token,
+        config: guildConfig,
+        logger: log,
+      }),
+      // And again for `/sticky`: the document is settings this process owns,
+      // the message at the bottom of the channel is the other bot's.
+      stickyBridge: createStickyBridge({
         baseUrl: config.internalApi.bridgeBaseUrl,
         token: config.internalApi.token,
         config: guildConfig,

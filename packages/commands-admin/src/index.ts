@@ -30,5 +30,7 @@ export type {
   RoleMenuBridge,
   RoleMenuSummary,
   RoleResolver,
+  StickyBridge,
+  StickySummary,
   TicketBridge,
 } from "./types.js";

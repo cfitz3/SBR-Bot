@@ -99,6 +99,7 @@ import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapter
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
 import type { TicketGateway } from "./tickets.js";
 import type { RoleMenuGateway } from "./role-menus.js";
+import type { StickyKeeper } from "./sticky.js";
 import type { EventBoardGateway } from "./event-board.js";
 import type { WelcomeProfile } from "./welcome.js";
 
@@ -221,6 +222,13 @@ export interface BridgeApp {
    */
   setRoleMenus(gateway: RoleMenuGateway | null): void;
   readonly roleMenus: RoleMenuGateway | null;
+  /**
+   * Sticky messages, late-bound for the same reason: reposting one is a message
+   * in the community server, and `/sticky` on the staff bot reaches it over the
+   * loopback API rather than through Discord.
+   */
+  setSticky(keeper: StickyKeeper | null): void;
+  readonly sticky: StickyKeeper | null;
   /**
    * What the bot can see of the Discord server, for `/userinfo`, `/serverinfo`
    * and `/avatar`. Late-bound like the rest; until it is set those three
@@ -481,6 +489,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   let liveTickets: TicketGateway | null = null;
   let liveEventBoard: EventBoardGateway | null = null;
   let liveRoleMenus: RoleMenuGateway | null = null;
+  let liveSticky: StickyKeeper | null = null;
   let liveDirectory: DiscordDirectory | null = null;
   // A thrown error rather than a null answer while unattached — the window is
   // the few hundred ms between composition and login, and "Discord has no such
@@ -670,6 +679,10 @@ export async function createBridgeApp(): Promise<BridgeApp> {
 
   const unsubscribe = await adapters.configBus.subscribe((guildId) => {
     guildConfig.invalidate(guildId);
+    // Sticky messages are a settings document, so a panel edit or a `/sticky`
+    // on the staff bot reaches this process the same way every other config
+    // change does.
+    liveSticky?.invalidate(guildId);
     log.debug("guild config invalidated by broadcast", { guildId });
   });
 
@@ -771,6 +784,12 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setRoleMenus(gateway) {
       liveRoleMenus = gateway;
+    },
+    setSticky(keeper) {
+      liveSticky = keeper;
+    },
+    get sticky() {
+      return liveSticky;
     },
     setDiscordDirectory(directory) {
       liveDirectory = directory;

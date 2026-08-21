@@ -70,6 +70,11 @@ export interface AdminHandlerDeps {
    * `/rolemenu` says so rather than half-working.
    */
   readonly roleMenuBridge?: RoleMenuBridge;
+  /**
+   * Sticky messages, which live in the community server. Absent means
+   * `/sticky` says so rather than saving something nothing will ever post.
+   */
+  readonly stickyBridge?: StickyBridge;
   readonly logger: Logger;
 }
 
@@ -125,6 +130,45 @@ export interface RoleMenuBridge {
     menuId: string,
     channelId: string | null,
   ): Promise<{ readonly ok: true; readonly edited: boolean } | { readonly ok: false; readonly detail: string }>;
+}
+
+/** One channel's sticky, as `/sticky list` shows it. */
+export interface StickySummary {
+  readonly channelId: string;
+  readonly content: string;
+  readonly enabled: boolean;
+}
+
+/**
+ * Sticky messages, seen from the staff bot.
+ *
+ * Split like role menus, and for the same reason: the document is guild
+ * configuration this process can read and write directly, but the message at
+ * the bottom of the channel belongs to the member-facing bot. So the write is
+ * local and the *apply* — post it now, or take down the one that is no longer
+ * configured — goes over the bridge.
+ *
+ * `applied: false` is not a failure. The configuration is saved either way; it
+ * means the channel will catch up when it next moves rather than this second,
+ * and the handler says so instead of pretending.
+ */
+export interface StickyBridge {
+  list(guildId: string): Promise<readonly StickySummary[]>;
+  set(
+    guildId: string,
+    channelId: string,
+    content: string,
+  ): Promise<
+    | { readonly ok: true; readonly created: boolean; readonly applied: boolean }
+    | { readonly ok: false; readonly detail: string }
+  >;
+  clear(
+    guildId: string,
+    channelId: string,
+  ): Promise<
+    | { readonly ok: true; readonly applied: boolean }
+    | { readonly ok: false; readonly detail: string }
+  >;
 }
 
 export type AdminHandler = (ctx: AdminContext, deps: AdminHandlerDeps) => Promise<AdminReply>;

@@ -50,6 +50,7 @@ async function main(): Promise<void> {
         tickets: () => app.tickets,
         eventBoard: () => app.eventBoard,
         roleMenus: () => app.roleMenus,
+        sticky: () => app.sticky,
         toDiscordGuildId: guildRepository.resolveDiscordId,
         token: app.config.internalApi.token,
         port: app.config.internalApi.bridgePort,

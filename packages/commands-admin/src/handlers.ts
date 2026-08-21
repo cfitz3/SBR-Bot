@@ -737,6 +737,76 @@ function noRoleMenuBridge(): AdminReply {
 }
 
 /**
+ * `/sticky` — keep one message at the bottom of a channel.
+ *
+ * The configuration is guild settings this process owns outright; the message
+ * is the member-facing bot's, which is why setting one is a local write plus a
+ * request to that bot to put it in place. A staffer typing this in the channel
+ * they mean should not have to name it, so the channel defaults to here.
+ */
+const sticky: AdminHandler = async (ctx, deps) => {
+  if (!deps.stickyBridge) return noStickyBridge();
+  const action = ctx.args.getString("action") ?? "list";
+
+  if (action === "list") {
+    const stickies = await deps.stickyBridge.list(ctx.guildId);
+    if (stickies.length === 0) {
+      return { ephemeral: true, text: "No sticky messages yet — try `/sticky action:set message:...` in a channel." };
+    }
+    const lines = stickies.map((entry) => {
+      const state = entry.enabled ? "" : " · off";
+      return `<#${entry.channelId}>${state} — ${firstLine(entry.content)}`;
+    });
+    return { ephemeral: true, text: lines.join("\n").slice(0, 1900) };
+  }
+
+  const channelId = ctx.args.getChannel("channel") ?? ctx.channelId ?? null;
+  if (channelId === null) {
+    return { ephemeral: true, text: "Name a channel — I can't tell where you typed this." };
+  }
+
+  if (action === "clear") {
+    const result = await deps.stickyBridge.clear(ctx.guildId, channelId);
+    if (!result.ok) return { ephemeral: true, text: `I couldn't clear that — ${result.detail}.` };
+    return {
+      ephemeral: true,
+      text: result.applied
+        ? `Cleared the sticky in <#${channelId}>.`
+        : `Cleared the sticky in <#${channelId}>. The old message is still there — I couldn't reach the bridge bot to take it down.`,
+    };
+  }
+
+  if (action !== "set") return { ephemeral: true, text: "Pick list, set or clear." };
+
+  const message = (ctx.args.getString("message") ?? "").trim();
+  if (message === "") return { ephemeral: true, text: "Usage: /sticky action:set message:<what it should say>" };
+
+  const result = await deps.stickyBridge.set(ctx.guildId, channelId, message);
+  if (!result.ok) return { ephemeral: true, text: `I couldn't save that — ${result.detail}.` };
+  const what = result.created ? "Sticky set in" : "Updated the sticky in";
+  return {
+    ephemeral: true,
+    text: result.applied
+      ? `${what} <#${channelId}>.`
+      : `${what} <#${channelId}>. It'll appear the next time somebody talks there — I couldn't reach the bridge bot to post it now.`,
+  };
+};
+
+/** The member-facing bot owns the message; without it, this would save and never post. */
+function noStickyBridge(): AdminReply {
+  return {
+    ephemeral: true,
+    text: "Sticky messages aren't reachable from here — the bridge bot isn't running or isn't wired to this one.",
+  };
+}
+
+/** Enough of a sticky to recognise it in a list, on one line. */
+function firstLine(content: string): string {
+  const line = content.split("\n")[0] ?? "";
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+/**
  * Menu ids, so nobody has to remember one. The label carries the title because
  * the id is a slug and the title is what staff called it.
  */
@@ -1187,6 +1257,26 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       minRole: "OFFICER",
       handler: rolemenu,
       autocomplete: roleMenuIds,
+    },
+    {
+      name: "sticky",
+      description: "Keep a message at the bottom of a channel",
+      options: [
+        {
+          name: "action",
+          description: "What to do",
+          type: "string",
+          choices: [
+            { name: "list", value: "list" },
+            { name: "set", value: "set" },
+            { name: "clear", value: "clear" },
+          ],
+        },
+        { name: "message", description: "What it should say", type: "string" },
+        { name: "channel", description: "Which channel (defaults to here)", type: "channel" },
+      ],
+      minRole: "OFFICER",
+      handler: sticky,
     },
     {
       name: "join-queue",

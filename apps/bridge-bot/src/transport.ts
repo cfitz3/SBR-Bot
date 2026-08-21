@@ -38,6 +38,7 @@ import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-
 import { startLevelAnnouncer } from "./levels.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
 import { createAutoresponder } from "./autoresponder.js";
+import { createStickyKeeper } from "./sticky.js";
 import { startReminderSweeper } from "./reminders.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
 import { deliverEventReminder } from "./events.js";
@@ -634,6 +635,33 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // and `/tag` posts from.
   const autoresponder = createAutoresponder({ listTags: (guildId) => app.tags.listTags(guildId) });
 
+  // Sticky messages. The keeper is handed to the app because the staff bot's
+  // `/sticky` reaches it over the loopback API — the message has to be this
+  // bot's, in the channel this bot can see.
+  const sticky = createStickyKeeper({
+    config: app.handlerDeps.config,
+    async post(channelId, content) {
+      const channel = await discord.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("send" in channel)) return null;
+      const message = await (channel as SendableChannel)
+        .send({
+          content,
+          // Staff-typed text reposted to a whole channel forever. Nothing in it
+          // may ping, or one sticky becomes an @everyone every few minutes.
+          allowedMentions: { parse: [] },
+        })
+        .catch(() => null);
+      return message?.id ?? null;
+    },
+    async remove(channelId, messageId) {
+      const channel = await discord.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("messages" in channel)) return;
+      await (channel as SendableChannel).messages.delete(messageId).catch(() => null);
+    },
+    log: app.log,
+  });
+  app.setSticky(sticky);
+
   // Reminders go back to the channel they were set in, so this needs no
   // configuration at all — only a client to post with.
   const reminderSweeper = startReminderSweeper({
@@ -1221,6 +1249,17 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           app.log.warn("autoresponse did not land", { messageId: msg.id, error: String(error) });
         });
     });
+
+    // Sticky messages: keep the channel's note at the bottom. Skipped for bot
+    // messages, the sticky itself first among them — a sticky that reacted to
+    // its own arrival would repost forever.
+    if (!msg.author.bot) {
+      relay("sticky:repost", async () => {
+        const guildId = await resolveInternalGuild();
+        if (!guildId) return;
+        await sticky.onMessage(guildId, msg.channelId);
+      });
+    }
 
     relay("discord→game", async () => {
       const guildId = await resolveInternalGuild();

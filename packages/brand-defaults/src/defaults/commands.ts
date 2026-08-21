@@ -410,6 +410,14 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       channel: "Where to post it (defaults to here)",
     },
   },
+  sticky: {
+    description: "Keep a message at the bottom of a channel",
+    option: {
+      action: "What to do",
+      message: "What it should say",
+      channel: "Which channel (defaults to here)",
+    },
+  },
   "join-queue": { description: "Live in-game join requests and how long is left to answer them" },
   "join-accept": {
     description: "Admit somebody who asked to join in-game",

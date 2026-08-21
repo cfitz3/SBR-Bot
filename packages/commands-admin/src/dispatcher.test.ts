@@ -31,7 +31,7 @@ import type { Logger } from "@sbr/observability";
 import { AdminDispatcher } from "./dispatcher.js";
 import { buildAdminRegistry } from "./handlers.js";
 import { parseDurationSeconds } from "./util.js";
-import type { AdminContext, RoleMenuBridge, RoleResolver, TicketBridge } from "./types.js";
+import type { AdminContext, RoleMenuBridge, RoleResolver, StickyBridge, TicketBridge } from "./types.js";
 
 // A real Discord snowflake: `getUser` rejects anything that is not one, so the
 // fixture has to look like an id rather than the word "target".
@@ -173,6 +173,7 @@ interface Overrides {
   moderation?: ModerationService;
   ticketBridge?: TicketBridge;
   roleMenuBridge?: RoleMenuBridge;
+  stickyBridge?: StickyBridge;
   roles?: RoleResolver;
   community?: CommunityService;
   config?: GuildConfigService;
@@ -196,6 +197,7 @@ function make(over: Overrides = {}) {
       analytics,
       ...(over.ticketBridge === undefined ? {} : { ticketBridge: over.ticketBridge }),
       ...(over.roleMenuBridge === undefined ? {} : { roleMenuBridge: over.roleMenuBridge }),
+      ...(over.stickyBridge === undefined ? {} : { stickyBridge: over.stickyBridge }),
       logger: silent,
     },
     logger: silent,
@@ -855,6 +857,114 @@ test("/rolemenu is not a moderator command", async () => {
   // wider act than moderating a channel.
   const r = await make({ roles: roles({ actor: "MODERATOR" }), roleMenuBridge: menuBridge() }).dispatch(
     "rolemenu",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /requires OFFICER/);
+});
+
+// -- /sticky ------------------------------------------------------------------
+
+function stickyBridge(over: Partial<StickyBridge> = {}): StickyBridge {
+  return {
+    async list() {
+      return [{ channelId: "444444444444444444", content: "Read the rules.\nSeriously.", enabled: true }];
+    },
+    async set() {
+      return { ok: true, created: true, applied: true };
+    },
+    async clear() {
+      return { ok: true, applied: true };
+    },
+    ...over,
+  };
+}
+
+test("/sticky list names the channels and shows one line of each note", async () => {
+  const r = await make({ roles: roles({ actor: "OFFICER" }), stickyBridge: stickyBridge() }).dispatch(
+    "sticky",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /<#444444444444444444>/);
+  assert.match(r.text, /Read the rules\./);
+  // The second line of the note is not part of the summary.
+  assert.equal(r.text.includes("Seriously"), false);
+});
+
+test("/sticky set defaults to the channel it was typed in", async () => {
+  const seen: string[] = [];
+  const r = await make({
+    roles: roles({ actor: "OFFICER" }),
+    stickyBridge: stickyBridge({
+      async set(_guildId, channelId) {
+        seen.push(channelId);
+        return { ok: true, created: true, applied: true };
+      },
+    }),
+  }).dispatch("sticky", ctx({ args: recordArgs({ action: "set", message: "No trading here" }) }));
+
+  assert.deepEqual(seen, ["333333333333333333"]);
+  assert.match(r.text, /Sticky set in/);
+});
+
+test("/sticky set with nothing to say explains itself instead of storing an empty note", async () => {
+  const r = await make({ roles: roles({ actor: "OFFICER" }), stickyBridge: stickyBridge() }).dispatch(
+    "sticky",
+    ctx({ args: recordArgs({ action: "set", message: "   " }) }),
+  );
+  assert.match(r.text, /Usage/);
+});
+
+test("a saved sticky the bridge could not post says when it will appear", async () => {
+  const r = await make({
+    roles: roles({ actor: "OFFICER" }),
+    stickyBridge: stickyBridge({
+      async set() {
+        return { ok: true, created: false, applied: false };
+      },
+    }),
+  }).dispatch("sticky", ctx({ args: recordArgs({ action: "set", message: "hi" }) }));
+
+  assert.match(r.text, /Updated the sticky/);
+  assert.match(r.text, /next time somebody talks/);
+});
+
+test("/sticky clear reports the bridge's own words when there is nothing to clear", async () => {
+  const r = await make({
+    roles: roles({ actor: "OFFICER" }),
+    stickyBridge: stickyBridge({
+      async clear() {
+        return { ok: false, detail: "that channel has no sticky" };
+      },
+    }),
+  }).dispatch("sticky", ctx({ args: recordArgs({ action: "clear" }) }));
+  assert.match(r.text, /no sticky/);
+});
+
+test("a cleared sticky the bridge could not reach admits the old message is still up", async () => {
+  const r = await make({
+    roles: roles({ actor: "OFFICER" }),
+    stickyBridge: stickyBridge({
+      async clear() {
+        return { ok: true, applied: false };
+      },
+    }),
+  }).dispatch("sticky", ctx({ args: recordArgs({ action: "clear" }) }));
+  assert.match(r.text, /still there/);
+});
+
+test("/sticky without a bridge says so rather than saving what nothing will post", async () => {
+  const r = await make({ roles: roles({ actor: "OFFICER" }) }).dispatch(
+    "sticky",
+    ctx({ args: recordArgs({ action: "list" }) }),
+  );
+  assert.match(r.text, /bridge bot isn't running/);
+});
+
+test("/sticky is not a moderator command", async () => {
+  // A sticky is a permanent notice in front of a whole channel, which is the
+  // same weight of act as publishing a role menu.
+  const r = await make({ roles: roles({ actor: "MODERATOR" }), stickyBridge: stickyBridge() }).dispatch(
+    "sticky",
     ctx({ args: recordArgs({ action: "list" }) }),
   );
   assert.match(r.text, /requires OFFICER/);

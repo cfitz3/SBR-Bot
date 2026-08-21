@@ -27,6 +27,7 @@ import type { Logger } from "@sbr/observability";
 import type { TicketGateway } from "./tickets.js";
 import type { EventBoardGateway } from "./event-board.js";
 import type { RoleMenuGateway } from "./role-menus.js";
+import type { StickyKeeper } from "./sticky.js";
 
 const BIND_HOST = "127.0.0.1";
 
@@ -52,6 +53,11 @@ export interface BridgeApiDeps {
    * connecting should be told to come back rather than crash on a null.
    */
   readonly roleMenus: () => RoleMenuGateway | null;
+  /**
+   * Sticky messages, resolved per request for the same reason: `/sticky set`
+   * arriving while the client is still connecting should be told to come back.
+   */
+  readonly sticky: () => StickyKeeper | null;
   /** Platform guild id → Discord snowflake, so callers never map ids themselves. */
   readonly toDiscordGuildId: (internalGuildId: string) => Promise<string | null>;
   readonly token: string;
@@ -164,6 +170,17 @@ export class BridgeApi {
         return;
       }
       await this.board(res, guildId, await readBody(req));
+      return;
+    }
+
+    // Answered before the ticket gateway is required, like the board and the
+    // role menu: a sticky has nothing to do with tickets.
+    if (resource === "sticky") {
+      if ((req.method ?? "GET") !== "POST") {
+        sendJson(res, 405, { problem: "METHOD_NOT_ALLOWED", detail: "use POST" });
+        return;
+      }
+      await this.stickyApply(res, guildId, await readBody(req));
       return;
     }
 
@@ -280,6 +297,27 @@ export class BridgeApi {
       return;
     }
     sendJson(res, 200, { channelId: result.channelId, messageId: result.messageId, edited: result.edited });
+  }
+
+  /**
+   * Put this channel's sticky where its configuration now says it belongs.
+   *
+   * One route for set and clear, because the caller has already written the
+   * configuration and what it wants from here is the same either way: make the
+   * channel match it.
+   */
+  private async stickyApply(res: ServerResponse, guildId: string, body: Record<string, unknown>): Promise<void> {
+    const channelId = str(body["channelId"]);
+    if (channelId === null) {
+      sendJson(res, 400, { problem: "BAD_REQUEST", detail: "channelId is required" });
+      return;
+    }
+    const keeper = this.d.sticky();
+    if (keeper === null) {
+      sendJson(res, 503, { problem: "NOT_READY", detail: "the bridge bot is still connecting" });
+      return;
+    }
+    sendJson(res, 200, { changed: await keeper.apply(guildId, channelId) });
   }
 
   private async publish(

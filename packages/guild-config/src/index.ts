@@ -5,6 +5,19 @@
 export { GuildConfigServiceImpl, type GuildConfigServiceDeps } from "./service.js";
 export type { ConfigBroadcaster, GuildConfigRepository, GuildConfigRow } from "./ports.js";
 export {
+  DEFAULT_STICKIES,
+  MAX_STICKIES,
+  MAX_STICKY_CONTENT,
+  STICKY_SETTING_KEY,
+  findSticky,
+  parseStickies,
+  removeSticky,
+  upsertSticky,
+  validateStickies,
+  type StickyDoc,
+  type StickyMessage,
+} from "./sticky.js";
+export {
   COOLDOWN_SETTING_KEY,
   MAX_COOLDOWN_SECONDS,
   DEFAULT_COOLDOWNS,
