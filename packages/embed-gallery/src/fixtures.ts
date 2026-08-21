@@ -28,6 +28,7 @@ import type {
   DungeonsDTO,
   EventDTO,
   FilterTestDTO,
+  GoalDTO,
   GuildRosterDTO,
   HypixelFailureState,
   HypixelResult,
@@ -264,6 +265,7 @@ export const ADVICE_GENERIC: AdviceDTO = {
 export const PROGRESS: ProgressSeriesDTO = {
   metric: "networth",
   rangeDays: 30,
+  perDay: 1_250_000,
   change: 1_240_000_000,
   points: [
     { date: "2026-07-14", value: 7_000_000_000 },
@@ -274,6 +276,35 @@ export const PROGRESS: ProgressSeriesDTO = {
     { date: "2026-08-11", value: 8_240_000_000 },
   ],
 };
+
+/** Two goals in different shapes: one moving, one that has stalled. */
+export const GOALS: GoalDTO[] = [
+  {
+    id: "goal-1",
+    metric: "networth",
+    target: 10_000_000_000,
+    startValue: 7_000_000_000,
+    current: 8_240_000_000,
+    progress: 0.413,
+    perDay: 41_333_333,
+    etaDays: 43,
+    createdAt: "2026-07-14T00:00:00.000Z",
+    achievedAt: null,
+  },
+  {
+    // No pace, so no ETA — the card says so rather than inventing one.
+    id: "goal-2",
+    metric: "catacombsLevel",
+    target: 45,
+    startValue: 42,
+    current: 42,
+    progress: 0,
+    perDay: null,
+    etaDays: null,
+    createdAt: "2026-08-01T00:00:00.000Z",
+    achievedAt: null,
+  },
+];
 
 export const ACHIEVEMENTS: AchievementsDTO = {
   configured: true,

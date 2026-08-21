@@ -151,16 +151,37 @@ A fresh install still needs `/set-channel` before the relay speaks.
 
 ## Next session, in order
 
-1. **Phase 16** — Milestones become achievements. `backfillMilestones` is the
-   load-bearing piece; without it every existing member has zero on day one.
-2. **Phase 17** — the `enabled` flag on command specs, retiring the run
-   commands, and the `TICKET_MANAGE` capability.
-3. **Part I Phase 11** — the XP page.
-4. **Part II Phase C2** — bot reply and embed prose behind keys (waits on 17).
-5. **Part IV** — the progression planner/tracker, plus the in-game prefix
-   command visual overhaul.
-6. **Part V** — the VPS→Discord health monitor and logger, then a security pass
+Phases 16, 17, Part I Phase 11, Part II Phase C2 and Part IV have all shipped.
+What is left:
+
+1. **Part V** — the VPS→Discord health monitor and logger, then a security pass
    and a full stress test before the guild opens to the public.
+2. **The deep bug sweep** — every segment of the repo, fixes applied and the
+   rest flagged.
+
+### Part IV, as built
+
+`/progress` gained a per-day pace line and came back off the retired list: it
+had gone dark with the advice engine, but it never read the auction house the
+advice engine relied on — it charts our own `ProfileSnapshot` rows.
+
+`/goal` is new. One target per member per metric (`ProgressionGoal`, unique on
+`(guild, account, metric)`), because a goal is a current intention rather than a
+ledger; the record of *reaching* one belongs in `Milestone`. Projections are the
+plainest defensible arithmetic — recent pace over a 14-day window, extended —
+and the card's footer says exactly that.
+
+`sweepGoalsOnce` (`apps/bridge-bot/src/goals.ts`, hourly) compares unachieved
+goals against the freshest snapshot and posts to the `milestones` channel. It
+stamps a reached goal whether or not the post lands: the fact lives on the row
+and the member sees it on `/goal`, unlike a milestone whose only record is the
+post.
+
+In-game replies were rewritten around `copy.embed.ingame`: field names are
+abbreviated (`SBL`, `Cata`, `NW`), emoji and zero-width padding are stripped,
+and truncation breaks on a separator rather than mid-word. The zero-width
+`padInlineRow` spacers had been leaking an invisible `​: ​` into guild chat and
+spending characters from the 252-char budget.
 
 The full plan lives at `~/.claude/plans/typed-dreaming-torvalds.md`.
 

@@ -209,6 +209,14 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       profile: "Skyblock profile name",
     },
   },
+  goal: {
+    description: "Set a progression target and track how it's going",
+    option: {
+      action: "List your goals, set one, or clear one (default list)",
+      metric: "Which track to aim at",
+      target: "The number to reach — 2b, 250, 45.5",
+    },
+  },
   progress: {
     description: "Your progression over time",
     option: {

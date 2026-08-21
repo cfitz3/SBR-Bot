@@ -14,6 +14,8 @@ import {
   toGameLine,
   type InGameIdentity,
 } from "./ingame.js";
+import { copy } from "@sbr/brand";
+import { padInlineRow } from "@sbr/shared-types";
 import { InMemoryCooldownGate } from "./cooldown.js";
 import type { CommandReply, CommandSpec, HandlerDeps } from "./types.js";
 
@@ -139,6 +141,69 @@ test("a long line is cut on a separator and marked as truncated", () => {
   assert.ok(line.endsWith("…"));
   // The cut lands between fields, not inside a value.
   assert.doesNotMatch(line, /: \d{1,9}…$/);
+});
+
+test("field names arrive abbreviated, so the numbers get the 256 characters", () => {
+  const line = toGameLine({
+    ephemeral: false,
+    text: "",
+    embed: {
+      title: "Steve",
+      fields: [
+        { name: copy.embed.field.skyblockLevel, value: "210", inline: true },
+        { name: copy.embed.field.skillAverage, value: "41.2", inline: true },
+        { name: copy.embed.field.networth, value: "8.2b", inline: true },
+      ],
+    },
+  });
+
+  assert.equal(line, "Steve — SBL: 210 | SA: 41.2 | NW: 8.2b");
+  // The point of the exercise: the full names would not have been wrong, just
+  // 30 characters of a budget that has none to spare.
+  assert.ok(line.length < "Steve — SkyBlock Level: 210 | Skill average: 41.2 | Networth: 8.2b".length);
+});
+
+test("a field with no short form keeps its full name rather than vanishing", () => {
+  const line = toGameLine({
+    ephemeral: false,
+    text: "",
+    embed: { fields: [{ name: "Bestiary", value: "8" }] },
+  });
+
+  assert.equal(line, "Bestiary: 8");
+});
+
+test("layout spacers do not ride along as invisible fields", () => {
+  // padInlineRow squares off Discord's three-across grid with zero-width
+  // fields. Guild chat has no grid, and before this they arrived as ": ".
+  const fields = padInlineRow([
+    { name: copy.embed.field.catacombs, value: "42", inline: true },
+    { name: copy.embed.field.weight, value: "9100", inline: true },
+  ]);
+  assert.equal(fields.length, 3, "the fixture is only meaningful if a spacer was added");
+
+  const line = toGameLine({ ephemeral: false, text: "", embed: { fields } });
+
+  assert.equal(line, "Cata: 42 | Wt: 9100");
+  assert.doesNotMatch(line, /\u200b/);
+});
+
+test("emoji are stripped, because Minecraft's chat font draws them as boxes", () => {
+  const line = toGameLine({
+    ephemeral: false,
+    text: "🥇 Steve — 1,204 XP ✨",
+  });
+
+  assert.equal(line, "Steve — 1,204 XP");
+});
+
+test("every short form has a field to shorten", () => {
+  // The two tables are joined on their keys, so a short form whose key is not a
+  // field name is dead copy that no card can ever reach.
+  assert.deepEqual(
+    Object.keys(copy.embed.fieldShort).filter((k) => !(k in copy.embed.field)),
+    [],
+  );
 });
 
 // ───────────────────────────── dispatch ─────────────────────────────
@@ -294,6 +359,9 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // Lookups (§17).
     "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
     "networth", "perm", "price", "profile", "skills", "slayer", "slayers", "standing", "stats",
+    // Progression (§17, Part IV). Both are the caller's own history, which is
+    // why both are "linked" below rather than open to any name typed in chat.
+    "goal", "progress",
   ].sort());
 
   // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
@@ -303,8 +371,8 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // attributed to a Discord account, and an IGN that resolves to none has no
   // standing to report — the link *is* the lookup key, not a permission.
   assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), [
-    "perm", "standing",
-  ]);
+    "goal", "perm", "progress", "standing",
+  ].sort());
 
   // And the identity commands stay Discord-only: `/link` in guild chat would
   // invite people to type an IGN at a surface that can't verify who they are.

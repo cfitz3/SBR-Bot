@@ -26,6 +26,7 @@ import {
   milestoneDefinitionRepository,
   moderationRepository,
   progressionRepository,
+  goalRepository,
   rankResolver,
   rolePolicyReader,
   wordlistRepository,
@@ -86,12 +87,14 @@ import {
   MemberRole,
   ok,
   type DiscordDirectory,
+  type GoalRepository,
   type GuildRosterSource,
   type LevelUpAnnouncerPort,
   type MilestoneAnnouncerPort,
   type ReminderPort,
   type TicketConfigService,
   type PlayerLookup,
+  type ProgressMetric,
   type TextScreen,
 } from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
@@ -146,6 +149,12 @@ export interface BridgeApp {
   readonly levelUps: LevelUpAnnouncerPort;
   /** The reminder store, exposed so the sweeper can be handed a fake. */
   readonly reminders: ReminderPort;
+  /** The goal store, exposed so the watcher can be handed a fake. */
+  readonly goals: Pick<GoalRepository, "listUnachieved" | "markAchieved">;
+  /** The freshest snapshot reading of one metric — what the watcher compares against. */
+  goalValue(minecraftUuid: string, metric: ProgressMetric): Promise<number | null>;
+  /** A linked member's IGN, for the card the watcher posts. */
+  ignForDiscordId(discordId: string): Promise<string | null>;
   /** The guild's canned replies, for `/tag` and the autoresponder. */
   readonly tags: Pick<TicketConfigService, "listTags">;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
@@ -379,6 +388,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     profiles,
     networth,
     repo: progressionRepository,
+    // `/goal` — targets a member set for themselves. Optional on the port; the
+    // bridge is where they are set and read, so it is wired here.
+    goals: goalRepository,
     // `/milestones` measures a member against what this guild recognises, so it
     // needs the definitions the panel edits — read-only here; the bots never
     // write configuration.
@@ -714,6 +726,16 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     milestones: milestoneAnnouncementRepository,
     levelUps: xpLevelUpAnnouncementRepository,
     reminders: reminderRepository,
+    goals: goalRepository,
+    async goalValue(minecraftUuid: string, metric: ProgressMetric) {
+      const latest = await progressionRepository.latestSnapshot(minecraftUuid).catch(() => null);
+      return latest?.[metric] ?? null;
+    },
+    ignForDiscordId: (discordId: string) =>
+      identityRepository
+        .findPrimaryLinkByDiscordId(discordId)
+        .then((link) => link?.ign ?? null)
+        .catch(() => null),
     tags: ticketConfigRepository,
     memberBus: adapters.memberBus,
     linkedDiscordIdForIgn: (ign) => identityRepository.findDiscordIdByIgn(ign).catch(() => null),

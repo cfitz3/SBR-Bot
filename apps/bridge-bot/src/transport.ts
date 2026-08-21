@@ -33,6 +33,7 @@ import {
 } from "@sbr/discord-kit";
 import type { GuildRosterDTO, GuildRosterSource } from "@sbr/shared-types";
 import { startLevelAnnouncer } from "./levels.js";
+import { startGoalWatcher } from "./goals.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
 import { createAutoresponder } from "./autoresponder.js";
 import { createStickyKeeper } from "./sticky.js";
@@ -568,6 +569,27 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           // Only the member being congratulated is pingable. The label comes
           // from guild configuration, and a role or everyone mention typed into
           // one must not become a server-wide ping.
+          allowedMentions: mentionDiscordId === null ? { parse: [] } : { users: [mentionDiscordId] },
+        })
+        .catch(() => null);
+      return message !== null;
+    },
+    log: app.log,
+  });
+
+  // Goals reached. Same channel as milestones — a member who set out for
+  // something and arrived belongs where the guild already looks for that news.
+  const goalWatcher = startGoalWatcher({
+    goals: app.goals,
+    currentValue: (uuid, metric) => app.goalValue(uuid, metric),
+    ignFor: (discordId) => app.ignForDiscordId(discordId),
+    getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "milestones"),
+    async post(channelId, embed, mentionDiscordId) {
+      const channel = await discord.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+      const message = await (channel as SendableChannel)
+        .send({
+          embeds: [toEmbed(embed)],
           allowedMentions: mentionDiscordId === null ? { parse: [] } : { users: [mentionDiscordId] },
         })
         .catch(() => null);
@@ -1506,6 +1528,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // isn't answered with a fresh login.
       announcer.stop();
       levelAnnouncer.stop();
+      goalWatcher.stop();
       reminderSweeper.stop();
       void greeter.stop().catch(() => undefined);
       // Detach first: the bus keeps delivering until the process exits, and a

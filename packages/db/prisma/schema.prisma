@@ -276,6 +276,7 @@ model MinecraftAccount {
   selectedProfiles SelectedSkyblockProfile[]
   snapshots        ProfileSnapshot[]
   milestones       Milestone[]
+  goals            ProgressionGoal[]
 
   @@index([uuid])
   @@index([currentIgn])
@@ -331,6 +332,7 @@ model Guild {
   xpBalances       XpBalance[]
   xpLevelUps       XpLevelUp[]
   reminders        Reminder[]
+  goals            ProgressionGoal[]
   xpSources        XpSourceConfig[]
   activityDaily    ActivityDaily[]
   screenings       GuildJoinScreening[]
@@ -852,43 +854,43 @@ model Application {
 // ─────────────────────────── Community & Engagement ───────────────────────────
 
 model Event {
-  id                String      @id @default(cuid())
-  guildId           String
-  title             String
-  description       String?
-  type              EventType   @default(CUSTOM)
-  status            EventStatus @default(SCHEDULED)
-  startsAt          DateTime
-  endsAt            DateTime?
-  capacity          Int?
-  hostDiscordId     String?
+  id                  String      @id @default(cuid())
+  guildId             String
+  title               String
+  description         String?
+  type                EventType   @default(CUSTOM)
+  status              EventStatus @default(SCHEDULED)
+  startsAt            DateTime
+  endsAt              DateTime?
+  capacity            Int?
+  hostDiscordId       String?
   /// Where the tracker board was published, and the message that is edited in
   /// place as the event runs. The channel is stored rather than resolved from
   /// the `events` slot each pass: a slot rebound mid-event would otherwise
   /// orphan a board nobody can update, and a board that cannot be edited is
   /// worse than one posted in the old channel.
-  channelId         String?
-  messageId         String?
+  channelId           String?
+  messageId           String?
   /// When the board was last edited. Shown on the board itself, so a reader can
   /// tell a quiet leaderboard from a stalled one.
-  boardUpdatedAt    DateTime?
+  boardUpdatedAt      DateTime?
   /// Set once the board has been edited into its result card. A finished event
   /// is otherwise indistinguishable from one whose board is merely overdue, and
   /// the board pass would rewrite the same card every half hour forever.
-  boardFinal        Boolean     @default(false)
+  boardFinal          Boolean     @default(false)
   // Progression-tracking events drive the sub-hourly snapshot cohort (WORKERS.md §2.5).
-  tracksProgression Boolean     @default(false)
+  tracksProgression   Boolean     @default(false)
   /// Metric keys this event scores, e.g. `catacombs`, `skill:mining`. Driven off
   /// the parsed snapshot's own keys rather than an enum, so a metric Hypixel
   /// adds needs no migration.
-  trackedMetrics    String[]    @default([])
+  trackedMetrics      String[]    @default([])
   /// How often the tracker polls participants while the event is LIVE.
-  pollIntervalMinutes Int       @default(30)
+  pollIntervalMinutes Int         @default(30)
   /// The mirrored Discord scheduled event, when one was created.
-  discordEventId    String?
-  reminderState     Json        @default("{}")
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  discordEventId      String?
+  reminderState       Json        @default("{}")
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
   guild     Guild             @relation(fields: [guildId], references: [id], onDelete: Cascade)
   rsvps     EventRSVP[]
@@ -1292,7 +1294,7 @@ model ProfileSnapshot {
 /// `@sbr/jobs` are what a guild with no definitions is measured against, not a
 /// floor it has to keep.
 model MilestoneDefinition {
-  id          String        @id @default(cuid())
+  id          String          @id @default(cuid())
   guildId     String
   /// Stable identifier, e.g. "networth:10b". The detector keys replays off this
   /// rather than the label, so renaming a milestone never re-announces it.
@@ -1305,9 +1307,9 @@ model MilestoneDefinition {
   threshold   BigInt
   /// Guild XP credited once, when the milestone is announced. 0 = recognition
   /// only, which is the default: a guild opts into paying for progress.
-  xpReward    Int           @default(0)
-  announce    Boolean       @default(true)
-  enabled     Boolean       @default(true)
+  xpReward    Int             @default(0)
+  announce    Boolean         @default(true)
+  enabled     Boolean         @default(true)
   /// Editorial weight, not arithmetic: what the guild considers a big deal.
   /// Ordering within a category and the badge colour both come from this.
   tier        AchievementTier @default(BRONZE)
@@ -1315,9 +1317,9 @@ model MilestoneDefinition {
   icon        String?
   /// Not listed while locked — a member reads about it when they earn it. It
   /// still detects, announces and pays like any other.
-  hidden      Boolean       @default(false)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  hidden      Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
   milestones Milestone[]
@@ -1353,6 +1355,43 @@ model Milestone {
   @@index([minecraftAccountId, achievedAt])
   /// The announcer's sweep: unannounced rows, oldest first.
   @@index([announced, achievedAt])
+}
+
+/// A target a member set for themselves, and the platform's record of whether
+/// they got there.
+///
+/// Unique on (member, metric): a goal is a current intention, not a ledger, so
+/// setting a new networth target replaces the old one rather than queueing
+/// behind it. What survives replacement is the *achievement* — the goal-check
+/// job writes a Milestone row when a target is met, and that table is the one
+/// built to remember things.
+model ProgressionGoal {
+  id                 String    @id @default(cuid())
+  guildId            String
+  minecraftAccountId String
+  /// Denormalised at set time so the announcer can mention a member without
+  /// re-resolving a link that may since have moved, exactly as Milestone does.
+  discordId          String?
+  /// A `ProgressMetric` — the four tracks `/progress` charts.
+  metric             String
+  /// BigInt because networth targets run to trillions; the other three metrics
+  /// are small integers and lose nothing by sharing the column type.
+  target             BigInt
+  /// Where they were when they set it, so a progress bar has a floor. Null for
+  /// a member with no snapshot yet.
+  startValue         BigInt?
+  achievedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  guild            Guild            @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, minecraftAccountId, metric])
+  /// `/goal` — one member's list.
+  @@index([guildId, minecraftAccountId])
+  /// The checker's sweep: everything still outstanding, paged by id.
+  @@index([achievedAt, id])
 }
 
 model CommandUsage {

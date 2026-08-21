@@ -31,6 +31,7 @@ import type {
   NetworthDTO,
   PriceDTO,
   ProfileSummaryDTO,
+  GoalDTO,
   ProgressSeriesDTO,
   SkillsDTO,
   SlayersDTO,
@@ -1152,10 +1153,82 @@ export function renderProgressEmbed(ign: string, series: ProgressSeriesDTO): Emb
     fields: [
       { name: first?.date ?? "start", value: fmt(first?.value ?? null), inline: true },
       { name: last?.date ?? "now", value: fmt(last?.value ?? null), inline: true },
-      { name: F.snapshots, value: `${series.points.length}`, inline: true },
+      // Pace, not another total: the two dates above already say where they
+      // started and finished, and what a member actually wants from a month of
+      // history is the rate they can plan against.
+      { name: F.pace, value: renderPace(series.metric, series.perDay), inline: true },
+      // Full width, and last: three inline fields fill a row exactly, and a
+      // fourth would leave the count stranded on a line of its own.
+      { name: F.snapshots, value: `${series.points.length}`, inline: false },
     ],
     color: series.change !== null && series.change < 0 ? "WARNING" : "SUCCESS",
   };
+}
+
+/** `+2.4/day`, or the "not enough history" phrase when there is no rate. */
+function renderPace(metric: string, perDay: number | null): string {
+  if (perDay === null) return C.goalNoPace;
+  const sign = perDay >= 0 ? "+" : "−";
+  return C.perDay.replace("{n}", `${sign}${formatMetric(metric, Math.abs(perDay))}`);
+}
+
+/**
+ * `/goal` — every target this member is chasing, and how it is going.
+ *
+ * One field per goal rather than one card per goal: a member has at most four
+ * (one per metric, enforced by the store), and four cards to say four numbers
+ * would be four times the scrolling for the same information.
+ */
+export function renderGoalsEmbed(ign: string, goals: readonly GoalDTO[]): EmbedView {
+  if (goals.length === 0) {
+    return { title: cardTitle(ign, "goals"), description: C.noGoals, color: "NEUTRAL" };
+  }
+
+  return {
+    title: cardTitle(ign, "goals"),
+    fields: goals.map((g) => ({
+      name: metricLabel(g.metric),
+      value: goalLine(g),
+      inline: false,
+    })),
+    footer: C.goalsFooter,
+    // Amber only when nothing is moving: a member with one stalled goal and
+    // three healthy ones is not in a warning state.
+    color: goals.every((g) => g.achievedAt === null && (g.perDay ?? 0) <= 0) ? "WARNING" : "SUCCESS",
+  };
+}
+
+/**
+ * The post when somebody reaches a goal they set.
+ *
+ * Its own card rather than a `renderMilestoneEmbed` with a different noun: a
+ * milestone is something the guild recognises, a goal is something the member
+ * chose, and flattening the two would put "reached 250 SkyBlock Level" beside
+ * "earned the guild's Dungeon Master badge" as if they carried the same weight.
+ */
+export function renderGoalAchievedEmbed(ign: string, metric: string, target: number): EmbedView {
+  return {
+    title: C.goalAchievedTitle,
+    description: C.goalAchievedBody.replace("{ign}", ign)
+      .replace("{target}", formatMetric(metric, target))
+      .replace("{metric}", metricLabel(metric)),
+    color: "SUCCESS",
+  };
+}
+
+/** One goal's line: where they are, where they're going, and when. */
+function goalLine(goal: GoalDTO): string {
+  const target = formatMetric(goal.metric, goal.target);
+  const current = goal.current === null ? "—" : formatMetric(goal.metric, goal.current);
+  const bar = goal.progress === null ? "" : `${progressBar(goal.progress)} `;
+  const eta =
+    goal.achievedAt !== null
+      ? C.goalDone
+      : goal.etaDays === null
+        ? C.goalNoPace
+        : C.goalEta.replace("{n}", String(goal.etaDays));
+
+  return `${bar}${current} / ${target} — ${eta}`;
 }
 
 /** Coins, or an em dash — an unpriced item must never render as `0`. */

@@ -17,6 +17,8 @@ export {
   renderBazaarEmbed,
   renderDungeonsEmbed,
   renderFailure,
+  renderGoalAchievedEmbed,
+  renderGoalsEmbed,
   renderLeaderboardEmbed,
   renderLinkError,
   renderLowestBinEmbed,

@@ -52,6 +52,19 @@ export const DEFAULT_ERRORS = {
   },
 
   /**
+   * Why a `/goal` did not take, keyed by `GoalError["kind"]`.
+   *
+   * `ALREADY_THERE` is the one that earns its place: a member who asks to reach
+   * a number they already passed has misread their own card, and telling them
+   * where they actually are is more use than refusing.
+   */
+  goal: {
+    UNAVAILABLE: "Goals aren't switched on for this guild yet.",
+    ALREADY_THERE: "You're already at {current} — aim higher than that.",
+    BAD_TARGET: "That target isn't a number I can chase.",
+  },
+
+  /**
    * Why a `/link` did not take, keyed by `LinkError["kind"]`.
    *
    * Each one names the next action, because every one of these is fixable by the

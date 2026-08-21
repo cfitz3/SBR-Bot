@@ -58,6 +58,69 @@ export const DEFAULT_EMBEDS = {
     lastEarned: "Last earned",
     whereFrom: "Where it came from",
     snapshots: "Snapshots",
+    pace: "Pace",
+    target: "Target",
+  },
+
+  /**
+   * The same field names again, cut down for guild chat.
+   *
+   * Minecraft's chat packet stops at 256 characters, so a card that reads
+   * comfortably in Discord spends most of that budget on its own labels:
+   * "SkyBlock Level: 210 | Skill average: 41.2 | Catacombs: 38" is 57
+   * characters of which 38 are words the reader already knows. In game these
+   * become "SBL 210 | SA 41.2 | Cata 38" and the numbers get the room.
+   *
+   * Keyed identically to `field` on purpose — the in-game renderer looks a
+   * rendered field name up in `field` to find its key, then prints the short
+   * form — so a key here with no twin there is dead weight and a field with no
+   * short form simply keeps its full name. `brand check` holds the two in step.
+   */
+  fieldShort: {
+    skyblockLevel: "SBL",
+    skillAverage: "SA",
+    catacombs: "Cata",
+    classAverage: "CA",
+    selected: "On",
+    weight: "Wt",
+    networth: "NW",
+    slayerXp: "Slayer",
+    magicalPower: "MP",
+    progress: "Prog",
+    guildStanding: "Standing",
+    achievements: "Achv",
+    leaderboards: "Boards",
+    yourRecord: "Best",
+    rank: "Rank",
+    tenure: "Tenure",
+    lastEarned: "Last",
+    whereFrom: "From",
+    snapshots: "Snaps",
+    pace: "Pace",
+    target: "Goal",
+  },
+
+  /**
+   * How a card is spoken aloud in guild chat.
+   *
+   * Deliberately *not* `FLATTEN_SEPARATOR` (" \u00b7 "), which is what the
+   * Discord-side flattener uses. A middle dot is a legible separator in a
+   * proportional font on a bright background; in Minecraft's chat font, over
+   * whatever the player happens to be standing in front of, it is a speck.
+   * The pipe is the shape COMMANDS.md documents for this surface and the shape
+   * players already read it as, so the two surfaces differ on purpose and the
+   * reason is written down here rather than looking like drift.
+   */
+  ingame: {
+    /** Between fields, and the seam a too-long line is cut on. */
+    separator: " | ",
+    /** Between the title, the body, and the footer. */
+    join: " \u2014 ",
+    /** The footer is parenthesised so it doesn't read as another field. */
+    footerOpen: "(",
+    footerClose: ")",
+    /** Marks a line that was cut. One character, because every one counts. */
+    ellipsis: "\u2026",
   },
 
   /**
@@ -120,6 +183,7 @@ export const DEFAULT_EMBEDS = {
       accessories: "accessories",
       achievements: "achievements",
       standing: "standing",
+    goals: "goals",
       leaderboard: "guild leaderboard",
     },
     /**
@@ -163,6 +227,23 @@ export const DEFAULT_EMBEDS = {
      * fetched, so what a member needs to know is that today is still counting.
      */
     standingFooter: "XP is totalled a few times a day — today's activity may not be in yet.",
+
+    /* ── goals ── */
+    noGoals: "No goals yet. Set one with /goal set.",
+    goalSet: "Tracking your {metric} to {target}.",
+    goalCleared: "Cleared your {metric} goal.",
+    goalNotSet: "You had no {metric} goal to clear.",
+    /** Shown in place of an ETA when there is not enough history to project. */
+    goalNoPace: "no pace yet",
+    /** `~12d` — days at recent pace, deliberately hedged with the tilde. */
+    goalEta: "~{n}d",
+    goalDone: "done",
+    goalsFooter: "Projections are recent pace extended, not a promise.",
+    /** The announcement when a goal is reached. Second person: it is their post. */
+    goalAchievedTitle: "Goal reached",
+    goalAchievedBody: "{ign} set out for {target} {metric} — and got there.",
+    /** Per-day movement, e.g. `+2.4/day`. */
+    perDay: "{n}/day",
   },
 };
 

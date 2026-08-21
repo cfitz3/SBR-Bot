@@ -1025,6 +1025,52 @@ export interface ProgressSeriesDTO {
    * a single snapshot cannot show change, and reporting 0 would imply it did.
    */
   readonly change: number | null;
+  /**
+   * Change divided by the days actually spanned, not by `rangeDays`.
+   *
+   * The distinction matters for anyone the snapshot worker started covering
+   * mid-window: dividing three days of gain by a thirty-day range reports a
+   * tenth of the real pace, and every projection built on it is then wrong by
+   * the same factor. Null whenever `change` is.
+   */
+  readonly perDay: number | null;
+}
+
+/**
+ * A target a member set for themselves, with the platform's read on how it is
+ * going (COMMANDS.md §11).
+ *
+ * The projection is deliberately the plainest arithmetic that can be defended —
+ * recent pace, extended — rather than a fit. Skyblock progress is lumpy enough
+ * that a curve would be a confident lie, and a member reading "about 12 days at
+ * your recent pace" understands exactly how much to trust it.
+ */
+export interface GoalDTO {
+  readonly id: string;
+  readonly metric: ProgressMetric;
+  readonly target: number;
+  /** Where they were when they set it, so the bar has a floor to fill from. */
+  readonly startValue: number | null;
+  /** Latest snapshot reading, or null if they have never been snapshotted. */
+  readonly current: number | null;
+  /**
+   * 0–1 of the way from `startValue` to `target`. Null when there is no
+   * reading, and clamped at both ends: a member who went backwards is at 0 and
+   * one who overshot is at 1, because a bar is not the place to learn you lost
+   * ground.
+   */
+  readonly progress: number | null;
+  /** Recent pace in units/day, from the same window `/progress` charts. */
+  readonly perDay: number | null;
+  /**
+   * Days to the target at that pace, rounded up. Null when the pace is unknown,
+   * zero, or negative — "never, at this rate" is true but useless, and a
+   * negative ETA reads as a date in the past.
+   */
+  readonly etaDays: number | null;
+  readonly createdAt: string;
+  /** Set once the target is met; the row is kept as a record, not deleted. */
+  readonly achievedAt: string | null;
 }
 
 export interface CommandUsageDTO {

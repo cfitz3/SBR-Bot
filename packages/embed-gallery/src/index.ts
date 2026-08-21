@@ -46,6 +46,8 @@ import {
   renderPriceEmbed,
   renderProfileEmbed,
   renderProfileListEmbed,
+  renderGoalAchievedEmbed,
+  renderGoalsEmbed,
   renderProgressEmbed,
   renderRosterEmbed,
   renderServerInfoEmbed,
@@ -258,6 +260,16 @@ export const GALLERY: readonly GalleryCard[] = [
     f.ACHIEVEMENTS_OFF,
   ),
   card("progress", "`/progress` — a series with a gap in it.", renderProgressEmbed, IGN, f.PROGRESS),
+  card("goals", "`/goal` — one target moving, one stalled.", renderGoalsEmbed, IGN, f.GOALS),
+  card("goals-empty", "No goals set: an invitation, not an error.", renderGoalsEmbed, IGN, []),
+  card(
+    "goal-achieved",
+    "The post when somebody arrives at a goal they set.",
+    renderGoalAchievedEmbed,
+    IGN,
+    "networth",
+    10_000_000_000,
+  ),
 
   // ── Market ────────────────────────────────────────────────────────────────
   card("price", "`/price` — an auction-only item.", renderPriceEmbed, f.live(f.PRICE)),

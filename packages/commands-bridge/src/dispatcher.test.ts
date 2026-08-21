@@ -139,6 +139,9 @@ const achievements: AchievementsDTO = {
 function progression(over: Partial<ProgressionService> = {}): ProgressionService {
   return {
     async getAchievements() { return ok(achievements); },
+    async setGoal() { return err({ kind: "UNAVAILABLE" as const }); },
+    async listGoals() { return ok([]); },
+    async clearGoal() { return ok(false); },
     async getProfileSummary() { return live(summary); },
     async listProfiles() { return live([summary]); },
     async getSkills() {
@@ -212,6 +215,8 @@ function progression(over: Partial<ProgressionService> = {}): ProgressionService
           { date: "2026-01-31", value: 3_000_000_000 },
         ],
         change: 2_000_000_000,
+        // 2b over the 30 days the fixture spans.
+        perDay: 2_000_000_000 / 30,
       });
     },
     async setSelectedProfile() { return ok(summary); },
@@ -905,6 +910,7 @@ test("progress with a single reading refuses to imply zero change", async () => 
         metric, rangeDays,
         points: [{ date: "2026-01-01", value: 1_000_000_000 }],
         change: null,
+        perDay: null,
       });
     },
   });
@@ -1856,7 +1862,7 @@ test("a card about somebody else never carries a record", async () => {
 // place and not the others is worse than no retirement — the member sees a
 // command, runs it, and gets an error that reads as a broken bot.
 
-const RETIRED = ["progress", "missing", "nextupgrade", "whatnext", "lfg", "runs", "joinrun", "leaverun", "editrun", "closerun"] as const;
+const RETIRED = ["missing", "nextupgrade", "whatnext", "lfg", "runs", "joinrun", "leaverun", "editrun", "closerun"] as const;
 
 test("the retired commands are still in the registry, flagged rather than deleted", () => {
   const registry = buildBridgeRegistry();

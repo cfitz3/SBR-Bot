@@ -18,6 +18,7 @@ import { communitySpecs } from "./handlers-community.js";
 import { permSpecs } from "./handlers-perms.js";
 import { infoSpecs } from "./handlers-info.js";
 import { levelAlertSpecs } from "./handlers-levels.js";
+import { goalSpecs } from "./handlers-goals.js";
 import { reminderSpecs } from "./handlers-remind.js";
 import { tagSpecs } from "./handlers-tags.js";
 import { funSpecs } from "./fun.js";
@@ -526,7 +527,7 @@ const progress: CommandHandler = async (ctx, deps) => {
   const result = await deps.progression.getProgress(linked.value.minecraftUuid, metric, range);
   const series = result.ok
     ? result.value
-    : { metric, rangeDays: range, points: [] as const, change: null };
+    : { metric, rangeDays: range, points: [] as const, change: null, perDay: null };
 
   return {
     ephemeral: false,
@@ -931,13 +932,11 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
         },
       ],
       cooldownMs: 15_000,
-      // Retired: the advice engine reads a live auction house the platform no
-      // longer keeps warm, so its suggestions were confident and stale — worse
-      // than no suggestion. Decision 2 of Phase 17 in
-      // `~/.claude/plans/typed-dreaming-torvalds.md`. The engine
-      // (`packages/progression/src/skyblock/advice.ts`) and this handler stay
-      // compiled and tested; turning it back on is this one line.
-      enabled: false,
+      // Back on. It went dark with the advice trio in Phase 17 — "until they're
+      // tuned" — but it never read the auction house that retired them: it
+      // charts our own snapshots. What it actually lacked was a reason to look
+      // at it twice, which is the pace line and the goals it now sits beside.
+      inGame: "linked",
       handler: progress,
     },
     {
@@ -1057,6 +1056,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     ...communitySpecs(),
     ...infoSpecs(),
     ...levelAlertSpecs(),
+    ...goalSpecs(),
     ...reminderSpecs(),
     ...tagSpecs(),
     ...permSpecs(),

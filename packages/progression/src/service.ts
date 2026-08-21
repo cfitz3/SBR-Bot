@@ -19,6 +19,10 @@ import {
   type MilestoneDTO,
   type ProgressMetric,
   type ProgressSeriesDTO,
+  type GoalDTO,
+  type GoalError,
+  type GoalRepository,
+  type StoredGoalDTO,
   type Result,
   type SkillsDTO,
   type SlayersDTO,
@@ -68,7 +72,89 @@ export interface ProgressionServiceDeps {
   readonly community?: CommunityMetricsSource;
   /** Optional: without it, `/nextupgrade` suggestions arrive without price tags. */
   readonly prices?: UpgradePriceSource;
+  /**
+   * Optional: goal storage. Without it `/goal` reports the feature as not
+   * installed rather than failing — the same shape every other optional port
+   * takes here, and the reason `setGoal` has an `UNAVAILABLE` state at all.
+   */
+  readonly goals?: GoalRepository;
   readonly logger: Logger;
+}
+
+/**
+ * The window a goal's pace is measured over.
+ *
+ * A fortnight, not the thirty days `/progress` defaults to: a projection is
+ * about what the member is doing *now*, and a month-long average still carries
+ * the week they were on holiday. Long enough that one idle weekend does not
+ * read as having stopped.
+ */
+const GOAL_PACE_DAYS = 14;
+
+/**
+ * Ceiling on a target, and a deliberately loose one.
+ *
+ * It exists to catch the paste — a networth figure with the digits of a UUID
+ * behind it — not to have an opinion about ambition. Anything under this is the
+ * member's business; above it, the projection arithmetic starts losing
+ * precision anyway.
+ */
+const MAX_TARGET = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Change and pace over a series, from the readings that exist.
+ *
+ * Pace divides by the days actually spanned rather than by the requested range,
+ * which is the difference between "8 levels in 4 days" and "8 levels in 30" for
+ * a member the snapshot worker only started covering last week. Both are null
+ * together: two readings on the same day show change but no rate, and a
+ * division by zero there would surface as `Infinity` days to a target.
+ */
+function paceOf(
+  points: readonly { readonly date: string; readonly value: number | null }[],
+): { readonly change: number | null; readonly perDay: number | null } {
+  // Change needs two *readable* endpoints — a window whose ends are both
+  // unknown has no measurable change, however many rows sit between them.
+  const known = points.filter((p): p is { date: string; value: number } => p.value !== null);
+  const first = known[0];
+  const last = known[known.length - 1];
+  if (known.length < 2 || !first || !last) return { change: null, perDay: null };
+
+  const change = last.value - first.value;
+  const days = (Date.parse(last.date) - Date.parse(first.date)) / (24 * 60 * 60_000);
+  return { change, perDay: days > 0 ? change / days : null };
+}
+
+/** A stored goal plus what is known about it, in the shape a card reads. */
+function toGoalView(row: StoredGoalDTO, current: number | null, perDay: number | null): GoalDTO {
+  const start = row.startValue;
+  // A bar needs both ends. No floor, no reading, or a target already below the
+  // floor when it was set (a member asking to *lose* networth, which the store
+  // does not forbid) all mean there is no honest fraction to draw.
+  const span = start === null ? 0 : row.target - start;
+  const progress =
+    current === null || start === null || span <= 0
+      ? null
+      : Math.min(1, Math.max(0, (current - start) / span));
+
+  const remaining = current === null ? null : row.target - current;
+  const etaDays =
+    remaining === null || remaining <= 0 || perDay === null || perDay <= 0
+      ? null
+      : Math.ceil(remaining / perDay);
+
+  return {
+    id: row.id,
+    metric: row.metric,
+    target: row.target,
+    startValue: start,
+    current,
+    progress,
+    perDay,
+    etaDays,
+    createdAt: row.createdAt,
+    achievedAt: row.achievedAt,
+  };
 }
 
 /**
@@ -102,6 +188,7 @@ export class ProgressionServiceImpl implements ProgressionService {
   private readonly definitions: MilestoneDefinitionReader | undefined;
   private readonly community: CommunityMetricsSource | undefined;
   private readonly prices: UpgradePriceSource | undefined;
+  private readonly goals: GoalRepository | undefined;
   private readonly log: Logger;
 
   constructor(deps: ProgressionServiceDeps) {
@@ -111,6 +198,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     this.definitions = deps.definitions;
     this.community = deps.community;
     this.prices = deps.prices;
+    this.goals = deps.goals;
     this.log = deps.logger.child({ service: "progression" });
   }
 
@@ -184,7 +272,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     metric: ProgressMetric,
     rangeDays: number,
   ): Promise<Result<ProgressSeriesDTO>> {
-    const empty: ProgressSeriesDTO = { metric, rangeDays, points: [], change: null };
+    const empty: ProgressSeriesDTO = { metric, rangeDays, points: [], change: null, perDay: null };
     if (!this.repo) return ok(empty);
 
     const since = new Date(Date.now() - rangeDays * 24 * 60 * 60_000);
@@ -192,14 +280,84 @@ export class ProgressionServiceImpl implements ProgressionService {
     if (rows.length === 0) return ok(empty);
 
     const points = rows.map((r) => ({ date: r.captureDate, value: r[metric] }));
-    // Change needs two *readable* endpoints — a window whose ends are both
-    // unknown has no measurable change, however many rows sit between them.
-    const known = points.filter((p): p is { date: string; value: number } => p.value !== null);
-    const first = known[0];
-    const last = known[known.length - 1];
-    const change = known.length >= 2 && first && last ? last.value - first.value : null;
+    const { change, perDay } = paceOf(points);
 
-    return ok({ metric, rangeDays, points, change });
+    return ok({ metric, rangeDays, points, change, perDay });
+  }
+
+  async setGoal(
+    guildId: string,
+    uuid: string,
+    metric: ProgressMetric,
+    target: number,
+  ): Promise<Result<GoalDTO, GoalError>> {
+    if (!this.goals) return err({ kind: "UNAVAILABLE" });
+    if (!Number.isFinite(target) || target <= 0 || target > MAX_TARGET) {
+      return err({ kind: "BAD_TARGET" });
+    }
+
+    const current = await this.currentValue(uuid, metric);
+    // Refusing a target already met is not pedantry: the bar would render full
+    // on the day it was set, and the goal-checker would announce it as an
+    // achievement within the hour. Both read as the platform being confused.
+    if (current !== null && current >= target) return err({ kind: "ALREADY_THERE", current });
+
+    const stored = await this.goals.setGoal({
+      guildId,
+      minecraftUuid: uuid,
+      metric,
+      target,
+      // The floor the bar fills from. Null for a member with no snapshot yet:
+      // their first one becomes the floor when the row is next read.
+      startValue: current,
+    });
+    const [view] = await this.describeGoals([stored], uuid);
+    return ok(view ?? toGoalView(stored, current, null));
+  }
+
+  async listGoals(guildId: string, uuid: string): Promise<Result<readonly GoalDTO[]>> {
+    if (!this.goals) return ok([]);
+    const rows = await this.goals.listGoals(guildId, uuid);
+    if (rows.length === 0) return ok([]);
+    return ok(await this.describeGoals(rows, uuid));
+  }
+
+  async clearGoal(guildId: string, uuid: string, metric: ProgressMetric): Promise<Result<boolean>> {
+    if (!this.goals) return ok(false);
+    return ok(await this.goals.clearGoal(guildId, uuid, metric));
+  }
+
+  /**
+   * Attach "how is it going" to stored rows.
+   *
+   * One snapshot window is read for the whole set rather than one per goal:
+   * four goals are four metrics off the same rows, and asking the database four
+   * times for the same fortnight to answer one command is how a cheap card
+   * becomes an expensive one.
+   */
+  private async describeGoals(
+    rows: readonly StoredGoalDTO[],
+    uuid: string,
+  ): Promise<readonly GoalDTO[]> {
+    if (!this.repo) return rows.map((r) => toGoalView(r, null, null));
+
+    const since = new Date(Date.now() - GOAL_PACE_DAYS * 24 * 60 * 60_000);
+    const [history, latest] = await Promise.all([
+      this.repo.listSnapshots(uuid, since).catch(() => []),
+      this.repo.latestSnapshot(uuid).catch(() => null),
+    ]);
+
+    return rows.map((r) => {
+      const pace = paceOf(history.map((h) => ({ date: h.captureDate, value: h[r.metric] })));
+      return toGoalView(r, latest?.[r.metric] ?? null, pace.perDay);
+    });
+  }
+
+  /** The freshest reading of one metric, or null if nothing has been captured. */
+  private async currentValue(uuid: string, metric: ProgressMetric): Promise<number | null> {
+    if (!this.repo) return null;
+    const latest = await this.repo.latestSnapshot(uuid).catch(() => null);
+    return latest?.[metric] ?? null;
   }
 
   async setSelectedProfile(

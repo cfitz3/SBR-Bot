@@ -16,6 +16,7 @@
  *  - a stricter per-IGN cooldown on top of the dispatcher's per-user one,
  *  - collapsing a rich reply to a single truncated line.
  */
+import { copy } from "@sbr/brand";
 import type { CommandArgs, CommandSurface } from "@sbr/shared-types";
 import { recordArgs } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
@@ -152,37 +153,85 @@ function usageHint(spec: CommandSpec, prefix: string): string {
   return `Usage: ${prefix}${spec.name}${shape ? ` ${shape}` : ""}`;
 }
 
+/** How a card reads in guild chat, and why it differs from Discord's. */
+const G = copy.embed.ingame;
+
+/**
+ * Rendered field name → the short form guild chat gets.
+ *
+ * Built by walking `copy.embed.field` and looking each key up in
+ * `copy.embed.fieldShort`, so the two tables are joined on their keys rather
+ * than on their text. Keyed on the lowercased name because the lookup runs
+ * against an already-rendered card, where the only thing left of the key is the
+ * string it produced. A field with no short form keeps its full name, which is
+ * the right failure: long is worse than wrong.
+ */
+const SHORT_NAMES: ReadonlyMap<string, string> = new Map(
+  Object.entries(copy.embed.field).map(([key, name]) => [
+    name.toLowerCase(),
+    (copy.embed.fieldShort as Readonly<Record<string, string>>)[key] ?? name,
+  ]),
+);
+
 /**
  * Collapse a reply to one guild-chat line.
  *
  * The embed is preferred over `text` when present because it carries the actual
  * numbers — `text` is often just a lead-in ("Here's Steve's profile:") that says
- * nothing on its own. Fields are joined with a pipe, matching the documented
- * `Player — Cata 42 | SA 45.3 | NW 8.2b` shape.
+ * nothing on its own. Field names are abbreviated on the way out and layout
+ * spacers are dropped, because both cost characters out of a 252-character
+ * budget and neither tells a player anything: the shape is the documented
+ * `Player — Cata: 42 | SA: 45.3 | NW: 8.2b`.
  */
 export function toGameLine(reply: CommandReply, max: number = INGAME_MAX_CHARS): string {
   const embed = reply.embed ?? reply.pages?.[0];
   const parts: string[] = [];
 
   if (embed) {
-    if (embed.title) parts.push(embed.title);
+    const title = embed.title ? flatten(embed.title) : "";
+    if (title) parts.push(title);
     const body = (embed.fields ?? [])
-      .map((f) => `${f.name}: ${flatten(f.value)}`)
+      .map((f) => renderField(flatten(f.name), flatten(f.value)))
       .filter((s) => s.length > 0)
-      .join(" | ");
+      .join(G.separator);
     const lead = embed.description ? flatten(embed.description) : "";
-    const tail = [lead, body].filter((s) => s.length > 0).join(" | ");
+    const tail = [lead, body].filter((s) => s.length > 0).join(G.separator);
     if (tail) parts.push(tail);
     // The staleness footer is the one piece of an embed a player can act on, so
     // it survives the collapse even though it costs characters.
-    if (embed.footer) parts.push(`(${flatten(embed.footer)})`);
+    const footer = embed.footer ? flatten(embed.footer) : "";
+    if (footer) parts.push(`${G.footerOpen}${footer}${G.footerClose}`);
   }
 
-  const line = parts.length > 0 ? parts.join(" — ") : flatten(reply.text);
+  const line = parts.length > 0 ? parts.join(G.join) : flatten(reply.text);
   return truncate(line, max);
 }
 
-/** Discord markdown and mentions mean nothing in Minecraft chat. */
+/**
+ * One field, already flattened.
+ *
+ * An empty result is dropped by the caller, which is how `padInlineRow`'s
+ * zero-width spacers leave the line: they exist to square off a three-across
+ * grid Discord draws and guild chat does not, and before this they rode along
+ * as an invisible `: ` between two real fields, spending characters to render
+ * nothing. A field with a name but no value keeps the name — "Networth" with
+ * nothing after it at least says the card tried.
+ */
+function renderField(name: string, value: string): string {
+  if (value.length === 0) return name;
+  if (name.length === 0) return value;
+  return `${SHORT_NAMES.get(name.toLowerCase()) ?? name}: ${value}`;
+}
+
+/**
+ * Discord markdown, mentions, and anything Minecraft's chat font cannot draw.
+ *
+ * The emoji strip is not cosmetic: a medal on a leaderboard row renders in game
+ * as a replacement box, and a variation selector renders as a second one, so a
+ * decorated card arrives as a line of tofu with the numbers hidden between it.
+ * Zero-width characters go the same way — they are invisible on both surfaces,
+ * but only one of them is counting to 256.
+ */
 function flatten(s: string): string {
   return s
     .replace(/<t:(\d+)(?::[a-zA-Z])?>/g, (_m, secs: string) => new Date(Number(secs) * 1000).toISOString().slice(0, 16).replace("T", " "))
@@ -190,6 +239,8 @@ function flatten(s: string): string {
     .replace(/<#(\d+)>/g, "#channel")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1") // markdown links → their label
     .replace(/[`*_~]/g, "")
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{20E3}]/gu, "")
+    .replace(/[\u200B-\u200F\u2060\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -197,9 +248,9 @@ function flatten(s: string): string {
 /** Cut on a separator where possible, so a line never ends mid-number. */
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
-  const head = s.slice(0, max - 1);
-  const seam = head.lastIndexOf(" | ");
-  return `${(seam > max / 2 ? head.slice(0, seam) : head).trimEnd()}…`;
+  const head = s.slice(0, max - G.ellipsis.length);
+  const seam = head.lastIndexOf(G.separator);
+  return `${(seam > max / 2 ? head.slice(0, seam) : head).trimEnd()}${G.ellipsis}`;
 }
 
 /**

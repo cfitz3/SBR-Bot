@@ -25,6 +25,7 @@ export {
   podiumRepository,
 } from "./repositories/community.js";
 export { progressionRepository } from "./repositories/progression.js";
+export { goalRepository } from "./repositories/goals.js";
 export {
   rankResolver,
   rolePolicyReader,

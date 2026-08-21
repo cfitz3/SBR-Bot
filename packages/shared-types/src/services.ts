@@ -41,6 +41,7 @@ import type {
   LowestBinDTO,
   MemberRecordDTO,
   MemberSummaryDTO,
+  GoalDTO,
   MilestoneDTO,
   MilestoneDefinitionDTO,
   MilestoneDefinitionInput,
@@ -185,6 +186,20 @@ export interface ProgressionService {
    */
   getAchievements(uuid: string, guildId: string): Promise<Result<AchievementsDTO>>;
   getProgress(uuid: string, metric: ProgressMetric, rangeDays: number): Promise<Result<ProgressSeriesDTO>>;
+  /**
+   * `/goal set` — one target per member per metric, replacing any earlier one.
+   *
+   * Replacing rather than accumulating is the honest model of what a goal is: a
+   * member has one current intention about their networth, not a queue of them,
+   * and a list that grew forever would be a chore to prune rather than a thing
+   * to check. The record of *reaching* a target lives in `Milestone`, which is
+   * the table built to remember things.
+   */
+  setGoal(guildId: string, uuid: string, metric: ProgressMetric, target: number): Promise<Result<GoalDTO, GoalError>>;
+  /** `/goal` — every target this member is working towards, with its standing. */
+  listGoals(guildId: string, uuid: string): Promise<Result<readonly GoalDTO[]>>;
+  /** `/goal clear` — drop one. False when they had no goal for that metric. */
+  clearGoal(guildId: string, uuid: string, metric: ProgressMetric): Promise<Result<boolean>>;
   /** `/setprofile` — remember which profile a member's lookups default to. */
   setSelectedProfile(uuid: string, profileId: string): Promise<Result<ProfileSummaryDTO, SelectProfileError>>;
 
@@ -213,6 +228,56 @@ export interface ProgressionService {
 export type SelectProfileError =
   | { readonly kind: "NO_SUCH_PROFILE" }
   | { readonly kind: "UNAVAILABLE" };
+
+export type GoalError =
+  /** No goal storage wired — the feature is not installed, not broken. */
+  | { readonly kind: "UNAVAILABLE" }
+  /** The member is already at or past the number they asked to reach. */
+  | { readonly kind: "ALREADY_THERE"; readonly current: number }
+  /** Below zero, non-finite, or absurd enough to be a typo rather than an ambition. */
+  | { readonly kind: "BAD_TARGET" };
+
+/**
+ * Port: the goals a member set, implemented by `@sbr/db`.
+ *
+ * A port of its own rather than four more methods on `ProgressionRepository`,
+ * because it is optional in the way that one is not: a deployment without goal
+ * storage still charts progress, and every existing implementation of that
+ * interface — including the fakes in the tests — would otherwise have to grow
+ * four methods to keep compiling.
+ */
+export interface GoalRepository {
+  /** Upsert on (member, metric). Returns the stored row. */
+  setGoal(input: {
+    readonly guildId: string;
+    readonly minecraftUuid: string;
+    readonly metric: ProgressMetric;
+    readonly target: number;
+    readonly startValue: number | null;
+  }): Promise<StoredGoalDTO>;
+  listGoals(guildId: string, minecraftUuid: string): Promise<readonly StoredGoalDTO[]>;
+  clearGoal(guildId: string, minecraftUuid: string, metric: ProgressMetric): Promise<boolean>;
+  /**
+   * Every unachieved goal across the platform, for the job that checks them.
+   * Paged by id so a guild with many members cannot starve the rest.
+   */
+  listUnachieved(limit: number, afterId?: string): Promise<readonly StoredGoalDTO[]>;
+  /** Stamp `achievedAt`. Returns rows changed, so a double-run announces once. */
+  markAchieved(ids: readonly string[], at: Date): Promise<number>;
+}
+
+/** What the store holds, before the service works out how it is going. */
+export interface StoredGoalDTO {
+  readonly id: string;
+  readonly guildId: string;
+  readonly minecraftUuid: string;
+  readonly discordId: string | null;
+  readonly metric: ProgressMetric;
+  readonly target: number;
+  readonly startValue: number | null;
+  readonly createdAt: string;
+  readonly achievedAt: string | null;
+}
 
 /**
  * Port: read-only access to a guild's milestone definitions.

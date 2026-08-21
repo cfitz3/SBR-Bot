@@ -18,16 +18,19 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 > ### Retired commands
 >
-> Ten commands are flagged `enabled: false` and are **absent from Discord's
+> Nine commands are flagged `enabled: false` and are **absent from Discord's
 > command list**, from `/help`, and from guild chat. They are not deleted: the
 > handlers stay compiled and under test, and turning one back on is a one-line
 > change. Sections 4 and 6 below still describe them, because what they did is
 > still what they would do.
 >
-> - **§4, the advice engine** — `/missing`, `/nextupgrade`, `/whatnext`, and
->   `/progress` alongside them. The advice reads a live auction house the
->   platform no longer keeps warm, so its suggestions were confident and stale.
->   A confidently wrong upgrade recommendation is worse than none.
+> - **§4, the advice engine** — `/missing`, `/nextupgrade`, `/whatnext`. The
+>   advice reads a live auction house the platform no longer keeps warm, so its
+>   suggestions were confident and stale. A confidently wrong upgrade
+>   recommendation is worse than none.
+>   `/progress` went dark with them and has since come back: it never read the
+>   auction house, it charts our own snapshots, and Part IV gave it the pace
+>   line and the goals that were the actual missing half.
 > - **§6, looking-for-group** — `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
 >   `/editrun`, `/closerun`, the `run:` buttons, the `!run` alias and the `lfg`
 >   channel slot. Parties get formed in guild chat; the board went stale faster
@@ -73,7 +76,8 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/slayer` | **Deprecated** alias of `/slayers`, kept for one release | Public | as `/slayers` | Same answer, prefixed with the new name | — | Cache→Live |
 | `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
 | `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
-| `/progress` | Progression over time vs. snapshots | Linked | `metric?`, `range?` | Embed/chart-link: delta since last snapshot | No snapshots yet for account | DB (`ProfileSnapshot`) + Cache (latest) |
+| `/progress` | Progression over time, with the pace it implies | Linked | `metric?`, `range?` | Embed: change over the window, both endpoints, per-day pace, snapshot count | No snapshots yet for account | DB (`ProfileSnapshot`) |
+| `/goal` | Set a target on one of the four tracks and watch it | Linked | `action?` (list/set/clear), `metric?`, `target?` | Embed: bar, current/target, days at recent pace | Goal storage unwired → says so; target already met → says where they are | DB (`ProgressionGoal`, `ProfileSnapshot`) |
 | `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned grouped by category (rarest tier first, tier badge or icon, XP paid) + the four closest unearned w/ progress bars, `n/total` headline, hidden-locked count, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet"; hidden achievements counted, never named | DB (`Milestone`, `MilestoneDefinition`, `ProfileSnapshot`) |
 
 ---
