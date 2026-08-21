@@ -10,6 +10,7 @@ import { createAdminApp } from "./composition.js";
 import { startInternalApi } from "./internal-api.js";
 import { startSafetySweep } from "./safety-sweep.js";
 import { startAdminGateway } from "./transport.js";
+import { startWatchtower } from "./watchtower.js";
 
 async function main(): Promise<void> {
   const app = await createAdminApp();
@@ -51,15 +52,50 @@ async function main(): Promise<void> {
     app.log.warn("INTERNAL_API_TOKEN not set — the panel will fall back to raw-ID entry");
   }
 
+  // The one way ops messages reach Discord. Deliberately plain text with every
+  // mention parsed off: an alert that pings @everyone because a log line
+  // happened to contain "@here" would be its own incident.
+  const postOps = async (channelId: string, text: string): Promise<boolean> => {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+    const sent = await channel
+      .send({ content: text.slice(0, 2000), allowedMentions: { parse: [] } })
+      .catch(() => null);
+    return sent !== null;
+  };
+  app.setOpsPoster(postOps);
+  if (!app.config.ops.errorChannelId) {
+    app.log.warn("OPS_ERROR_CHANNEL_ID not set — errors stay in the process log only");
+  }
+
+  // The watchtower reports on a fleet that includes this process, so it can only
+  // speak to an outage it survives. That is the common case — a worker wedged, a
+  // database unreachable, the panel gone — and the case it cannot cover (this bot
+  // itself dead) is the one the *other* services' own beats would show.
+  const watchtower = startWatchtower({
+    listBeats: () => app.listBeats(),
+    health: () => app.health.run(),
+    channelId: () => app.config.ops.alertChannelId ?? null,
+    post: postOps,
+    log: app.log,
+  });
+  if (!app.config.ops.alertChannelId) {
+    app.log.warn("OPS_ALERT_CHANNEL_ID not set — fleet alerts are computed but not posted");
+  }
+
   app.log.info("admin-bot serving");
 
   installLifecycle({
     logger: app.log,
     async shutdown() {
       stopSweep();
+      watchtower.stop();
       await internalApi?.stop();
-      await client.destroy();
+      // `app.shutdown()` flushes the last log batch, so the gateway has to stay
+      // up until after it. Destroying the client first would drop exactly the
+      // errors that explain why we are shutting down.
       await app.shutdown();
+      await client.destroy();
     },
   });
 }

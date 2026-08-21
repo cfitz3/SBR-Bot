@@ -7,7 +7,17 @@ export {
   type LogLevel,
   type LogFields,
   type LoggerOptions,
+  type LogRecord,
+  type LogSink,
 } from "./logger.js";
+export {
+  createLogShipper,
+  SHIP_WINDOW_MS,
+  SHIP_MAX_ENTRIES,
+  SHIP_MAX_DISTINCT,
+  type LogShipper,
+  type LogShipperOptions,
+} from "./shipper.js";
 export { HealthRegistry, pingCheck } from "./health.js";
 export {
   installLifecycle,

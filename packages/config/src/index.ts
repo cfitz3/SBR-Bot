@@ -69,6 +69,20 @@ export interface AppConfig {
    * just reports every applicant as unchecked rather than cleared.
    */
   readonly skykings: { readonly apiKey: string | undefined };
+  /**
+   * Where the platform reports on itself.
+   *
+   * Channel ids rather than configured slots, because these are about the
+   * *fleet* rather than about any one guild: the alert that matters most is the
+   * one sent while the database — and therefore every guild's configuration —
+   * is unreadable. Unset means the watchtower and the log shipper stay silent,
+   * which is the correct default for a development machine.
+   */
+  readonly ops: {
+    readonly alertChannelId: string | undefined;
+    /** Errors are shipped here. Falls back to the alert channel when unset. */
+    readonly errorChannelId: string | undefined;
+  };
   readonly minecraft: {
     readonly host: string;
     readonly port: number;
@@ -212,6 +226,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     internalApi: internalApiConfig(v),
     hypixel: { apiKey: v.optionalString("HYPIXEL_API_KEY") },
     skykings: { apiKey: v.optionalString("SKYKINGS_API_KEY") },
+    ops: {
+      alertChannelId: v.optionalString("OPS_ALERT_CHANNEL_ID"),
+      errorChannelId:
+        v.optionalString("OPS_ERROR_CHANNEL_ID") ?? v.optionalString("OPS_ALERT_CHANNEL_ID"),
+    },
     minecraft: {
       host: v.optionalString("MC_HOST") ?? "mc.hypixel.net",
       port: v.int("MC_PORT", 25565),

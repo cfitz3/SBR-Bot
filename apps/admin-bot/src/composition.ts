@@ -15,6 +15,7 @@ import {
   memberRoleDirtyMarker,
   identityRepository,
   moderationRepository,
+  pingDb,
   rankResolver,
   rolePolicyReader,
   wordlistRepository,
@@ -33,8 +34,14 @@ import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { AnalyticsServiceImpl, createDomainMetrics } from "@sbr/analytics";
 import { AdminDispatcher, buildAdminRegistry } from "@sbr/commands-admin";
-import { createLogger, type Logger } from "@sbr/observability";
-import { closeRedis, createRedisAdapters, getRedis, startHeartbeat } from "@sbr/redis";
+import {
+  createLogger,
+  createLogShipper,
+  HealthRegistry,
+  pingCheck,
+  type Logger,
+} from "@sbr/observability";
+import { closeRedis, createRedisAdapters, getRedis, pingRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import { DiscordGuildEffects } from "./effects.js";
 import { createTicketBridge } from "./ticket-bridge.js";
@@ -69,6 +76,19 @@ export interface AdminApp {
    * Health page should show during a slow start.
    */
   setStatusSource(source: (() => AdminStatusDetails) | null): void;
+  /**
+   * How ops messages reach Discord. Late-bound for the same reason the status
+   * source is: this process reports on a fleet that includes its own gateway,
+   * so the reporting has to exist before the connection does. Until it is set —
+   * and while it is null again during shutdown — batches are dropped rather
+   * than queued: a stale alert about a minute that has already passed is worse
+   * than no alert.
+   */
+  setOpsPoster(post: ((channelId: string, text: string) => Promise<boolean>) | null): void;
+  /** The infrastructure probes, for the watchtower's own reading. */
+  readonly health: HealthRegistry;
+  /** Live heartbeats across the fleet. */
+  listBeats(): Promise<readonly { service: string; instance: string; at: string }[]>;
   shutdown(): Promise<void>;
 }
 
@@ -77,7 +97,27 @@ export type AdminStatusDetails = Readonly<Record<string, string | number | boole
 
 export async function createAdminApp(): Promise<AdminApp> {
   const config = loadConfig();
-  const log = createLogger({ level: config.logLevel, name: "admin-bot" });
+
+  // The ops poster is set by the transport at ready; everything built before
+  // then closes over this rather than over a client that does not exist yet.
+  let opsPost: ((channelId: string, text: string) => Promise<boolean>) | null = null;
+  const errorChannelId = config.ops.errorChannelId ?? null;
+  const shipper =
+    errorChannelId === null
+      ? null
+      : createLogShipper({
+          service: "admin-bot",
+          async post(text) {
+            if (opsPost === null) return;
+            await opsPost(errorChannelId, text);
+          },
+        });
+
+  const log = createLogger({
+    level: config.logLevel,
+    name: "admin-bot",
+    ...(shipper ? { sink: shipper.sink } : {}),
+  });
 
   // Prisma connects lazily, so a wrong or absent Postgres would otherwise only
   // show up later as an endless drip of failing queries. Check once, up front.
@@ -260,6 +300,10 @@ export async function createAdminApp(): Promise<AdminApp> {
     log.debug("guild config invalidated by broadcast", { guildId });
   });
 
+  const health = new HealthRegistry();
+  health.register(pingCheck("postgres", pingDb));
+  health.register(pingCheck("redis", pingRedis));
+
   let liveStatus: (() => AdminStatusDetails) | null = null;
   const stopHeartbeat = startHeartbeat(adapters.heartbeat, () => ({
     service: "admin-bot",
@@ -279,8 +323,20 @@ export async function createAdminApp(): Promise<AdminApp> {
     setStatusSource(source) {
       liveStatus = source;
     },
+    setOpsPoster(post) {
+      opsPost = post;
+    },
+    health,
+    listBeats: () => adapters.heartbeat.list(),
     async shutdown() {
       stopHeartbeat();
+      // One last flush while the gateway is still up: the errors that explain a
+      // crash are the ones logged in the seconds before it.
+      if (shipper) {
+        await shipper.flush().catch(() => false);
+        shipper.stop();
+      }
+      opsPost = null;
       await unsubscribe().catch(() => undefined);
       await Promise.allSettled([closeRedis(), disconnectDb()]);
     },

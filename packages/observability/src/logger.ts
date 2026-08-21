@@ -17,6 +17,25 @@ const LEVEL_WEIGHT: Record<LogLevel, number> = {
 
 export type LogFields = Record<string, unknown>;
 
+/** One emitted record, as a sink sees it. The same object that is serialised. */
+export interface LogRecord {
+  readonly level: LogLevel;
+  readonly time: string;
+  readonly name: string | undefined;
+  readonly msg: string;
+  readonly fields: LogFields;
+}
+
+/**
+ * A second destination for records at or above `sinkLevel`.
+ *
+ * Deliberately synchronous and return-less: a sink that could fail or block
+ * would make logging a source of the failures it exists to report, so the
+ * contract is "take this and deal with it elsewhere". The Discord shipper
+ * buffers and posts on its own timer for exactly that reason.
+ */
+export type LogSink = (record: LogRecord) => void;
+
 export interface Logger {
   trace(msg: string, fields?: LogFields): void;
   debug(msg: string, fields?: LogFields): void;
@@ -30,6 +49,10 @@ export interface LoggerOptions {
   readonly level?: LogLevel;
   readonly name?: string;
   readonly base?: LogFields;
+  /** Where records also go. Inherited by every child of this logger. */
+  readonly sink?: LogSink;
+  /** The floor for the sink, independent of the console level. Defaults to `error`. */
+  readonly sinkLevel?: LogLevel;
 }
 
 function write(level: LogLevel, name: string | undefined, base: LogFields, msg: string, fields?: LogFields): void {
@@ -50,9 +73,20 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   const threshold = LEVEL_WEIGHT[options.level ?? "info"];
   const base = options.base ?? {};
   const name = options.name;
+  const sink = options.sink;
+  const sinkThreshold = LEVEL_WEIGHT[options.sinkLevel ?? "error"];
 
   const make = (level: LogLevel) => (msg: string, fields?: LogFields) => {
     if (LEVEL_WEIGHT[level] >= threshold) write(level, name, base, msg, fields);
+    // Independent of the console threshold: a process running at `warn` must
+    // still ship its errors, and one running at `trace` must not ship its noise.
+    if (sink && LEVEL_WEIGHT[level] >= sinkThreshold) {
+      try {
+        sink({ level, time: new Date().toISOString(), name, msg, fields: { ...base, ...(fields ?? {}) } });
+      } catch {
+        // A sink that throws must not take the call site down with it.
+      }
+    }
   };
 
   return {
@@ -65,6 +99,8 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       return createLogger({
         ...(options.level ? { level: options.level } : {}),
         ...(name ? { name } : {}),
+        ...(sink ? { sink } : {}),
+        ...(options.sinkLevel ? { sinkLevel: options.sinkLevel } : {}),
         base: { ...base, ...bindings },
       });
     },
