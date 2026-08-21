@@ -61,7 +61,26 @@ Keys are **structural, never sentence-derived**: `panel.members.title`, not `pan
 | `error.deny.*` | Panel access denials, by reason code | `client/api.ts` |
 | `error.generic.*` | Shared failures, by reason code | Both bots' dispatchers |
 | `error.command.*` | What a dispatcher says before a handler runs | Both bots' dispatchers |
-| `embed.*` | Embed tone words, shared footers, the "no value" dash | Bot renderers |
+| `error.hypixel.*` | Hypixel's four refusals, by `HypixelFailureState` | `renderFailure`, so every card that can fail |
+| `error.link.*` | Why a `/link` didn't take, by `LinkError["kind"]` | `renderLinkError` |
+| `embed.tone.*`, `embed.footer.*`, `embed.unknown` | Tone words, shared footers, the "no value" dash | Bot renderers |
+| `embed.field.*` | Field names that appear on more than one card | The lookup cards and the profile card |
+| `embed.metricPhrase.*` | The same metrics sentence-cased, for mid-sentence use | The event board |
+| `embed.xpSource.*` | How each XP source is named to a member | `/standing` |
+| `embed.card.*` | Card titles, the title template and its nouns, and every "nothing to show" line | `render.ts` |
+
+### Card titles are a template, not fifteen sentences
+
+Every lookup card's title has the same shape — *whose* card, then *what* card — so there is one key for the shape and a vocabulary of nouns to fill it:
+
+```ts
+title: "{subject} — {noun}",
+noun: { profile: "profile", skills: "skills", standing: "standing", … },
+```
+
+Change `card.title` once and all fifteen move together. Fifteen separate title literals would be fifteen chances for one of them to use a hyphen where the rest use an em dash, which is exactly what a house style is supposed to prevent. Two cards sit outside the template on purpose and have their own keys: `card.auctions` puts the item first, because an auction card is about an item far more often than about a player, and `card.roster` names the guild.
+
+`embed.field` and `embed.metricPhrase` hold the same metrics in two casings, and that is deliberate rather than drift: field names are title-cased because they head a column, and the event board's are sentence-cased because they land inside a sentence. "SkyBlock" keeps its capital in both — no `toLowerCase()` would have got that right, which is why both are written out.
 
 Keyed by *reason code* rather than by call site is deliberate: the same denial reaches a member through a slash command, a panel page and an in-game reply, and it should say the same thing in all three. When a surface genuinely needs different phrasing — the panel's denial can offer a sign-in button, guild chat cannot — that surface gets its own key rather than rewording the shared one.
 

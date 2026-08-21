@@ -2,6 +2,7 @@
  * User-facing rendering. Maps typed fallback states to honest messages and
  * formats networth respecting exact-vs-estimate and staleness.
  */
+import { copy } from "@sbr/brand";
 import { describeAge, padInlineRow, stalenessFooter, tierRank } from "@sbr/shared-types";
 import type {
   AccessoryReportDTO,
@@ -37,6 +38,32 @@ import type {
   XpStandingDTO,
 } from "@sbr/shared-types";
 
+/**
+ * The shared embed vocabulary, read once.
+ *
+ * `C` is per-card copy — titles and the sentences a card prints when it has
+ * nothing to show. `F` is field names, which exist as keys precisely because
+ * half of them appear on three cards each and had already drifted apart once.
+ */
+const C = copy.embed.card;
+const F = copy.embed.field;
+
+/**
+ * `{subject} — {noun}`: whose card, then what card.
+ *
+ * One template and a vocabulary rather than fifteen title literals, because
+ * fifteen literals is fifteen chances for one of them to use a hyphen where the
+ * rest use an em dash — which is exactly what a house style is for.
+ */
+function cardTitle(subject: string, noun: keyof typeof C.noun): string {
+  return C.title.replace("{subject}", subject).replace("{noun}", C.noun[noun]);
+}
+
+/** The same shape, for the cards whose noun is data rather than vocabulary. */
+function titleFor(subject: string, noun: string): string {
+  return C.title.replace("{subject}", subject).replace("{noun}", noun);
+}
+
 /** One decimal is enough for a level; two would imply precision we don't have. */
 export function formatLevel(n: number | null): string {
   return n === null ? "—" : Number.isInteger(n) ? `${n}` : n.toFixed(1);
@@ -62,30 +89,18 @@ export function formatCoins(n: number): string {
   return `${n}`;
 }
 
+/**
+ * A lookup rather than a switch: the same four sentences reach a member through
+ * a slash command, through guild chat and through the panel, and the exhaustive
+ * key means a fifth upstream state is a type error here instead of a card that
+ * renders `undefined`.
+ */
 export function renderFailure(state: HypixelFailureState): string {
-  switch (state) {
-    case "NOT_LINKED":
-      return "You're not linked yet — use /link <ign>.";
-    case "MISSING_PROFILE":
-      return "No Skyblock profile found for that player.";
-    case "RATE_LIMITED":
-      return "Hypixel is rate-limiting us right now — try again in a moment.";
-    case "API_DISABLED":
-      return "That data is turned off in the player's Hypixel API settings.";
-  }
+  return copy.error.hypixel[state];
 }
 
 export function renderLinkError(error: LinkError): string {
-  switch (error.kind) {
-    case "IGN_NOT_FOUND":
-      return "That IGN doesn't exist.";
-    case "SOCIAL_UNSET":
-      return "Set your Discord in-game first (Hypixel → social menu), then run /link again.";
-    case "SOCIAL_MISMATCH":
-      return "Your Hypixel Discord link doesn't match your Discord account.";
-    case "ALREADY_OWNED":
-      return "That Minecraft account is already linked to another member.";
-  }
+  return copy.error.link[error.kind];
 }
 
 export function renderNetworth(result: HypixelResult<NetworthDTO>): string {
@@ -149,10 +164,10 @@ export function renderNetworthEmbed(ign: string, result: HypixelResult<NetworthD
     });
 
   return {
-    title: `${ign} — networth`,
+    title: cardTitle(ign, "networth"),
     description:
       data.total === null
-        ? "Unknown — the profile's API settings hide the data this needs."
+        ? C.networthHidden
         : `**${formatCoins(data.total)}**${data.exact ? "" : " (estimate — some data is hidden)"}`,
     // Padded because the category count is data — a profile with four scoring
     // categories would otherwise leave the fourth stretched alone on its own row.
@@ -200,16 +215,16 @@ export function renderProfileEmbed(
   ign: string,
   result: HypixelResult<ProfileSummaryDTO>,
 ): EmbedView {
-  return statEmbed(`${ign} — profile`, result, (p) => ({
+  return statEmbed(cardTitle(ign, "profile"), result, (p) => ({
     description: `**${profileLabel(p)}**`,
     // SkyBlock Level leads: it is the number a member quotes about themselves,
     // and the one that moves whatever they happen to be playing. Weight stays,
     // one column over, as a figure rather than as the headline.
     fields: padInlineRow([
-      { name: "SkyBlock Level", value: formatLevel(p.skyblockLevel), inline: true },
-      { name: "Skill average", value: formatLevel(p.skillAverage), inline: true },
-      { name: "Catacombs", value: formatLevel(p.catacombsLevel), inline: true },
-      { name: "Weight", value: weightText(p.senitherWeight), inline: true },
+      { name: F.skyblockLevel, value: formatLevel(p.skyblockLevel), inline: true },
+      { name: F.skillAverage, value: formatLevel(p.skillAverage), inline: true },
+      { name: F.catacombs, value: formatLevel(p.catacombsLevel), inline: true },
+      { name: F.weight, value: weightText(p.senitherWeight), inline: true },
     ]),
     color: "INFO",
   }));
@@ -220,9 +235,9 @@ export function renderProfileListEmbed(
   ign: string,
   result: HypixelResult<readonly ProfileSummaryDTO[]>,
 ): EmbedView {
-  return statEmbed(`${ign} — profiles`, result, (list) => {
+  return statEmbed(cardTitle(ign, "profiles"), result, (list) => {
     if (list.length === 0) {
-      return { description: "No Skyblock profiles on this account.", color: "NEUTRAL" };
+      return { description: C.noProfiles, color: "NEUTRAL" };
     }
     return {
       fields: list.map((p) => ({
@@ -240,17 +255,17 @@ export function renderSkillsEmbed(
   result: HypixelResult<SkillsDTO>,
   only?: string,
 ): EmbedView {
-  return statEmbed(`${ign} — skills`, result, (s) => {
+  return statEmbed(cardTitle(ign, "skills"), result, (s) => {
     if (s.apiDisabled) {
       return {
-        description: "This profile's skill API is turned off, so none of it is readable.",
+        description: C.skillsOff,
         color: "NEUTRAL",
       };
     }
     const wanted = only?.toLowerCase();
     const shown = wanted ? s.skills.filter((k) => k.name.toLowerCase() === wanted) : s.skills;
     if (shown.length === 0) {
-      return { description: `No skill called "${only ?? ""}".`, color: "NEUTRAL" };
+      return { description: C.noSuchSkill.replace("{name}", only ?? ""), color: "NEUTRAL" };
     }
     // Counted against the readable skills only: "3 maxed" out of a set half of
     // which is hidden would overstate what we can actually see.
@@ -295,7 +310,7 @@ function tierBreakdown(kills: Readonly<Record<string, number>>): string {
     .map(Number)
     .filter((n) => Number.isFinite(n));
   const highest = tiers.length > 0 ? Math.max(...tiers) : 0;
-  if (highest === 0) return "No recorded kills.";
+  if (highest === 0) return C.noKills;
   const parts: string[] = [];
   for (let tier = 1; tier <= highest; tier += 1) {
     parts.push(`T${tier} ${formatNumber(kills[String(tier)] ?? 0)}`);
@@ -308,14 +323,12 @@ export function renderSlayersEmbed(
   result: HypixelResult<SlayersDTO>,
   only?: string,
 ): EmbedView {
-  return statEmbed(`${ign} — slayers`, result, (s) => {
+  return statEmbed(cardTitle(ign, "slayers"), result, (s) => {
     const wanted = only?.toLowerCase();
     const shown = wanted ? s.bosses.filter((b) => b.boss === wanted) : s.bosses;
     if (shown.length === 0) {
       return {
-        description: wanted
-          ? `No ${only ?? ""} slayer data on this profile.`
-          : "No slayer data on this profile.",
+        description: wanted ? C.noSlayerDataFor.replace("{boss}", only ?? "") : C.noSlayerData,
         color: "NEUTRAL",
       };
     }
@@ -338,14 +351,14 @@ ${tierBreakdown(b.kills)}` : ` · ${formatNumber(totalKills(b.kills))} kills`),
 }
 
 export function renderDungeonsEmbed(ign: string, result: HypixelResult<DungeonsDTO>): EmbedView {
-  return statEmbed(`${ign} — dungeons`, result, (d) => {
+  return statEmbed(cardTitle(ign, "dungeons"), result, (d) => {
     if (!d.played) {
-      return { description: "This player has never entered a dungeon.", color: "NEUTRAL" };
+      return { description: C.noDungeons, color: "NEUTRAL" };
     }
     const fields = [
-      { name: "Catacombs", value: formatLevel(d.catacombsLevel), inline: true },
-      { name: "Class average", value: formatLevel(d.classAverage), inline: true },
-      { name: "Selected", value: d.selectedClass ?? "—", inline: true },
+      { name: F.catacombs, value: formatLevel(d.catacombsLevel), inline: true },
+      { name: F.classAverage, value: formatLevel(d.classAverage), inline: true },
+      { name: F.selected, value: d.selectedClass ?? "—", inline: true },
       ...d.classes.map((c) => ({ name: c.name, value: `${c.level}`, inline: true })),
     ];
 
@@ -353,7 +366,7 @@ export function renderDungeonsEmbed(ign: string, result: HypixelResult<DungeonsD
     // where "0 XP to go" would be a misleading way to say "finished".
     if (d.catacombsProgress !== null && d.catacombsXpToNext !== null) {
       fields.push({
-        name: "Progress",
+        name: F.progress,
         value: `${progressBar(d.catacombsProgress)}\n${formatNumber(d.catacombsXpToNext)} XP to next level`,
         inline: false,
       });
@@ -425,23 +438,23 @@ export function renderStatsEmbed(
   const recordField = record === undefined || record === null ? null : renderMemberRecordField(record);
 
   return {
-    title: `${ign} — stats`,
+    title: cardTitle(ign, "stats"),
     description: `Profile **${profileLabel(p)}**`,
     // Padded: how many fields this card carries depends on whether standing and
     // a staff record were available, so the row can end short in three different
     // ways and none of them is a reason to leave a field stranded.
     fields: padInlineRow([
-      { name: "SkyBlock Level", value: formatLevel(p.skyblockLevel), inline: true },
-      { name: "Skill average", value: formatLevel(p.skillAverage), inline: true },
+      { name: F.skyblockLevel, value: formatLevel(p.skyblockLevel), inline: true },
+      { name: F.skillAverage, value: formatLevel(p.skillAverage), inline: true },
       {
-        name: "Catacombs",
+        name: F.catacombs,
         value: formatLevel(dungeons.ok ? dungeons.value.data.catacombsLevel : null),
         inline: true,
       },
-      { name: "Weight", value: weightText(p.senitherWeight), inline: true },
-      { name: "Networth", value: nw, inline: true },
+      { name: F.weight, value: weightText(p.senitherWeight), inline: true },
+      { name: F.networth, value: nw, inline: true },
       {
-        name: "Slayer xp",
+        name: F.slayerXp,
         value: slayers.ok ? formatNumber(slayers.value.data.totalExperience) : "—",
         inline: true,
       },
@@ -451,14 +464,14 @@ export function renderStatsEmbed(
       ...(standing
         ? [
             {
-              name: "Guild standing",
+              name: F.guildStanding,
               value: `Level ${standing.level} · ${formatNumber(standing.totalXp)} XP${
                 standing.rank === null ? "" : ` · #${standing.rank}`
               }`,
               inline: true,
             },
             {
-              name: "Tenure",
+              name: F.tenure,
               value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
               inline: true,
             },
@@ -532,16 +545,16 @@ export function renderProfileCardEmbed(ign: string, input: ProfileCardInput): Em
     : renderFailure(input.profile.error.state);
 
   const hypixelRow: CardField[] = [
-    { name: "Skill average", value: formatLevel(p === null ? null : p.skillAverage), inline: true },
+    { name: F.skillAverage, value: formatLevel(p === null ? null : p.skillAverage), inline: true },
     {
-      name: "Catacombs",
+      name: F.catacombs,
       value: formatLevel(input.dungeons.ok ? input.dungeons.value.data.catacombsLevel : null),
       inline: true,
     },
-    { name: "Weight", value: p === null ? "—" : weightText(p.senitherWeight), inline: true },
-    { name: "Networth", value: nw, inline: true },
+    { name: F.weight, value: p === null ? "—" : weightText(p.senitherWeight), inline: true },
+    { name: F.networth, value: nw, inline: true },
     {
-      name: "Slayer xp",
+      name: F.slayerXp,
       value: input.slayers.ok ? formatNumber(input.slayers.value.data.totalExperience) : "—",
       inline: true,
     },
@@ -553,14 +566,14 @@ export function renderProfileCardEmbed(ign: string, input: ProfileCardInput): Em
       ? []
       : [
           {
-            name: "Guild standing",
+            name: F.guildStanding,
             value: `Level ${standing.level} · ${formatNumber(standing.totalXp)} XP${
               standing.rank === null ? "" : ` · #${standing.rank}`
             }`,
             inline: true,
           },
           {
-            name: "Tenure",
+            name: F.tenure,
             value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
             inline: true,
           },
@@ -612,7 +625,7 @@ function achievementField(data: AchievementsDTO | null): CardField | null {
     `**${data.earnedCount}/${data.totalCount}** earned${badges === "" ? "" : ` — ${badges}`}`,
     ...latest,
   ];
-  return { name: "Achievements", value: lines.join("\n"), inline: false };
+  return { name: F.achievements, value: lines.join("\n"), inline: false };
 }
 
 /**
@@ -657,7 +670,7 @@ function positionsField(positions: readonly LeaderboardPositionDTO[] | null): Ca
   const value = positions
     .map((row) => `${row.label} **#${String(row.rank)}** of ${formatNumber(row.totalRanked)}`)
     .join(" · ");
-  return { name: "Leaderboards", value, inline: false };
+  return { name: F.leaderboards, value, inline: false };
 }
 
 /**
@@ -666,14 +679,17 @@ function positionsField(positions: readonly LeaderboardPositionDTO[] | null): Ca
  * never seen is tidied and printed rather than dropped.
  */
 function metricLabel(metric: string): string {
+  // Read from the field vocabulary rather than restated: a metric printed on an
+  // event podium and the same metric printed as a card field are the same thing
+  // to a reader, and two lists is how they stop matching.
   const known: Readonly<Record<string, string>> = {
-    catacombsLevel: "Catacombs",
-    catacombs: "Catacombs",
-    networth: "Networth",
-    skillAverage: "Skill average",
-    skyblockLevel: "SkyBlock Level",
-    slayerXp: "Slayer xp",
-    senitherWeight: "Weight",
+    catacombsLevel: F.catacombs,
+    catacombs: F.catacombs,
+    networth: F.networth,
+    skillAverage: F.skillAverage,
+    skyblockLevel: F.skyblockLevel,
+    slayerXp: F.slayerXp,
+    senitherWeight: F.weight,
   };
   const direct = known[metric];
   if (direct !== undefined) return direct;
@@ -723,27 +739,13 @@ export function renderMemberRecordField(
   }
 
   if (lines.length === 0) return null;
-  return { name: "Your record", value: lines.join("\n"), inline: false };
+  return { name: F.yourRecord, value: lines.join("\n"), inline: false };
 }
 
 // ── Standing (COMMANDS.md §18) ──────────────────────────────────────────────
 
-/**
- * How each XP source is named to a member. Deliberately in the member's terms
- * rather than the enum's: nobody earns "GUILD_CHAT_MESSAGE", they talk in guild
- * chat. `MANUAL` says "staff adjustment" because pretending an adjustment was
- * earned is exactly the kind of thing that makes people distrust the number.
- */
-const XP_SOURCE_LABELS: Readonly<Record<XpSource, string>> = {
-  GEXP: "Guild XP",
-  DISCORD_MESSAGE: "Discord chat",
-  GUILD_CHAT_MESSAGE: "Guild chat",
-  TENURE: "Tenure",
-  COMMAND_USAGE: "Command use",
-  EVENT: "Events",
-  MILESTONE: "Milestones",
-  MANUAL: "Staff adjustment",
-};
+/** How each XP source is named to a member — the member's word, not the enum's. */
+const XP_SOURCE_LABELS: Readonly<Record<XpSource, string>> = copy.embed.xpSource;
 
 /** `▰▰▰▱▱▱▱▱▱▱`. Built from the DTO's own numbers so this file needs no engine. */
 function xpProgressBar(intoLevel: number, levelSpan: number, width = 10): string {
@@ -767,35 +769,35 @@ export function renderStandingEmbed(name: string, standing: XpStandingDTO): Embe
 
   const breakdown =
     earned.length === 0
-      ? "Nothing yet."
+      ? C.noXpYet
       : earned.map(([source, amount]) => `${XP_SOURCE_LABELS[source]} — ${formatNumber(amount)}`).join("\n");
 
   const bar = xpProgressBar(standing.intoLevel, standing.levelSpan);
   const toNext = Math.max(0, standing.levelSpan - standing.intoLevel);
 
   return {
-    title: `${name} — standing`,
+    title: cardTitle(name, "standing"),
     description: `**Level ${standing.level}** · ${formatNumber(standing.totalXp)} XP\n${bar} ${formatNumber(
       standing.intoLevel,
     )}/${formatNumber(standing.levelSpan)} · ${formatNumber(toNext)} to level ${standing.level + 1}`,
     fields: [
-      { name: "Rank", value: standing.rank === null ? "—" : `#${standing.rank}`, inline: true },
+      { name: F.rank, value: standing.rank === null ? "—" : `#${standing.rank}`, inline: true },
       {
-        name: "Tenure",
+        name: F.tenure,
         value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
         inline: true,
       },
       {
-        name: "Last earned",
+        name: F.lastEarned,
         value: standing.lastAwardAt === null ? "—" : describeAge(standing.lastAwardAt.toISOString()),
         inline: true,
       },
-      { name: "Where it came from", value: breakdown, inline: false },
+      { name: F.whereFrom, value: breakdown, inline: false },
     ],
     // Not a staleness footer: standing is recomputed on a cadence rather than
     // fetched, so what a member needs to know is that today is still counting,
     // not how old some upstream read was.
-    footer: "XP is totalled a few times a day — today's activity may not be in yet.",
+    footer: C.standingFooter,
     color: "INFO",
   };
 }
@@ -841,7 +843,7 @@ export function renderLeaderboardEmbed(page: LeaderboardPageDTO, now = Date.now(
 
   const body =
     page.entries.length === 0
-      ? "Nobody is ranked here yet."
+      ? C.nobodyRanked
       : page.entries.map((e) => leaderboardLine(e, spec.format)).join("\n");
 
   // Appended rather than merged into the list: the viewer's row is an answer to
@@ -857,7 +859,7 @@ export function renderLeaderboardEmbed(page: LeaderboardPageDTO, now = Date.now(
   if (page.oldestReadingAt !== null) parts.push(`oldest reading ${describeAge(page.oldestReadingAt, now)}`);
 
   return {
-    title: `${spec.label} — guild leaderboard`,
+    title: cardTitle(spec.label, "leaderboard"),
     description: `${spec.description}\n\n${body}${yours}`,
     footer: parts.join(" · "),
     color: "INFO",
@@ -903,18 +905,17 @@ export function renderAccessoriesEmbed(
   ign: string,
   result: HypixelResult<AccessoryReportDTO>,
 ): EmbedView {
-  const embed = statEmbed(`${ign} — accessories`, result, (r) => {
+  const embed = statEmbed(cardTitle(ign, "accessories"), result, (r) => {
     if (r.apiDisabled) {
       return {
-        description:
-          "Couldn't read this profile's talisman bag — the inventory API is off, so ownership is unknown.",
+        description: C.bagUnreadable,
         color: "NEUTRAL",
       };
     }
 
     const fields = [
       {
-        name: "Magical power",
+        name: F.magicalPower,
         value: r.magicalPower === null ? "unknown" : formatNumber(r.magicalPower),
         inline: true,
       },
@@ -962,13 +963,13 @@ export function renderAdviceEmbed(
   title: string,
   result: HypixelResult<AdviceDTO>,
 ): EmbedView {
-  return statEmbed(`${ign} — ${title}`, result, (a) => {
+  return statEmbed(titleFor(ign, title), result, (a) => {
     if (a.items.length === 0) {
-      return { description: "No suggestions — nothing obvious to improve.", color: "SUCCESS" };
+      return { description: C.noAdvice, color: "SUCCESS" };
     }
     return {
       description: a.generic
-        ? "Couldn't read this profile, so this is general advice rather than advice about you."
+        ? C.genericAdvice
         : `Focus: **${a.focus}**`,
       fields: a.items.map((i) => ({
         name: `${PRIORITY_MARK[i.priority] ?? ""} ${i.title}`.trim(),
@@ -1051,17 +1052,17 @@ function glyph(a: AchievementDTO): string {
 export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): EmbedView {
   if (!data.configured) {
     return {
-      title: `${ign} — achievements`,
+      title: cardTitle(ign, "achievements"),
       // "Off", not "none": a member reading an empty list would conclude they
       // had achieved nothing, which is a different and untrue claim.
-      description: "Achievements aren't switched on here.",
+      description: C.achievementsOff,
       color: "NEUTRAL",
     };
   }
   if (data.totalCount === 0) {
     return {
-      title: `${ign} — achievements`,
-      description: "This guild hasn't set up any achievements yet.",
+      title: cardTitle(ign, "achievements"),
+      description: C.achievementsNone,
       color: "NEUTRAL",
     };
   }
@@ -1113,7 +1114,7 @@ export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): Emb
       : `\n${data.hiddenLocked} hidden achievement${data.hiddenLocked === 1 ? "" : "s"} still to find.`;
 
   return {
-    title: `${ign} — achievements`,
+    title: cardTitle(ign, "achievements"),
     description:
       `**${data.earnedCount}/${data.totalCount}** earned` +
       (data.xpEarned > 0 ? ` · **${formatNumber(data.xpEarned)}** guild XP from achievements` : "") +
@@ -1132,8 +1133,8 @@ export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): Emb
 export function renderProgressEmbed(ign: string, series: ProgressSeriesDTO): EmbedView {
   if (series.points.length === 0) {
     return {
-      title: `${ign} — ${series.metric}`,
-      description: `No snapshots in the last ${series.rangeDays} days.`,
+      title: titleFor(ign, series.metric),
+      description: C.noSnapshots.replace("{n}", String(series.rangeDays)),
       color: "NEUTRAL",
     };
   }
@@ -1143,15 +1144,15 @@ export function renderProgressEmbed(ign: string, series: ProgressSeriesDTO): Emb
   const first = series.points[0];
   const last = series.points[series.points.length - 1];
   return {
-    title: `${ign} — ${series.metric}`,
+    title: titleFor(ign, series.metric),
     description:
       series.change === null
-        ? "Only one reading so far — come back after the next snapshot."
+        ? C.oneSnapshot
         : `**${series.change >= 0 ? "+" : "−"}${fmt(Math.abs(series.change))}** over ${series.rangeDays} days`,
     fields: [
       { name: first?.date ?? "start", value: fmt(first?.value ?? null), inline: true },
       { name: last?.date ?? "now", value: fmt(last?.value ?? null), inline: true },
-      { name: "Snapshots", value: `${series.points.length}`, inline: true },
+      { name: F.snapshots, value: `${series.points.length}`, inline: true },
     ],
     color: series.change !== null && series.change < 0 ? "WARNING" : "SUCCESS",
   };
@@ -1234,9 +1235,9 @@ export function renderAuctionsEmbed(
   result: HypixelResult<AuctionsDTO>,
   now: number = Date.now(),
 ): EmbedView {
-  return statEmbed(`Auctions — ${subject}`, result, (data) => {
+  return statEmbed(C.auctions.replace("{subject}", subject), result, (data) => {
     if (data.listings.length === 0) {
-      return { description: `No active auctions for ${subject}.`, color: "NEUTRAL" };
+      return { description: C.noAuctions.replace("{subject}", subject), color: "NEUTRAL" };
     }
 
     const line = (l: AuctionListingDTO): string => {
@@ -1309,7 +1310,7 @@ export function renderRosterEmbed(roster: GuildRosterDTO, now: number = Date.now
   if (listed === 0) {
     return {
       title: rosterTitle(roster),
-      description: online === 0 ? "Nobody is online right now." : headline,
+      description: online === 0 ? C.nobodyOnline : headline,
       color: "NEUTRAL",
       footer: `as of ${describeAge(roster.fetchedAt, now)}`,
     };
@@ -1335,7 +1336,7 @@ export function renderRosterEmbed(roster: GuildRosterDTO, now: number = Date.now
 }
 
 function rosterTitle(roster: GuildRosterDTO): string {
-  return roster.guildName ? `${roster.guildName} — online now` : "Online now";
+  return roster.guildName ? C.roster.replace("{guild}", roster.guildName) : C.rosterUnnamed;
 }
 
 /** Discord rejects an embed field value over 1024 characters outright. */

@@ -16,6 +16,7 @@ import type {
   RsvpEntryDTO,
   TicketDTO,
 } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
 import { padInlineRow } from "@sbr/shared-types";
 
 /**
@@ -112,15 +113,15 @@ export interface EventBoardView {
   readonly updatedAt: string;
 }
 
-/** Metric keys read as camelCase in the database and as English on the board. */
-const METRIC_LABELS: Readonly<Record<string, string>> = {
-  skyblockLevel: "SkyBlock level",
-  networth: "networth",
-  skillAverage: "skill average",
-  catacombsLevel: "catacombs level",
-  slayerXp: "slayer XP",
-  senitherWeight: "weight",
-};
+/**
+ * Metric keys read as camelCase in the database and as English on the board.
+ *
+ * Sentence-cased, and deliberately not the same table as the title-cased field
+ * names on the lookup cards: these land mid-sentence. Both live in the brand
+ * layer so the difference is a stated decision rather than something that looks
+ * like one of the two having drifted.
+ */
+const METRIC_LABELS: Readonly<Record<string, string>> = copy.embed.metricPhrase;
 
 export function metricLabel(metric: string): string {
   return METRIC_LABELS[metric] ?? metric;

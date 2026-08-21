@@ -33,6 +33,39 @@ export const DEFAULT_ERRORS = {
   },
 
   /**
+   * Hypixel's four documented refusals, in the member's terms.
+   *
+   * Keyed by `HypixelFailureState` so the switch that used to hold these
+   * sentences is a lookup: every card that can fail prints one of these, on both
+   * bots and in guild chat, and a fifth state added upstream is a type error here
+   * rather than a card that renders `undefined`.
+   *
+   * None of them says "error". Three of the four are somebody else's setting or
+   * somebody else's rate limit, and telling a member their own lookup broke when
+   * it did not is how a platform earns a reputation for being flaky.
+   */
+  hypixel: {
+    NOT_LINKED: "You're not linked yet — use /link <ign>.",
+    MISSING_PROFILE: "No Skyblock profile found for that player.",
+    RATE_LIMITED: "Hypixel is rate-limiting us right now — try again in a moment.",
+    API_DISABLED: "That data is turned off in the player's Hypixel API settings.",
+  },
+
+  /**
+   * Why a `/link` did not take, keyed by `LinkError["kind"]`.
+   *
+   * Each one names the next action, because every one of these is fixable by the
+   * member in under a minute and a bare "link failed" would send them to staff
+   * instead.
+   */
+  link: {
+    IGN_NOT_FOUND: "That IGN doesn't exist.",
+    SOCIAL_UNSET: "Set your Discord in-game first (Hypixel → social menu), then run /link again.",
+    SOCIAL_MISMATCH: "Your Hypixel Discord link doesn't match your Discord account.",
+    ALREADY_OWNED: "That Minecraft account is already linked to another member.",
+  },
+
+  /**
    * What a dispatcher says before a handler ever runs — the same four answers in
    * both bots, on Discord and in guild chat.
    *
