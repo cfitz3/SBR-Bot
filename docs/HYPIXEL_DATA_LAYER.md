@@ -40,10 +40,10 @@ All methods return a discriminated result — success carries data + `freshness`
 
 | Endpoint | Class | Why | Cadence / TTL |
 |----------|-------|-----|---------------|
-| `player` | **Live** (cached) | Single small object; needed on demand | Cache 5–10 min |
-| `skyblock/profiles` (by player) | **Live** (cached) | Per-player, bounded size; powers stats/networth | Cache 3–5 min |
-| `skyblock/profile` (single) | **Live** (cached) | Same | Cache 3–5 min |
-| `skyblock/museum` (per profile) | **Live** (cached, on-demand) | Needed for accurate networth; separate call | Cache 10 min |
+| `player` | **Live** (cached) | Single small object; needed on demand | Cache **6 h** |
+| `skyblock/profiles` (by player) | **Live** (cached) | Per-player, bounded size; powers stats/networth | Cache **6 h** |
+| `skyblock/profile` (single) | **Live** (cached) | Served from the profiles list; no call of its own | Cache **6 h** |
+| `skyblock/museum` (per profile) | **Live** (cached, on-demand) | Needed for accurate networth; separate call | Cache **12 h** |
 | `guild` (by id/player) | **Live** (cached) + periodic worker refresh | Roster/rank sync | Cache 5 min; worker every 5–15 min |
 | `resources/*` (skills, collections, items, election) | **Live-ish, long cache** | Static-ish reference data | Cache hours; worker daily refresh |
 | `skyblock/bazaar` | **Background-primary** (quick-status) | One big object, high churn; serve from cache | Worker every 30–60 s → cache; commands read cache |
@@ -52,6 +52,18 @@ All methods return a discriminated result — success carries data + `freshness`
 | `skyblock/election` / mayor | **Background-primary** | Global, slow-changing | Worker every few min → cache; commands read cache |
 | `skyblock/firesales` | **Background-primary** | Global, slow-changing | Worker periodic → cache |
 | `skyblock/bingo` (+ resources) | **Background-primary** | Global event data | Worker periodic → cache |
+
+**Why the player TTLs are hours, not minutes.** They were 3–10 minutes, which was
+a cost decision. They are now a policy decision: see `HYPIXEL_COMPLIANCE.md`. The
+guild-activity exception this install runs under caps player reads at one per
+player per hour, and the cache is the control that keeps volume inside that cap —
+a member viewed twenty times a day costs four upstream reads at a 6-hour TTL, not
+twenty. `PlayerRateLimiter` is the floor underneath it, not a substitute for it.
+Market TTLs are unchanged: public, guild-agnostic, one request serving everyone.
+
+Anything wanting fresher data than the TTL must pass an explicit `maxAgeMs`
+(`PlayerReadOptions`), which exists for a member or operator pressing refresh.
+Nothing scheduled passes it.
 
 **Rule of thumb:** *per-player, bounded* endpoints are **Live (cached on demand)**; *global, large, or paginated* datasets (AH, bazaar, election, firesales, bingo) are **worker-owned** and commands only ever read the derived cache.
 
@@ -73,9 +85,9 @@ Redis is the single cache tier (see `DOMAIN_MODEL.md` Redis categories). Keys ca
 
 | Data | Key (illustrative) | TTL | Populated by | Notes |
 |------|--------------------|-----|--------------|-------|
-| Player object | `cache:hypixel:player:{uuid}` | 5–10 min | Live (on demand) | Small; cheap to refresh |
-| Skyblock profile | `cache:hypixel:profile:{uuid}:{profileId}` | 3–5 min | Live (on demand) | Per-selected-profile |
-| Museum | `cache:hypixel:museum:{profileId}` | 10 min | Live (on demand) | Only fetched for networth |
+| Player object | `cache:hypixel:player:{uuid}` | **6 h** | Live (on demand) | Policy-driven, not cost-driven |
+| Skyblock profile | `cache:hypixel:profile:{uuid}:{profileId}` | **6 h** | Live (on demand) | The whole list is the cached unit |
+| Museum | `cache:hypixel:museum:{profileId}` | **12 h** | Live (on demand) | Only fetched for networth |
 | Guild | `cache:hypixel:guild:{guildId}` | 5 min | Live + worker | Roster/rank |
 | Resources (skills/items/etc.) | `cache:hypixel:res:{name}` | 6–24 h | Worker (daily) | Reference data |
 | Bazaar quick-status | `cache:pricing:bazaar` | 60–90 s | Worker (30–60 s) | Whole snapshot; per-item derived below |

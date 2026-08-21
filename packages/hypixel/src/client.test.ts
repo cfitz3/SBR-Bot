@@ -567,3 +567,32 @@ test("an explicit refresh is the only route below the TTL", async () => {
   await c.getPlayer("uuid-aria", { maxAgeMs: 60_000 });
   assert.equal(f.count("hypixel"), 1);
 });
+
+// ── No de-anonymising a nick (docs/HYPIXEL_COMPLIANCE.md) ───────────────────
+
+test("a name Mojang does not know costs no Hypixel call and no second route", async () => {
+  // What a nicked player looks like from here. The failure mode this guards is
+  // a well-meaning fallback — scan the roster for a near-match, search active
+  // auctions — which would be exactly the de-anonymising the policy forbids.
+  const f = fakeFetcher(() => res(204, undefined));
+  const c = new HypixelClient({ logger: silentLogger, http: f.fetcher, sleep: noopSleep });
+
+  assert.deepEqual(await c.getLinkedDiscord("Nicked_xX"), { kind: "IGN_NOT_FOUND" });
+  assert.equal(f.count("hypixel"), 0);
+  assert.equal(f.count("mojang"), 1);
+});
+
+test("an unreadable Hypixel social field stays unreadable rather than inferred", async () => {
+  const f = fakeFetcher((url) => (url.includes("mojang") ? mojangOk("uuid-aria", "Aria") : res(429, {})));
+  const c = new HypixelClient({
+    logger: silentLogger,
+    http: f.fetcher,
+    sleep: noopSleep,
+    maxRetries: 0,
+    cache: new NullCache(),
+  });
+
+  await assert.rejects(() => c.getLinkedDiscord("Aria"), HypixelUnavailableError);
+  // One attempt, then it stops. Nothing tries another endpoint for the answer.
+  assert.equal(f.count("hypixel"), 1);
+});

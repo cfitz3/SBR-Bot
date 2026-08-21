@@ -92,7 +92,7 @@ buf:analytics                      XADD * type command.used guildId 872... ...
 
 ## 4. Rate-Limit Buckets (`rl:`)
 
-- **Naming:** shared Hypixel budget `rl:hypixel` (account-wide); optional per-endpoint `rl:hypixel:{endpoint}`; Discord/webhook pacing `rl:discord:{scope}`.
+- **Naming:** shared Hypixel budget `rl:hypixel` (account-wide); optional per-endpoint `rl:hypixel:{endpoint}`; the self-imposed per-player floor `rl:player:{uuid}:{endpoint}`; Discord/webhook pacing `rl:discord:{scope}`.
 - **TTL:** a **rolling window** aligned to the upstream reset — refreshed from real response headers (`RateLimit-Remaining`/`Reset`, `Retry-After`), not guessed.
 - **Serialization:** **hash** `{ limit, remaining, resetAt }` or a token-bucket int with a companion `resetAt`.
 - **Ownership:** the `packages/hypixel` client writes it from headers; workers and live handlers both consume tokens, with a **reserved worker fraction** so sweeps can't starve commands.
@@ -100,8 +100,19 @@ buf:analytics                      XADD * type command.used guildId 872... ...
 
 ```
 rl:hypixel        HSET limit 300 remaining 271 resetAt 1723489200   (updated from headers)
+rl:player:a1b2...:player     SET "1" EX 3600   (the claim IS the key's existence)
 rl:discord:webhook:872...   (pacing bucket)
 ```
+
+**`rl:player:` is a different kind of thing from `rl:hypixel`.** The shared bucket
+tracks what upstream says our budget is, and is soft — `acquire` reads then
+decrements without a transaction, because a `429` is the real backstop. The
+per-player keys are a promise we made to Hypixel (`HYPIXEL_COMPLIANCE.md`), so
+they are written `SET NX EX` and never read back: the key's existence is the
+claim, two processes racing produce exactly one winner, and nothing releases a
+claim if the request it covered then failed. Expiry is the configured window
+(`config.hypixel.playerWindowMs`, one hour under the guild-activity exception);
+the keys are absent entirely in `production` mode.
 
 ---
 

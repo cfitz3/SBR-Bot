@@ -373,7 +373,22 @@ export class HypixelClient implements HypixelSocialLookup {
     throw new HypixelUnavailableError(`Mojang name lookup failed for "${uuid}" (status ${res.status})`);
   }
 
-  /** HypixelSocialLookup: read the in-game Discord social field for an IGN. */
+  /**
+   * HypixelSocialLookup: read the in-game Discord social field for an IGN.
+   *
+   * Exactly two upstream reads, always: Mojang for the uuid, then the Hypixel
+   * player object. **There is deliberately no fallback route**, and the absence
+   * is the point rather than an omission. A name that Mojang does not know is a
+   * name that does not exist — which is what a nick looks like from here — and
+   * the obvious next moves (scan the guild roster for a similar name, search
+   * active auctions, walk recent chat) would all amount to working out who is
+   * behind the nick. The Hypixel policy prohibits de-anonymising nicked players,
+   * and "we only did it to help them link" is not an exception to that.
+   *
+   * So an inconclusive lookup stays inconclusive: `IGN_NOT_FOUND` when Mojang
+   * has nothing, and a thrown `HypixelUnavailableError` when Hypixel will not
+   * answer. Both are honest, and neither identifies anybody.
+   */
   async getLinkedDiscord(ign: string): Promise<HypixelSocialResult> {
     const resolved = await this.resolveUuid(ign);
     if (!resolved) return { kind: "IGN_NOT_FOUND" };
