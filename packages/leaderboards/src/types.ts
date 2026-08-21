@@ -36,6 +36,8 @@ export type LeaderboardPage = LeaderboardPageDTO;
  * - `ACTIVITY` — summed `ActivityDaily` counters over a window. Same counters
  *   XP is derived from, so a member's activity rank and XP rank move together.
  * - `XP` — the denormalized `XpBalance`, rebuilt by `xp-aggregate`.
+ * - `GEXP` — summed `GuildGexpDaily` rows over a window. Hypixel's own number,
+ *   keyed by uuid, so an unlinked member is not on it at all.
  */
 export const CATEGORY_SPECS: Readonly<Record<LeaderboardCategory, CategorySpec>> = {
   level: {
@@ -100,6 +102,14 @@ export const CATEGORY_SPECS: Readonly<Record<LeaderboardCategory, CategorySpec>>
     format: "count",
     source: "ACTIVITY",
     description: "Messages sent in guild chat",
+    windowed: true,
+  },
+  gexp: {
+    id: "gexp",
+    label: LEADERBOARD_LABELS["gexp"],
+    format: "count",
+    source: "GEXP",
+    description: "Guild experience earned in-game, as Hypixel reports it",
     windowed: true,
   },
   xp: {

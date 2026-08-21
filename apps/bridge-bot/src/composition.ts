@@ -102,6 +102,7 @@ import type { TicketGateway } from "./tickets.js";
 import type { RoleMenuGateway } from "./role-menus.js";
 import type { StickyKeeper } from "./sticky.js";
 import type { EventBoardGateway } from "./event-board.js";
+import type { LeaderboardDigest } from "./leaderboard-digest.js";
 import type { WelcomeProfile } from "./welcome.js";
 
 export interface BridgeApp {
@@ -216,6 +217,8 @@ export interface BridgeApp {
    */
   setEventBoard(gateway: EventBoardGateway | null): void;
   readonly eventBoard: EventBoardGateway | null;
+  setLeaderboardDigest(digest: LeaderboardDigest | null): void;
+  readonly leaderboardDigest: LeaderboardDigest | null;
   /**
    * Self-service role menus, late-bound for the same reason: publishing one is
    * a message in the community server, and the panel asks for it over the
@@ -489,6 +492,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   let liveBoard: LfgBoard | null = null;
   let liveTickets: TicketGateway | null = null;
   let liveEventBoard: EventBoardGateway | null = null;
+  let liveDigest: LeaderboardDigest | null = null;
   let liveRoleMenus: RoleMenuGateway | null = null;
   let liveSticky: StickyKeeper | null = null;
   let liveDirectory: DiscordDirectory | null = null;
@@ -787,6 +791,12 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     get eventBoard() {
       return liveEventBoard;
+    },
+    setLeaderboardDigest(digest) {
+      liveDigest = digest;
+    },
+    get leaderboardDigest() {
+      return liveDigest;
     },
     setRoleMenus(gateway) {
       liveRoleMenus = gateway;

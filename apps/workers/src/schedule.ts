@@ -71,6 +71,10 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // Half-hourly, off the half hour: the boards are only as fresh as the
   // tracker that feeds them, and it polls every thirty minutes by default.
   { name: "event-board", repeat: { pattern: "13,43 * * * *" }, priority: LANE.timely },
+  // Sunday evening, off the hour. Weekly rather than daily because a digest is
+  // only interesting when something moved between two of them, and a member's
+  // SkyBlock level does not move enough in a day to be worth a post.
+  { name: "leaderboard-post", repeat: { pattern: "23 18 * * 0" }, priority: LANE.timely },
 
   // ── bulk lane: everything that can wait for a token ──
   // Snapshots run twice an hour and take the oldest-captured slice each time,

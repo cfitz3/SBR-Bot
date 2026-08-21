@@ -192,14 +192,56 @@ async function xpValues(guildId: string): Promise<readonly MemberValue[]> {
     }));
 }
 
+/**
+ * Summed daily guild experience over a rolling window.
+ *
+ * Keyed by uuid because that is how Hypixel reports it and how the roster scan
+ * stores it. A member with no verified link is therefore not on this board at
+ * all — which is honest: we have no way to know which in-game account is
+ * theirs, and guessing would credit their GEXP to nobody or to someone else.
+ */
+async function gexpValues(guildId: string, windowDays: number): Promise<readonly MemberValue[]> {
+  const cutoff = new Date(Date.now() - windowDays * 86_400_000);
+  cutoff.setUTCHours(0, 0, 0, 0);
+
+  const [rows, links] = await Promise.all([
+    prisma.guildGexpDaily.groupBy({
+      by: ["uuid"],
+      where: { guildId, day: { gte: cutoff } },
+      _sum: { gexp: true },
+      // No `take`: Prisma disallows it alongside an aggregate, and the link
+      // filter below bounds the result to the guild's own roster anyway.
+    }),
+    prisma.linkedAccount.findMany({
+      where: { status: "VERIFIED", discordUser: activeMemberOfGuild(guildId) },
+      select: { minecraftAccount: { select: { uuid: true, currentIgn: true } } },
+    }),
+  ]);
+
+  const eligible = new Map<string, string>();
+  for (const link of links) {
+    const account = link.minecraftAccount;
+    eligible.set(account.uuid, account.currentIgn ?? account.uuid.slice(0, 8));
+  }
+
+  const values: MemberValue[] = [];
+  for (const row of rows) {
+    const label = eligible.get(row.uuid);
+    if (label === undefined) continue;
+    values.push({ key: row.uuid, label, value: row._sum.gexp ?? 0, at: null });
+  }
+  return values.slice(0, MAX_ROWS);
+}
+
 /** True for the categories keyed by Minecraft uuid rather than Discord id. */
-function isSnapshotCategory(category: LeaderboardCategory): boolean {
+function isUuidCategory(category: LeaderboardCategory): boolean {
   return (
     category === "level" ||
     category === "wealth" ||
     category === "skill-average" ||
     category === "catacombs" ||
-    category === "slayer"
+    category === "slayer" ||
+    category === "gexp"
   );
 }
 
@@ -224,11 +266,13 @@ export const leaderboardSource: LeaderboardSource = {
         return activityValues(guildId, "guildChatMessages", windowDays);
       case "xp":
         return xpValues(guildId);
+      case "gexp":
+        return gexpValues(guildId, windowDays);
     }
   },
 
   async viewerKey(guildId, discordId, category): Promise<string | null> {
-    if (!isSnapshotCategory(category)) return discordId;
+    if (!isUuidCategory(category)) return discordId;
     // The Hypixel-side boards are keyed by uuid, so an unlinked caller has no
     // key at all — which is the honest answer to "where am I" for a board they
     // are not on.

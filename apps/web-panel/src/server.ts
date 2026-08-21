@@ -437,6 +437,15 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(res, await app.panel.loadSettings(session, guildId));
         case "milestones":
           return sendPage(res, await app.panel.loadMilestones(session, guildId));
+        case "leaderboard":
+          return sendPage(
+            res,
+            await app.panel.loadLeaderboard(session, guildId, {
+              category: url.searchParams.get("category") ?? "",
+              ...numeric(url.searchParams.get("page"), "page"),
+              ...numeric(url.searchParams.get("window"), "windowDays"),
+            }),
+          );
         case "roles":
           return sendPage(res, await app.panel.loadRoles(session, guildId));
         case "tickets":
@@ -831,6 +840,20 @@ function sendCsv(res: ServerResponse, table: string | null, data: AnalyticsVM): 
     ...SECURITY_HEADERS,
   });
   res.end(body);
+}
+
+/**
+ * One optional numeric query parameter, present only when it is really a number.
+ *
+ * Spread into the options object rather than assigned, because
+ * `exactOptionalPropertyTypes` makes `{ page: undefined }` a different thing
+ * from `{}` — and the domain's own clamping should see an absent value, not an
+ * explicit one it has to re-check.
+ */
+function numeric(raw: string | null, key: string): Readonly<Record<string, number>> {
+  if (raw === null || raw.trim() === "") return {};
+  const value = Number(raw);
+  return Number.isFinite(value) ? { [key]: value } : {};
 }
 
 function analyticsOptions(url: URL): { period?: RollupPeriod; rangeDays?: number } {

@@ -36,6 +36,7 @@ export type PanelPage =
   | "wordlist"
   | "health"
   | "permissions"
+  | "leaderboard"
   | "directory";
 
 /**
@@ -91,6 +92,16 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // that the config pages are built from. Moderator rather than Admin because
   // Moderator-tier pages use pickers too (a moderation target, a ticket
   // assignee), and it discloses nothing a member cannot see in Discord itself.
+  // The one page that asks for nothing above being a member: it shows standings
+  // that are already public to the guild on Discord, and holds no action at all.
+  //
+  // Note what this tier does *not* do today. Gate one still requires the guild
+  // to be in the session's manageable set, which is built from Discord's
+  // MANAGE_GUILD — so in practice this page is reachable by the same people the
+  // rest of the panel is. Lowering the tier is still right: it states what the
+  // page needs, so that when a member-scoped session exists this page is
+  // already correct rather than quietly Admin-only. Flagged, not assumed.
+  leaderboard: "MEMBER",
   directory: "MODERATOR",
 };
 

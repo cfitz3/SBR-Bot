@@ -1208,6 +1208,7 @@ export const LEADERBOARD_CATEGORIES = [
   "discord-activity",
   "guild-chat",
   "xp",
+  "gexp",
 ] as const;
 
 export type LeaderboardCategory = (typeof LEADERBOARD_CATEGORIES)[number];
@@ -1231,6 +1232,7 @@ export const LEADERBOARD_LABELS: Readonly<Record<LeaderboardCategory, string>> =
   "discord-activity": "Discord activity",
   "guild-chat": "Guild chat",
   xp: "Guild XP",
+  gexp: "In-game GEXP",
 };
 
 /**
@@ -1267,6 +1269,12 @@ const LEADERBOARD_ALIASES: Readonly<Record<string, LeaderboardCategory>> = {
   // direct match wins here anyway. `standing` still reaches guild XP.
   standing: "xp",
   guildxp: "xp",
+  // Hypixel's own guild experience, which is a different number from the XP
+  // this platform awards. `guildxp` above stays pointed at ours because that is
+  // what someone reading our own levels means by it.
+  gxp: "gexp",
+  guildexp: "gexp",
+  guildexperience: "gexp",
 };
 
 /** Canonical category for anything a member might type, or null. */
@@ -1286,7 +1294,7 @@ export function categoryFor(raw: string): LeaderboardCategory | null {
  * `SNAPSHOT` is the only family that can lag — it reads the newest profile
  * capture, up to a snapshot cycle old.
  */
-export type LeaderboardSourceKind = "SNAPSHOT" | "TENURE" | "ACTIVITY" | "XP";
+export type LeaderboardSourceKind = "SNAPSHOT" | "TENURE" | "ACTIVITY" | "XP" | "GEXP";
 
 /** How the transport should print a ranked value. The domain never formats. */
 export type LeaderboardValueFormat = "coins" | "count" | "level" | "days";

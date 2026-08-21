@@ -23,10 +23,12 @@ import {
   wordlistRepository,
   activitySink,
   xpRepository,
+  leaderboardSource,
 } from "@sbr/db";
 import { AnalyticsServiceImpl, createDomainMetrics } from "@sbr/analytics";
 import { buildAdminRegistry } from "@sbr/commands-admin";
 import { CommunityServiceImpl } from "@sbr/community";
+import { LeaderboardService } from "@sbr/leaderboards";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { HypixelClient } from "@sbr/hypixel";
 import { IdentityServiceImpl } from "@sbr/identity";
@@ -230,6 +232,10 @@ export async function createPanelApp(): Promise<PanelApp> {
     reads: panelRepository,
     config: guildConfig,
     milestones: milestoneDefinitionRepository,
+    // The same service, over the same source, that `/leaderboard` reads. One
+    // ranking implementation is the point: a member who is 3rd in Discord must
+    // not be 4th on the page, and two implementations would eventually differ.
+    leaderboards: new LeaderboardService(leaderboardSource),
     tickets: ticketConfigRepository,
     wordlist,
     heartbeats: adapters.heartbeat,

@@ -322,7 +322,7 @@ Not a tab of its own. The behaviour below is unchanged; it renders from `Setting
 - **Per-source rules:** for each `XpSource` — whether it counts, its weight, its daily cap (blank = uncapped), its cooldown in seconds, and, for the two message sources, the minimum message length. Sources with no stored row render as **off**: a missing row *is* "disabled", and showing a guessed default would put a number on screen that nobody chose and no job reads.
 - **Manual adjustment:** a signed amount against one member, with a **required reason** that is stored on the ledger row itself, not only in the audit trail — a member asking where 5,000 XP came from should be answerable from their own history. Armed-then-confirmed, and the form clears on success, because an adjustment is not a setting that can be corrected by typing a different value; the only way back is a second adjustment.
 - **Not retroactive, and the page says so.** Weights are read when `xp-aggregate` derives a day, so a change lands on today's still-open counters and everything after; already-scored days keep the numbers they were scored under.
-- **No standings, no leaderboard, no activity counters.** Those are member-facing and live behind `/standing` and `/leaderboard`. The panel owns the *rules* everyone is scored by, not the scores.
+- **No standings and no activity counters here.** Those are member-facing and live behind `/standing`. The panel owns the *rules* everyone is scored by, not the scores. (Standings themselves did get a panel surface — §3.18 — but a read-only one, on a different page, with no control on it.)
 - **Degrades to a sentence** when XP is not wired into the deployment: the section says it is not enabled rather than rendering seven dead controls. The rest of Settings still renders — a deployment without XP still has channels to bind.
 - **Access:** Admin+ (both writes, matching the page it now sits on — an Officer-tier write behind an Admin-only page would be a permission nobody could exercise).
 
@@ -332,6 +332,54 @@ Not a tab of its own. The behaviour below is unchanged; it renders from `Setting
 - **Every control saves the whole definition** rather than a patch, since for a default there is nothing on the server to merge a patch against.
 - **Removal is for guild rows only.** The way to stop recognising a built-in is to switch it off, which stores it disabled — deleting a row that does not exist would just make the default reappear.
 - **Access:** Admin+.
+
+### 3.18 Leaderboard — standings, read-only
+
+Added after WEB_PANEL.md §0 had already said there would be no panel surface for
+leaderboards at all. The reasoning then was that a leaderboard is something the
+guild reads, not something staff administers — and the second half of that is
+still true, which is why this page has **no action anywhere on it**. What the
+first half missed is that "staff does not administer it" is an argument for a
+page without controls, not for no page.
+
+- **Same service, same ranking.** The page reads `LeaderboardService` over
+  `leaderboardSource`, which is what `/leaderboard` reads. A member who is 3rd
+  in Discord is 3rd here; two ranking implementations would eventually disagree,
+  and the disagreement would be invisible until somebody screenshotted both.
+- **Thirteen categories as a tab strip**, built from `LEADERBOARD_CATEGORIES` so
+  a category added in shared-types appears here with no panel change. Switching
+  category resets to page one: page four of Catacombs has nothing to do with
+  page four of Wealth.
+- **Windowed categories get a window picker** (7 / 30 / 90 / 365 days), a fixed
+  set rather than a number box — the service clamps to 1–365 anyway, and a board
+  over a window nobody else picked is a board nobody can compare against.
+- **Ranks are shown in proportion** — "3 / 42", never a bare "3rd". A third
+  place on a board of four is not an achievement, and rendering it as one is a
+  claim the data does not support.
+- **The reader's own row is pinned** above the table when it falls outside the
+  shown page, rather than requiring them to page to it. Pinned *above* rather
+  than spliced in, because a 137 sitting between a 9 and a 10 reads as a bug.
+- **Staleness is stated, worst-case.** The line under the board names the oldest
+  reading on the page, not the newest — `SNAPSHOT` categories are up to a
+  snapshot cycle behind, and reporting the freshest row would overstate the lot.
+  Categories derived at read time say so instead.
+- **Access: MEMBER** — the only page at that tier, because it holds nothing
+  above what the guild already reads in Discord. **This does not currently widen
+  reach**: gate one still requires the guild to be in the session's manageable
+  set, which is built from Discord `MANAGE_GUILD`, so in practice the same
+  people reach it as reach everything else. The tier is declared honestly so the
+  page is already correct the day a member-scoped session exists.
+
+**The weekly digest.** The `leaderboard` channel slot is consumed by a
+`leaderboard-post` worker job (Sundays, 18:23 local to the worker), which offers
+every active guild a digest and lets the bridge refuse the ones with no slot
+bound — binding it *is* how a guild opts in. Four boards (Level, Wealth,
+Catacombs, Guild XP), top ten each, **posted fresh rather than edited**. That is
+the opposite of the event tracker board and deliberately so: a tracker board is
+one event's live state, so a second copy is a wrong copy, while a digest is a
+record of where the guild stood on one Sunday and rewriting it destroys the only
+reason to keep it. A board with nobody on it is left out rather than posted
+empty, and if all four are empty nothing is posted at all.
 
 ### 3.14 Tickets
 - **The queue first, then the menu.** The open tickets lead because they are the part with a clock on them: a ticket nobody answered is a member waiting, while a ticket type nobody edited is fine. Each row carries its subject, category, opener, assignee and age, plus a closing note and a `ticket.close` button. What a member *wrote* in one still stays in the bot, where the people in it are — this page offers closing it, not reading it.
@@ -473,6 +521,7 @@ Stickies (`/sticky`) have **no panel surface**; they are managed from Discord.
 | Members | DB (`GuildMember`+`DiscordUser` from `discord-member-sync`, `GuildMemberCache` from `guild-scan`, joined via `LinkedAccount`) | DB (role, unlink) |
 | Health | `WorkerJobLog` + live BullMQ + bot heartbeats + `rl:hypixel` | Requeue/force-sync (workers) |
 | Milestones | `milestones` (`MilestoneDefinition` layered over built-in defaults) | `MilestoneDefinition` + audit |
+| Leaderboard | `leaderboards` (`LeaderboardService` over `leaderboardSource`: `ProfileSnapshot`, `GuildMember.joinedAt`, `ActivityDaily`, `XpBalance`, `GuildGexpDaily`) | — |
 | Tickets | DB (`Ticket`, open queue) + `tickets` (`TicketTypeConfig` layered over built-in defaults, `TicketPanelConfig`) | `ticket.close`; `TicketTypeConfig`, `TicketPanelConfig` + audit |
 | Filter | `wordlist` (`WordlistEntry`) + `GuildSetting['moderation.escalation']` and `['moderation.relay-sync']` layered over built-in defaults | `WordlistEntry`, `GuildSetting` + audit |
 | Roles & Welcome | `GuildSetting['roles.auto'|'discord.welcome'|'roles.menus']`, `RoleGrant` (open grants, for the dry run), admin-bot role preflight + refusal log | `GuildSetting` + audit; bridge internal API (post a menu) |

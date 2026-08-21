@@ -543,6 +543,7 @@ export const RUNNABLE_JOBS: readonly string[] = [
   "ticket-sweep",
   "event-tracking",
   "event-board",
+  "leaderboard-post",
   "role-sync",
   "config-cache-invalidation",
 ];

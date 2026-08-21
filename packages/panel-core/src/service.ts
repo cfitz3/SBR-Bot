@@ -6,7 +6,14 @@
  * Reads only. Writes go through the same domain services the bots use (the panel
  * "commands, it doesn't bypass"), so nothing here mutates.
  */
-import { CONFIG_CHANNEL_SLOTS, rankOfRole, type MemberRole } from "@sbr/shared-types";
+import {
+  categoryFor,
+  CONFIG_CHANNEL_SLOTS,
+  LEADERBOARD_CATEGORIES,
+  LEADERBOARD_LABELS,
+  rankOfRole,
+  type MemberRole,
+} from "@sbr/shared-types";
 import {
   parseAutomod,
   parseEscalationPolicy,
@@ -26,6 +33,9 @@ import type {
   GuildConfigService,
   GuildRuntimeConfig,
   InfractionDTO,
+  LeaderboardCategory,
+  LeaderboardPageDTO,
+  LeaderboardService,
   MilestoneDefinitionDTO,
   MilestoneDefinitionService,
   TicketCategoryDTO,
@@ -462,6 +472,27 @@ export const XP_SOURCE_ORDER: readonly XpSource[] = [
   "MANUAL",
 ];
 
+/**
+ * A category as a tab: enough to draw the strip, and nothing else.
+ *
+ * Deliberately not the whole `LeaderboardCategorySpec` — the tabs are drawn
+ * before any board is fetched, and the spec of the board you are *looking* at
+ * arrives with it (`page.spec`), which is where the window selector and the
+ * value format come from.
+ */
+export interface LeaderboardTabVM {
+  readonly id: LeaderboardCategory;
+  readonly label: string;
+}
+
+export interface LeaderboardVM {
+  /** False when no leaderboard service is wired; the page then says so. */
+  readonly installed: boolean;
+  readonly tabs: readonly LeaderboardTabVM[];
+  /** The board being shown. Null when nothing is installed to show one. */
+  readonly page: LeaderboardPageDTO | null;
+}
+
 export interface MilestonesVM {
   /** False when no definition service is wired; the page then says so. */
   readonly installed: boolean;
@@ -688,6 +719,11 @@ export interface PanelServiceDeps {
    * port lives on the mutation deps, where the posting happens.
    */
   readonly roleMenuPublisher?: boolean;
+  /**
+   * Optional: absent means the Leaderboard page reports itself not installed,
+   * which is the honest rendering of a panel with no ranking service behind it.
+   */
+  readonly leaderboards?: LeaderboardService;
   /** Optional: absent means the Tickets page reports itself not installed. */
   readonly tickets?: TicketConfigService;
   /** Optional: absent means the Wordlist page reports itself not installed. */
@@ -1119,6 +1155,51 @@ export class PanelService {
     if (milestones === undefined) return { access, data: { installed: false, definitions: [] } };
 
     return { access, data: { installed: true, definitions: await milestones.list(guildId) } };
+  }
+
+  /**
+   * A leaderboard, as the panel shows it.
+   *
+   * The same service the bots read, ranked the same way, so a member cannot be
+   * 3rd in Discord and 4th here. The panel adds only what a page can do that an
+   * embed cannot: switch categories without re-running a command, and follow a
+   * row through to the member it belongs to.
+   *
+   * Read-only, and the only page with no action on it at all — which is why it
+   * sits at MEMBER rather than MODERATOR (see `PAGE_TIERS`).
+   */
+  async loadLeaderboard(
+    session: PanelSession | null,
+    guildId: string,
+    query: { readonly category?: string; readonly page?: number; readonly windowDays?: number } = {},
+  ): Promise<PageResult<LeaderboardVM>> {
+    const access = await authorize(session, guildId, "leaderboard", this.d.roles);
+    if (!access.allowed) return this.denied(access, "leaderboard", guildId);
+
+    const tabs = LEADERBOARD_CATEGORIES.map((id) => ({ id, label: LEADERBOARD_LABELS[id] }));
+    const leaderboards = this.d.leaderboards;
+    if (leaderboards === undefined || session === null) {
+      return { access, data: { installed: false, tabs, page: null } };
+    }
+
+    // An unknown or absent category falls back to the first tab rather than
+    // erroring: a stale bookmark should show a board, not a stack trace.
+    const category = categoryFor(query.category ?? "") ?? tabs[0]?.id ?? "level";
+
+    return {
+      access,
+      data: {
+        installed: true,
+        tabs,
+        page: await leaderboards.page({
+          guildId,
+          category,
+          discordId: session.discordId,
+          ...(query.page === undefined ? {} : { page: query.page }),
+          ...(query.windowDays === undefined ? {} : { windowDays: query.windowDays }),
+        }),
+      },
+    };
   }
 
   /**

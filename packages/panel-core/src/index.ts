@@ -40,6 +40,8 @@ export {
   type SettingsVM,
   type XpSettingsVM,
   type MilestonesVM,
+  type LeaderboardVM,
+  type LeaderboardTabVM,
   type RolesVM,
   type RolesHealthVM,
   type TicketsVM,

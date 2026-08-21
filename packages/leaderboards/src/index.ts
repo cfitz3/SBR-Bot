@@ -2,9 +2,13 @@
  * @sbr/leaderboards — what the guild can be ranked by, and how a column of
  * numbers becomes a page with ranks, ties and "where am I".
  *
- * Member-facing only. There is no panel surface for any of this by design
- * (WEB_PANEL.md §0): a leaderboard is something the guild reads, not something
- * staff administers.
+ * Read-only on every surface: `/leaderboard` in Discord, the panel's
+ * Leaderboard page, and the weekly digest the workers schedule. WEB_PANEL.md §0
+ * once said there would be no panel surface at all, on the reasoning that a
+ * leaderboard is something the guild reads rather than something staff
+ * administers. The first half of that still holds — the page has no action on
+ * it anywhere — but "staff does not administer it" turned out to be an argument
+ * for a page with no controls, not for no page.
  */
 export {
   LeaderboardService,

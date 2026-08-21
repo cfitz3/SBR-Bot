@@ -29,6 +29,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
 | `event-tracking` | Repeatable (cron) | every 10 min (`8-59/10 * * * *`), per-event interval on top | `EventScore` upsert on `(eventId,uuid,metric)`; baselines written once | 1 retry; global lock, 10 min TTL | Live event leaderboards age; recorded scores are unaffected |
 | `event-board` | Repeatable (cron) | every 30 min (`13,43 * * * *`) | The board is one message, edited in place; `boardFinal` stops a finished card being rewritten | 1 retry; global lock, 5 min TTL | Live boards show older numbers than the database holds; nothing is duplicated |
+| `leaderboard-post` | Repeatable (cron) | weekly, Sun 18:23 (`23 18 * * 0`) | **Not idempotent by design** — a re-run posts a second digest; the cadence and the global lock are the guard | 0 retries; global lock, 5 min TTL | A guild misses one week's digest; nothing reads what it writes |
 | `role-sync` | Repeatable (cron) | every 15 min (`11-59/15 * * * *`) | Reconciles against current facts; only roles Discord confirmed are recorded, and only recorded grants are ever revoked | 1 retry; global lock, 5 min TTL | Auto-roles are applied late; nothing is granted or taken away wrongly |
 | `ticket-sweep` | Repeatable (cron) | every 6 min (`5-59/6 * * * *`) | The warned flag is a Redis key with a 24 h TTL; a close is refused on an already-closed row | 2 retries; global lock, 5 min TTL | Quiet tickets are warned and auto-closed late; nothing is closed that should not be |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
@@ -229,6 +230,38 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Retry:** 1 retry; a global lock stops two workers redrawing at once.
 - **Failure impact:** a board shows numbers up to a cadence old. The scores
   themselves are `event-tracking`'s (§2.5b) and are unaffected.
+
+### 2.7d `leaderboard-post`
+- **Trigger / frequency:** cron, weekly — Sunday 18:23 (`23 18 * * 0`), **timely** lane.
+- **Inputs:** every ACTIVE `Guild`. No filtering happens here on purpose: the
+  bridge refuses guilds with no `leaderboard` channel bound, and filtering on
+  this side would mean two processes holding an opinion about what "configured"
+  means.
+- **Outputs:** one `POST /internal/g/<guildId>/leaderboard-post` per guild. The
+  bridge reads four boards (Level, Wealth, Catacombs, Guild XP), top ten each,
+  and posts them into the `leaderboard` channel.
+- **Where the work happens:** the same division of labour as `event-board`
+  (§2.7c). The render and the post live in
+  `apps/bridge-bot/src/leaderboard-digest.ts`.
+- **Posted, never edited — the opposite of §2.7c, deliberately.** A tracker
+  board is one event's live state, so a second copy of it is a wrong copy. A
+  digest is a record of where the guild stood on one particular Sunday, and
+  editing last week's message would destroy the only reason to keep it.
+- **Weekly, not daily.** A digest is interesting when something moved between
+  two of them, and a member's SkyBlock Level does not move enough in a day.
+- **Empty boards are omitted**, and a guild with nobody ranked on any of the
+  four posts nothing at all. "Here are the top ten" over a blank table reads as
+  a broken bot rather than as a young guild.
+- **Mentions:** rows are IGNs and `<@id>`, and none of them pings. Notifying the
+  top ten of four boards every Sunday is how a digest channel becomes a muted
+  one.
+- **Idempotency: none, and that is the point.** A re-run posts a second digest.
+  The weekly cadence plus a global lock is what keeps that from happening;
+  "Run now" from the panel will genuinely post another one.
+- **Retry: 0.** A digest that failed is a week old before anybody notices, and
+  posting it late is worse than not posting it.
+- **Failure impact:** a guild misses one week's digest. Nothing else reads what
+  this writes — the boards themselves are live on `/leaderboard` and the panel.
 
 ### 2.8 `event-transition`
 - **Trigger / frequency:** repeatable sweep every 1–5 min, plus delayed jobs pinned to start/end boundaries.

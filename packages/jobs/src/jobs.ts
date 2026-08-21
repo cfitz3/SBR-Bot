@@ -245,6 +245,25 @@ export function defineEventBoardJob(publish: () => Promise<number>): JobDefiniti
 }
 
 /**
+ * leaderboard-post: the weekly standings digest.
+ *
+ * `community` for the same reason the board is: every unit of work is a Discord
+ * post over the bridge's loopback API, and none of it spends Hypixel budget.
+ */
+export function defineLeaderboardPostJob(post: () => Promise<number>): JobDefinition<number> {
+  return {
+    name: "leaderboard-post",
+    queue: "community",
+    lockKey: "lock:job:leaderboard-post",
+    lockTtlMs: 5 * 60_000,
+    // Not retried. A digest that failed is a digest that is a week old by the
+    // time anybody notices; posting it late is worse than not posting it.
+    maxRetries: 0,
+    handler: post,
+  };
+}
+
+/**
  * role-sync: make Discord's roles match what the guild's rules say.
  *
  * `community`, not `progression`: the work is Discord writes over the admin

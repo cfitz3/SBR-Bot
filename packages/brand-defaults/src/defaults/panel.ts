@@ -85,6 +85,7 @@ export const DEFAULT_PANEL = {
       events: "Loading events…",
       health: "Loading job health…",
       members: "Loading members…",
+      leaderboard: "Loading the board…",
       milestones: "Loading milestones…",
       moderation: "Loading moderation…",
       overview: "Loading overview…",
@@ -125,6 +126,11 @@ export const DEFAULT_PANEL = {
       membersGame: "Everyone in the guild is linked to somebody in the server.",
       membersUnlinked: "Everyone on both rosters is linked.",
       membersNone: "No members on record yet. They appear as the roster scans run.",
+
+      leaderboardBoard:
+        "Nobody is ranked on this board yet. Members appear once there is something to rank them by.",
+      leaderboardUninstalled:
+        "Leaderboards aren't switched on for this deployment, so there is nothing to show here.",
 
       milestonesDisabled:
         "Milestone tracking isn't switched on for this deployment, so there is nothing to configure.",
@@ -1650,7 +1656,40 @@ export const DEFAULT_PANEL = {
     errAmount: "Enter a non-zero whole number within ±{max}.",
     errNoReason: "A reason is required.",
   },
-  leaderboard: { title: "Leaderboard", subtitle: "Guild standings." },
+  /**
+   * The one read-only page, and the only one a member could be shown without
+   * being given anything to press. The words here have one job to keep: a rank
+   * is always said *in proportion* — "3rd of 42", never a bare "3rd" — because
+   * a bare rank on a board of four reads like an achievement and isn't one.
+   */
+  leaderboard: {
+    title: "Leaderboard",
+    subtitle: "Guild standings.",
+    /** `{n}` members ranked on the board being shown. */
+    subtitleRanked: "{n} ranked on this board.",
+    notEnabled: "Not enabled",
+    colRank: "#",
+    colMember: "Member",
+    colValue: "Value",
+    colReading: "Reading",
+    windowLabel: "Window",
+    windowHint: "This board counts activity in a rolling window. The others are current standings.",
+    window7: "Last 7 days",
+    window30: "Last 30 days",
+    window90: "Last 90 days",
+    window365: "Last year",
+    /** `{page}` of `{total}`. */
+    pageStatus: "Page {page} of {total}",
+    prev: "Previous",
+    next: "Next",
+    you: "you",
+    /** Shown above the table when the reader's own row is off the shown page. */
+    yourRow: "Your position",
+    /** `{when}` is how long ago the oldest reading on the page was taken. */
+    staleness: "Oldest reading on this page: {when}.",
+    /** Said instead when nothing on the board has a reading time at all. */
+    stalenessLive: "Worked out at the moment you loaded the page.",
+  },
 };
 
 export type Panel = typeof DEFAULT_PANEL;

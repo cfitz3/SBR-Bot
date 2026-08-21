@@ -39,6 +39,8 @@ const PATHS: Readonly<Record<string, readonly string[]>> = {
     "M12 12.8V17",
     "M8.5 20h7",
   ],
+  // Three bars of a podium, tallest in the middle.
+  leaderboard: ["M4 13.5h4.5V20H4z", "M9.75 8h4.5v12h-4.5z", "M15.5 11h4.5v9h-4.5z"],
   // Conversation.
   tickets: ["M4.5 5.5h15v10h-9l-6 4.5z"],
   // A key: what a level actually is on this platform.

@@ -28,6 +28,7 @@ export {
   defineSafetyExpiryJob,
   defineTicketSweepJob,
   defineEventBoardJob,
+  defineLeaderboardPostJob,
   defineEventTrackingJob,
   defineXpAggregateJob,
 } from "./jobs.js";
@@ -144,6 +145,11 @@ export {
   type EventTrackingDeps,
   type TrackableEvent,
 } from "./event-tracking.js";
+export {
+  postLeaderboardDigests,
+  type DigestGuild,
+  type LeaderboardPostJobDeps,
+} from "./leaderboard-post.js";
 export {
   publishEventBoards,
   BOARD_REFRESH_MS,

@@ -20,6 +20,7 @@ import { renderOverview } from "./pages/overview.js";
 import { renderPermissions } from "./pages/permissions.js";
 import { renderSelector } from "./pages/selector.js";
 import { renderSettings } from "./pages/settings.js";
+import { renderLeaderboard } from "./pages/leaderboard.js";
 import { renderMilestones } from "./pages/milestones.js";
 import { renderRoles } from "./pages/roles.js";
 import { renderTickets } from "./pages/tickets.js";
@@ -53,6 +54,7 @@ const GUILD_PAGES: readonly GuildPage[] = [
   { id: "analytics", group: "monitor", icon: "analytics", render: renderAnalytics },
   { id: "health", group: "monitor", icon: "health", render: renderHealth },
   { id: "events", group: "monitor", icon: "events", render: renderEvents },
+  { id: "leaderboard", group: "monitor", icon: "leaderboard", render: renderLeaderboard },
   { id: "moderation", group: "queues", icon: "moderation", render: renderModeration },
   { id: "members", group: "queues", icon: "members", render: renderMembers },
   { id: "tickets", group: "queues", icon: "tickets", render: renderTickets },

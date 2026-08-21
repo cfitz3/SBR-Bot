@@ -39,6 +39,7 @@ import {
   defineMilestoneBackfillJob,
   defineMilestoneDetectJob,
   defineEventBoardJob,
+  defineLeaderboardPostJob,
   defineEventTrackingJob,
   defineProfileSnapshotJob,
   definePunishmentExpiryJob,
@@ -67,6 +68,7 @@ import {
   syncRoles,
   MAX_MEMBERS_PER_PASS,
   syncRoster,
+  postLeaderboardDigests,
   publishEventBoards,
   transitionEvents,
   type JobDefinition,
@@ -77,6 +79,7 @@ import { AUTO_ROLES_SETTING_KEY, parseAutoRoles } from "@sbr/roles";
 import { XpService } from "@sbr/xp";
 import { createWorkerTicketBridge } from "./ticket-bridge.js";
 import { createWorkerEventBoard } from "./event-board-bridge.js";
+import { createWorkerLeaderboardDigest } from "./leaderboard-digest-bridge.js";
 import { createWorkerRoleEffector } from "./role-bridge.js";
 import type { WorkerContext } from "./composition.js";
 
@@ -735,6 +738,33 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
   };
 
   /**
+   * The weekly standings digest. Same division of labour as the board: this
+   * process knows which guilds exist, and the one with a gateway to the
+   * community server is the only one that can post.
+   *
+   * Every active guild is offered one; the bridge refuses the ones with no
+   * `leaderboard` channel bound. Filtering here instead would mean this process
+   * held a second opinion about what "configured" means.
+   */
+  const leaderboardPost: JobDefinition<number> = {
+    ...defineLeaderboardPostJob(async () => {
+      const bridge = createWorkerLeaderboardDigest({
+        baseUrl: ctx.config.internalApi.bridgeBaseUrl,
+        token: ctx.config.internalApi.token,
+        logger: ctx.log,
+      });
+      return postLeaderboardDigests({
+        listGuilds: async () => (await guildRepository.listActive()).map((g) => ({ id: g.id })),
+        publish: (guild) => bridge.publish(guild),
+        onError(scope, error) {
+          ctx.log.warn("leaderboard digest failed", { scope, error: String(error) });
+        },
+      });
+    }),
+    lockKey: keys.lockJob("leaderboard-post"),
+  };
+
+  /**
    * Auto-roles. The reconcile decides, the admin bot acts: this process has the
    * database and Redis, and the one holding a gateway to the member server is
    * the only one that can touch a role.
@@ -895,6 +925,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     snapshot,
     milestones,
     milestoneBackfill,
+    leaderboardPost,
     eventTransition,
     reminders,
     rosterSync,

@@ -49,6 +49,7 @@ async function main(): Promise<void> {
     ? new BridgeApi({
         tickets: () => app.tickets,
         eventBoard: () => app.eventBoard,
+        leaderboardDigest: () => app.leaderboardDigest,
         roleMenus: () => app.roleMenus,
         sticky: () => app.sticky,
         toDiscordGuildId: guildRepository.resolveDiscordId,

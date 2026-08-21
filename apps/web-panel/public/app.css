@@ -822,6 +822,39 @@ a.guild-switch:hover {
   background: var(--color-neutral-800);
 }
 
+/* The leaderboard's category strip. Same segmented control as `.tabs`, but
+   with thirteen categories it has to wrap: a single non-wrapping row would
+   either overflow the card or squeeze every label past reading. */
+.tab-strip {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+/* The reader's own row, pinned above a board they are not on. Set apart from
+   the table rather than spliced into it, because "#137" between a 9 and a 10
+   would read as a rendering fault. */
+.pinned-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
 .control-label {
   display: inline-flex;
   align-items: center;

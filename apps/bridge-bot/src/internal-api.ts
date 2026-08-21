@@ -26,6 +26,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { Logger } from "@sbr/observability";
 import type { TicketGateway } from "./tickets.js";
 import type { EventBoardGateway } from "./event-board.js";
+import type { LeaderboardDigest } from "./leaderboard-digest.js";
 import type { RoleMenuGateway } from "./role-menus.js";
 import type { StickyKeeper } from "./sticky.js";
 
@@ -47,6 +48,12 @@ export interface BridgeApiDeps {
    * is up should be told to come back rather than crash.
    */
   readonly eventBoard: () => EventBoardGateway | null;
+  /**
+   * The weekly standings digest, resolved per request for the same reason as
+   * the board: it is built with the Discord client, and a pass arriving before
+   * the gateway is up should be told to come back rather than crash on a null.
+   */
+  readonly leaderboardDigest: () => LeaderboardDigest | null;
   /**
    * Self-service role menus, resolved per request for the same reason as the
    * other two: the panel's Publish button arriving while the client is still
@@ -173,6 +180,17 @@ export class BridgeApi {
       return;
     }
 
+    // Answered before the ticket gateway is required, like the board: a weekly
+    // digest has nothing to do with tickets.
+    if (resource === "leaderboard-post") {
+      if ((req.method ?? "GET") !== "POST") {
+        sendJson(res, 405, { problem: "METHOD_NOT_ALLOWED", detail: "use POST" });
+        return;
+      }
+      await this.digest(res, guildId);
+      return;
+    }
+
     // Answered before the ticket gateway is required, like the board and the
     // role menu: a sticky has nothing to do with tickets.
     if (resource === "sticky") {
@@ -269,6 +287,28 @@ export class BridgeApi {
       edited: result.edited,
       final: result.final,
     });
+  }
+
+  /**
+   * Post one guild's weekly standings digest.
+   *
+   * Every refusal is a 422 with its own problem string rather than a status the
+   * caller has to interpret. `NO_CHANNEL` and `NOTHING_RANKED` in particular are
+   * ordinary outcomes, not faults: the first is a guild that never bound the
+   * slot, the second a guild too new to rank anybody.
+   */
+  private async digest(res: ServerResponse, guildId: string): Promise<void> {
+    const digest = this.d.leaderboardDigest();
+    if (digest === null) {
+      sendJson(res, 503, { problem: "NOT_READY", detail: "the bridge bot is still connecting" });
+      return;
+    }
+    const result = await digest.publish(guildId);
+    if (!result.ok) {
+      sendJson(res, 422, { problem: result.problem, detail: result.detail });
+      return;
+    }
+    sendJson(res, 200, { channelId: result.channelId, posted: result.posted });
   }
 
   /**

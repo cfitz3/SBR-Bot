@@ -43,6 +43,7 @@ import { startReminderSweeper } from "./reminders.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
 import { deliverEventReminder } from "./events.js";
 import { EventBoardGateway } from "./event-board.js";
+import { LeaderboardDigest } from "./leaderboard-digest.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
 import { acceptCommand, denyCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
@@ -579,6 +580,37 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       log: app.log,
     }),
   );
+  // The weekly digest. Same shape as the board above and posted into a
+  // different slot — `leaderboard`, which a guild binds to opt in at all.
+  //
+  // The leaderboard service is an optional port, so the digest exists only when
+  // it is installed. Left null the internal route answers 503, which is the
+  // honest answer: this deployment cannot rank anybody, rather than nobody
+  // ranked this week.
+  const digestSource = app.handlerDeps.leaderboards;
+  if (digestSource !== undefined) {
+    app.setLeaderboardDigest(
+      new LeaderboardDigest({
+        leaderboards: digestSource,
+        getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "leaderboard"),
+        discord: {
+          async post(channelId, embed) {
+            const channel = await discord.channels.fetch(channelId).catch(() => null);
+            if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+            const message = await (channel as SendableChannel)
+              // The rows are IGNs and mentions; none of them is a ping.
+              // Notifying the top ten of four boards every Sunday is how a
+              // digest channel becomes a muted one.
+              .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+              .catch(() => null);
+            return message !== null;
+          },
+        },
+        log: app.log,
+      }),
+    );
+  }
+
   // The board needs the client, and the client is built from the app, so it is
   // handed over here rather than composed in.
   app.setLfgBoard(createLfgBoard(app, discord));
@@ -1549,6 +1581,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // The board gateway holds the client this is about to destroy; a board
       // pass arriving after it should be told "not ready", not handed a corpse.
       app.setEventBoard(null);
+      app.setLeaderboardDigest(null);
       stopping = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);

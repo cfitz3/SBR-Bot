@@ -19,6 +19,7 @@
     "@sbr/db": "*",
     "@sbr/guild-config": "*",
     "@sbr/hypixel": "*",
+    "@sbr/leaderboards": "*",
     "@sbr/identity": "*",
     "@sbr/moderation": "*",
     "@sbr/observability": "*",
