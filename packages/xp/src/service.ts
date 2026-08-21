@@ -7,6 +7,7 @@
  * own failures: a member's message is not allowed to fail because the XP
  * bookkeeping did, and a broken counter should cost XP, not conversation.
  */
+import type { XpAdjustmentDTO } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type { ActivitySink, BalanceRow, XpRepository } from "./ports.js";
 import { toPolicyMap } from "./ports.js";
@@ -195,6 +196,19 @@ export class XpService {
     ]);
     await this.rebuildBalances(guildId);
     return true;
+  }
+
+  /**
+   * Straight through to the repository, and absent when it cannot answer.
+   *
+   * No rebuild, no derivation: this is a read of what was already written, and
+   * the one thing it must not do is invent a history when the store has none.
+   */
+  async recentAdjustments(guildId: string, limit: number): Promise<readonly XpAdjustmentDTO[]> {
+    const rows = (await this.repo.recentAdjustments?.(guildId, limit)) ?? [];
+    // The one transformation: the store deals in Dates and the DTO in ISO
+    // strings, because the panel reads this over HTTP.
+    return rows.map((row) => ({ ...row, at: row.at.toISOString() }));
   }
 
   async adjust(

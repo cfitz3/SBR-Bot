@@ -1162,6 +1162,35 @@ export interface XpService {
    */
   policy(guildId: string): Promise<Readonly<Partial<Record<XpSource, XpSourcePolicyDTO>>>>;
   setSourcePolicy(guildId: string, policy: XpSourcePolicyDTO): Promise<XpSourcePolicyDTO>;
+  /**
+   * The most recent hand-entered adjustments, newest first.
+   *
+   * Optional because it is a panel affordance rather than something the engine
+   * needs: every other read here is on a path a bot command takes, and a
+   * deployment whose XP service predates the page should keep compiling. Absent
+   * means "no history to show", which is what the page renders — not zero
+   * adjustments, and not an error.
+   *
+   * Only MANUAL rows. Derived awards are the engine explaining itself and are
+   * already visible as a standing; what needs a record is the write that
+   * bypassed the rules, and who made it.
+   */
+  recentAdjustments?(guildId: string, limit: number): Promise<readonly XpAdjustmentDTO[]>;
+}
+
+/** One hand-entered adjustment, as the panel lists it. */
+export interface XpAdjustmentDTO {
+  readonly discordId: string;
+  /** Signed: an adjustment may take XP away. */
+  readonly amount: number;
+  /** Always present in the write path; empty only for a row written before it. */
+  readonly reason: string;
+  /** Who made it. Null when the meta blob does not name anybody. */
+  readonly byDiscordId: string | null;
+  /** ISO 8601. A string rather than a Date because this crosses the panel's
+   * HTTP boundary, where a Date becomes a string anyway — typing it as one
+   * keeps the client from calling Date methods on something that is not one. */
+  readonly at: string;
 }
 
 /** Where a unit of XP came from. Mirrors the `XpSource` DB enum. */

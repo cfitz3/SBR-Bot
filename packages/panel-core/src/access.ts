@@ -37,7 +37,8 @@ export type PanelPage =
   | "health"
   | "permissions"
   | "leaderboard"
-  | "directory";
+  | "directory"
+  | "xp";
 
 /**
  * Minimum platform role per page (WEB_PANEL.md §2). Staff read and work the
@@ -103,6 +104,11 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // already correct rather than quietly Admin-only. Flagged, not assumed.
   leaderboard: "MEMBER",
   directory: "MODERATOR",
+  // The weights and caps every member's standing is derived from, plus the one
+  // write that bypasses them. Admin for the same reason `milestones` is: this
+  // decides what activity is worth for everybody, and a hand-entered adjustment
+  // is XP created out of nothing.
+  xp: "ADMIN",
 };
 
 export type DenyReason = "NOT_AUTHENTICATED" | "NOT_MANAGEABLE" | "INSUFFICIENT_ROLE";

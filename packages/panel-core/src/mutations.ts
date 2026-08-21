@@ -107,6 +107,7 @@ import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
 import { ROLE_PREVIEW_LIMIT } from "./reads.js";
 import type { PermissionExceptionStore, PermSubjectKind, RolesInsight } from "./reads.js";
+import { SUGGESTED_POLICY } from "@sbr/xp";
 import { XP_SOURCE_ORDER } from "./service.js";
 
 /** Every write the panel can perform, and the platform role it requires. */
@@ -145,6 +146,7 @@ export const MUTATION_TIERS = {
    */
   "xp.source": "ADMIN",
   "xp.adjust": "ADMIN",
+  "xp.suggest": "ADMIN",
   /**
    * What the guild recognises as a milestone, and what reaching one pays.
    * Admin because a definition carries an XP reward: at a lower tier this
@@ -1098,6 +1100,40 @@ export class PanelMutations {
       // these are numbers and switches with nobody's words in them, and "who
       // made chat worth ten times more, and when" is the question this answers.
       return { result: { ok: true }, change: { ...policy } };
+    });
+  }
+
+  /**
+   * Write the suggested starting policy over every source it names.
+   *
+   * For the guild that has just turned XP on and is looking at eight sources
+   * all reading zero. The numbers are the engine's own suggestion
+   * (`SUGGESTED_POLICY`), not a second set kept here, so the page cannot drift
+   * from what the engine documents as sane.
+   *
+   * Two deliberate limits. It writes only the sources the suggestion names —
+   * `MILESTONE` is not one of them, and a source the suggestion has no opinion
+   * about should keep whatever the guild chose rather than be reset by a button
+   * labelled "suggested". And it overwrites: this is offered as a starting
+   * point, so it is one action and one audit row rather than a merge whose
+   * result nobody can predict from the label.
+   */
+  async applySuggestedXpPolicy(session: PanelSession | null, guildId: string): Promise<MutationResult> {
+    return this.run(session, guildId, "xp.suggest", async () => {
+      const xp = this.d.xp;
+      if (xp === undefined) return unavailable("XP is not enabled on this deployment");
+      try {
+        for (const policy of SUGGESTED_POLICY) await xp.setSourcePolicy(guildId, policy);
+      } catch (error) {
+        // Partially applied, and said so rather than reported as a clean
+        // failure: some rows may already be written, and the page reloads onto
+        // whatever actually landed.
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+      return {
+        result: { ok: true, sources: SUGGESTED_POLICY.length },
+        change: { sources: SUGGESTED_POLICY.map((p) => p.source) },
+      };
     });
   }
 

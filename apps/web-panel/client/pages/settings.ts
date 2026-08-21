@@ -24,7 +24,6 @@ import {
 } from "../forms.js";
 import { h, replace } from "../dom.js";
 import { channelSlotCopy } from "./channel-slots.js";
-import { xpSection } from "./settings-xp.js";
 
 const t = scope("settings");
 
@@ -208,7 +207,6 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
       card(t("cardChannels"), channels),
       card(t("cardFeatures"), features),
       card(t("cardScreening"), screening),
-      ...xpSection(guildId, result.data.xp),
     ),
   );
 }

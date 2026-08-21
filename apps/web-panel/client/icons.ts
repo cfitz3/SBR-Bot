@@ -39,6 +39,9 @@ const PATHS: Readonly<Record<string, readonly string[]>> = {
     "M12 12.8V17",
     "M8.5 20h7",
   ],
+  // A rising line over a baseline: XP is a number that only goes up, except
+  // where a hand pushes it back down.
+  xp: ["M4 19h16", "M5 15.5l4.5-4.5 3 3L19 7", "M15 7h4v4"],
   // Three bars of a podium, tallest in the middle.
   leaderboard: ["M4 13.5h4.5V20H4z", "M9.75 8h4.5v12h-4.5z", "M15.5 11h4.5v9h-4.5z"],
   // Conversation.

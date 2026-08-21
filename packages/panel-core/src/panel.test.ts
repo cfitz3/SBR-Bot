@@ -762,10 +762,15 @@ test("a bound slot comes back from the canonical map, not from a legacy column",
   assert.equal(r.data?.channels["modlog"], "123456789012345678");
 });
 
-// ── xp, now a section of settings ──
+// ── xp, a page of its own ──
 
-/** Only the two sources the guild has actually configured. */
-const xpService = (): XpService =>
+/**
+ * Only the two sources the guild has actually configured, plus the two lists
+ * the page shows beside them. `recentAdjustments` is present here because the
+ * whole point of the optional method is that a service *may* have it; the
+ * absent case gets its own test below.
+ */
+const xpService = (over: Partial<XpService> = {}): XpService =>
   ({
     async policy() {
       return {
@@ -775,27 +780,82 @@ const xpService = (): XpService =>
         GEXP: { source: "GEXP", enabled: true, weight: 0.01, dailyCap: null, cooldownSec: 0, minLength: 0 },
       };
     },
+    async leaderboard() {
+      return [
+        { discordId: "1", totalXp: 900, level: 9, intoLevel: 0, levelSpan: 100, bySource: {}, tenureDays: 30, lastAwardAt: null, rank: 1 },
+        { discordId: "9", totalXp: 400, level: 4, intoLevel: 0, levelSpan: 100, bySource: {}, tenureDays: 3, lastAwardAt: null, rank: 2 },
+      ];
+    },
+    async recentAdjustments() {
+      return [{ discordId: "1", amount: -250, reason: "duplicate award", byDiscordId: "2", at: "2026-08-20T10:00:00.000Z" }];
+    },
+    ...over,
   }) as unknown as XpService;
 
-test("the XP section lists every source, with unconfigured ones off rather than guessed", async () => {
+test("the XP page lists every source, with unconfigured ones off rather than guessed", async () => {
   // A source with no row is disabled, and the page has to say so: inventing a
   // default weight would show an admin a number nobody chose and no job reads.
-  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: xpService() }).loadSettings(session(), "g1");
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: xpService() }).loadXp(session(), "g1");
 
   assert.equal(r.access.allowed, true);
-  assert.equal(r.data?.xp.installed, true);
-  assert.deepEqual(r.data?.xp.sources.map((s) => s.source), [...XP_SOURCE_ORDER]);
-  assert.equal(r.data?.xp.sources.find((s) => s.source === "GEXP")?.weight, 0.01);
-  const tenure = r.data?.xp.sources.find((s) => s.source === "TENURE");
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.sources.map((s) => s.source), [...XP_SOURCE_ORDER]);
+  assert.equal(r.data?.sources.find((s) => s.source === "GEXP")?.weight, 0.01);
+  const tenure = r.data?.sources.find((s) => s.source === "TENURE");
   assert.equal(tenure?.enabled, false);
   assert.equal(tenure?.weight, 0);
 });
 
-test("with XP unwired the section says so instead of showing seven dead controls", async () => {
-  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadSettings(session(), "g1");
+test("the page carries the evidence beside the rules: standings and hand-written adjustments", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: xpService() }).loadXp(session(), "g1");
+
+  assert.deepEqual(r.data?.leaderboard.map((e) => e.discordId), ["1", "9"]);
+  assert.equal(r.data?.recentAdjustments[0]?.amount, -250);
+  // Named where the platform knows the name; an id with no linked account is
+  // simply absent from the map and renders as itself.
+  assert.equal(r.data?.names["1"], "a");
+  assert.equal(r.data?.names["9"], undefined);
+});
+
+test("a failing leaderboard costs the list, not the page", async () => {
+  // The policy is the page. Everything else on it is commentary, and an admin
+  // who came to change a weight must not be shown an error screen because a
+  // ranking query timed out.
+  const r = await svc({
+    roles: roles({ "111": "ADMIN" }),
+    xp: xpService({
+      async leaderboard() { throw new Error("timeout"); },
+      async recentAdjustments() { throw new Error("timeout"); },
+    }),
+  }).loadXp(session(), "g1");
+
+  assert.equal(r.data?.installed, true);
+  assert.equal(r.data?.sources.length, XP_SOURCE_ORDER.length);
+  assert.deepEqual(r.data?.leaderboard, []);
+  assert.deepEqual(r.data?.recentAdjustments, []);
+});
+
+test("an XP service without the adjustment history renders an empty history, not an error", async () => {
+  // The method is optional so a deployment that predates it keeps working.
+  const partial = xpService();
+  delete (partial as { recentAdjustments?: unknown }).recentAdjustments;
+  const r = await svc({ roles: roles({ "111": "ADMIN" }), xp: partial }).loadXp(session(), "g1");
+
+  assert.equal(r.data?.installed, true);
+  assert.deepEqual(r.data?.recentAdjustments, []);
+});
+
+test("with XP unwired the page says so instead of showing eight dead controls", async () => {
+  const r = await svc({ roles: roles({ "111": "ADMIN" }) }).loadXp(session(), "g1");
   assert.equal(r.access.allowed, true);
-  assert.equal(r.data?.xp.installed, false);
-  assert.deepEqual(r.data?.xp.sources, []);
+  assert.equal(r.data?.installed, false);
+  assert.deepEqual(r.data?.sources, []);
+  assert.deepEqual(r.data?.leaderboard, []);
+});
+
+test("the XP page is Admin, not Moderator: it decides what everyone's standing is worth", async () => {
+  const r = await svc({ roles: roles({ "111": "MODERATOR" }), xp: xpService() }).loadXp(session(), "g1");
+  assert.equal(r.access.allowed, false);
 });
 
 // ── milestones ──

@@ -38,7 +38,7 @@ export {
   DIRECTORY_SIDES,
   isDirectorySide,
   type SettingsVM,
-  type XpSettingsVM,
+  type XpVM,
   type MilestonesVM,
   type LeaderboardVM,
   type LeaderboardTabVM,

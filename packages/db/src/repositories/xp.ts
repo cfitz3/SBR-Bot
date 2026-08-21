@@ -10,6 +10,7 @@
 import type {
   ActivityRow,
   ActivitySink,
+  AdjustmentRow,
   BalanceRow,
   LedgerRow,
   XpRepository,
@@ -251,6 +252,29 @@ export const xpRepository: XpRepository = {
     // arbitrarily by row id.
     const ahead = await prisma.xpBalance.count({ where: { guildId, totalXp: { gt: mine.totalXp } } });
     return ahead + 1;
+  },
+
+  async recentAdjustments(guildId, limit): Promise<readonly AdjustmentRow[]> {
+    const rows = await prisma.xpEvent.findMany({
+      where: { guildId, source: "MANUAL" },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      select: { discordId: true, amount: true, meta: true, createdAt: true },
+    });
+    return rows.map((r) => {
+      // `meta` is JSON, so it is `unknown` until proven otherwise. A row whose
+      // blob was written by an older path, or corrupted, reads as an adjustment
+      // with no reason and no author rather than dropping out of the list — the
+      // XP moved either way, and hiding it is the worse answer.
+      const meta = (r.meta === null || typeof r.meta !== "object" ? {} : r.meta) as Record<string, unknown>;
+      return {
+        discordId: r.discordId,
+        amount: r.amount,
+        reason: typeof meta["reason"] === "string" ? meta["reason"] : "",
+        byDiscordId: typeof meta["by"] === "string" ? meta["by"] : null,
+        at: r.createdAt,
+      };
+    });
   },
 
   async top(guildId, limit): Promise<readonly BalanceRow[]> {

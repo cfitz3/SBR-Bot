@@ -13,6 +13,7 @@
     { "path": "../analytics" },
     { "path": "../screening" },
     { "path": "../guild-config" },
-    { "path": "../roles" }
+    { "path": "../roles" },
+    { "path": "../xp" }
   ]
 }

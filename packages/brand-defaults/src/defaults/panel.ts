@@ -93,6 +93,7 @@ export const DEFAULT_PANEL = {
       selector: "Loading your guilds…",
       settings: "Loading settings…",
       tickets: "Loading tickets…",
+      xp: "Loading XP…",
     },
     retry: "Try again",
     signIn: "Sign in with Discord",
@@ -1658,11 +1659,14 @@ export const DEFAULT_PANEL = {
 
   xp: {
     title: "XP",
-    subtitle: "Where XP comes from and what it's worth.",
-    card: "XP",
+    subtitle: "Where XP comes from, what it's worth, and what it has produced.",
+    notEnabled: "Not enabled",
+    card: "Sources",
     /** `{label}` is the source's own name. */
     cardSource: "XP — {label}",
     cardAdjust: "Adjust a member's XP",
+    cardStandings: "Standings",
+    cardHistory: "Recent adjustments",
     /** `{on}` of `{total}` sources are counting. */
     intro:
       "{on} of {total} sources counting. Changes apply from the next totalling pass onwards; days already scored keep the numbers they were scored under.",
@@ -1678,6 +1682,19 @@ export const DEFAULT_PANEL = {
     },
     /** Used when a source has no entry above; the key stands in for the name. */
     sourceUnitFallback: "one unit per recorded action",
+    stateOn: "Counting",
+    stateOff: "Off",
+    /** `{weight}` is the XP awarded per unit, on the collapsed row. */
+    weightBadge: "× {weight}",
+    /** `{cap}` is the daily cap; the badge is absent when there is none. */
+    capBadge: "cap {cap}/day",
+    advanced: "Limits",
+    advancedHint:
+      "Anti-abuse settings. Most guilds can leave these alone — the defaults stop farming without penalising ordinary activity.",
+    suggestApply: "Apply suggested settings",
+    suggestHint:
+      "A sane starting point for a guild turning XP on: chat capped low enough that a day of talking is worth less than a day of playing. Overwrites every source it covers.",
+    suggestConfirm: "Overwrite these sources",
     enabledLabel: "Counts towards XP",
     /** `{unit}` is the source's unit line. */
     enabledHint: "Weight is {unit}.",
@@ -1706,6 +1723,20 @@ export const DEFAULT_PANEL = {
     /** `{max}` is the largest adjustment in either direction. */
     errAmount: "Enter a non-zero whole number within ±{max}.",
     errNoReason: "A reason is required.",
+    standingsHint: "The top standings under the current rules. The full board is /leaderboard.",
+    standingsEmpty: "Nobody has earned XP yet. Standings appear after the next totalling pass.",
+    historyHint: "The last few adjustments entered by hand. Everything else on the ledger is derived.",
+    historyEmpty: "No adjustments recorded.",
+    colRank: "#",
+    colMember: "Member",
+    colLevel: "Level",
+    colXp: "XP",
+    colWhen: "When",
+    colAmount: "Amount",
+    colBy: "By",
+    colReason: "Reason",
+    byUnknown: "Unknown",
+    reasonMissing: "No reason recorded",
   },
   /**
    * The one read-only page, and the only one a member could be shown without

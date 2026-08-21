@@ -23,6 +23,7 @@
     "@sbr/observability": "*",
     "@sbr/roles": "*",
     "@sbr/screening": "*",
-    "@sbr/shared-types": "*"
+    "@sbr/shared-types": "*",
+    "@sbr/xp": "*"
   }
 }

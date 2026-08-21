@@ -437,6 +437,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(res, await app.panel.loadSettings(session, guildId));
         case "milestones":
           return sendPage(res, await app.panel.loadMilestones(session, guildId));
+        case "xp":
+          return sendPage(res, await app.panel.loadXp(session, guildId));
         case "leaderboard":
           return sendPage(
             res,
@@ -644,6 +646,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.setXpSource(session, guildId, b));
       case "xp.adjust":
         return sendMutation(res, await m.adjustXp(session, guildId, b));
+      case "xp.suggest":
+        return sendMutation(res, await m.applySuggestedXpPolicy(session, guildId));
       case "milestone.upsert":
         return sendMutation(res, await m.upsertMilestone(session, guildId, b));
       case "milestone.remove":

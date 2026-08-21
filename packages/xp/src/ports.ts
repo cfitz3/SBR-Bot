@@ -33,6 +33,15 @@ export interface LevelClimb {
   readonly totalXp: number;
 }
 
+/** A stored MANUAL award, with its meta unpacked. */
+export interface AdjustmentRow {
+  readonly discordId: string;
+  readonly amount: number;
+  readonly reason: string;
+  readonly byDiscordId: string | null;
+  readonly at: Date;
+}
+
 /** A stored balance. */
 export interface BalanceRow {
   readonly discordId: string;
@@ -99,6 +108,15 @@ export interface XpRepository {
   /** 1-based position by total XP. Null when the member has no balance. */
   rank(guildId: string, discordId: string): Promise<number | null>;
   top(guildId: string, limit: number): Promise<readonly BalanceRow[]>;
+
+  /**
+   * The newest MANUAL awards, with `meta.reason` and `meta.by` unpacked.
+   *
+   * Optional so the fakes the engine is tested against stay valid: nothing in
+   * the engine reads this, and a repository that does not implement it costs
+   * the panel a list rather than the page.
+   */
+  recentAdjustments?(guildId: string, limit: number): Promise<readonly AdjustmentRow[]>;
 }
 
 /** Convenience view over `XpRepository.policy`, keyed for `policyFor`. */

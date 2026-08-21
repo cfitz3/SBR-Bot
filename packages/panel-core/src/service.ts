@@ -51,7 +51,9 @@ import type {
   RsvpEntryDTO,
   XpService,
   XpSource,
+  XpAdjustmentDTO,
   XpSourcePolicyDTO,
+  XpStandingDTO,
 } from "@sbr/shared-types";
 import {
   parsePolicy,
@@ -443,10 +445,20 @@ export interface SettingsVM {
    */
   readonly channels: Readonly<Record<string, string | null>>;
   readonly features: Readonly<Record<string, boolean>>;
-  readonly xp: XpSettingsVM;
 }
 
-export interface XpSettingsVM {
+/**
+ * The XP page: the rules, who is doing well under them, and the writes that
+ * went around them.
+ *
+ * It used to be a section of Settings, and it outgrew it — eight source forms
+ * are most of that page's height and none of the rest of it is about XP. The
+ * two read-only lists are new here and are the reason the page earns its own
+ * slot: an admin changing a weight is guessing until they can see what the
+ * current weights produced, and an adjustment nobody can see afterwards is an
+ * unauditable write.
+ */
+export interface XpVM {
   /** False when the deployment has no XP service at all — not "all sources off". */
   readonly installed: boolean;
   /**
@@ -454,6 +466,19 @@ export interface XpSettingsVM {
    * as disabled with zero weight, which is exactly what the engine does with it.
    */
   readonly sources: readonly XpSourcePolicyDTO[];
+  /** The top standings, for the "what did these weights do" half of the page. */
+  readonly leaderboard: readonly XpStandingDTO[];
+  /** Recent hand-entered adjustments, newest first. Empty when unreadable. */
+  readonly recentAdjustments: readonly XpAdjustmentDTO[];
+  /**
+   * Discord id → display name, for the ids the two lists carry.
+   *
+   * Partial by construction: it is built from the linked members, so somebody
+   * who earned XP without ever linking an account has no entry and renders as
+   * their id. That is the honest rendering — the alternative is a lookup per
+   * row on a page that is not a directory.
+   */
+  readonly names: Readonly<Record<string, string>>;
 }
 
 /**
@@ -461,6 +486,26 @@ export interface XpSettingsVM {
  * across guilds and across reloads. Mirrors the `XpSource` enum; a source
  * missing from this list would be invisible in the panel while still paying out.
  */
+/**
+ * How much of each list the XP page carries.
+ *
+ * Both are deliberately short. The page is a configuration screen with two
+ * pieces of evidence on it, not a reporting tool: `/leaderboard` is where a
+ * whole board lives, and the ledger is in the database for anyone who needs all
+ * of it. Twenty is enough to see whether the weights are producing sane numbers
+ * and whether anybody has been handing out XP.
+ */
+const XP_LEADERBOARD_LIMIT = 20;
+const XP_ADJUSTMENT_LIMIT = 20;
+
+/**
+ * How far the name lookup reaches. A guild's linked members, near enough: the
+ * two lists above are twenty rows each, and the people on them are overwhelmingly
+ * the people who linked. Anybody past this reads as their id, which is what an
+ * unlinked earner reads as anyway.
+ */
+const XP_NAME_LOOKUP_LIMIT = 500;
+
 export const XP_SOURCE_ORDER: readonly XpSource[] = [
   "GEXP",
   "DISCORD_MESSAGE",
@@ -1096,12 +1141,10 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const xp = this.d.xp;
-    const [config, policy, cards, xpPolicy] = await Promise.all([
+    const [config, policy, cards] = await Promise.all([
       this.d.config.get(guildId),
       this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
       this.d.reads.listGuildCards([guildId]),
-      xp === undefined ? Promise.resolve(null) : xp.policy(guildId),
     ]);
 
     const cfg = config.ok ? config.value : null;
@@ -1121,26 +1164,65 @@ export class PanelService {
           CONFIG_CHANNEL_SLOTS.map((slot) => [slot, cfg?.channels[slot] ?? null] as const),
         ),
         features: cfg?.features ?? {},
-        xp:
-          xpPolicy === null
-            ? { installed: false, sources: [] }
-            : {
-                installed: true,
-                // Filled out to the full list here rather than in the client:
-                // what an unconfigured source does is the engine's rule, and the
-                // page should show that rule rather than a second guess at it.
-                sources: XP_SOURCE_ORDER.map(
-                  (source) =>
-                    xpPolicy[source] ?? {
-                      source,
-                      enabled: false,
-                      weight: 0,
-                      dailyCap: null,
-                      cooldownSec: 0,
-                      minLength: 0,
-                    },
-                ),
-              },
+      },
+    };
+  }
+
+  /**
+   * The XP page.
+   *
+   * The policy is the page — if it cannot be read there is nothing to show, so
+   * it is the only read here that is allowed to fail the load. The other two
+   * are commentary on it and absorb their own failure: an admin who came to
+   * change a weight should get the weights even if the leaderboard query timed
+   * out, and `recentAdjustments` is optional besides, so a deployment whose XP
+   * service predates it renders an empty history rather than an error.
+   */
+  async loadXp(session: PanelSession | null, guildId: string): Promise<PageResult<XpVM>> {
+    const access = await authorize(session, guildId, "xp", this.d.roles);
+    if (!access.allowed) return this.denied(access, "xp", guildId);
+
+    const xp = this.d.xp;
+    if (xp === undefined) {
+      return {
+        access,
+        data: { installed: false, sources: [], leaderboard: [], recentAdjustments: [], names: {} },
+      };
+    }
+
+    const [policy, leaderboard, recentAdjustments, linked] = await Promise.all([
+      xp.policy(guildId),
+      xp.leaderboard(guildId, XP_LEADERBOARD_LIMIT).catch(() => []),
+      xp.recentAdjustments?.(guildId, XP_ADJUSTMENT_LIMIT).catch(() => []) ?? Promise.resolve([]),
+      this.d.reads.listLinkedMembers(guildId, XP_NAME_LOOKUP_LIMIT).catch(() => []),
+    ]);
+
+    const names: Record<string, string> = {};
+    for (const member of linked) {
+      if (member.username !== null) names[member.discordId] = member.username;
+    }
+
+    return {
+      access,
+      data: {
+        installed: true,
+        // Filled out to the full list here rather than in the client: what an
+        // unconfigured source does is the engine's rule, and the page should
+        // show that rule rather than a second guess at it.
+        sources: XP_SOURCE_ORDER.map(
+          (source) =>
+            policy[source] ?? {
+              source,
+              enabled: false,
+              weight: 0,
+              dailyCap: null,
+              cooldownSec: 0,
+              minLength: 0,
+            },
+        ),
+        leaderboard,
+        recentAdjustments,
+        names,
       },
     };
   }

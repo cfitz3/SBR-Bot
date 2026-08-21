@@ -9,6 +9,7 @@ export {
   toPolicyMap,
   type ActivityRow,
   type ActivitySink,
+  type AdjustmentRow,
   type BalanceRow,
   type LedgerRow,
   type XpRepository,
