@@ -75,7 +75,6 @@ import {
   buildBridgeRegistry,
   type CapabilityChecker,
   type HandlerDeps,
-  type LfgBoard,
   type UsageSink,
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
@@ -197,8 +196,6 @@ export interface BridgeApp {
    * withholding the beat until ready would render that as DOWN.
    */
   setStatusSource(source: (() => BridgeStatusDetails) | null): void;
-  /** Hand the composition the Discord-backed LFG board once the client exists. */
-  setLfgBoard(board: LfgBoard | null): void;
   /**
    * The ticket gateway, once the client exists.
    *
@@ -485,11 +482,6 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
   };
 
-  // Same indirection for the LFG board, which additionally needs the Discord
-  // client — built from the app, so it cannot be a constructor argument. Before
-  // it is set every call is a no-op, which is the right answer: the post is
-  // already saved, and only its card in the channel is missing.
-  let liveBoard: LfgBoard | null = null;
   let liveTickets: TicketGateway | null = null;
   let liveEventBoard: EventBoardGateway | null = null;
   let liveDigest: LeaderboardDigest | null = null;
@@ -509,15 +501,6 @@ export async function createBridgeApp(): Promise<BridgeApp> {
       return liveDirectory.guildInfo(guildId);
     },
   };
-  const lfgBoard: LfgBoard = {
-    async publish(post) {
-      await liveBoard?.publish(post);
-    },
-    async refresh(post) {
-      await liveBoard?.refresh(post);
-    },
-  };
-
   // A member's own record, over the same audit tables the admin bot writes —
   // read-only, one member at a time, and no escalation policy needed beyond the
   // one the warning ladder already reads, so `/me` can say what the next warning
@@ -554,7 +537,6 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     roster,
     config: guildConfig,
     analytics,
-    lfgBoard,
     xp,
     leaderboards,
     record,
@@ -776,9 +758,6 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setStatusSource(source) {
       liveStatus = source;
-    },
-    setLfgBoard(board) {
-      liveBoard = board;
     },
     setTickets(gateway) {
       liveTickets = gateway;

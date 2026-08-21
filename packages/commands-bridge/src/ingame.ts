@@ -61,7 +61,6 @@ const ALIASES: Readonly<Record<string, string>> = {
   sl: "slayers",
   dungs: "dungeons",
   cata: "dungeons",
-  run: "runs",
   event: "events",
   h: "help",
   commands: "help",
@@ -272,6 +271,10 @@ export class InGameDispatcher {
     // that exist but are Discord-only would just invite people to try them.
     // This allow-list is the authorization boundary for the whole surface.
     if (!spec || spec.inGame === undefined || spec.inGame === false) return null;
+    // A retired command answers with the same silence as one that never
+    // existed. The dispatcher would refuse it anyway, but refusing here keeps
+    // the surface's rule intact: guild chat never learns what it cannot reach.
+    if (spec.enabled === false) return null;
 
     const args = positionalArgs(spec, parsed.tokens);
     const missing = missingRequired(spec, args);

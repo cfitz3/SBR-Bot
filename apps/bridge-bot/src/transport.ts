@@ -18,11 +18,8 @@ import { createBot, type Bot } from "mineflayer";
 import {
   buildBridgeRegistry,
   communityButtonReplies,
-  lfgButtons,
   parseRsvpState,
   readLevelOptOuts,
-  renderLfgEmbed,
-  type LfgBoard,
 } from "@sbr/commands-bridge";
 import { EchoLedger } from "@sbr/bridge";
 import {
@@ -34,7 +31,7 @@ import {
   toEmbed,
   toSlashCommands,
 } from "@sbr/discord-kit";
-import type { GuildRosterDTO, GuildRosterSource, LFGPostDTO } from "@sbr/shared-types";
+import type { GuildRosterDTO, GuildRosterSource } from "@sbr/shared-types";
 import { startLevelAnnouncer } from "./levels.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
 import { createAutoresponder } from "./autoresponder.js";
@@ -249,70 +246,6 @@ function denyLine(result: JoinActionResult, ign: string): string {
 /** A text channel this bot can actually post in — i.e. not a partial group DM. */
 type SendableChannel = Extract<TextBasedChannel, { send: unknown; messages: unknown }>;
 
-/**
- * The LFG board: an `LfgBoard` backed by the guild's `lfg` channel binding.
- *
- * Every failure is swallowed and logged. The post in the database is the record
- * of the run; the message is only a view of it, and losing the view must never
- * turn a successful join into an error in somebody's face. The one thing worth
- * being careful about is the binding: a message is only recorded once the send
- * has actually succeeded, so a post never points at a message that isn't there.
- */
-export function createLfgBoard(app: BridgeApp, discord: Client): LfgBoard {
-  async function textChannel(channelId: string): Promise<SendableChannel | null> {
-    const channel = await discord.channels.fetch(channelId).catch(() => null);
-    if (!channel || !channel.isTextBased() || !("send" in channel)) return null;
-    return channel as SendableChannel;
-  }
-
-  return {
-    async publish(post: LFGPostDTO): Promise<void> {
-      const channelId = await app.handlerDeps.config.getChannel(post.guildId, "lfg").catch(() => null);
-      // No board configured is a normal state, not a fault: the command still
-      // answered in the channel it was run in.
-      if (!channelId) return;
-      const channel = await textChannel(channelId);
-      if (!channel) {
-        app.log.warn("lfg channel is bound to something I can't post in", { channelId });
-        return;
-      }
-      const message = await channel
-        .send({
-          embeds: [toEmbed(renderLfgEmbed(post))],
-          components: lfgButtons(post).map(toActionRow),
-          // The post carries a title and notes somebody typed; a stray @everyone
-          // in them is not a licence to ping the server.
-          allowedMentions: { users: [...post.members] },
-        })
-        .catch((e: unknown) => {
-          app.log.warn("could not publish lfg post", { postId: post.id, error: String(e) });
-          return null;
-        });
-      if (!message) return;
-      await app.handlerDeps.community.bindLfgMessage(post.id, channel.id, message.id);
-    },
-
-    async refresh(post: LFGPostDTO): Promise<void> {
-      if (post.channelId === null || post.messageId === null) return;
-      const channel = await textChannel(post.channelId);
-      if (!channel) return;
-      const message = await channel.messages.fetch(post.messageId).catch(() => null);
-      // A deleted message is not an error worth reporting: somebody tidied the
-      // channel, and the run carries on without its card.
-      if (!message) return;
-      await message
-        .edit({
-          embeds: [toEmbed(renderLfgEmbed(post))],
-          components: lfgButtons(post).map(toActionRow),
-          allowedMentions: { users: [...post.members] },
-        })
-        .catch((e: unknown) => {
-          app.log.warn("could not refresh lfg post", { postId: post.id, error: String(e) });
-        });
-    },
-  };
-}
-
 export interface BridgeTransportOptions {
   readonly discordToken: string;
   readonly discordGuildId: string | undefined;
@@ -516,6 +449,11 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     archive: ticketArchivePort(),
     discord: ticketDiscordPort(discord, app.log),
     guildName: async (guildId) => (await guildRepository.displayName(guildId)) ?? "this server",
+    // The guild-wide half of the staff check, over the same resolver every
+    // other capability goes through — so ticket staff are granted on the
+    // permissions page rather than only by tagging a Discord role per category.
+    capability: (guildId, discordId, capability) =>
+      app.handlerDeps.identity.hasCapability(guildId, discordId, capability),
     log: app.log,
   });
   const ticketRouting = {
@@ -610,10 +548,6 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       }),
     );
   }
-
-  // The board needs the client, and the client is built from the app, so it is
-  // handed over here rather than composed in.
-  app.setLfgBoard(createLfgBoard(app, discord));
 
   // Read-only, and the last of the late-bound ports: `/userinfo`, `/serverinfo`
   // and `/avatar` are a view of Discord itself, so they can only be answered on

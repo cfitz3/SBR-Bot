@@ -43,6 +43,13 @@ export const DEFAULT_ERRORS = {
   command: {
     /** `{name}` is what was typed, without its slash or prefix. */
     unknown: "Unknown command: {name}",
+    /**
+     * A command this guild's deploy has retired. Distinct from `unknown`
+     * because it is a different fact and a different next step: the name was
+     * real, so "it was withdrawn" answers the question that "no such command"
+     * only raises. `{name}` is what was typed.
+     */
+    retired: "`/{name}` has been retired.",
     /** `{n}` is whole seconds, always at least 1. */
     cooldown: "Slow down — try that again in {n}s.",
     /** `{old}` and `{new}` are command names; the old one still answers. */

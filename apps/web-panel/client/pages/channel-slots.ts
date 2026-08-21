@@ -30,7 +30,6 @@ export const CHANNEL_SLOT_ORDER = [
   "log",
   "applications",
   "events",
-  "lfg",
   "tickets",
   "milestones",
   "leaderboard",

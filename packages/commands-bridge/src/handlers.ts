@@ -80,12 +80,11 @@ const help: CommandHandler = async () => ({
   ephemeral: true,
   text: [
     "Account: /link /verify /unlink /me /profile /setprofile",
-    "Stats: /stats /skills /slayers /dungeons /networth /progress /milestones",
-    "Optimize: /missing /nextupgrade /whatnext",
+    "Stats: /stats /skills /slayers /dungeons /networth /milestones",
     "Market: /price /bazaar /lowestbin /auctions",
-    "Guild: /online",
+    "Guild: /online /leaderboard",
     "Events: /events /create-event /rsvp /attendance",
-    "Groups: /lfg /runs /joinrun /leaverun /perm",
+    "Groups: /perm",
     "Help: /ticket /help",
   ].join("\n"),
 });
@@ -932,6 +931,13 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
         },
       ],
       cooldownMs: 15_000,
+      // Retired: the advice engine reads a live auction house the platform no
+      // longer keeps warm, so its suggestions were confident and stale — worse
+      // than no suggestion. Decision 2 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. The engine
+      // (`packages/progression/src/skyblock/advice.ts`) and this handler stay
+      // compiled and tested; turning it back on is this one line.
+      enabled: false,
       handler: progress,
     },
     {
@@ -940,6 +946,13 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       options: TARGET_OPTIONS,
       capability: "RUN_COMMAND",
       cooldownMs: 30_000,
+      // Retired: the advice engine reads a live auction house the platform no
+      // longer keeps warm, so its suggestions were confident and stale — worse
+      // than no suggestion. Decision 2 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. The engine
+      // (`packages/progression/src/skyblock/advice.ts`) and this handler stay
+      // compiled and tested; turning it back on is this one line.
+      enabled: false,
       handler: missing,
     },
     {
@@ -964,6 +977,13 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       ],
       capability: "RUN_COMMAND",
       cooldownMs: 30_000,
+      // Retired: the advice engine reads a live auction house the platform no
+      // longer keeps warm, so its suggestions were confident and stale — worse
+      // than no suggestion. Decision 2 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. The engine
+      // (`packages/progression/src/skyblock/advice.ts`) and this handler stay
+      // compiled and tested; turning it back on is this one line.
+      enabled: false,
       handler: nextupgrade,
     },
     {
@@ -987,6 +1007,13 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       ],
       capability: "RUN_COMMAND",
       cooldownMs: 30_000,
+      // Retired: the advice engine reads a live auction house the platform no
+      // longer keeps warm, so its suggestions were confident and stale — worse
+      // than no suggestion. Decision 2 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. The engine
+      // (`packages/progression/src/skyblock/advice.ts`) and this handler stay
+      // compiled and tested; turning it back on is this one line.
+      enabled: false,
       handler: whatnext,
     },
     {

@@ -40,7 +40,7 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 The bot exposes two command channels; both route to the **same domain services** so behavior is identical.
 
 ### 2.1 Discord slash commands
-Full member surface per `COMMANDS.md` §1–7 (`/link`, `/me`, `/stats`, `/networth`, `/price`, `/lfg`, `/rsvp`, `/help`, …). Permission via `packages/identity` + `BridgePermission`. Personal/admin output ephemeral; shareable lookups public.
+Full member surface per `COMMANDS.md` §1–7 (`/link`, `/me`, `/stats`, `/networth`, `/price`, `/rsvp`, `/help`, …), less the ten retired there. Permission via `packages/identity` + `BridgePermission`. Personal/admin output ephemeral; shareable lookups public.
 
 ### 2.2 In-game commands (guild chat)
 Prefix commands (prefix + enabled set from `GuildConfig`). **Read-only / low-risk subset only** — never moderation, linking secrets, or config.
@@ -50,7 +50,6 @@ Prefix commands (prefix + enabled set from `GuildConfig`). **Read-only / low-ris
 | `!stats <ign?>` `!skills` `!slayer` `!dungeons` `!nw` | `/stats`…`/networth` | `RUN_COMMAND` | Cache→Live |
 | `!price <item>` `!bz <item>` `!lbin <item>` | market lookups | `RUN_COMMAND` | Cache (worker) |
 | `!weight <ign?>` | Senither/farming weight | `RUN_COMMAND` | Cache→Live |
-| `!lfg <activity> <slots>` `!runs` | LFG create/list | `RUN_COMMAND` (linked) | DB + Cache |
 | `!help` | condensed catalog | Public | Static |
 | `!8ball` `!roll` `!coinflip` `!rps` `!guildquote` `!rank` `!cringe` | fun (`COMMANDS.md` §20) | Public | None (Redis counter for `!cringe`) |
 
@@ -187,7 +186,7 @@ The in-game connection (Mineflayer) is the fragile link — it can drop from Hyp
 ### 6.2 Degraded-mode behavior
 | Capability | When in-game bridge is DOWN |
 |------------|-----------------------------|
-| Discord slash commands (`/stats`, `/nw`, `/price`, `/lfg`, …) | **Fully work** — they use the Hypixel API + cache, not the in-game connection |
+| Discord slash commands (`/stats`, `/nw`, `/price`, …) | **Fully work** — they use the Hypixel API + cache, not the in-game connection |
 | Discord → guild chat relay | **Paused**; messages **queued** (bounded, TTL) and flushed on reconnect, or dropped with a notice if the queue expires |
 | Guild chat → Discord relay | Unavailable (no in-game feed); a status notice is posted once to the bridge channel |
 | In-game `!commands` | Unavailable (no in-game input); N/A until reconnect |

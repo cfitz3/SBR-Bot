@@ -64,7 +64,11 @@ export class CommandDispatcher {
     focused: { readonly name: string; readonly value: string },
     ctx: AutocompleteContext,
   ): Promise<readonly { name: string; value: string }[]> {
-    const handler = this.d.registry.get(name)?.autocomplete;
+    const spec = this.d.registry.get(name);
+    // Suggestions for a command that will refuse to run are a worse lie than no
+    // suggestions: they say the command works right up until it doesn't.
+    if (spec === undefined || spec.enabled === false) return [];
+    const handler = spec.autocomplete;
     if (!handler) return [];
     try {
       // Discord rejects a response with more than 25 choices outright.
@@ -81,6 +85,14 @@ export class CommandDispatcher {
   async dispatch(name: string, ctx: CommandContext): Promise<CommandReply> {
     const spec = this.d.registry.get(name);
     if (!spec) return { ephemeral: true, text: E.command.unknown.replace("{name}", name) };
+    // A retired command is not registered, so this only fires for an invocation
+    // Discord has cached from before the deploy — or for an in-game prefix,
+    // which has no registry to go stale. Either way it answers rather than
+    // running: the handler is still compiled, and "disabled" that still
+    // executes is not disabled.
+    if (spec.enabled === false) {
+      return { ephemeral: true, text: E.command.retired.replace("{name}", name) };
+    }
 
     if (spec.capability) {
       const allowed = await this.d.capabilities.can(ctx.guildId, ctx.userId, spec.capability);

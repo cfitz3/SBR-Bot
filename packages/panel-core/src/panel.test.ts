@@ -757,9 +757,9 @@ test("settings carries every channel slot, present or not", async () => {
 test("a bound slot comes back from the canonical map, not from a legacy column", async () => {
   const r = await svc({
     roles: roles({ "111": "ADMIN" }),
-    config: configService({ channels: { lfg: "123456789012345678" } }),
+    config: configService({ channels: { modlog: "123456789012345678" } }),
   }).loadSettings(session(), "g1");
-  assert.equal(r.data?.channels["lfg"], "123456789012345678");
+  assert.equal(r.data?.channels["modlog"], "123456789012345678");
 });
 
 // ── xp, now a section of settings ──

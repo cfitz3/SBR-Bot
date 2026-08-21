@@ -265,6 +265,17 @@ export interface CommandSpec {
    * prefixes the reply with a notice, and the transport can grey it out.
    */
   readonly deprecatedBy?: string;
+  /**
+   * Off retires the command without deleting it (default true).
+   *
+   * Honoured at registration, in the dispatcher and in the in-game router, so
+   * a retired command is genuinely gone from all three rather than gone from
+   * one and quietly answering on the others. The handler stays compiled and
+   * tested: the flag is how a feature is withdrawn, not how it is deleted, and
+   * turning one back on is a one-line change rather than an archaeology
+   * exercise.
+   */
+  readonly enabled?: boolean;
 }
 
 /** Cooldown gate (Redis-backed at wiring time; in-memory for tests/single-instance). */

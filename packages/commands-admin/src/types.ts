@@ -218,6 +218,8 @@ export interface AdminCommandSpec {
   readonly destructive?: boolean;
   readonly handler: AdminHandler;
   readonly autocomplete?: AdminAutocompleteHandler;
+  /** Off retires the command without deleting it; see `CommandSpec.enabled`. */
+  readonly enabled?: boolean;
 }
 
 /**

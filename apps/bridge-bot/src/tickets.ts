@@ -48,6 +48,7 @@ import {
 } from "@sbr/tickets";
 import type { Logger } from "@sbr/observability";
 import type {
+  BridgeCapability,
   ActionRowView,
   CommunityService,
   EmbedView,
@@ -166,6 +167,17 @@ export interface TicketGatewayDeps {
   readonly guildName: (guildId: string) => Promise<string>;
   readonly log: Logger;
   readonly now?: () => Date;
+  /**
+   * Whether a member holds a bridge capability, for the guild-wide half of the
+   * staff check.
+   *
+   * Optional: a deployment without it falls back to the category's own
+   * `staffRoleIds`, which is how ticket staff were granted before the
+   * capability existed. Absent means "no guild-wide grant", never "denied" —
+   * the two halves are OR'd, so losing this port narrows who counts as staff
+   * rather than locking out the roles an admin already configured.
+   */
+  readonly capability?: (guildId: string, discordId: string, capability: BridgeCapability) => Promise<boolean>;
 }
 
 // ── results ──────────────────────────────────────────────────────────────────
@@ -628,6 +640,11 @@ export class TicketGateway {
    * which fails closed.
    */
   async isStaff(ticket: TicketDTO, discordId: string, discordGuildId: string): Promise<boolean> {
+    // The guild-wide grant first, because it is one read and does not care
+    // which category the ticket is in. A failure here is not a denial: it falls
+    // through to the roles, which is what the check was before the capability.
+    const granted = await this.d.capability?.(ticket.guildId, discordId, "TICKET_MANAGE").catch(() => false);
+    if (granted === true) return true;
     const categories = await this.d.tickets.categories(ticket.guildId);
     const category = categories.find((c) => c.id === ticket.categoryId) ?? null;
     if (category === null || category.staffRoleIds.length === 0) return false;

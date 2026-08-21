@@ -51,7 +51,7 @@ import { CommandDispatcher } from "./dispatcher.js";
 import { buildBridgeRegistry } from "./handlers.js";
 import { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
 import { InMemoryCooldownGate } from "./cooldown.js";
-import type { CapabilityChecker, CommandContext, LfgBoard, UsageSink } from "./types.js";
+import type { CapabilityChecker, CommandContext, CommandSpec, LfgBoard, UsageSink } from "./types.js";
 
 const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, child() { return silent; } };
 
@@ -488,6 +488,25 @@ const analytics: AnalyticsService = { async capture() {}, async emit() {} };
 const allowAll: CapabilityChecker = { async can() { return true; } };
 const denyAll: CapabilityChecker = { async can() { return false; } };
 
+/**
+ * The registry with every retirement lifted.
+ *
+ * `enabled: false` withdraws a command from Discord, the dispatcher and guild
+ * chat, but it does not delete the handler — the whole point of the flag is
+ * that turning one back on is a one-line change rather than an archaeology
+ * exercise, and that only holds if the handler is still under test. So this
+ * harness exercises them, and the flag itself is tested separately below
+ * against the real registry.
+ */
+function enabledRegistry(): ReadonlyMap<string, CommandSpec> {
+  const out = new Map<string, CommandSpec>();
+  for (const [name, spec] of buildBridgeRegistry()) {
+    const { enabled: _retired, ...rest } = spec;
+    out.set(name, rest);
+  }
+  return out;
+}
+
 function makeDispatcher(over: {
   identity?: IdentityService;
   progression?: ProgressionService;
@@ -505,7 +524,7 @@ function makeDispatcher(over: {
   now?: () => number;
 } = {}) {
   return new CommandDispatcher({
-    registry: buildBridgeRegistry(),
+    registry: enabledRegistry(),
     cooldowns: new InMemoryCooldownGate(over.now),
     capabilities: over.capabilities ?? allowAll,
     handlerDeps: {
@@ -1444,7 +1463,9 @@ test("/ticket action:list only ever shows the caller their own tickets", async (
 test("/ticket action:close never closes someone else's ticket", async () => {
   // The hole this rebuild exists to shut: the old command took an id and
   // checked neither ownership nor rank, so any member could close anything.
-  // This surface is never staff, so a stranger's ticket is refused outright.
+  // Staff-ness is now a `TICKET_MANAGE` read rather than an assertion, so an
+  // ordinary member reaches the lifecycle as a non-staff actor and a stranger's
+  // ticket is refused there.
   const seen: Array<{ isStaff: boolean }> = [];
   const spy = community({
     async closeTicket(_id, actor) {
@@ -1452,12 +1473,40 @@ test("/ticket action:close never closes someone else's ticket", async () => {
       return err({ kind: "FORBIDDEN" });
     },
   });
-  const r = await makeDispatcher({ community: spy }).dispatch(
-    "ticket",
-    ctx({ args: recordArgs({ action: "close", id: "someone-elses" }) }),
-  );
+  const r = await makeDispatcher({
+    community: spy,
+    identity: identity({ async hasCapability() { return false; } }),
+  }).dispatch("ticket", ctx({ args: recordArgs({ action: "close", id: "someone-elses" }) }));
   assert.deepEqual(seen, [{ isStaff: false }]);
   assert.match(r.text, /isn't your ticket/);
+});
+
+test("someone holding TICKET_MANAGE reaches the lifecycle as staff", async () => {
+  const seen: Array<{ isStaff: boolean }> = [];
+  const spy = community({
+    async closeTicket(_id, actor) {
+      seen.push({ isStaff: actor.isStaff });
+      return err({ kind: "FORBIDDEN" });
+    },
+  });
+  await makeDispatcher({ community: spy, identity: identity({ async hasCapability() { return true; } }) })
+    .dispatch("ticket", ctx({ args: recordArgs({ action: "close", id: "someone-elses" }) }));
+  assert.deepEqual(seen, [{ isStaff: true }]);
+});
+
+test("a failed capability read denies rather than grants ticket staff", async () => {
+  const seen: Array<{ isStaff: boolean }> = [];
+  const spy = community({
+    async closeTicket(_id, actor) {
+      seen.push({ isStaff: actor.isStaff });
+      return err({ kind: "FORBIDDEN" });
+    },
+  });
+  await makeDispatcher({
+    community: spy,
+    identity: identity({ async hasCapability() { throw new Error("db down"); } }),
+  }).dispatch("ticket", ctx({ args: recordArgs({ action: "close", id: "someone-elses" }) }));
+  assert.deepEqual(seen, [{ isStaff: false }], "an outage must not hand out staff powers");
 });
 
 test("/ticket action:close without an id asks for one", async () => {
@@ -1797,4 +1846,82 @@ test("a card about somebody else never carries a record", async () => {
   const record = memberRecord({ warnings: 4 });
   const r = await makeDispatcher({ record }).dispatch("stats", ctx({ args: recordArgs({ player: "Aria" }) }));
   assert.equal(r.embed?.fields?.find((f) => f.name === "Your record"), undefined);
+});
+
+// ── retirement ───────────────────────────────────────────────────────────────
+//
+// Three surfaces have to agree, which is the whole reason the flag exists:
+// `deprecatedBy` only ever changed a description, so a command it marked stayed
+// in Discord's picker and stayed dispatchable. A retirement honoured in one
+// place and not the others is worse than no retirement — the member sees a
+// command, runs it, and gets an error that reads as a broken bot.
+
+const RETIRED = ["progress", "missing", "nextupgrade", "whatnext", "lfg", "runs", "joinrun", "leaverun", "editrun", "closerun"] as const;
+
+test("the retired commands are still in the registry, flagged rather than deleted", () => {
+  const registry = buildBridgeRegistry();
+  for (const name of RETIRED) {
+    const spec = registry.get(name);
+    assert.ok(spec, `${name} was deleted, not retired`);
+    assert.equal(spec.enabled, false, `${name} is not flagged`);
+    assert.equal(typeof spec.handler, "function", `${name} lost its handler`);
+  }
+});
+
+test("a retired command is refused rather than run", async () => {
+  const d = new CommandDispatcher({
+    registry: buildBridgeRegistry(),
+    cooldowns: new InMemoryCooldownGate(),
+    capabilities: allowAll,
+    handlerDeps: {
+      identity: identity(),
+      progression: progression(),
+      players,
+      pricing,
+      market: market(),
+      community: community(),
+      perms: perms(),
+      config: guildConfig,
+      analytics,
+      logger: silent,
+    },
+    logger: silent,
+  });
+  for (const name of RETIRED) {
+    const r = await d.dispatch(name, ctx());
+    assert.equal(r.ephemeral, true, `${name} answered publicly`);
+    assert.match(r.text, /retired/i, `${name} ran anyway`);
+  }
+  // And an unknown name still reads as unknown: retirement is a distinct
+  // answer, not a rename of the catch-all.
+  const unknown = await d.dispatch("nosuchthing", ctx());
+  assert.doesNotMatch(unknown.text, /retired/i);
+});
+
+test("a retired command offers no autocomplete", async () => {
+  const registry = new Map(buildBridgeRegistry());
+  const spec = registry.get("editrun");
+  assert.ok(spec);
+  // Give it suggestions it would happily have served, to prove the refusal is
+  // the flag rather than the absence of a handler.
+  registry.set("editrun", { ...spec, autocomplete: async () => [{ name: "a", value: "a" }] });
+  const d = new CommandDispatcher({
+    registry,
+    cooldowns: new InMemoryCooldownGate(),
+    capabilities: allowAll,
+    handlerDeps: {
+      identity: identity(),
+      progression: progression(),
+      players,
+      pricing,
+      market: market(),
+      community: community(),
+      perms: perms(),
+      config: guildConfig,
+      analytics,
+      logger: silent,
+    },
+    logger: silent,
+  });
+  assert.deepEqual(await d.autocomplete("editrun", { name: "id", value: "" }, ctx()), []);
 });

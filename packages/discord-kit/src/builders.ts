@@ -34,6 +34,18 @@ export interface CommandSpecLike {
   readonly name: string;
   readonly description: string;
   readonly options?: readonly OptionSpecLike[];
+  /**
+   * Off means the command does not exist as far as Discord is concerned.
+   *
+   * Defaulting to enabled keeps every existing spec unchanged, and the flag is
+   * honoured in three places rather than one — here, in the dispatcher, and in
+   * the in-game router — because a command absent from the registry but still
+   * accepted by a dispatcher is exactly the "Unknown command" asymmetry this
+   * module's header exists to prevent, just pointing the other way.
+   */
+  readonly enabled?: boolean;
+  /** The command that replaced this one; see `describe` below. */
+  readonly deprecatedBy?: string;
 }
 
 /** Discord caps command and option descriptions at 100 characters. */
@@ -41,6 +53,28 @@ const MAX_DESCRIPTION = 100;
 
 function clamp(text: string): string {
   return text.length <= MAX_DESCRIPTION ? text : `${text.slice(0, MAX_DESCRIPTION - 1)}…`;
+}
+
+/**
+ * What Discord's picker says about a command.
+ *
+ * A deprecated alias describes itself as one, derived from `deprecatedBy` in
+ * exactly the way the dispatcher's notice is. Writing it into the copy layer by
+ * hand worked right up until the replacement was renamed again, at which point
+ * the picker was confidently pointing at a command that no longer existed —
+ * the same class of drift that made the registration list derived in the first
+ * place. The spec's own description is not lost: it is what the command says
+ * everywhere the alias is not the thing being described.
+ */
+function describe(spec: CommandSpecLike): string {
+  return spec.deprecatedBy === undefined
+    ? clamp(spec.description)
+    : clamp(`Deprecated — use /${spec.deprecatedBy}`);
+}
+
+/** Whether a spec should exist in Discord's registry at all. */
+export function isRegistrable(spec: CommandSpecLike): boolean {
+  return spec.enabled !== false;
 }
 
 function addOption(builder: SlashCommandOptionsOnlyBuilder, spec: OptionSpecLike): void {
@@ -94,7 +128,7 @@ function addOption(builder: SlashCommandOptionsOnlyBuilder, spec: OptionSpecLike
 export function toSlashCommand(spec: CommandSpecLike): unknown {
   const builder = new SlashCommandBuilder()
     .setName(spec.name)
-    .setDescription(clamp(spec.description)) as SlashCommandOptionsOnlyBuilder;
+    .setDescription(describe(spec)) as SlashCommandOptionsOnlyBuilder;
 
   // Discord requires every required option to precede the optional ones, so
   // sort rather than trusting each spec to have declared them in order.
@@ -105,7 +139,14 @@ export function toSlashCommand(spec: CommandSpecLike): unknown {
   return builder.toJSON();
 }
 
-/** Build the full registration payload from a handler registry. */
+/**
+ * Build the full registration payload from a handler registry.
+ *
+ * Disabled specs are dropped, which is what makes `enabled: false` a real
+ * removal: the command disappears from Discord's list on the next deploy
+ * instead of staying in the picker and answering with an error, which reads to
+ * a member as a broken bot rather than as a retired feature.
+ */
 export function toSlashCommands(registry: ReadonlyMap<string, CommandSpecLike>): unknown[] {
-  return [...registry.values()].map(toSlashCommand);
+  return [...registry.values()].filter(isRegistrable).map(toSlashCommand);
 }

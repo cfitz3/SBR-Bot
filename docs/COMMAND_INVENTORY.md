@@ -16,6 +16,15 @@ Sources of truth for this file:
 
 **Totals: 33 member commands, 26 staff commands, 15 reachable in-game, 2 button routes.**
 
+**Ten of the 33 are retired** (`enabled: false`): `/progress`, `/missing`,
+`/nextupgrade`, `/whatnext`, `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
+`/editrun`, `/closerun`. They are absent from Discord's registry, refused by the
+dispatcher, and silent in guild chat — but still in `buildBridgeRegistry()` with
+their handlers intact, which is why they are still counted and still described
+below. **23 member commands are actually reachable, and 13 in-game** (`lfg` and
+`runs` leave that surface with them). `COMMANDS.md` explains why each went. The
+rows below describe behaviour, not availability.
+
 ---
 
 ## 1. How a command is gated

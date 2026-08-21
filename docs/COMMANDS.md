@@ -16,6 +16,33 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 ---
 
+> ### Retired commands
+>
+> Ten commands are flagged `enabled: false` and are **absent from Discord's
+> command list**, from `/help`, and from guild chat. They are not deleted: the
+> handlers stay compiled and under test, and turning one back on is a one-line
+> change. Sections 4 and 6 below still describe them, because what they did is
+> still what they would do.
+>
+> - **§4, the advice engine** — `/missing`, `/nextupgrade`, `/whatnext`, and
+>   `/progress` alongside them. The advice reads a live auction house the
+>   platform no longer keeps warm, so its suggestions were confident and stale.
+>   A confidently wrong upgrade recommendation is worse than none.
+> - **§6, looking-for-group** — `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
+>   `/editrun`, `/closerun`, the `run:` buttons, the `!run` alias and the `lfg`
+>   channel slot. Parties get formed in guild chat; the board went stale faster
+>   than anyone closed a post. `/perm` stays: the party lists it keeps are
+>   useful on their own, and `LFGPost` / `LFGActivity` rows are untouched.
+>
+> The flag is honoured in three places — `toSlashCommands` (so the command
+> leaves Discord's registry), the dispatcher (so a stale client is refused with
+> *"`/x` has been retired."*), and the in-game router (so guild chat answers
+> with the same silence an unknown command gets). Honouring it in one place and
+> not the others is what `deprecatedBy` used to do, and it reads to a member as
+> a broken bot rather than as a retired feature.
+
+---
+
 ## 1. Member Bot — Account & Identity
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |

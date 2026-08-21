@@ -306,10 +306,6 @@ export const DEFAULT_PANEL = {
     log: { label: "Log", hint: "Moderation and config audit trail." },
     applications: { label: "Applications", hint: "Where new applications are posted for review." },
     events: { label: "Events", hint: "Event announcements and RSVP posts." },
-    lfg: {
-      label: "Looking for group",
-      hint: "Where /lfg posts land. Unset and the post has nowhere to go, so the command refuses.",
-    },
     tickets: {
       label: "Ticket panel",
       hint: "Holds the open-a-ticket message. Threads for new tickets are created under it.",
@@ -1479,6 +1475,7 @@ export const DEFAULT_PANEL = {
       RELAY_MESSAGE: "Speak through the bridge — their Discord messages reach guild chat.",
       RUN_COMMAND: "Run bot commands from guild chat.",
       MENTION: "Have @mentions survive the relay instead of being flattened.",
+      TICKET_MANAGE: "Answer tickets: claim one, close somebody else's, read a transcript.",
       BYPASS_FILTER: "Skip the chat filter entirely, in both directions.",
       BYPASS_COOLDOWN: "Skip relay and command cooldowns.",
       ADMIN: "Administrative bridge control. Only ever an Admin.",

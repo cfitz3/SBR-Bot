@@ -39,10 +39,19 @@ test("ignores non-guild-chat lines that mention a guild", () => {
   assert.equal(parseGuildChat("Officer > Steve: hi"), null);
 });
 
-test("every registered command has a handler behind it", () => {
+test("every registered command has a handler behind it, and every retired one is gone", () => {
   const registry = buildBridgeRegistry();
   const names = (buildCommands() as { name: string }[]).map((c) => c.name);
-  assert.deepEqual([...names].sort(), [...registry.keys()].sort());
+  const registrable = [...registry.values()].filter((s) => s.enabled !== false).map((s) => s.name);
+  assert.deepEqual([...names].sort(), [...registrable].sort());
+
+  // The other half of the same claim: a retired command is absent from what we
+  // send Discord, not merely present and answering with an error. Discord's
+  // registry is what a member's picker is built from, so this is the only place
+  // the withdrawal is actually visible to them.
+  const retired = [...registry.values()].filter((s) => s.enabled === false).map((s) => s.name);
+  assert.ok(retired.length > 0, "nothing is retired — this test would pass vacuously");
+  for (const name of retired) assert.ok(!names.includes(name), `${name} is still registered`);
 });
 
 test("link publishes its required ign option", () => {

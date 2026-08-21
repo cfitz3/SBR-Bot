@@ -297,12 +297,15 @@ const ticket: CommandHandler = async (ctx, deps) => {
   if (action === "close") {
     const id = ctx.args.getString("id");
     if (!id) return { ephemeral: true, text: "Which ticket? Pass `id:` — `/ticket action:list` shows yours." };
-    // Never staff on this path. `/ticket action:close` is the member surface and
-    // it takes an arbitrary id, which is exactly how any member could close
-    // anyone's ticket before this rebuild; with `isStaff: false` the lifecycle
-    // lets a member close only their own. Staff close from the ticket channel
-    // or the panel, both of which are capability-gated.
-    const actor = { discordId: ctx.userId, isStaff: false };
+    // Staff-ness is a capability read, not an assertion. This path takes an
+    // arbitrary id, which is exactly how any member could close anyone's ticket
+    // before the rebuild; the lifecycle lets a member close only their own
+    // unless they actually hold `TICKET_MANAGE`, and a failed read denies
+    // rather than grants.
+    const actor = {
+      discordId: ctx.userId,
+      isStaff: await deps.identity.hasCapability(ctx.guildId, ctx.userId, "TICKET_MANAGE").catch(() => false),
+    };
     const result = await deps.community.closeTicket(id, actor, ctx.args.getString("reason"));
     if (!result.ok) {
       return {
@@ -527,6 +530,13 @@ export function communitySpecs(): readonly CommandSpec[] {
       // `true` — the post is attributed to its author, so the speaking IGN has
       // to resolve to a Discord account first.
       inGame: "linked",
+      // Retired: looking-for-group never found an audience — parties get formed
+      // in guild chat and the board went stale faster than anyone closed a
+      // post. Decision 3 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. `LFGPost`, `LFGActivity`
+      // and `@sbr/perms` are untouched: `/perm` still keeps the party lists,
+      // and existing posts stay readable in the database.
+      enabled: false,
       handler: lfg,
     },
     {
@@ -535,6 +545,13 @@ export function communitySpecs(): readonly CommandSpec[] {
       options: [{ name: "activity", description: "Filter by activity", type: "string", choices: ACTIVITY_CHOICES }],
       cooldownMs: 10_000,
       inGame: true,
+      // Retired: looking-for-group never found an audience — parties get formed
+      // in guild chat and the board went stale faster than anyone closed a
+      // post. Decision 3 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. `LFGPost`, `LFGActivity`
+      // and `@sbr/perms` are untouched: `/perm` still keeps the party lists,
+      // and existing posts stay readable in the database.
+      enabled: false,
       handler: runs,
     },
     {
@@ -542,6 +559,13 @@ export function communitySpecs(): readonly CommandSpec[] {
       description: "Take a slot in an open run",
       options: [{ name: "id", description: "Run id (shown by /runs)", type: "string", required: true }],
       cooldownMs: 5_000,
+      // Retired: looking-for-group never found an audience — parties get formed
+      // in guild chat and the board went stale faster than anyone closed a
+      // post. Decision 3 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. `LFGPost`, `LFGActivity`
+      // and `@sbr/perms` are untouched: `/perm` still keeps the party lists,
+      // and existing posts stay readable in the database.
+      enabled: false,
       handler: joinrun,
     },
     {
@@ -549,6 +573,13 @@ export function communitySpecs(): readonly CommandSpec[] {
       description: "Give up your slot in a run",
       options: [{ name: "id", description: "Run id", type: "string", required: true }],
       cooldownMs: 5_000,
+      // Retired: looking-for-group never found an audience — parties get formed
+      // in guild chat and the board went stale faster than anyone closed a
+      // post. Decision 3 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. `LFGPost`, `LFGActivity`
+      // and `@sbr/perms` are untouched: `/perm` still keeps the party lists,
+      // and existing posts stay readable in the database.
+      enabled: false,
       handler: leaverun,
     },
     {
@@ -562,6 +593,13 @@ export function communitySpecs(): readonly CommandSpec[] {
       ],
       capability: "RUN_COMMAND",
       cooldownMs: 10_000,
+      // Retired: looking-for-group never found an audience — parties get formed
+      // in guild chat and the board went stale faster than anyone closed a
+      // post. Decision 3 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. `LFGPost`, `LFGActivity`
+      // and `@sbr/perms` are untouched: `/perm` still keeps the party lists,
+      // and existing posts stay readable in the database.
+      enabled: false,
       handler: editrun,
     },
     {
@@ -570,6 +608,13 @@ export function communitySpecs(): readonly CommandSpec[] {
       options: [{ name: "id", description: "Run id", type: "string", required: true }],
       capability: "RUN_COMMAND",
       cooldownMs: 5_000,
+      // Retired: looking-for-group never found an audience — parties get formed
+      // in guild chat and the board went stale faster than anyone closed a
+      // post. Decision 3 of Phase 17 in
+      // `~/.claude/plans/typed-dreaming-torvalds.md`. `LFGPost`, `LFGActivity`
+      // and `@sbr/perms` are untouched: `/perm` still keeps the party lists,
+      // and existing posts stay readable in the database.
+      enabled: false,
       handler: closerun,
     },
     {

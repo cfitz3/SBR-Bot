@@ -124,19 +124,19 @@ test("every slot is written to the binding table and nowhere else", async () => 
   // the columns were dropped, all three take exactly the same single write.
   await svc.setChannel("g1", "staff", "chan-9");
   await svc.setChannel("g1", "events", null);
-  await svc.setChannel("g1", "lfg", "chan-7");
-  assert.deepEqual(bound, [["staff", "chan-9"], ["events", null], ["lfg", "chan-7"]]);
+  await svc.setChannel("g1", "tickets", "chan-7");
+  assert.deepEqual(bound, [["staff", "chan-9"], ["events", null], ["tickets", "chan-7"]]);
   assert.deepEqual(calls, ["bind", "bind", "bind"], "nothing left to mirror into");
 });
 
 test("getChannel resolves through the channel map", async () => {
   const svc = new GuildConfigServiceImpl({
-    repo: repo({ async get() { return row({ channels: { bridge: "chan-1", lfg: "chan-7" } }); } }),
+    repo: repo({ async get() { return row({ channels: { bridge: "chan-1", tickets: "chan-7" } }); } }),
     logger: silent,
   });
 
-  assert.equal(await svc.getChannel("g1", "lfg"), "chan-7");
-  assert.equal(await svc.getChannel("g1", "tickets"), null, "an unbound slot is absent, not an error");
+  assert.equal(await svc.getChannel("g1", "tickets"), "chan-7");
+  assert.equal(await svc.getChannel("g1", "modlog"), null, "an unbound slot is absent, not an error");
 });
 
 test("an unconfigured guild has no channels rather than throwing", async () => {

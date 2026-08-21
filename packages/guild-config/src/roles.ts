@@ -42,6 +42,12 @@ export const DEFAULT_CAPABILITY_FLOOR: Readonly<Record<BridgeCapability, MemberR
   RELAY_MESSAGE: MemberRole.MEMBER,
   RUN_COMMAND: MemberRole.MEMBER,
   MENTION: MemberRole.MODERATOR,
+  // Ticket staff powers — claim, close somebody else's, read a transcript.
+  // Moderator by default because answering tickets is the job the moderator
+  // rank exists for, and because a category's own `staffRoleIds` remains the
+  // per-category grant: this capability is the guild-wide one, so a guild that
+  // wants ticket staff who are not Discord-role-tagged has a way to say so.
+  TICKET_MANAGE: MemberRole.MODERATOR,
   BYPASS_COOLDOWN: MemberRole.OFFICER,
   BYPASS_FILTER: MemberRole.ADMIN,
   ADMIN: MemberRole.ADMIN,

@@ -277,7 +277,12 @@ test("a handler that throws answers with a short message, never a stack trace", 
 
 test("the real registry exposes only lookups in-game, and every write requires a link", async () => {
   const { buildBridgeRegistry } = await import("./handlers.js");
-  const exposed = [...buildBridgeRegistry().values()].filter((s) => s.inGame !== undefined && s.inGame !== false);
+  // Retired specs are filtered the same way the router filters them: a command
+  // flagged off is not part of the in-game surface, and pinning it here would
+  // pin a promise guild chat no longer keeps.
+  const exposed = [...buildBridgeRegistry().values()].filter(
+    (s) => s.enabled !== false && s.inGame !== undefined && s.inGame !== false,
+  );
   const names = exposed.map((s) => s.name).sort();
 
   // The documented §17 set. Pinned exactly, because widening it is a security
@@ -287,8 +292,8 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // accountable for, so they widen the surface by exactly one joke each.
     "8ball", "coinflip", "cringe", "guildquote", "rank", "roll", "rps",
     // Lookups (§17).
-    "bazaar", "dungeons", "events", "help", "leaderboard", "lfg", "lowestbin",
-    "networth", "perm", "price", "profile", "runs", "skills", "slayer", "slayers", "standing", "stats",
+    "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
+    "networth", "perm", "price", "profile", "skills", "slayer", "slayers", "standing", "stats",
   ].sort());
 
   // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
@@ -298,7 +303,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // attributed to a Discord account, and an IGN that resolves to none has no
   // standing to report — the link *is* the lookup key, not a permission.
   assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), [
-    "lfg", "perm", "standing",
+    "perm", "standing",
   ]);
 
   // And the identity commands stay Discord-only: `/link` in guild chat would
@@ -306,4 +311,12 @@ test("the real registry exposes only lookups in-game, and every write requires a
   for (const forbidden of ["link", "unlink", "verify", "setprofile"]) {
     assert.ok(!names.includes(forbidden), `${forbidden} must not be reachable in-game`);
   }
+});
+
+test("a retired command is silent in guild chat, not refused out loud", async () => {
+  // The same silence an unknown command gets. The dispatcher would refuse it
+  // anyway, but the surface's own rule is that guild chat never learns what it
+  // cannot reach — an error naming a retired command is a hint that it exists.
+  const retired: CommandSpec = { ...lookup, name: "gone", enabled: false, inGame: true };
+  assert.equal(await make(specs([retired])).handle("g1", "Steve", "!gone"), null);
 });
