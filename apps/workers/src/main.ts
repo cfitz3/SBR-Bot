@@ -9,16 +9,11 @@
 import { Queue, Worker, type Job } from "bullmq";
 import { installLifecycle } from "@sbr/observability";
 import { createWorkerContext } from "./composition.js";
+import { redisConnection } from "./connection.js";
 import { buildJobDefinitions } from "./jobs.js";
 import { LANE, SCHEDULE, reconcileSchedule } from "./schedule.js";
 
 const QUEUE = "sbr-worker";
-
-
-function redisConnection(url: string): { host: string; port: number } {
-  const u = new URL(url);
-  return { host: u.hostname, port: Number(u.port || 6379) };
-}
 
 async function main(): Promise<void> {
   const ctx = await createWorkerContext();

@@ -681,23 +681,40 @@ export class TicketGateway {
   }
 
   /**
+   * Read a ticket, and refuse it if it belongs to a different server.
+   *
+   * A ticket id is opaque but it is not a secret, and both callers of the
+   * methods below arrive over the internal API, where the guild is a path
+   * segment the caller chose. Every other route on that API is scoped to that
+   * segment; a transcript — the single most sensitive thing tickets hold — must
+   * not be the exception. Both current callers happen to check first. This is
+   * the check that does not depend on them continuing to.
+   */
+  private async ticketIn(guildId: string, ticketId: string): Promise<TicketDTO | null> {
+    const found = await this.d.community.getTicket(ticketId);
+    const ticket = found.ok ? found.value : null;
+    return ticket !== null && ticket.guildId === guildId ? ticket : null;
+  }
+
+  /**
    * Re-send by id, for the panel's "Re-send transcript" and the admin bot.
    *
    * Null means there is no such ticket, which is a different answer from false
    * — "the member has DMs closed" is worth showing, and "you typed the wrong
    * id" is worth not disguising as it.
    */
-  async deliverTranscriptById(ticketId: string): Promise<boolean | null> {
-    const found = await this.d.community.getTicket(ticketId);
-    const ticket = found.ok ? found.value : null;
+  async deliverTranscriptById(guildId: string, ticketId: string): Promise<boolean | null> {
+    const ticket = await this.ticketIn(guildId, ticketId);
     if (ticket === null) return null;
     return this.deliverTranscript(ticket);
   }
 
   /** The markdown transcript, for `/tickets transcript`. */
-  async transcript(ticketId: string): Promise<{ readonly name: string; readonly content: string } | null> {
-    const found = await this.d.community.getTicket(ticketId);
-    const ticket = found.ok ? found.value : null;
+  async transcript(
+    guildId: string,
+    ticketId: string,
+  ): Promise<{ readonly name: string; readonly content: string } | null> {
+    const ticket = await this.ticketIn(guildId, ticketId);
     if (ticket === null) return null;
     const messages = await this.d.archive.messages(ticket.id);
     return {

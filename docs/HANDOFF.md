@@ -151,13 +151,10 @@ A fresh install still needs `/set-channel` before the relay speaks.
 
 ## Next session, in order
 
-Phases 16, 17, Part I Phase 11, Part II Phase C2 and Part IV have all shipped.
-What is left:
-
-1. **Part V** — the VPS→Discord health monitor and logger, then a security pass
-   and a full stress test before the guild opens to the public.
-2. **The deep bug sweep** — every segment of the repo, fixes applied and the
-   rest flagged.
+Phases 16, 17, Part I Phase 11, Part II Phase C2, Part IV, Part V and the deep
+bug sweep have all shipped. Nothing on the plan is outstanding. What remains is
+the full stress test, which needs a machine with Postgres and Redis actually
+running (see "Not covered" under the bug sweep below).
 
 ### Part IV, as built
 
@@ -184,6 +181,79 @@ and truncation breaks on a separator rather than mid-word. The zero-width
 spending characters from the 252-char budget.
 
 The full plan lives at `~/.claude/plans/typed-dreaming-torvalds.md`.
+
+## The deep bug sweep
+
+Read rather than scanned: this codebase is defensively written, so pattern
+greps came back almost empty and the yield was in reading the least-tested
+packages line by line. `packages/redis` (1447 lines, no tests), `apps/workers`,
+`apps/web-panel/src`, `packages/db`'s repositories, `packages/analytics` and
+`packages/perms`, in that order.
+
+### Fixed
+
+- **Automod's spam window slid instead of tumbling.** `RedisAutomodCounters`
+  refreshed the key's expiry on *every* bump, so the counter only lapsed once an
+  author stopped talking. Somebody chatting steadily just under the rate — one
+  line every nine seconds against a ten-second window — accumulated towards the
+  threshold forever and would eventually be muted for not flooding. The expiry is
+  now set on the bump that creates the key. The regression test walks six
+  messages nine seconds apart and asserts the counter never passes two.
+- **BullMQ was handed half a Redis URL.** `apps/workers` translated `REDIS_URL`
+  into `{ host, port }` and dropped the username, the password, the database and
+  the `rediss:` TLS scheme. Against any managed Redis the workers would have been
+  the one service in the fleet unable to connect. Now `apps/workers/src/connection.ts`,
+  with the parsing tested.
+- **A ticket transcript could be read across guilds.** The bridge's internal API
+  scopes every route to a guild in its path, but `transcript` and
+  `deliverTranscriptById` took only a ticket id. Both callers happened to check
+  the guild first; the check no longer depends on them continuing to.
+- **A Redis outage could 500 a settings page.** `createBotDirectory` documented
+  that an unreachable Redis simply falls through to the bot, but the
+  `await getRedis()` that builds the cache key sat outside the guard and would
+  reject.
+- **A corrupt Hypixel cache entry threw at the call site.** Every other read in
+  `packages/redis` treats an unparseable value as absent; this one did not, so a
+  bad byte in Redis surfaced as a failed player lookup.
+- **The rate-gate hash had no expiry** — the only key in the package that would
+  outlive every process that wrote it, holding a `remaining` from a window that
+  lapsed hours ago.
+- **`toActionRow` had no component clamps.** Discord rejects the *whole* payload
+  when a row exceeds five buttons or a select exceeds twenty-five options, so a
+  twenty-sixth role would not have dropped a role, it would have dropped the
+  message. Every call site clamps at source; `render.ts` is now the floor under
+  all of them, and clamps label lengths and `min`/`maxValues` too.
+- **The panel's directory cache never evicted.** Keyed by search text, so it grew
+  one entry per keystroke for the life of the page. Pruned on write.
+
+### Flagged, deliberately not changed
+
+- `packages/db/src/repositories/tickets.ts` — `byId`, `byChannel`, `bindChannel`,
+  `markMessageEdited`, `markMessageDeleted` and `listMessages` are id-addressed
+  with no `guildId` predicate. Every caller that reaches them from outside the
+  process now checks the guild (above); adding a predicate to the repository
+  itself would mean threading a guild through the ticket gateway's internals for
+  a lookup that is already reached only by id it just read.
+- `packages/perms/src/service.ts` — an explicit `input.slot` is not checked for
+  uniqueness, so two roster entries can share a seat number. Rendering is
+  deterministic (`slot`, then `ign`), and an explicit slot is the caller stating
+  where they want somebody: silently relocating them would be the worse answer.
+- The panel's `/auth/login` mints an OAuth `state` key per request with no gate
+  in front of it. Each key carries a short TTL, so the ceiling is bounded, but a
+  determined caller can churn the keyspace.
+- `RedisRateGate.acquire` reads then decrements without a transaction, so two
+  processes can each spend the last unit of a budget. It is a soft gate in front
+  of an API that also answers 429, and `observe` corrects the count on the next
+  response.
+
+### Not covered
+
+No Postgres and no Redis on this machine (`pg_isready` and `redis-cli ping` both
+report them absent), so the sweep could not include a live stress test. The
+2023-test suite is the only dynamic proxy available, and the new
+`packages/redis/src/adapters.test.ts` runs the adapters against an in-memory
+stand-in rather than a real server — a fake that implements `SET NX`, TTLs and
+`INCR`-on-missing rather than stubbing them, but a fake.
 
 ## Open question
 

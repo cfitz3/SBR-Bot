@@ -77,13 +77,20 @@ export function createBotDirectory(deps: DirectoryDeps): DirectorySource {
     if (deps.token === undefined) return UNAVAILABLE;
     const q = rawQuery.trim().slice(0, MAX_QUERY);
 
-    const ctx = await getRedis();
-    const key = ctx.keys.directory(guildId, resource, q);
-
     // A cache miss and an unreachable Redis are the same situation here — go to
-    // the bot — so the read is allowed to fail without taking the picker down.
-    const cached = await getJson<readonly T[]>(key).catch(() => null);
-    if (cached !== null && Array.isArray(cached)) return { available: true, rows: cached };
+    // the bot — so neither the key nor the read is allowed to throw. Building
+    // the key needs a connected client, which is the part that actually fails
+    // when Redis is down; letting that reject would take the whole settings page
+    // with it, which is exactly what the caching is not supposed to be able to
+    // do.
+    const key = await getRedis()
+      .then((ctx) => ctx.keys.directory(guildId, resource, q))
+      .catch(() => null);
+
+    if (key !== null) {
+      const cached = await getJson<readonly T[]>(key).catch(() => null);
+      if (cached !== null && Array.isArray(cached)) return { available: true, rows: cached };
+    }
 
     const url = `${base}/internal/g/${encodeURIComponent(guildId)}/${resource}${
       q.length > 0 ? `?q=${encodeURIComponent(q)}` : ""
@@ -111,7 +118,7 @@ export function createBotDirectory(deps: DirectoryDeps): DirectorySource {
       const rows = body[resource];
       if (!Array.isArray(rows)) return UNAVAILABLE;
 
-      await setJson(key, rows, CACHE_TTL_S).catch(() => undefined);
+      if (key !== null) await setJson(key, rows, CACHE_TTL_S).catch(() => undefined);
       return { available: true, rows: rows as readonly T[] };
     } catch (error: unknown) {
       // Includes the abort. Debug rather than warn: with the bot deliberately

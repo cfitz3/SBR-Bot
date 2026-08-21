@@ -92,9 +92,16 @@ export interface AutomodCounterRequest {
  *
  * Counting is a bump-and-read rather than a read: the message being judged is
  * part of its own window, so "the fifth message in ten seconds" has to see
- * itself to be the fifth. The expiry is set from the current bump, which makes
- * the window sliding-ish — good enough for flood detection, and far cheaper
- * than a sorted set of timestamps per author per rule.
+ * itself to be the fifth.
+ *
+ * The expiry is set only when the counter is created, which makes each window a
+ * tumbling one. Refreshing it on every bump instead would mean the key only
+ * expires once the author *stops* talking, so somebody chatting steadily just
+ * under the rate — one line every nine seconds against a ten-second window —
+ * accumulates towards the threshold forever and is eventually muted for not
+ * flooding. A tumbling window is cheaper than a sorted set of timestamps per
+ * author per rule, and wrong only at the seam, where the worst case is a burst
+ * split across two windows going unpunished.
  *
  * A Redis failure returns zero for that rule rather than throwing. Automod
  * mutes people; the failure mode when the counter store is unreachable must be
@@ -120,7 +127,14 @@ export class RedisAutomodCounters {
             : this.ctx.keys.automodRepeat(guildId, request.ruleId, author, hash);
         try {
           const total = await this.ctx.client.incr(key);
-          await this.ctx.client.expire(key, Math.max(1, Math.ceil(request.windowSeconds)));
+          // Only the bump that created the key sets the window. A key that
+          // somehow survived without one (a crash between the two calls) is
+          // given a TTL too, so nothing here can leak forever.
+          if (total === 1) {
+            await this.ctx.client.expire(key, Math.max(1, Math.ceil(request.windowSeconds)));
+          } else if ((await this.ctx.client.ttl(key)) < 0) {
+            await this.ctx.client.expire(key, Math.max(1, Math.ceil(request.windowSeconds)));
+          }
           out[request.ruleId] = total;
         } catch {
           out[request.ruleId] = 0;
@@ -153,7 +167,15 @@ export class RedisHypixelCache {
   async get<T>(key: string): Promise<{ data: T; fetchedAt: string; expired: boolean } | null> {
     const raw = await this.ctx.client.get(key);
     if (!raw) return null;
-    const e = JSON.parse(raw) as { data: T; fetchedAt: string; softExpiresAt: number };
+    let e: { data: T; fetchedAt: string; softExpiresAt: number };
+    try {
+      e = JSON.parse(raw) as { data: T; fetchedAt: string; softExpiresAt: number };
+    } catch {
+      // A corrupt envelope is a cache miss, not an error: the caller's fallback
+      // is to fetch, which is exactly what it should do. Throwing here would
+      // turn a bad byte in Redis into a failed player lookup.
+      return null;
+    }
     return { data: e.data, fetchedAt: e.fetchedAt, expired: Date.now() > e.softExpiresAt };
   }
   async set<T>(key: string, data: T, ttlMs: number): Promise<void> {
@@ -162,6 +184,15 @@ export class RedisHypixelCache {
     await this.ctx.client.set(key, payload, { EX: hardSeconds });
   }
 }
+
+/**
+ * How long an observed Hypixel budget stays interesting.
+ *
+ * Hypixel's window is a minute; an hour is comfortably longer than any window
+ * whose `remaining` could still mean something, and short enough that a key
+ * nobody has written since a deploy simply goes away.
+ */
+const RATE_GATE_TTL_SECONDS = 3600;
 
 /** RateGate — shared Hypixel budget driven by observed headers. */
 export class RedisRateGate {
@@ -193,8 +224,14 @@ export class RedisRateGate {
       if (retry !== undefined && retry !== "") upd.resetAt = String(Date.now() + Number(retry) * 1000);
     }
     if (Object.keys(upd).length > 0) {
-      // Fire-and-forget: observe() is sync in the port.
-      void this.ctx.client.hSet(key, upd).catch(() => {});
+      // Fire-and-forget: observe() is sync in the port. The TTL is here because
+      // this is a window, not a fact: a `remaining` from a budget that lapsed
+      // hours ago describes nothing, and without an expiry it would be the one
+      // key in this file that outlives every process that wrote it.
+      void this.ctx.client
+        .hSet(key, upd)
+        .then(() => this.ctx.client.expire(key, RATE_GATE_TTL_SECONDS))
+        .catch(() => {});
     }
   }
 }

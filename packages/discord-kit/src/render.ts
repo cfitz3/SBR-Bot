@@ -23,6 +23,28 @@ import {
 // This module used to keep its own private copy of the same five numbers.
 import { VIEW_COLORS } from "./style.js";
 
+/**
+ * Discord's component limits, enforced here rather than trusted to call sites.
+ *
+ * Every current caller clamps its own lists — the role menus at 25, the ticket
+ * panel at its category cap, the paginator at one nav row. This is the floor
+ * under all of them, and it exists because of what going over costs: Discord
+ * rejects the *whole* payload, so a twenty-sixth role does not drop a role, it
+ * drops the message. Truncating is the lesser failure, and it is the one a
+ * staffer can see and explain.
+ */
+const MAX_BUTTONS_PER_ROW = 5;
+const MAX_SELECT_OPTIONS = 25;
+const MAX_ROWS_PER_MESSAGE = 5;
+const MAX_BUTTON_LABEL = 80;
+const MAX_OPTION_LABEL = 100;
+const MAX_OPTION_DESCRIPTION = 100;
+
+/** Discord counts UTF-16 code units, which is what `String#slice` counts too. */
+function clampText(text: string, max: number): string {
+  return text.length <= max ? text : text.slice(0, max);
+}
+
 const STYLES = {
   PRIMARY: DiscordButtonStyle.Primary,
   SECONDARY: DiscordButtonStyle.Secondary,
@@ -45,7 +67,9 @@ export function toEmbed(view: EmbedView): EmbedBuilder {
 }
 
 function toButton(view: ButtonView): ButtonBuilder {
-  const button = new ButtonBuilder().setLabel(view.label).setStyle(STYLES[view.style]);
+  const button = new ButtonBuilder()
+    .setLabel(clampText(view.label, MAX_BUTTON_LABEL))
+    .setStyle(STYLES[view.style]);
   // A link button carries a URL and no customId; every other style is the
   // reverse. Discord rejects the payload if both or neither is set.
   if (view.style === "LINK") button.setURL(view.url ?? "https://discord.com");
@@ -58,18 +82,26 @@ function toButton(view: ButtonView): ButtonBuilder {
 function toSelect(view: SelectMenuView): StringSelectMenuBuilder {
   const menu = new StringSelectMenuBuilder().setCustomId(view.customId);
   if (view.placeholder) menu.setPlaceholder(view.placeholder);
-  if (view.minValues !== undefined) menu.setMinValues(view.minValues);
-  if (view.maxValues !== undefined) menu.setMaxValues(view.maxValues);
   if (view.disabled) menu.setDisabled(true);
+  const options = view.options.slice(0, MAX_SELECT_OPTIONS);
   menu.addOptions(
-    view.options.map((o) => {
-      const option = new StringSelectMenuOptionBuilder().setLabel(o.label).setValue(o.value);
-      if (o.description) option.setDescription(o.description);
+    options.map((o) => {
+      const option = new StringSelectMenuOptionBuilder()
+        .setLabel(clampText(o.label, MAX_OPTION_LABEL))
+        .setValue(o.value);
+      if (o.description) option.setDescription(clampText(o.description, MAX_OPTION_DESCRIPTION));
       if (o.emoji) option.setEmoji(o.emoji);
       if (o.default) option.setDefault(true);
       return option;
     }),
   );
+  // Both bounds are set after the options, and against the list that actually
+  // survived truncation. A `maxValues` above the option count is rejected
+  // outright, and a truncated list is exactly how that happens without anybody
+  // having written it down.
+  const ceiling = Math.max(1, options.length);
+  if (view.minValues !== undefined) menu.setMinValues(Math.min(view.minValues, ceiling));
+  if (view.maxValues !== undefined) menu.setMaxValues(Math.max(1, Math.min(view.maxValues, ceiling)));
   return menu;
 }
 
@@ -82,7 +114,7 @@ function toSelect(view: SelectMenuView): StringSelectMenuBuilder {
 export function toActionRow(view: ActionRowView): ActionRowBuilder<MessageActionRowComponentBuilder> {
   const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
   if (view.select) return row.addComponents(toSelect(view.select));
-  return row.addComponents(...view.buttons.map(toButton));
+  return row.addComponents(...view.buttons.slice(0, MAX_BUTTONS_PER_ROW).map(toButton));
 }
 
 /** The transport-agnostic reply shape both command packages return. */
@@ -128,7 +160,9 @@ export function replyOptions(reply: ReplyView): DiscordReplyOptions {
   const options: DiscordReplyOptions = { allowedMentions: { parse: [] } };
   if (embedView) options.embeds = [toEmbed(embedView)];
   else options.content = reply.text;
-  if (reply.components?.length) options.components = reply.components.map(toActionRow);
+  if (reply.components?.length) {
+    options.components = reply.components.slice(0, MAX_ROWS_PER_MESSAGE).map(toActionRow);
+  }
   if (reply.file) {
     options.files = [
       new AttachmentBuilder(Buffer.from(reply.file.content, "utf8"), { name: reply.file.name }),

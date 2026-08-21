@@ -224,7 +224,7 @@ export class BridgeApi {
     const method = req.method ?? "GET";
     if (method === "GET" && resource === "ticket-transcript") {
       const ticketId = url.searchParams.get("ticketId") ?? "";
-      const transcript = await tickets.transcript(ticketId);
+      const transcript = await tickets.transcript(guildId, ticketId);
       if (transcript === null) {
         sendJson(res, 404, { problem: "NO_TICKET", detail: "no such ticket" });
         return;
@@ -244,7 +244,7 @@ export class BridgeApi {
         await this.publish(res, tickets, guildId, body);
         return;
       case "ticket-transcript":
-        await this.resend(res, tickets, body);
+        await this.resend(res, guildId, tickets, body);
         return;
       case "ticket-close":
         await this.close(res, tickets, guildId, body);
@@ -384,13 +384,18 @@ export class BridgeApi {
    * body — a caller naming the recipient is a way to mail somebody else's
    * conversation to themselves.
    */
-  private async resend(res: ServerResponse, tickets: TicketGateway, body: Record<string, unknown>): Promise<void> {
+  private async resend(
+    res: ServerResponse,
+    guildId: string,
+    tickets: TicketGateway,
+    body: Record<string, unknown>,
+  ): Promise<void> {
     const ticketId = str(body["ticketId"]);
     if (ticketId === null) {
       sendJson(res, 400, { problem: "BAD_REQUEST", detail: "ticketId is required" });
       return;
     }
-    const sent = await tickets.deliverTranscriptById(ticketId);
+    const sent = await tickets.deliverTranscriptById(guildId, ticketId);
     if (sent === null) {
       sendJson(res, 404, { problem: "NO_TICKET", detail: "no such ticket" });
       return;

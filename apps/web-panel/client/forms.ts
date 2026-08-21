@@ -372,6 +372,22 @@ const DIRECTORY_TTL_MS = 30_000;
 const directoryCache = new Map<string, { at: number; value: DirectoryAnswer }>();
 const directoryInflight = new Map<string, Promise<DirectoryAnswer>>();
 
+/**
+ * Drop what has already lapsed, on the way to storing something new.
+ *
+ * The cache is keyed by search text, so a staffer typing into a member picker
+ * mints an entry per keystroke. Checking the TTL on read alone would leave every
+ * one of those entries in the map for the life of the page — never returned
+ * again, never collected. Pruning on write keeps the map the size of what is
+ * actually still warm, and the work is proportional to a map that stays small
+ * precisely because of it.
+ */
+function pruneDirectoryCache(now: number): void {
+  for (const [key, entry] of directoryCache) {
+    if (now - entry.at >= DIRECTORY_TTL_MS) directoryCache.delete(key);
+  }
+}
+
 function channelRow(c: DirectoryChannel): PickerRow {
   // `#` only for the kinds Discord itself prefixes; a voice channel rendered as
   // `#General` is a small lie that makes the list harder to scan, not easier.
@@ -415,7 +431,11 @@ async function fetchDirectory(guildId: string, kind: PickerKind, q: string): Pro
     const answer: DirectoryAnswer = { available: vm.available, rows };
     // Only a real answer is worth keeping: caching "the bot is down" would keep
     // the picker dead for half a minute after it came back.
-    if (answer.available) directoryCache.set(key, { at: Date.now(), value: answer });
+    if (answer.available) {
+      const at = Date.now();
+      pruneDirectoryCache(at);
+      directoryCache.set(key, { at, value: answer });
+    }
     return answer;
   })().finally(() => directoryInflight.delete(key));
 
