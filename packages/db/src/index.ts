@@ -19,7 +19,11 @@ export {
   type PermSubjectKind,
 } from "./repositories/bridge-permissions.js";
 export { moderationRepository } from "./repositories/moderation.js";
-export { communityRepository, podiumRepository } from "./repositories/community.js";
+export {
+  communityMetricsRepository,
+  communityRepository,
+  podiumRepository,
+} from "./repositories/community.js";
 export { progressionRepository } from "./repositories/progression.js";
 export {
   rankResolver,

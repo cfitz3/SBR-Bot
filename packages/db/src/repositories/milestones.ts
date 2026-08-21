@@ -169,6 +169,43 @@ export const milestoneDefinitionRepository = {
     const { count } = await prisma.milestoneDefinition.deleteMany({ where: { guildId, key } });
     return count > 0;
   },
+
+  /**
+   * How many members hold each definition, keyed by definition key.
+   *
+   * Grouped on `(metric, thresholdValue)` rather than joined on `definitionId`,
+   * because a milestone detected against a built-in default carries no
+   * definition id at all — a join would report the twenty-odd defaults as held
+   * by nobody, which is exactly backwards. That pair is the same identity the
+   * unique constraint and the announcer's label fallback both use.
+   *
+   * The consequence to know about: a guild that shadows a default at the same
+   * threshold inherits the rows detected before it did so. That is intended —
+   * the members did reach it, and renaming what the guild calls it does not
+   * unmake that.
+   */
+  async countHolders(guildId: string): Promise<Readonly<Record<string, number>>> {
+    const [definitions, groups] = await Promise.all([
+      this.list(guildId),
+      prisma.milestone.groupBy({
+        by: ["metric", "thresholdValue"],
+        where: { guildId },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const counts = new Map<string, number>();
+    for (const group of groups) {
+      counts.set(`${group.metric}:${Number(group.thresholdValue)}`, group._count._all);
+    }
+
+    const out: Record<string, number> = {};
+    for (const d of definitions) {
+      const held = counts.get(`${d.metric}:${d.threshold}`);
+      if (held !== undefined) out[d.key] = held;
+    }
+    return out;
+  },
 };
 
 /**

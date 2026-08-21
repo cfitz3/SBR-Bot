@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { MilestoneDTO, MilestoneDefinitionDTO, SnapshotMetricsDTO } from "@sbr/shared-types";
+import type {
+  CommunityMetricsDTO,
+  MilestoneDTO,
+  MilestoneDefinitionDTO,
+  SnapshotMetricsDTO,
+} from "@sbr/shared-types";
 import { buildAchievements } from "./achievements.js";
 
 function def(over: Partial<MilestoneDefinitionDTO> = {}): MilestoneDefinitionDTO {
@@ -185,4 +190,101 @@ test("tier and icon travel with the definition", () => {
   const result = buildAchievements([def({ tier: "PLATINUM", icon: "💰" })], [], snapshot);
   assert.equal(result.upcoming[0]?.tier, "PLATINUM");
   assert.equal(result.upcoming[0]?.icon, "💰");
+});
+
+/**
+ * The community half of the catalog: counters this platform keeps itself.
+ *
+ * These are never detected as crossings — see `COMMUNITY_MILESTONE_METRICS` —
+ * so the only thing that can unlock them is the standing at read time, and
+ * these tests are what holds that behaviour in place.
+ */
+const community: CommunityMetricsDTO = {
+  eventsAttended: 25,
+  eventPodiums: 3,
+  guildTenureDays: 400,
+  guildXp: 12_000,
+};
+
+function communityDef(over: Partial<MilestoneDefinitionDTO> = {}): MilestoneDefinitionDTO {
+  return def({
+    key: "events-25",
+    label: "25 events",
+    type: "CUSTOM",
+    metric: "eventsAttended",
+    threshold: 25,
+    xpReward: 250,
+    ...over,
+  });
+}
+
+test("a community definition is earned from the standing, with no recorded row", () => {
+  const result = buildAchievements([communityDef()], [], snapshot, { configured: true, community });
+
+  assert.equal(result.earnedCount, 1);
+  assert.equal(result.earned[0]?.key, "events-25");
+  assert.equal(result.earned[0]?.current, 25);
+  assert.equal(result.earned[0]?.progress, 1);
+  // No date, and honestly so: we know it is reached and not when it was.
+  assert.equal(result.earned[0]?.achievedAt, null);
+  assert.equal(result.xpEarned, 250);
+});
+
+test("a community definition not yet reached is outstanding with real progress", () => {
+  const result = buildAchievements([communityDef({ threshold: 50 })], [], snapshot, {
+    configured: true,
+    community,
+  });
+
+  assert.equal(result.earnedCount, 0);
+  assert.equal(result.upcoming[0]?.current, 25);
+  assert.equal(result.upcoming[0]?.progress, 0.5);
+});
+
+test("without a community reading a community definition is unmeasured, not zero", () => {
+  const result = buildAchievements([communityDef()], [], snapshot);
+
+  assert.equal(result.earnedCount, 0);
+  assert.equal(result.upcoming[0]?.current, null);
+  assert.equal(result.upcoming[0]?.progress, null);
+});
+
+test("a hidden community definition stays hidden until the standing reaches it", () => {
+  const locked = buildAchievements([communityDef({ threshold: 50, hidden: true })], [], snapshot, {
+    configured: true,
+    community,
+  });
+  assert.equal(locked.hiddenLocked, 1);
+  assert.equal(locked.upcoming.length, 0);
+  assert.equal(locked.totalCount, 1);
+
+  const revealed = buildAchievements([communityDef({ hidden: true })], [], snapshot, {
+    configured: true,
+    community,
+  });
+  assert.equal(revealed.hiddenLocked, 0);
+  assert.equal(revealed.earned[0]?.key, "events-25");
+});
+
+test("dateless community earns sort after dated ones rather than before them", () => {
+  const result = buildAchievements([def(), communityDef()], [earnedRow()], snapshot, {
+    configured: true,
+    community,
+  });
+
+  assert.deepEqual(
+    result.earned.map((a) => a.key),
+    ["networth-10b", "events-25"],
+  );
+});
+
+test("a snapshot reading never satisfies a community definition, or the reverse", () => {
+  // `guildXp` off a snapshot and `networth` off the community reading are both
+  // absent, and reading the wrong source would quietly invent a value.
+  const result = buildAchievements(
+    [communityDef({ key: "xp-1", metric: "guildXp", threshold: 1 })],
+    [],
+    snapshot,
+  );
+  assert.equal(result.upcoming[0]?.current, null);
 });

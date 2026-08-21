@@ -7,6 +7,7 @@
  */
 import type { MilestoneDTO, ProfileSummaryDTO, ProgressionRepository } from "@sbr/shared-types";
 import { prisma } from "../client.js";
+import { unpackJsonMetrics } from "./snapshot-metrics.js";
 
 /** BigInt columns exceed Number.MAX_SAFE_INTEGER only past ~9 quadrillion coins. */
 function toNumber(value: bigint | null): number | null {
@@ -71,6 +72,7 @@ export const progressionRepository: ProgressionRepository = {
         catacombsLevel: true,
         slayerXp: true,
         senitherWeight: true,
+        metrics: true,
       },
     });
     if (!row) return null;
@@ -82,6 +84,9 @@ export const progressionRepository: ProgressionRepository = {
       catacombsLevel: row.catacombsLevel,
       slayerXp: toNumber(row.slayerXp),
       senitherWeight: row.senitherWeight,
+      // Spread last so a row captured before the widened catalog existed simply
+      // omits those keys — `undefined` reads as "never measured", which is true.
+      ...unpackJsonMetrics(row.metrics),
     };
   },
 

@@ -245,6 +245,21 @@ export interface MilestoneDefinitionService extends MilestoneDefinitionReader {
    * custom definition disappears. Recorded milestones are untouched either way.
    */
   remove(guildId: string, key: string): Promise<boolean>;
+
+  /**
+   * How many members hold each definition, keyed by `key`.
+   *
+   * Optional because it is the one question here that needs the milestone rows
+   * rather than the definition rows, and a deployment that wires only the
+   * config half should not be forced to answer it. A key absent from the map
+   * means nobody holds it, which is the same thing zero means — callers should
+   * default rather than distinguish.
+   *
+   * Community definitions are always absent: they are recognised from the
+   * standing rather than recorded, so there are no rows to count. The panel
+   * says so rather than reporting them as held by nobody.
+   */
+  countHolders?(guildId: string): Promise<Readonly<Record<string, number>>>;
 }
 
 /**

@@ -93,6 +93,7 @@ export const PROFILE: ProfileSummaryDTO = {
   catacombsLevel: 42,
   slayerXp: 2_640_000,
   senitherWeight: 8420.5,
+  bestiaryMilestone: 7,
 };
 
 export const PROFILE_LIST: readonly ProfileSummaryDTO[] = [
@@ -107,6 +108,7 @@ export const PROFILE_LIST: readonly ProfileSummaryDTO[] = [
     catacombsLevel: null,
     slayerXp: 0,
     senitherWeight: 1204,
+    bestiaryMilestone: null,
   },
 ];
 

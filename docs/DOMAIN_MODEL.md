@@ -645,7 +645,7 @@ A point-in-time capture of a Skyblock profile's stats (time-series for progressi
 | `skillAverage`, `catacombsLevel`, `senitherWeight` | Float, nullable |
 | `skyblockLevel` | Float, nullable — fractional SkyBlock Level (`leveling.experience / 100`), the headline progression figure |
 | `slayerXp` | BigInt, nullable — total slayer XP across all bosses |
-| `metrics` | JSON blob for everything not promoted to a column |
+| `metrics` | JSON blob for everything not promoted to a column — the widened catalog (`JSON_METRICS`) lives here |
 | `source`, `eventId` | see enum; `eventId` set for event-tracked captures |
 
 **Enum — `SnapshotSource`:** `SCHEDULED`, `ON_DEMAND`, `EVENT_TRIGGERED`, `BACKFILL`.
@@ -669,6 +669,25 @@ because it is now the headline metric — a leaderboard category, a milestone ty
 because it advances for anyone who plays, where skills plateau, dungeons are a
 sub-community and networth swings with the market. Weight is still captured and
 still shown on `/stats`; it is simply no longer what the platform ranks by.
+
+**Why the rest are not columns.** The twelve readings added with the widened
+metric catalog — the five dungeon class levels, the six per-boss slayer XP
+figures and the bestiary milestone — ride in `metrics` instead, partitioned by
+`packages/db/src/repositories/snapshot-metrics.ts`. They are only ever read
+whole, for one account, by milestone detection and the achievements join; none
+of them is ranked or charted, which is the only thing a column buys. The trade
+is deliberate and stated there: adding the next metric costs nothing, and
+removing one costs a deploy rather than a migration. Two compile-time assertions
+hold `COLUMN_METRICS ∪ JSON_METRICS` exactly equal to
+`SNAPSHOT_MILESTONE_METRICS`, so a metric added to the platform and to neither
+list fails the build rather than being silently accepted by the panel, stored on
+a definition and then never read. If one of them ever needs to be ranked, the
+same assertion is what points at every site that has to change.
+
+The pack drops absent keys rather than writing nulls, because `{}` on a row
+captured before a metric existed and `{"classTank": null}` on a profile whose
+dungeon read failed are different facts, and only the second one means "we
+looked".
 
 #### Milestone
 A recognized achievement/threshold crossed by a member.

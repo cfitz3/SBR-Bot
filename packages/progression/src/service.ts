@@ -28,8 +28,13 @@ import {
 } from "@sbr/shared-types";
 import type { NetworthService } from "@sbr/pricing";
 import type { Logger } from "@sbr/observability";
-import type { ProfileProvider, SkyblockProfileData, UpgradePriceSource } from "./ports.js";
-import { parseDungeons, parseSkills, parseSlayers, skyblockLevel } from "./skyblock/parse.js";
+import type {
+  CommunityMetricsSource,
+  ProfileProvider,
+  SkyblockProfileData,
+  UpgradePriceSource,
+} from "./ports.js";
+import { bestiaryMilestone, parseDungeons, parseSkills, parseSlayers, skyblockLevel } from "./skyblock/parse.js";
 import { senitherWeight } from "./skyblock/weight.js";
 import { buildAchievements } from "./achievements.js";
 import { analyseAccessories, CATALOG_NOTE, type AccessoryReport, type CatalogEntry } from "./skyblock/accessories.js";
@@ -55,6 +60,12 @@ export interface ProgressionServiceDeps {
    * against, so it reports achievements as switched off.
    */
   readonly definitions?: MilestoneDefinitionReader;
+  /**
+   * Optional: what this platform counts about the member itself. Without it,
+   * community definitions (events attended, tenure, guild XP) show as
+   * unmeasured rather than as zero — see `COMMUNITY_MILESTONE_METRICS`.
+   */
+  readonly community?: CommunityMetricsSource;
   /** Optional: without it, `/nextupgrade` suggestions arrive without price tags. */
   readonly prices?: UpgradePriceSource;
   readonly logger: Logger;
@@ -89,6 +100,7 @@ export class ProgressionServiceImpl implements ProgressionService {
   private readonly networth: NetworthService;
   private readonly repo: ProgressionRepository | undefined;
   private readonly definitions: MilestoneDefinitionReader | undefined;
+  private readonly community: CommunityMetricsSource | undefined;
   private readonly prices: UpgradePriceSource | undefined;
   private readonly log: Logger;
 
@@ -97,6 +109,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     this.networth = deps.networth;
     this.repo = deps.repo;
     this.definitions = deps.definitions;
+    this.community = deps.community;
     this.prices = deps.prices;
     this.log = deps.logger.child({ service: "progression" });
   }
@@ -155,12 +168,15 @@ export class ProgressionServiceImpl implements ProgressionService {
     // Every recorded milestone, not a page: the totals and the earned list are
     // both over the member's whole history, and a member with more than this
     // many has out-achieved the definition set several times over.
-    const [definitions, earned, snapshot] = await Promise.all([
+    const [definitions, earned, snapshot, community] = await Promise.all([
       this.definitions?.list(guildId) ?? Promise.resolve([]),
       this.repo.listMilestones(uuid, ACHIEVEMENT_HISTORY_LIMIT),
       this.repo.latestSnapshot(uuid),
+      // Absorbed: an unreadable community reading costs the community
+      // definitions their progress bar, and costs the Hypixel ones nothing.
+      this.community?.forAccount(guildId, uuid).catch(() => null) ?? Promise.resolve(null),
     ]);
-    return ok(buildAchievements(definitions, earned, snapshot, { configured }));
+    return ok(buildAchievements(definitions, earned, snapshot, { configured, community }));
   }
 
   async getProgress(
@@ -365,5 +381,6 @@ function toSummary(p: SkyblockProfileData): ProfileSummaryDTO {
     catacombsLevel: dungeons.catacombsLevel,
     slayerXp: slayers.totalExperience,
     senitherWeight: senitherWeight(skills, slayers, dungeons),
+    bestiaryMilestone: bestiaryMilestone(p.rawMember),
   };
 }

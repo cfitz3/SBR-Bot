@@ -456,11 +456,45 @@ export const DEFAULT_PANEL = {
       "Detection compares each new snapshot against the one before it, so a threshold only fires when somebody " +
       "crosses it. Adding one now will not fire for members who are already past it.",
     metric: {
+      skyblockLevel: "SkyBlock level",
       networth: "Networth, in coins",
       skillAverage: "Skill average",
       catacombsLevel: "Catacombs level",
       slayerXp: "Total slayer XP",
       senitherWeight: "Senither weight",
+      classHealer: "Healer class level",
+      classMage: "Mage class level",
+      classBerserk: "Berserk class level",
+      classArcher: "Archer class level",
+      classTank: "Tank class level",
+      slayerZombie: "Revenant XP",
+      slayerSpider: "Tarantula XP",
+      slayerWolf: "Sven XP",
+      slayerEnderman: "Voidgloom XP",
+      slayerBlaze: "Inferno XP",
+      slayerVampire: "Riftstalker XP",
+      bestiaryMilestone: "Bestiary milestone",
+      eventsAttended: "Events attended",
+      eventPodiums: "Event podiums",
+      guildTenureDays: "Days in the guild",
+      guildXp: "Guild XP",
+    },
+    /** Group headings, keyed by `AchievementCategory`. */
+    category: {
+      PROGRESSION: "Progression",
+      WEALTH: "Wealth",
+      DUNGEONS: "Dungeons",
+      SKILLS: "Skills",
+      SLAYER: "Slayer",
+      COMMUNITY: "Community",
+      EVENTS: "Events",
+    },
+    /** Badge names, keyed by `AchievementTier`. */
+    tier: {
+      BRONZE: "Bronze",
+      SILVER: "Silver",
+      GOLD: "Gold",
+      PLATINUM: "Platinum",
     },
     /** `{metric}` and `{key}` — what this row measures and what identifies it. */
     rowSummary: "{metric} • key {key}",
@@ -499,6 +533,26 @@ export const DEFAULT_PANEL = {
     positiveError: "Enter a number greater than zero.",
     /** `{max}` is the mutation layer's ceiling. */
     rewardError: "Enter a whole number between 0 and {max}.",
+    /** `{active}` of `{total}` in this family are switched on. */
+    groupSummary: "{active} of {total} on",
+    /** `{n}` members have reached this one. */
+    holders: "Held by {n}",
+    holdersNone: "Nobody yet",
+    /** Counts come from recorded crossings, which community metrics have none of. */
+    holdersUnrecorded: "Not counted",
+    tierLabel: "Tier",
+    tierHint: "Presentation only — a rarer tier does not make a milestone harder to reach.",
+    iconLabel: "Icon",
+    iconHint: "One emoji, shown beside the name. Leave empty for none.",
+    iconPlaceholder: "e.g. 💰",
+    /** `{max}` mirrors the mutation layer's cap, counted in characters not bytes. */
+    iconError: "Enter up to {max} characters, or leave it empty.",
+    hiddenLabel: "Hidden until earned",
+    hiddenHint:
+      "Members see only that an unnamed one exists. Earning it reveals it — the reveal is the reward.",
+    communityNote:
+      "This family is counted by the platform rather than read from Hypixel, so it is recognised the moment " +
+      "the number is reached, including for members already past it. It is never announced.",
   },
 
   /**

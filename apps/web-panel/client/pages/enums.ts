@@ -25,8 +25,87 @@ export const MILESTONE_METRICS = [
   "catacombsLevel",
   "slayerXp",
   "senitherWeight",
+  "classHealer",
+  "classMage",
+  "classBerserk",
+  "classArcher",
+  "classTank",
+  "slayerZombie",
+  "slayerSpider",
+  "slayerWolf",
+  "slayerEnderman",
+  "slayerBlaze",
+  "slayerVampire",
+  "bestiaryMilestone",
+  "eventsAttended",
+  "eventPodiums",
+  "guildTenureDays",
+  "guildXp",
 ] as const;
 export type MilestoneMetric = (typeof MILESTONE_METRICS)[number];
+
+/**
+ * The subset this platform counts itself (`COMMUNITY_MILESTONE_METRICS`).
+ *
+ * The page needs the distinction for two honest labels: these are recognised
+ * from the standing rather than from a crossing, so the "adding one now will
+ * not fire retroactively" warning does not apply to them, and there are no
+ * recorded rows to count holders from.
+ */
+export const COMMUNITY_MILESTONE_METRICS = [
+  "eventsAttended",
+  "eventPodiums",
+  "guildTenureDays",
+  "guildXp",
+] as const;
+
+/** The families a metric groups under (`ACHIEVEMENT_CATEGORIES`). */
+export const ACHIEVEMENT_CATEGORIES = [
+  "PROGRESSION",
+  "WEALTH",
+  "DUNGEONS",
+  "SKILLS",
+  "SLAYER",
+  "COMMUNITY",
+  "EVENTS",
+] as const;
+export type AchievementCategory = (typeof ACHIEVEMENT_CATEGORIES)[number];
+
+/** Ascending, rarest last (`ACHIEVEMENT_TIERS`). */
+export const ACHIEVEMENT_TIERS = ["BRONZE", "SILVER", "GOLD", "PLATINUM"] as const;
+export type AchievementTier = (typeof ACHIEVEMENT_TIERS)[number];
+
+/**
+ * Which family each metric belongs to (`CATEGORY_OF_METRIC`).
+ *
+ * Mirrored rather than imported for the reason at the top of this file, and
+ * guarded the same way: `enums.test.ts` compares it against `categoryOfMetric`
+ * for every metric in the real registry.
+ */
+export const CATEGORY_OF_METRIC: Readonly<Record<string, AchievementCategory>> = {
+  skyblockLevel: "PROGRESSION",
+  senitherWeight: "PROGRESSION",
+  bestiaryMilestone: "PROGRESSION",
+  networth: "WEALTH",
+  catacombsLevel: "DUNGEONS",
+  classHealer: "DUNGEONS",
+  classMage: "DUNGEONS",
+  classBerserk: "DUNGEONS",
+  classArcher: "DUNGEONS",
+  classTank: "DUNGEONS",
+  skillAverage: "SKILLS",
+  slayerXp: "SLAYER",
+  slayerZombie: "SLAYER",
+  slayerSpider: "SLAYER",
+  slayerWolf: "SLAYER",
+  slayerEnderman: "SLAYER",
+  slayerBlaze: "SLAYER",
+  slayerVampire: "SLAYER",
+  eventsAttended: "EVENTS",
+  eventPodiums: "EVENTS",
+  guildTenureDays: "COMMUNITY",
+  guildXp: "COMMUNITY",
+};
 
 /** What kind of thing a milestone recognises. */
 export const MilestoneType = {

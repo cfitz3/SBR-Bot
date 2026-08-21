@@ -20,6 +20,7 @@ import type {
 } from "@sbr/jobs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../client.js";
+import { packJsonMetrics, unpackJsonMetrics } from "./snapshot-metrics.js";
 
 function toNumber(value: bigint | null): number | null {
   return value === null ? null : Number(value);
@@ -360,6 +361,9 @@ export const snapshotJobRepository = {
       catacombsLevel: snapshot.catacombsLevel,
       slayerXp: toBigInt(snapshot.slayerXp),
       senitherWeight: snapshot.senitherWeight,
+      // The widened catalog rides here rather than in columns of its own —
+      // see `snapshot-metrics.ts` for the trade that buys.
+      metrics: packJsonMetrics(snapshot),
     };
     await prisma.profileSnapshot.upsert({
       where: { minecraftAccountId_profileId_captureDate_seq: key },
@@ -381,6 +385,7 @@ export const snapshotJobRepository = {
         catacombsLevel: true,
         slayerXp: true,
         senitherWeight: true,
+        metrics: true,
       },
     });
     return rows.map((r) => ({
@@ -390,6 +395,7 @@ export const snapshotJobRepository = {
       catacombsLevel: r.catacombsLevel,
       slayerXp: toNumber(r.slayerXp),
       senitherWeight: r.senitherWeight,
+      ...unpackJsonMetrics(r.metrics),
     }));
   },
 

@@ -3,7 +3,12 @@
  * with networth valuation.
  */
 export { ProgressionServiceImpl, type ProgressionServiceDeps } from "./service.js";
-export type { ProfileProvider, SkyblockProfileData, UpgradePriceSource } from "./ports.js";
+export type {
+  CommunityMetricsSource,
+  ProfileProvider,
+  SkyblockProfileData,
+  UpgradePriceSource,
+} from "./ports.js";
 export { analyseAccessories, CATALOG, CATALOG_NOTE, type AccessoryReport } from "./skyblock/accessories.js";
 export { readBag, type BagItem } from "./skyblock/nbt.js";
 export {

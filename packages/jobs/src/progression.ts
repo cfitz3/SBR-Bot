@@ -11,7 +11,8 @@
  * tight loop.
  */
 import {
-  MILESTONE_METRICS,
+  isCommunityMetric,
+  SNAPSHOT_MILESTONE_METRICS,
   type AchievementTier,
   type MilestoneMetric as SharedMilestoneMetric,
 } from "@sbr/shared-types";
@@ -34,6 +35,24 @@ export interface SnapshotMetrics {
   readonly catacombsLevel: number | null;
   readonly slayerXp: number | null;
   readonly senitherWeight: number | null;
+  /**
+   * The widened catalog. Optional because a capture from before they existed
+   * carries none of them, and because they ride in the snapshot's `metrics`
+   * JSON column rather than in columns of their own — a metric that turns out
+   * to be a bad idea should cost a deploy, not a migration.
+   */
+  readonly classHealer?: number | null;
+  readonly classMage?: number | null;
+  readonly classBerserk?: number | null;
+  readonly classArcher?: number | null;
+  readonly classTank?: number | null;
+  readonly slayerZombie?: number | null;
+  readonly slayerSpider?: number | null;
+  readonly slayerWolf?: number | null;
+  readonly slayerEnderman?: number | null;
+  readonly slayerBlaze?: number | null;
+  readonly slayerVampire?: number | null;
+  readonly bestiaryMilestone?: number | null;
 }
 
 export interface SnapshotWrite extends SnapshotMetrics {
@@ -135,8 +154,13 @@ export type MilestoneType =
 // line stops the build rather than letting a metric silently never fire.
 export { isMilestoneMetric } from "@sbr/shared-types";
 export type MilestoneMetric = SharedMilestoneMetric;
-/** Compile-time check that every listed metric is a field a snapshot carries. */
-const _metricsAreSnapshotFields: readonly (keyof SnapshotMetrics)[] = MILESTONE_METRICS;
+/**
+ * Compile-time check that every snapshot metric is a field a snapshot carries.
+ *
+ * Only the snapshot half: the community metrics are deliberately not fields
+ * here, which is what stops `detectMilestones` from ever being handed one.
+ */
+const _metricsAreSnapshotFields: readonly (keyof SnapshotMetrics)[] = SNAPSHOT_MILESTONE_METRICS;
 void _metricsAreSnapshotFields;
 
 /**
@@ -298,9 +322,16 @@ export function detectMilestones(
   const found: MilestoneCandidate[] = [];
   for (const d of definitions) {
     if (!d.enabled) continue;
+    // Community metrics are ours, monotonic, and readable at any time, so they
+    // are recognised from the standing rather than from a crossing — see
+    // `COMMUNITY_MILESTONE_METRICS`. They are not snapshot fields at all, so
+    // this guard is also what keeps the two indexes below well typed.
+    if (isCommunityMetric(d.metric)) continue;
     const before = previous[d.metric];
     const after = current[d.metric];
-    if (before === null || after === null) continue;
+    // `undefined` is a snapshot captured before the metric existed, `null` is a
+    // profile we read and found nothing in. Neither is a crossing.
+    if (before === null || before === undefined || after === null || after === undefined) continue;
     if (before < d.threshold && after >= d.threshold) {
       found.push({
         minecraftAccountId,
@@ -363,8 +394,12 @@ export function standingMilestones(
   const found: MilestoneCandidate[] = [];
   for (const d of definitions) {
     if (!d.enabled) continue;
+    // Community metrics are guild-scoped and this snapshot is account-scoped,
+    // so there is nothing here to compare them against. They are recognised
+    // from the standing at read time instead — see `buildAchievements`.
+    if (isCommunityMetric(d.metric)) continue;
     const value = current[d.metric];
-    if (value === null || value < d.threshold) continue;
+    if (value === null || value === undefined || value < d.threshold) continue;
     found.push({
       minecraftAccountId,
       type: d.type,

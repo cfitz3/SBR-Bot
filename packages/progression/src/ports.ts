@@ -5,7 +5,7 @@
  * the Hypixel client; faked in tests. Returns the typed HypixelResult so
  * MISSING_PROFILE / RATE_LIMITED / API_DISABLED propagate cleanly.
  */
-import type { HypixelResult, SkyblockGameMode } from "@sbr/shared-types";
+import type { CommunityMetricsDTO, HypixelResult, SkyblockGameMode } from "@sbr/shared-types";
 import type { NetworthEngineInput } from "@sbr/pricing";
 
 export interface SkyblockProfileData {
@@ -38,4 +38,20 @@ export interface ProfileProvider {
   getSelectedProfile(uuid: string, profileId?: string): Promise<HypixelResult<SkyblockProfileData>>;
   /** Every profile on the account, for `/profile` and `/setprofile`. */
   listProfiles(uuid: string): Promise<HypixelResult<readonly SkyblockProfileData[]>>;
+}
+
+/**
+ * Port: what this platform counts about a member of a guild, for the metrics
+ * Hypixel knows nothing about — events attended, podiums, tenure, guild XP.
+ *
+ * Keyed by Minecraft UUID because that is what the progression service has in
+ * hand; resolving it to a Discord id is the adapter's problem, and an account
+ * with no verified link in this guild has no community reading at all, which is
+ * `null` rather than a row of zeroes.
+ *
+ * Optional at wiring time. Without it, community definitions read as unmeasured
+ * — the same rule every other optional port here follows.
+ */
+export interface CommunityMetricsSource {
+  forAccount(guildId: string, minecraftUuid: string): Promise<CommunityMetricsDTO | null>;
 }

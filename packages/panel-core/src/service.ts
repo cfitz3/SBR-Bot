@@ -504,6 +504,13 @@ export interface MilestonesVM {
    * one is a create rather than an update.
    */
   readonly definitions: readonly MilestoneDefinitionDTO[];
+  /**
+   * How many members hold each definition, keyed by `key`. An absent key means
+   * nobody — or, for a community definition, that the question does not apply:
+   * those are recognised from the standing and never recorded, so there is
+   * nothing to count. Empty when the service cannot answer at all.
+   */
+  readonly holders: Readonly<Record<string, number>>;
 }
 
 /**
@@ -1152,9 +1159,18 @@ export class PanelService {
     if (!access.allowed) return this.denied(access, "milestones", guildId);
 
     const milestones = this.d.milestones;
-    if (milestones === undefined) return { access, data: { installed: false, definitions: [] } };
+    if (milestones === undefined) {
+      return { access, data: { installed: false, definitions: [], holders: {} } };
+    }
 
-    return { access, data: { installed: true, definitions: await milestones.list(guildId) } };
+    // The counts are a nicety on top of the configuration, so they absorb their
+    // own failure: a page that lists what the guild recognises is worth having
+    // without "held by 14 members" beside each row, and is not worth losing over it.
+    const [definitions, holders] = await Promise.all([
+      milestones.list(guildId),
+      milestones.countHolders?.(guildId).catch(() => ({})) ?? Promise.resolve({}),
+    ]);
+    return { access, data: { installed: true, definitions, holders } };
   }
 
   /**

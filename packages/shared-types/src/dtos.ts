@@ -98,6 +98,15 @@ export interface ProfileSummaryDTO {
    */
   readonly slayerXp: number | null;
   readonly senitherWeight: number | null;
+  /**
+   * The last bestiary milestone Hypixel says the profile claimed.
+   *
+   * Repeated rather than derived. A bestiary "level" is a function of kill
+   * counts against bracket tables that move with every mob patch, and a number
+   * we compute from a stale table is confidently wrong where this one is merely
+   * coarse. Null when the profile has never claimed one, or hides the field.
+   */
+  readonly bestiaryMilestone: number | null;
 }
 
 /**
@@ -882,9 +891,14 @@ export interface MilestoneDefinitionInput {
 /**
  * One reading of every metric a milestone can be defined against.
  *
- * Keys match `MILESTONE_METRICS` exactly so a definition's `metric` indexes
- * this directly — the alternative, a switch per metric, is one place to forget
- * when a metric is added.
+ * Keys match `SNAPSHOT_MILESTONE_METRICS` exactly so a definition's `metric`
+ * indexes this directly — the alternative, a switch per metric, is one place to
+ * forget when a metric is added.
+ *
+ * The widened readings are optional rather than nullable-required. A snapshot
+ * captured before they existed genuinely does not carry them, and `undefined`
+ * says that, where a `null` we invented at read time would claim the profile
+ * was read and found empty.
  */
 export interface SnapshotMetricsDTO {
   /** ISO-8601 of the capture, for "as of" in the reply. */
@@ -895,6 +909,33 @@ export interface SnapshotMetricsDTO {
   readonly catacombsLevel: number | null;
   readonly slayerXp: number | null;
   readonly senitherWeight: number | null;
+  readonly classHealer?: number | null;
+  readonly classMage?: number | null;
+  readonly classBerserk?: number | null;
+  readonly classArcher?: number | null;
+  readonly classTank?: number | null;
+  readonly slayerZombie?: number | null;
+  readonly slayerSpider?: number | null;
+  readonly slayerWolf?: number | null;
+  readonly slayerEnderman?: number | null;
+  readonly slayerBlaze?: number | null;
+  readonly slayerVampire?: number | null;
+  readonly bestiaryMilestone?: number | null;
+}
+
+/**
+ * One reading of every metric this platform counts about a member itself.
+ *
+ * Guild-scoped, unlike a snapshot: a member of two guilds has two tenures and
+ * two XP totals, and there is no account-wide answer to give. That is why these
+ * do not live on `ProfileSnapshot` — see `COMMUNITY_MILESTONE_METRICS` for why
+ * they are also never detected as crossings.
+ */
+export interface CommunityMetricsDTO {
+  readonly eventsAttended: number | null;
+  readonly eventPodiums: number | null;
+  readonly guildTenureDays: number | null;
+  readonly guildXp: number | null;
 }
 
 /**

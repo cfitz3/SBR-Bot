@@ -42,6 +42,7 @@ const PROFILE: ProfileSummaryDTO = {
   catacombsLevel: 42,
   slayerXp: 2_640_000,
   senitherWeight: 8420.5,
+  bestiaryMilestone: 7,
 };
 
 const SLAYERS: SlayersDTO = { totalExperience: 2_640_000, bosses: [] };

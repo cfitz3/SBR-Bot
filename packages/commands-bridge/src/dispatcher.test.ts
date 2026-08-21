@@ -88,6 +88,7 @@ const summary: ProfileSummaryDTO = {
   catacombsLevel: 36,
   slayerXp: 2_400_000,
   senitherWeight: 8_120,
+  bestiaryMilestone: 6,
 };
 
 const achievements: AchievementsDTO = {

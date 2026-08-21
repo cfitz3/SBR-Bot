@@ -187,6 +187,16 @@ export function skyblockLevel(member: unknown): number | null {
   return xp === null ? null : xp / 100;
 }
 
+/**
+ * The last bestiary milestone the profile claimed.
+ *
+ * One dig, no arithmetic — see the note on `ProfileSummaryDTO.bestiaryMilestone`
+ * for why this is repeated rather than recomputed from kill counts.
+ */
+export function bestiaryMilestone(member: unknown): number | null {
+  return num(dig(member, "bestiary", "milestone", "last_claimed_milestone"));
+}
+
 export function parseDungeons(member: unknown): DungeonsDTO {
   const dungeons = obj(dig(member, "dungeons"));
   const catacombs = obj(dig(dungeons, "dungeon_types", "catacombs"));

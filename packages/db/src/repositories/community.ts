@@ -6,6 +6,7 @@ import type {
   ApplicationDTO,
   ApplicationStatus,
   AttendanceDTO,
+  CommunityMetricsDTO,
   EventDTO,
   EventStatus,
   LFGActivity,
@@ -27,6 +28,7 @@ import type {
   TicketPatch,
 } from "@sbr/community";
 import { prisma } from "../client.js";
+import { countPodiumsIn } from "./podium.js";
 import { ticketConfigRepository } from "./ticket-config.js";
 import { ticketRepository } from "./tickets.js";
 
@@ -521,3 +523,85 @@ export const podiumRepository: PodiumRepository = {
     return prisma.eventAttendance.count({ where: { discordId, event: { guildId } } });
   },
 };
+
+/**
+ * What this platform counts about one member of one guild.
+ *
+ * Four numbers from four places, because they genuinely live in four places:
+ * attendance rows, completed-event scores, the in-game roster cache, and the XP
+ * balance. Each is read independently and each absorbs its own failure — a
+ * guild with no XP installed should still get a tenure reading, and a member
+ * with no verified link should still get one too, since tenure is the one
+ * metric keyed by UUID rather than by Discord id.
+ *
+ * Tenure comes from `GuildMemberCache.joinedAt` — the in-game guild join — not
+ * from `GuildMember.joinedAt`, which is when they turned up in Discord. "Days
+ * in the guild" means the guild, and a member who joined in-game a year before
+ * finding the Discord should not have that year taken off them.
+ */
+export const communityMetricsRepository = {
+  async forAccount(guildId: string, minecraftUuid: string): Promise<CommunityMetricsDTO | null> {
+    const [account, cached] = await Promise.all([
+      prisma.minecraftAccount.findUnique({
+        where: { uuid: minecraftUuid },
+        select: {
+          linkedAccounts: {
+            where: { status: "VERIFIED" },
+            select: { discordUser: { select: { discordId: true } } },
+            orderBy: { isPrimary: "desc" },
+            take: 1,
+          },
+        },
+      }),
+      prisma.guildMemberCache.findUnique({
+        where: { guildId_uuid: { guildId, uuid: minecraftUuid } },
+        select: { joinedAt: true },
+      }),
+    ]);
+
+    const joinedAt = cached?.joinedAt ?? null;
+    const guildTenureDays =
+      joinedAt === null ? null : Math.max(0, Math.floor((Date.now() - joinedAt.getTime()) / 86_400_000));
+
+    const discordId = account?.linkedAccounts[0]?.discordUser.discordId ?? null;
+    // No verified link means there is no Discord-keyed half to read. Tenure is
+    // still real, so this returns a partial reading rather than null — the
+    // account is in the guild, we just cannot see their side of the platform.
+    if (discordId === null) {
+      if (guildTenureDays === null) return null;
+      return { eventsAttended: null, eventPodiums: null, guildTenureDays, guildXp: null };
+    }
+
+    const [attended, podiums, balance] = await Promise.all([
+      prisma.eventAttendance.count({ where: { discordId, event: { guildId } } }).catch(() => null),
+      countPodiums(guildId, discordId).catch(() => null),
+      prisma.xpBalance
+        .findUnique({ where: { guildId_discordId: { guildId, discordId } }, select: { totalXp: true } })
+        .catch(() => null),
+    ]);
+
+    return {
+      eventsAttended: attended,
+      eventPodiums: podiums,
+      guildTenureDays,
+      // A member with no balance row has never been awarded anything, which is
+      // genuinely zero rather than unknown — unlike the reads above, the absence
+      // of a row here is itself the answer.
+      guildXp: balance?.totalXp ?? 0,
+    };
+  },
+};
+
+/**
+ * Top-three finishes across completed events in this guild.
+ *
+ * The placing rule itself lives in `podium.ts` so it can be tested without a
+ * database; what is left here is the read it needs.
+ */
+async function countPodiums(guildId: string, discordId: string): Promise<number> {
+  const rows = await prisma.eventScore.findMany({
+    where: { event: { guildId, status: "COMPLETED" } },
+    select: { eventId: true, metric: true, discordId: true, delta: true },
+  });
+  return countPodiumsIn(rows, discordId);
+}

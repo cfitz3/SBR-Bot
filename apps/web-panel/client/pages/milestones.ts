@@ -10,12 +10,35 @@
  * list for a guild that is, in fact, recognising thirty things. Editing a
  * default writes a row that shadows it, which is why every control here saves
  * the whole definition rather than a patch.
+ *
+ * The list is grouped by family and each row is collapsed to a line, because
+ * the catalog is now twenty-odd metrics across seven families: a flat list of
+ * open cards was readable at six and is a scroll at forty. The summary line
+ * carries what somebody scanning is actually checking — name, tier, what it
+ * measures, whether it is on, and how many members hold it.
  */
 import type { MilestonesVM } from "@sbr/panel-core";
 import type { MilestoneDefinitionDTO } from "@sbr/shared-types";
-import { MILESTONE_METRICS, MilestoneType } from "./enums.js";
+import {
+  ACHIEVEMENT_CATEGORIES,
+  ACHIEVEMENT_TIERS,
+  CATEGORY_OF_METRIC,
+  COMMUNITY_MILESTONE_METRICS,
+  MILESTONE_METRICS,
+  MilestoneType,
+  type AchievementCategory,
+} from "./enums.js";
 import { loadPage, postAction, type WriteResult } from "../api.js";
-import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
+import {
+  badge,
+  card,
+  deniedState,
+  emptyState,
+  errorState,
+  pageTitle,
+  spinner,
+  type BadgeTone,
+} from "../components.js";
 import { actionButton, fieldGroup, selectField, statusSlot, textField, toggleField } from "../forms.js";
 import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
@@ -24,6 +47,7 @@ const t = scope("milestones");
 
 /** Mirrors the mutation layer's bounds; see forms.ts on why both exist. */
 const MAX_REWARD = 1_000_000;
+const MAX_ICON = 4;
 const KEY_SHAPE = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
 
 /**
@@ -36,8 +60,32 @@ const KEY_SHAPE = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
 const metricLabel = (metric: string): string =>
   (t("metric") as Readonly<Record<string, string>>)[metric] ?? metric;
 
+const categoryLabel = (category: string): string =>
+  (t("category") as Readonly<Record<string, string>>)[category] ?? category;
+
+const tierLabel = (tier: string): string =>
+  (t("tier") as Readonly<Record<string, string>>)[tier] ?? tier;
+
 const metricOptions = (): readonly (readonly [string, string])[] =>
   MILESTONE_METRICS.map((metric) => [metric, metricLabel(metric)] as const);
+
+const tierOptions = (): readonly (readonly [string, string])[] =>
+  ACHIEVEMENT_TIERS.map((tier) => [tier, tierLabel(tier)] as const);
+
+/**
+ * Tier as a colour. Ascending scarcity reads as ascending weight, and the two
+ * lowest are deliberately `neutral`: bronze is where every definition starts,
+ * so colouring it would tint the whole list by default.
+ */
+const TIER_TONE: Readonly<Record<string, BadgeTone>> = {
+  BRONZE: "neutral",
+  SILVER: "neutral",
+  GOLD: "warn",
+  PLATINUM: "ok",
+};
+
+const isCommunity = (metric: string): boolean =>
+  (COMMUNITY_MILESTONE_METRICS as readonly string[]).includes(metric);
 
 // Kinds are grouping labels derived from the enum itself, not prose: they exist
 // to sort the list, and inventing separate copy for each would be five keys
@@ -53,7 +101,7 @@ export async function renderMilestones(host: HTMLElement, guildId: string): Prom
     return replace(host, errorState(result.message, () => void renderMilestones(host, guildId)));
   }
 
-  const { installed, definitions } = result.data;
+  const { installed, definitions, holders } = result.data;
   if (!installed) {
     return replace(
       host,
@@ -84,21 +132,83 @@ export async function renderMilestones(host: HTMLElement, guildId: string): Prom
         t("note"),
       ),
       card(t("cardAdd"), createForm(guildId, reload)),
-      ...definitions.map((definition) => definitionCard(guildId, definition, reload)),
+      ...groupCards(guildId, definitions, holders, reload),
     ),
   );
 }
 
 /**
- * One definition's rules.
+ * The definitions, one card per family.
+ *
+ * Families are walked in the platform's declared order rather than sorted by
+ * name or by size, so the page reads the same on every guild — an admin who
+ * learns that Dungeons is third should not find it fifth next month because
+ * somebody added two wealth thresholds. An empty family is omitted entirely
+ * rather than shown as a heading over nothing.
+ *
+ * A metric the browser's mirror does not know lands in PROGRESSION, matching
+ * `categoryOfMetric` upstream: a definition in the wrong group still edits, and
+ * one dropped from the list would silently become uneditable.
+ */
+function groupCards(
+  guildId: string,
+  definitions: readonly MilestoneDefinitionDTO[],
+  holders: Readonly<Record<string, number>>,
+  reload: () => void,
+): readonly HTMLElement[] {
+  const grouped = new Map<AchievementCategory, MilestoneDefinitionDTO[]>();
+  for (const definition of definitions) {
+    const category = CATEGORY_OF_METRIC[definition.metric] ?? "PROGRESSION";
+    const bucket = grouped.get(category);
+    if (bucket === undefined) grouped.set(category, [definition]);
+    else bucket.push(definition);
+  }
+
+  const cards: HTMLElement[] = [];
+  for (const category of ACHIEVEMENT_CATEGORIES) {
+    const rows = grouped.get(category);
+    if (rows === undefined || rows.length === 0) continue;
+    // Within a family, by metric and then ascending threshold: the tiers of one
+    // metric are a ladder, and ordering by key would put "1b" before "250b"
+    // purely because of how the strings sort.
+    const ordered = [...rows].sort((a, b) =>
+      a.metric === b.metric ? a.threshold - b.threshold : a.metric.localeCompare(b.metric),
+    );
+    const on = ordered.filter((d) => d.enabled).length;
+    const community = ordered.every((d) => isCommunity(d.metric));
+
+    cards.push(
+      card(
+        categoryLabel(category),
+        h(
+          "div",
+          {},
+          community ? h("p", { class: "field-hint" }, t("communityNote")) : null,
+          ...ordered.map((definition) =>
+            definitionRow(guildId, definition, holders[definition.key] ?? null, reload),
+          ),
+        ),
+        badge(
+          t("groupSummary").replace("{active}", String(on)).replace("{total}", String(ordered.length)),
+          on === 0 ? "neutral" : "ok",
+        ),
+      ),
+    );
+  }
+  return cards;
+}
+
+/**
+ * One definition's rules, collapsed to a line until you open it.
  *
  * Every control writes the whole definition, because the mutation upserts a
  * whole row: a partial write would need the server to merge against what it
  * has, and for a default there is nothing on the server to merge with.
  */
-function definitionCard(
+function definitionRow(
   guildId: string,
   definition: MilestoneDefinitionDTO,
+  held: number | null,
   reload: () => void,
 ): HTMLElement {
   const current: { -readonly [K in keyof MilestoneDefinitionDTO]: MilestoneDefinitionDTO[K] } = { ...definition };
@@ -115,6 +225,9 @@ function definitionCard(
       xpReward: current.xpReward,
       announce: current.announce,
       enabled: current.enabled,
+      tier: current.tier,
+      icon: current.icon,
+      hidden: current.hidden,
     });
   };
 
@@ -133,59 +246,109 @@ function definitionCard(
         })
       : null;
 
-  return card(
-    definition.label,
+  const community = isCommunity(definition.metric);
+
+  return h(
+    "details",
+    { class: "collapse" },
     h(
-      "div",
+      "summary",
       {},
-      h(
-        "p",
-        { class: "field-hint" },
-        t("rowSummary").replace("{metric}", metricLabel(definition.metric)).replace("{key}", definition.key),
+      // The icon is the guild's own choice of character and goes in as text,
+      // never as markup — the same rule the rest of this client follows.
+      h("strong", {}, definition.icon === null ? definition.label : `${definition.icon} ${definition.label}`),
+      badge(tierLabel(definition.tier), TIER_TONE[definition.tier] ?? "neutral"),
+      badge(metricLabel(definition.metric), "neutral"),
+      // "Held by 14" is the question staff ask of a threshold, and the two ways
+      // of not having an answer are different facts: nobody has reached it, or
+      // this family records no crossings to count in the first place.
+      badge(holderText(community, held), !community && held !== null && held > 0 ? "ok" : "neutral"),
+      definition.hidden ? badge(t("hiddenLabel"), "neutral") : null,
+      definition.enabled ? null : badge(t("recognisedLabel"), "warn"),
+      badge(
+        definition.source === "DEFAULT" ? t("sourceBuiltIn") : t("sourceCustom"),
+        definition.source === "DEFAULT" ? "neutral" : "ok",
       ),
-      fieldGroup(
-        toggleField({
-          label: t("recognisedLabel"),
-          hint: t("recognisedHint"),
-          checked: definition.enabled,
-          save: (enabled) => write({ enabled }),
-        }),
-        toggleField({
-          label: t("announcedLabel"),
-          hint: t("announcedHint"),
-          checked: definition.announce,
-          save: (announce) => write({ announce }),
-        }),
-        textField({
-          label: t("nameLabel"),
-          hint: t("nameHint"),
-          value: definition.label,
-          validate: (raw) => (raw.trim().length === 0 || raw.length > 80 ? t("nameError") : null),
-          save: (raw) => write({ label: raw.trim() }),
-        }),
-        textField({
-          label: t("thresholdLabel"),
-          hint: t("thresholdHint"),
-          value: String(definition.threshold),
-          validate: validatePositive,
-          save: (raw) => write({ threshold: Number(raw.trim()) }),
-        }),
-        textField({
-          label: t("rewardLabel"),
-          hint: t("rewardHint"),
-          value: String(definition.xpReward),
-          validate: (raw) => validateWholeReward(raw),
-          save: (raw) => write({ xpReward: Number(raw.trim()) }),
-        }),
-      ),
-      remove === null ? null : h("div", { class: "field-row" }, remove),
-      status.el,
     ),
-    badge(
-      definition.source === "DEFAULT" ? t("sourceBuiltIn") : t("sourceCustom"),
-      definition.source === "DEFAULT" ? "neutral" : "ok",
+    h(
+      "p",
+      { class: "field-hint" },
+      t("rowSummary").replace("{metric}", metricLabel(definition.metric)).replace("{key}", definition.key),
     ),
+    fieldGroup(
+      toggleField({
+        label: t("recognisedLabel"),
+        hint: t("recognisedHint"),
+        checked: definition.enabled,
+        save: (enabled) => write({ enabled }),
+      }),
+      // Community definitions never announce — they are recognised from the
+      // standing, not from a crossing, so there is no moment to post about.
+      // The switch is omitted rather than shown-and-ignored: a control that
+      // saves happily and does nothing is worse than no control at all.
+      community
+        ? null
+        : toggleField({
+            label: t("announcedLabel"),
+            hint: t("announcedHint"),
+            checked: definition.announce,
+            save: (announce) => write({ announce }),
+          }),
+      textField({
+        label: t("nameLabel"),
+        hint: t("nameHint"),
+        value: definition.label,
+        validate: (raw) => (raw.trim().length === 0 || raw.length > 80 ? t("nameError") : null),
+        save: (raw) => write({ label: raw.trim() }),
+      }),
+      textField({
+        label: t("thresholdLabel"),
+        hint: t("thresholdHint"),
+        value: String(definition.threshold),
+        validate: validatePositive,
+        save: (raw) => write({ threshold: Number(raw.trim()) }),
+      }),
+      textField({
+        label: t("rewardLabel"),
+        hint: t("rewardHint"),
+        value: String(definition.xpReward),
+        validate: (raw) => validateWholeReward(raw),
+        save: (raw) => write({ xpReward: Number(raw.trim()) }),
+      }),
+      selectField({
+        label: t("tierLabel"),
+        hint: t("tierHint"),
+        value: definition.tier,
+        options: tierOptions(),
+        save: (tier) => write({ tier: tier as MilestoneDefinitionDTO["tier"] }),
+      }),
+      textField({
+        label: t("iconLabel"),
+        hint: t("iconHint"),
+        placeholder: t("iconPlaceholder"),
+        value: definition.icon ?? "",
+        validate: validateIcon,
+        // Empty means "no icon", and null is how the row stores that — an empty
+        // string would render as a leading space beside every name.
+        save: (raw) => write({ icon: raw.trim() === "" ? null : raw.trim() }),
+      }),
+      toggleField({
+        label: t("hiddenLabel"),
+        hint: t("hiddenHint"),
+        checked: definition.hidden,
+        save: (hidden) => write({ hidden }),
+      }),
+    ),
+    remove === null ? null : h("div", { class: "field-row" }, remove),
+    status.el,
   );
+}
+
+/** The three things the holder badge can honestly say. */
+function holderText(community: boolean, held: number | null): string {
+  if (community) return t("holdersUnrecorded");
+  if (held === null || held === 0) return t("holdersNone");
+  return t("holders").replace("{n}", held.toLocaleString());
 }
 
 /**
@@ -300,4 +463,14 @@ function validateWholeReward(raw: string): string | null {
     return t("rewardError").replace("{max}", String(MAX_REWARD));
   }
   return null;
+}
+
+/**
+ * The icon cap counts characters the way the mutation layer does — code points,
+ * not UTF-16 units, so a single emoji is one and not two.
+ */
+function validateIcon(raw: string): string | null {
+  const value = raw.trim();
+  if (value === "") return null;
+  return [...value].length > MAX_ICON ? t("iconError").replace("{max}", String(MAX_ICON)) : null;
 }

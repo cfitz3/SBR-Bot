@@ -201,15 +201,72 @@ export type MilestoneType = (typeof MilestoneType)[keyof typeof MilestoneType];
  * the panel cannot import the workers' package. Two lists would drift into a
  * control that saves into a rejection.
  */
-export const MILESTONE_METRICS = [
+export const SNAPSHOT_MILESTONE_METRICS = [
   "skyblockLevel",
   "networth",
   "skillAverage",
   "catacombsLevel",
   "slayerXp",
   "senitherWeight",
+  // Per-class dungeon levels. Catacombs alone says how much someone has run;
+  // it says nothing about whether they can heal, and a guild recruiting for a
+  // role wants the second answer. Levels rather than XP, because that is the
+  // number the game shows and the number people quote at each other.
+  "classHealer",
+  "classMage",
+  "classBerserk",
+  "classArcher",
+  "classTank",
+  // Per-boss slayer XP. `slayerXp` is the sum, which hides the shape: 10m of
+  // it spread over five bosses and 10m of it all Enderman are different
+  // players, and only one of them can carry a Voidgloom lobby.
+  "slayerZombie",
+  "slayerSpider",
+  "slayerWolf",
+  "slayerEnderman",
+  "slayerBlaze",
+  "slayerVampire",
+  // The last bestiary milestone Hypixel says the profile claimed. Read
+  // straight off the profile rather than recomputed from kill counts: the
+  // bracket tables move with every mob patch, and a number we derive wrongly
+  // is worse than a number we simply repeat.
+  "bestiaryMilestone",
+] as const;
+export type SnapshotMilestoneMetric = (typeof SNAPSHOT_MILESTONE_METRICS)[number];
+
+/**
+ * Metrics this platform measures itself, about a member of a specific guild.
+ *
+ * Kept apart from the snapshot list because they behave differently in one
+ * important way: they are **not detected as crossings**. A Hypixel reading
+ * needs two snapshots to know that a threshold was passed rather than always
+ * having been true, which is why `detectMilestones` compares a pair. These
+ * counters are ours, they only ever go up, and we can read the current value
+ * at any time — so "attended 25 events" is simply true or not true, and
+ * `buildAchievements` unlocks it from the reading with no stored row at all.
+ *
+ * The practical consequence: a community definition is recognised the moment
+ * the number reaches it, retroactively, and it never announces. That is the
+ * honest trade — the alternative is a detector that silently never fires.
+ */
+export const COMMUNITY_MILESTONE_METRICS = [
+  "eventsAttended",
+  "eventPodiums",
+  "guildTenureDays",
+  "guildXp",
+] as const;
+export type CommunityMilestoneMetric = (typeof COMMUNITY_MILESTONE_METRICS)[number];
+
+export const MILESTONE_METRICS = [
+  ...SNAPSHOT_MILESTONE_METRICS,
+  ...COMMUNITY_MILESTONE_METRICS,
 ] as const;
 export type MilestoneMetric = (typeof MILESTONE_METRICS)[number];
+
+/** True for the metrics this platform counts itself — see the note above. */
+export function isCommunityMetric(value: unknown): value is CommunityMilestoneMetric {
+  return typeof value === "string" && (COMMUNITY_MILESTONE_METRICS as readonly string[]).includes(value);
+}
 
 /** Narrow an untrusted string — a panel body, a stored row — to a real metric. */
 export function isMilestoneMetric(value: unknown): value is MilestoneMetric {
@@ -258,10 +315,59 @@ export type AchievementCategory = (typeof ACHIEVEMENT_CATEGORIES)[number];
 const CATEGORY_OF_METRIC: Readonly<Record<MilestoneMetric, AchievementCategory>> = {
   skyblockLevel: "PROGRESSION",
   senitherWeight: "PROGRESSION",
+  bestiaryMilestone: "PROGRESSION",
   networth: "WEALTH",
   catacombsLevel: "DUNGEONS",
+  classHealer: "DUNGEONS",
+  classMage: "DUNGEONS",
+  classBerserk: "DUNGEONS",
+  classArcher: "DUNGEONS",
+  classTank: "DUNGEONS",
   skillAverage: "SKILLS",
   slayerXp: "SLAYER",
+  slayerZombie: "SLAYER",
+  slayerSpider: "SLAYER",
+  slayerWolf: "SLAYER",
+  slayerEnderman: "SLAYER",
+  slayerBlaze: "SLAYER",
+  slayerVampire: "SLAYER",
+  eventsAttended: "EVENTS",
+  eventPodiums: "EVENTS",
+  guildTenureDays: "COMMUNITY",
+  guildXp: "COMMUNITY",
+};
+
+/**
+ * What a metric is called on screen, and how its value reads.
+ *
+ * Here beside the metric list for the same reason the list is here: the panel
+ * renders one option per metric and cannot import the workers' package, and a
+ * second table of labels somewhere else is a table that goes stale the first
+ * time a metric is added.
+ */
+export const METRIC_LABELS: Readonly<Record<MilestoneMetric, string>> = {
+  skyblockLevel: "SkyBlock Level",
+  networth: "Networth",
+  skillAverage: "Skill average",
+  catacombsLevel: "Catacombs level",
+  slayerXp: "Slayer XP (total)",
+  senitherWeight: "Senither weight",
+  classHealer: "Healer level",
+  classMage: "Mage level",
+  classBerserk: "Berserk level",
+  classArcher: "Archer level",
+  classTank: "Tank level",
+  slayerZombie: "Revenant XP",
+  slayerSpider: "Tarantula XP",
+  slayerWolf: "Sven XP",
+  slayerEnderman: "Voidgloom XP",
+  slayerBlaze: "Inferno XP",
+  slayerVampire: "Riftstalker XP",
+  bestiaryMilestone: "Bestiary milestone",
+  eventsAttended: "Events attended",
+  eventPodiums: "Event podiums",
+  guildTenureDays: "Days in the guild",
+  guildXp: "Guild XP",
 };
 
 /**
