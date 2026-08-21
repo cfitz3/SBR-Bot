@@ -41,7 +41,7 @@ import {
   defineEventBoardJob,
   defineLeaderboardPostJob,
   defineEventTrackingJob,
-  defineProfileSnapshotJob,
+  defineProfileRefreshJob,
   definePunishmentExpiryJob,
   defineReminderDispatchJob,
   defineResourcesRefreshJob,
@@ -59,7 +59,7 @@ import {
   refreshResources,
   scanGuild,
   scanInactivity,
-  snapshotProfiles,
+  refreshProfiles,
   trackEvents,
   type TrackedAccount,
   sweepAuctions,
@@ -284,8 +284,8 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
   };
 
   const snapshot: JobDefinition<number> = {
-    ...defineProfileSnapshotJob(async () =>
-      snapshotProfiles({
+    ...defineProfileRefreshJob(async () =>
+      refreshProfiles({
         listTracked: () => snapshotJobRepository.listTracked(),
         capture: captureProfile,
         write: (row) => snapshotJobRepository.write(row),
@@ -300,7 +300,9 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
         listLiveTracked: () => eventJobRepository.listLiveTracked(),
         listParticipants: (eventId) => eventJobRepository.listParticipants(eventId),
         capture: captureProfile,
-        writeSnapshot: (row) => snapshotJobRepository.write(row),
+        write: (row) => snapshotJobRepository.write(row),
+        writeBaseline: (row) => snapshotJobRepository.writeBaseline(row),
+        writeFinal: (row) => snapshotJobRepository.writeFinal(row),
         upsertScore: (write) => eventJobRepository.upsertScore(write),
         onError(scope, error) {
           ctx.log.warn("event tracking failed", { scope, error: String(error) });
@@ -334,7 +336,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
         const definitions = target.guildId === null ? [] : definitionsByGuild.get(target.guildId) ?? [];
 
         recorded += await detectAndRecord(target.minecraftAccountId, {
-          recentSnapshots: (id) => snapshotJobRepository.recentSnapshots(id),
+          recentReadings: (id) => snapshotJobRepository.recentReadings(id),
           definitions,
           record: async (candidate) => {
             const isNew = await snapshotJobRepository.record(candidate, target.guildId, target.discordId);

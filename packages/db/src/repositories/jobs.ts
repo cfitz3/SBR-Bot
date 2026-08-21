@@ -13,6 +13,7 @@ import type {
   EventScoreWrite,
   MilestoneCandidate,
   RosterMemberLike,
+  ProfileReading,
   SnapshotMetrics,
   SnapshotWrite,
   StoredRosterRow,
@@ -20,7 +21,7 @@ import type {
 } from "@sbr/jobs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../client.js";
-import { packJsonMetrics, unpackJsonMetrics } from "./snapshot-metrics.js";
+import { packAllMetrics, packJsonMetrics, unpackAllMetrics, unpackJsonMetrics } from "./snapshot-metrics.js";
 
 function toNumber(value: bigint | null): number | null {
   return value === null ? null : Number(value);
@@ -315,10 +316,10 @@ export interface DetectionTarget {
 
 export const snapshotJobRepository = {
   /**
-   * Every verified account, with the timestamp of its newest snapshot.
+   * Every verified account, with the timestamp of its current reading.
    *
-   * The snapshot job orders by that timestamp to spread the guild across runs,
-   * so accounts never captured must sort first — they come back with null.
+   * The refresh job orders by that timestamp to spread the guild across runs,
+   * so accounts never read must sort first — they come back with null.
    */
   async listTracked(): Promise<
     readonly { minecraftAccountId: string; uuid: string; profileId: string | null; lastCapturedAt: string | null }[]
@@ -329,55 +330,102 @@ export const snapshotJobRepository = {
         id: true,
         uuid: true,
         selectedProfiles: { where: { isActive: true }, select: { profileId: true }, take: 1 },
-        snapshots: { orderBy: { capturedAt: "desc" }, select: { capturedAt: true }, take: 1 },
+        current: { orderBy: { capturedAt: "desc" }, select: { capturedAt: true }, take: 1 },
       },
     });
     return accounts.map((a) => ({
       minecraftAccountId: a.id,
       uuid: a.uuid,
       profileId: a.selectedProfiles[0]?.profileId ?? null,
-      lastCapturedAt: a.snapshots[0]?.capturedAt.toISOString() ?? null,
+      lastCapturedAt: a.current[0]?.capturedAt.toISOString() ?? null,
     }));
   },
 
   /**
-   * Upsert on the documented `(account, profile, day, seq)` key, so re-running a
-   * day's capture corrects the row instead of duplicating it.
+   * Roll a fresh reading onto the account's current row.
+   *
+   * The one before it is not discarded but demoted: it moves into
+   * `previousMetrics`, whole, which is the entire history this table keeps.
+   * That bound is the point — milestone detection needs the pair and nothing
+   * else does, so storing the pair is storing exactly what is used and no more
+   * (docs/HYPIXEL_COMPLIANCE.md §1).
+   *
+   * Read-then-write inside a transaction, because the demotion depends on what
+   * is already there. Two refreshes of the same profile racing would otherwise
+   * be able to interleave and lose the displaced reading — rare, since the job
+   * spreads accounts across runs, but the failure would be a silently missed
+   * milestone rather than an error.
    */
-  async write(snapshot: SnapshotWrite): Promise<void> {
-    const key = {
-      minecraftAccountId: snapshot.minecraftAccountId,
-      profileId: snapshot.profileId,
-      captureDate: new Date(`${snapshot.captureDate}T00:00:00.000Z`),
-      seq: snapshot.seq,
-    };
-    const metrics = {
-      capturedAt: new Date(snapshot.capturedAt),
-      source: snapshot.source,
-      eventId: snapshot.eventId,
-      skyblockLevel: snapshot.skyblockLevel,
-      networth: toBigInt(snapshot.networth),
-      skillAverage: snapshot.skillAverage,
-      catacombsLevel: snapshot.catacombsLevel,
-      slayerXp: toBigInt(snapshot.slayerXp),
-      senitherWeight: snapshot.senitherWeight,
+  async write(reading: ProfileReading): Promise<void> {
+    const key = { minecraftAccountId: reading.minecraftAccountId, profileId: reading.profileId };
+    const columns = {
+      capturedAt: new Date(reading.capturedAt),
+      skyblockLevel: reading.skyblockLevel,
+      networth: toBigInt(reading.networth),
+      skillAverage: reading.skillAverage,
+      catacombsLevel: reading.catacombsLevel,
+      slayerXp: toBigInt(reading.slayerXp),
+      senitherWeight: reading.senitherWeight,
       // The widened catalog rides here rather than in columns of its own —
       // see `snapshot-metrics.ts` for the trade that buys.
-      metrics: packJsonMetrics(snapshot),
+      metrics: packJsonMetrics(reading),
     };
-    await prisma.profileSnapshot.upsert({
-      where: { minecraftAccountId_profileId_captureDate_seq: key },
-      create: { ...key, ...metrics },
-      update: metrics,
+
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.profileCurrent.findUnique({
+        where: { minecraftAccountId_profileId: key },
+        select: {
+          capturedAt: true,
+          skyblockLevel: true,
+          networth: true,
+          skillAverage: true,
+          catacombsLevel: true,
+          slayerXp: true,
+          senitherWeight: true,
+          metrics: true,
+        },
+      });
+
+      if (existing === null) {
+        // A first reading has nothing to compare against, and `{}` says so —
+        // `detectMilestones` reads an absent metric as "not a crossing", so a
+        // newly tracked member is not congratulated for everything at once.
+        await tx.profileCurrent.create({ data: { ...key, ...columns, previousMetrics: {} } });
+        return;
+      }
+
+      const displaced = packAllMetrics({
+        skyblockLevel: existing.skyblockLevel,
+        networth: toNumber(existing.networth),
+        skillAverage: existing.skillAverage,
+        catacombsLevel: existing.catacombsLevel,
+        slayerXp: toNumber(existing.slayerXp),
+        senitherWeight: existing.senitherWeight,
+        ...unpackJsonMetrics(existing.metrics),
+      });
+
+      await tx.profileCurrent.update({
+        where: { minecraftAccountId_profileId: key },
+        data: { ...columns, previousMetrics: displaced, previousCapturedAt: existing.capturedAt },
+      });
     });
   },
 
-  /** The two newest snapshots, newest first — exactly what detection compares. */
-  async recentSnapshots(minecraftAccountId: string): Promise<readonly SnapshotMetrics[]> {
-    const rows = await prisma.profileSnapshot.findMany({
+  /**
+   * The account's current reading and the one it displaced, newest first.
+   *
+   * The pair comes off a single row, so this is one indexed read rather than an
+   * ordered scan of a series — and there is structurally no third element to
+   * return. An account refreshed once yields one entry; never refreshed, none.
+   *
+   * Where an account has more than one profile, the newest reading wins. That
+   * matches what the rest of the platform shows: a member's numbers are the
+   * numbers of whichever profile they last played.
+   */
+  async recentReadings(minecraftAccountId: string): Promise<readonly SnapshotMetrics[]> {
+    const row = await prisma.profileCurrent.findFirst({
       where: { minecraftAccountId },
       orderBy: { capturedAt: "desc" },
-      take: 2,
       select: {
         skyblockLevel: true,
         networth: true,
@@ -386,17 +434,89 @@ export const snapshotJobRepository = {
         slayerXp: true,
         senitherWeight: true,
         metrics: true,
+        previousMetrics: true,
+        previousCapturedAt: true,
       },
     });
-    return rows.map((r) => ({
-      skyblockLevel: r.skyblockLevel,
-      networth: toNumber(r.networth),
-      skillAverage: r.skillAverage,
-      catacombsLevel: r.catacombsLevel,
-      slayerXp: toNumber(r.slayerXp),
-      senitherWeight: r.senitherWeight,
-      ...unpackJsonMetrics(r.metrics),
-    }));
+    if (row === null) return [];
+
+    const current: SnapshotMetrics = {
+      skyblockLevel: row.skyblockLevel,
+      networth: toNumber(row.networth),
+      skillAverage: row.skillAverage,
+      catacombsLevel: row.catacombsLevel,
+      slayerXp: toNumber(row.slayerXp),
+      senitherWeight: row.senitherWeight,
+      ...unpackJsonMetrics(row.metrics),
+    };
+    if (row.previousCapturedAt === null) return [current];
+    return [current, unpackAllMetrics(row.previousMetrics)];
+  },
+
+  /**
+   * A snapshot somebody asked for: an event boundary, or a member saving a
+   * marker to compare against later.
+   *
+   * `create` rather than `upsert` for baselines, because a baseline is a fact
+   * about a moment that has passed — the unique constraint on
+   * `(account, event, source)` turns a second attempt into a caught P2002 and a
+   * no-op rather than a moved starting line. Finals take the upsert branch, so
+   * the last pass before an event completes overwrites the one before it and
+   * two rows per participant is the ceiling.
+   *
+   * Member-saved rows have a null `eventId`, and Postgres treats nulls as
+   * distinct in a unique index, so they are unconstrained by it — a member may
+   * save many, bounded instead by the maintenance sweep.
+   */
+  async writeSnapshot(snapshot: SnapshotWrite, mode: "create-if-absent" | "overwrite"): Promise<void> {
+    const data = {
+      minecraftAccountId: snapshot.minecraftAccountId,
+      profileId: snapshot.profileId,
+      capturedAt: new Date(snapshot.capturedAt),
+      source: snapshot.source,
+      eventId: snapshot.eventId,
+      savedBy: snapshot.savedBy,
+      label: snapshot.label,
+      skyblockLevel: snapshot.skyblockLevel,
+      networth: toBigInt(snapshot.networth),
+      skillAverage: snapshot.skillAverage,
+      catacombsLevel: snapshot.catacombsLevel,
+      slayerXp: toBigInt(snapshot.slayerXp),
+      senitherWeight: snapshot.senitherWeight,
+      metrics: packJsonMetrics(snapshot),
+    };
+
+    if (mode === "create-if-absent" || snapshot.eventId === null) {
+      try {
+        await prisma.profileSnapshot.create({ data });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return;
+        throw error;
+      }
+      return;
+    }
+
+    await prisma.profileSnapshot.upsert({
+      where: {
+        minecraftAccountId_eventId_source: {
+          minecraftAccountId: snapshot.minecraftAccountId,
+          eventId: snapshot.eventId,
+          source: snapshot.source,
+        },
+      },
+      create: data,
+      update: data,
+    });
+  },
+
+  /** Where a participant started. Written once per participant per event. */
+  writeBaseline(snapshot: SnapshotWrite): Promise<void> {
+    return snapshotJobRepository.writeSnapshot(snapshot, "create-if-absent");
+  },
+
+  /** Where a participant stands now. Overwritten on every pass. */
+  writeFinal(snapshot: SnapshotWrite): Promise<void> {
+    return snapshotJobRepository.writeSnapshot(snapshot, "overwrite");
   },
 
   /**
@@ -502,16 +622,15 @@ export const snapshotJobRepository = {
     }));
   },
 
-  /** Accounts with at least two snapshots — anything less has nothing to compare. */
   /**
    * Accounts to back-fill, paged in a stable order.
    *
-   * One snapshot is enough here, unlike detection's two: standings are read
-   * from the newest row alone, so a member captured for the first time this
+   * One reading is enough here, unlike detection's two: standings are read from
+   * the current reading alone, so a member refreshed for the first time this
    * morning still has thresholds worth recording.
    */
   async listAccountsForBackfill(limit: number, offset: number): Promise<readonly DetectionTarget[]> {
-    const rows = await prisma.profileSnapshot.groupBy({
+    const rows = await prisma.profileCurrent.groupBy({
       by: ["minecraftAccountId"],
       orderBy: { minecraftAccountId: "asc" },
       take: limit,
@@ -520,19 +639,23 @@ export const snapshotJobRepository = {
     return snapshotJobRepository.resolveTargets(rows.map((r) => r.minecraftAccountId));
   },
 
-  /** The newest snapshot's metrics, or null when the account has none. */
+  /** The current reading's metrics, or null when the account has none. */
   async latestSnapshot(minecraftAccountId: string): Promise<SnapshotMetrics | null> {
-    const [newest] = await snapshotJobRepository.recentSnapshots(minecraftAccountId);
+    const [newest] = await snapshotJobRepository.recentReadings(minecraftAccountId);
     return newest ?? null;
   },
 
+  /**
+   * Accounts with something to compare — a current reading that displaced an
+   * earlier one. A member refreshed only once has no crossing to detect yet.
+   */
   async listAccountsWithHistory(limit: number): Promise<readonly string[]> {
-    const rows = await prisma.profileSnapshot.groupBy({
-      by: ["minecraftAccountId"],
-      _count: { _all: true },
-      having: { minecraftAccountId: { _count: { gte: 2 } } },
+    const rows = await prisma.profileCurrent.findMany({
+      where: { previousCapturedAt: { not: null } },
+      distinct: ["minecraftAccountId"],
       orderBy: { minecraftAccountId: "asc" },
       take: limit,
+      select: { minecraftAccountId: true },
     });
     return rows.map((r) => r.minecraftAccountId);
   },

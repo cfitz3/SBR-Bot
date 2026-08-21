@@ -6,12 +6,12 @@ import {
   detectAndRecord,
   detectMilestones,
   resolveDefinitions,
-  snapshotProfiles,
+  refreshProfiles,
   DEFAULT_MILESTONE_DEFINITIONS,
   type MilestoneCandidate,
   type MilestoneDefinition,
   type SnapshotMetrics,
-  type SnapshotWrite,
+  type ProfileReading,
   type TrackedAccount,
   standingMilestones,
   type BackfillTarget,
@@ -41,7 +41,7 @@ function account(over: Partial<TrackedAccount> = {}): TrackedAccount {
 
 test("accounts captured recently are skipped, so a tick doesn't burn the rate budget", async () => {
   const captured: string[] = [];
-  const written = await snapshotProfiles({
+  const written = await refreshProfiles({
     listTracked: async () => [
       account({ minecraftAccountId: "fresh", lastCapturedAt: "2026-08-07T11:00:00.000Z" }),
       account({ minecraftAccountId: "stale", lastCapturedAt: "2026-08-06T00:00:00.000Z" }),
@@ -61,7 +61,7 @@ test("accounts captured recently are skipped, so a tick doesn't burn the rate bu
 
 test("the batch size caps how many accounts one run touches", async () => {
   let captures = 0;
-  await snapshotProfiles({
+  await refreshProfiles({
     listTracked: async () =>
       Array.from({ length: 40 }, (_, i) => account({ minecraftAccountId: `a${i}` })),
     capture: async () => {
@@ -76,8 +76,8 @@ test("the batch size caps how many accounts one run touches", async () => {
 });
 
 test("one unreadable profile does not cost the rest of the batch their snapshot", async () => {
-  const rows: SnapshotWrite[] = [];
-  const written = await snapshotProfiles({
+  const rows: ProfileReading[] = [];
+  const written = await refreshProfiles({
     listTracked: async () => [
       account({ minecraftAccountId: "hidden" }),
       account({ minecraftAccountId: "broken" }),
@@ -98,9 +98,9 @@ test("one unreadable profile does not cost the rest of the batch their snapshot"
   assert.equal(rows[0]?.minecraftAccountId, "ok");
 });
 
-test("a scheduled snapshot lands in the day's bucket at seq 0", async () => {
-  const rows: SnapshotWrite[] = [];
-  await snapshotProfiles({
+test("a refresh writes the reading itself, with no bucket or sequence to place it in", async () => {
+  const rows: ProfileReading[] = [];
+  await refreshProfiles({
     listTracked: async () => [account()],
     capture: async () => ({ profileId: "profile-x", metrics: metrics({ catacombsLevel: 42 }) }),
     write: async (s) => {
@@ -111,34 +111,37 @@ test("a scheduled snapshot lands in the day's bucket at seq 0", async () => {
 
   const row = rows[0];
   assert.ok(row);
-  assert.equal(row.captureDate, "2026-08-07");
-  assert.equal(row.seq, 0);
-  assert.equal(row.source, "SCHEDULED");
-  assert.equal(row.eventId, null);
+  assert.equal(row.profileId, "profile-x");
+  assert.equal(row.capturedAt, NOW.toISOString());
   assert.equal(row.catacombsLevel, 42);
   assert.equal(row.networth, null, "unknown stays null, never zero");
+  // The shape is the guarantee: no day bucket, no sequence, nothing that would
+  // let two readings of one profile coexist. See docs/HYPIXEL_COMPLIANCE.md §1.
+  assert.deepEqual(
+    Object.keys(row).filter((k) => k === "captureDate" || k === "seq" || k === "source"),
+    [],
+  );
 });
 
-test("the event-tracked cohort gets distinct sequences so several rows fit in one day", async () => {
-  const rows: SnapshotWrite[] = [];
-  const write = async (s: SnapshotWrite): Promise<void> => {
-    rows.push(s);
-  };
+test("repeated refreshes of one profile address the same row rather than accumulating", async () => {
+  const rows: ProfileReading[] = [];
   const common = {
     listTracked: async () => [account()],
     capture: async () => ({ profileId: "p1", metrics: metrics() }),
-    write,
-    source: "EVENT_TRACKED" as const,
-    eventId: "evt1",
+    write: async (s: ProfileReading): Promise<void> => {
+      rows.push(s);
+    },
     minIntervalMs: 0,
   };
 
-  await snapshotProfiles({ ...common, now: () => new Date("2026-08-07T12:00:00Z") });
-  await snapshotProfiles({ ...common, now: () => new Date("2026-08-07T12:30:00Z") });
+  await refreshProfiles({ ...common, now: () => new Date("2026-08-07T12:00:00Z") });
+  await refreshProfiles({ ...common, now: () => new Date("2026-08-07T13:30:00Z") });
 
-  assert.equal(rows.length, 2);
-  assert.notEqual(rows[0]?.seq, rows[1]?.seq);
-  assert.equal(rows[0]?.eventId, "evt1");
+  assert.equal(rows.length, 2, "two passes, two writes");
+  // Both carry the same key, so the upsert behind `write` addresses one row.
+  assert.equal(rows[0]?.minecraftAccountId, rows[1]?.minecraftAccountId);
+  assert.equal(rows[0]?.profileId, rows[1]?.profileId);
+  assert.notEqual(rows[0]?.capturedAt, rows[1]?.capturedAt);
 });
 
 test("crossing a threshold produces exactly one milestone", () => {
@@ -179,7 +182,7 @@ test("an unreadable metric on either side is skipped instead of read as zero", (
 test("only newly recorded milestones are counted — a duplicate insert is not a new one", async () => {
   const attempted: MilestoneCandidate[] = [];
   const recorded = await detectAndRecord("a1", {
-    recentSnapshots: async () => [metrics({ skillAverage: 41 }), metrics({ skillAverage: 39 })],
+    recentReadings: async () => [metrics({ skillAverage: 41 }), metrics({ skillAverage: 39 })],
     record: async (c) => {
       attempted.push(c);
       return false; // unique constraint said we already have it
@@ -193,7 +196,7 @@ test("only newly recorded milestones are counted — a duplicate insert is not a
 
 test("an account with a single snapshot yields nothing to compare", async () => {
   const recorded = await detectAndRecord("a1", {
-    recentSnapshots: async () => [metrics({ networth: 1e11 })],
+    recentReadings: async () => [metrics({ networth: 1e11 })],
     record: async () => true,
   });
   assert.equal(recorded, 0);
@@ -259,7 +262,7 @@ test("a candidate carries the reward and the announce flag the definition set", 
   const attempted: MilestoneCandidate[] = [];
   await detectAndRecord("a1", {
     definitions: [definition({ xpReward: 250, announce: false })],
-    recentSnapshots: async () => [metrics({ catacombsLevel: 31 }), metrics({ catacombsLevel: 29 })],
+    recentReadings: async () => [metrics({ catacombsLevel: 31 }), metrics({ catacombsLevel: 29 })],
     record: async (c) => {
       attempted.push(c);
       return true;

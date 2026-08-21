@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   isEventMetric,
+  EVENT_POLL_FLOOR_MINUTES,
   trackEvents,
   type EventParticipant,
   type EventScoreWrite,
@@ -52,7 +53,8 @@ function harness(options: {
   failEventList?: boolean;
 }) {
   const scores: EventScoreWrite[] = [];
-  const snapshots: SnapshotWrite[] = [];
+  const baselines: SnapshotWrite[] = [];
+  const finals: SnapshotWrite[] = [];
   const captured: string[] = [];
   const errors: string[] = [];
 
@@ -71,8 +73,19 @@ function harness(options: {
       const resolved = reading === undefined ? metrics() : reading;
       return resolved === null ? null : { profileId: account.profileId ?? "prof-1", metrics: resolved };
     },
-    async writeSnapshot(snapshot) {
-      snapshots.push(snapshot);
+    async write() {},
+    async writeBaseline(snapshot) {
+      // Write-once in the repository, so the double is write-once too: a second
+      // call for the same participant and event must not move the starting line.
+      const key = `${snapshot.minecraftAccountId}:${snapshot.eventId}`;
+      if (baselines.some((b) => `${b.minecraftAccountId}:${b.eventId}` === key)) return;
+      baselines.push(snapshot);
+    },
+    async writeFinal(snapshot) {
+      const key = `${snapshot.minecraftAccountId}:${snapshot.eventId}`;
+      const at = finals.findIndex((f) => `${f.minecraftAccountId}:${f.eventId}` === key);
+      if (at === -1) finals.push(snapshot);
+      else finals[at] = snapshot;
     },
     async upsertScore(write) {
       scores.push(write);
@@ -83,7 +96,7 @@ function harness(options: {
     now: () => NOW,
   };
 
-  return { deps, scores, snapshots, captured, errors };
+  return { deps, scores, baselines, finals, captured, errors };
 }
 
 describe("trackEvents", () => {
@@ -100,13 +113,33 @@ describe("trackEvents", () => {
     );
   });
 
-  it("writes the capture as an EVENT_TRACKED snapshot against the event", async () => {
+  it("records a baseline and a final against the event, and nothing between them", async () => {
     const h = harness({});
 
     await trackEvents(h.deps);
-    assert.equal(h.snapshots.length, 1);
-    assert.equal(h.snapshots[0]?.source, "EVENT_TRACKED");
-    assert.equal(h.snapshots[0]?.eventId, "e1");
+    assert.equal(h.baselines.length, 1);
+    assert.equal(h.finals.length, 1);
+    assert.equal(h.baselines[0]?.source, "EVENT_BASELINE");
+    assert.equal(h.finals[0]?.source, "EVENT_FINAL");
+    assert.equal(h.baselines[0]?.eventId, "e1");
+    assert.equal(h.baselines[0]?.savedBy, null, "a boundary is nobody's saved marker");
+  });
+
+  it("a second pass moves the final and leaves the baseline where it was", async () => {
+    // The two rows per participant are the ceiling, not the starting point: a
+    // long event polls many times and must still end with exactly two rows.
+    const stale = new Date(NOW.getTime() - 3 * 60 * 60_000).toISOString();
+    const h = harness({
+      participants: { e1: [participant({ lastCapturedAt: stale })] },
+      readings: { "acct-1": metrics({ catacombsLevel: 41 }) },
+    });
+
+    await trackEvents(h.deps);
+    await trackEvents(h.deps);
+
+    assert.equal(h.baselines.length, 1);
+    assert.equal(h.finals.length, 1);
+    assert.equal(h.captured.length, 2, "two passes did fetch twice");
   });
 
   it("ignores a metric nothing captures rather than failing the event", async () => {
@@ -155,13 +188,27 @@ describe("trackEvents", () => {
   });
 
   it("polls again once the interval has passed", async () => {
-    const stale = new Date(NOW.getTime() - 31 * 60_000).toISOString();
+    const stale = new Date(NOW.getTime() - 61 * 60_000).toISOString();
     const h = harness({
       events: [{ id: "e1", guildId: "g1", trackedMetrics: ["catacombsLevel"], pollIntervalMinutes: 30 }],
       participants: { e1: [participant({ lastCapturedAt: stale })] },
     });
 
     assert.equal(await trackEvents(h.deps), 1);
+  });
+
+  it("a configured interval under an hour is clamped up to the floor", async () => {
+    // 30 was a legal value before the floor existed, and rows carrying it are
+    // still in the database — the clamp has to be here, not only in the panel.
+    const stale = new Date(NOW.getTime() - 45 * 60_000).toISOString();
+    const h = harness({
+      events: [{ id: "e1", guildId: "g1", trackedMetrics: ["catacombsLevel"], pollIntervalMinutes: 5 }],
+      participants: { e1: [participant({ lastCapturedAt: stale })] },
+    });
+
+    assert.equal(await trackEvents(h.deps), 0, "45 minutes is inside the 60-minute floor");
+    assert.deepEqual(h.captured, []);
+    assert.equal(EVENT_POLL_FLOOR_MINUTES, 60);
   });
 
   it("spends nothing on an event nobody RSVP'd to", async () => {

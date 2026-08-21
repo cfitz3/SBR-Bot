@@ -58,7 +58,7 @@ test("live-serving refreshes outrank bulk work", () => {
     SCHEDULE.find((e) => e.name === name)?.priority ?? Number.MAX_SAFE_INTEGER;
 
   // Lower is more urgent in BullMQ.
-  assert.ok(priority("bazaar-refresh") < priority("profile-snapshot"));
+  assert.ok(priority("bazaar-refresh") < priority("profile-refresh"));
   assert.ok(priority("ah-sweep") < priority("inactivity-scan"));
   assert.ok(priority("event-transition") < priority("analytics-rollup"));
 });

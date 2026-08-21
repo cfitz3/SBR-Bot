@@ -127,7 +127,7 @@ export const STALE_AFTER_MS: Readonly<Record<string, number>> = {
   "ah-sweep": 15 * 60_000,
   "ah-ended-ingest": 5 * 60_000,
   "resources-refresh": 3 * 86_400_000,
-  "profile-snapshot": 3 * 60 * 60_000,
+  "profile-refresh": 3 * 60 * 60_000,
   "guild-roster-sync": 90 * 60_000,
   "analytics-ingest": 5 * 60_000,
   "analytics-rollup": 3 * 60 * 60_000,

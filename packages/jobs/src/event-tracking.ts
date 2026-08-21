@@ -2,27 +2,44 @@
  * `event-tracking` — turning a scheduled event into a scored competition.
  *
  * The measurement is a difference, not a reading: a member's score is what they
- * gained *during* the event, so the first poll after it goes LIVE records a
- * baseline and every poll after that records the distance from it. That is the
+ * gained *during* the event, so the first pass after it goes LIVE records a
+ * baseline and every pass after that records the distance from it. That is the
  * whole idea, and it is why the baseline is written once and never touched
  * again — recapturing it would silently reset everyone's score to zero.
+ *
+ * **Two rows per participant per event, and only two.** A baseline and a final,
+ * both keyed `(account, event, source)` so the database refuses a third. Earlier
+ * versions of this job appended a row every ten minutes, which is the stat
+ * history the Hypixel Developer API Policy prohibits (docs/HYPIXEL_COMPLIANCE.md
+ * §1). The intermediate readings are gone; the final is overwritten in place on
+ * each pass, so whichever pass runs last before the event completes *is* the
+ * final without anything having to know it was the last one.
  *
  * Polling is deliberately narrow. Only LIVE events with metrics are polled, and
  * within them only the members who said they were coming, because the Hypixel
  * budget is shared with every other job in the fleet and an event nobody
- * RSVP'd to must not cost the guild its snapshots. `snapshotProfiles` does the
- * fetching — the same function the bulk cadence uses, with `EVENT_TRACKED` as
- * its source — so there is one profile-capture path rather than two that drift.
+ * RSVP'd to must not cost the guild its refreshes. `refreshProfiles` does the
+ * fetching — the same function the bulk cadence uses — so there is one
+ * profile-read path rather than two that drift, and one per-player claim.
  */
-import { snapshotProfiles, type SnapshotMetrics, type SnapshotWrite, type TrackedAccount } from "./progression.js";
+import {
+  refreshProfiles,
+  type ProfileReading,
+  type SnapshotMetrics,
+  type SnapshotWrite,
+  type TrackedAccount,
+} from "./progression.js";
 
 /**
- * What an event can be scored on.
+ * The floor under any event's configured poll interval.
  *
- * These are exactly the fields a snapshot records, and deliberately not a
- * superset: a metric offered in the panel that no capture writes would leave a
- * leaderboard permanently empty with nothing to point at as the cause.
+ * A guild may set a shorter one in the panel; it is clamped here rather than
+ * rejected there, so a value stored before this floor existed cannot poll under
+ * it. One hour is the per-player cap the policy sets, and an event's cohort is
+ * made of players like any other read.
  */
+export const EVENT_POLL_FLOOR_MINUTES = 60;
+
 export const EVENT_METRICS = [
   "skyblockLevel",
   "networth",
@@ -72,7 +89,20 @@ export interface EventTrackingDeps {
    */
   listParticipants(eventId: string): Promise<readonly EventParticipant[]>;
   capture(account: TrackedAccount): Promise<{ profileId: string; metrics: SnapshotMetrics } | null>;
-  writeSnapshot(snapshot: SnapshotWrite): Promise<void>;
+  /** The same current-reading upsert the bulk refresh uses. */
+  write(reading: ProfileReading): Promise<void>;
+  /**
+   * Records where a participant started. Write-once: a second call for the same
+   * participant and event is a no-op, not an overwrite. The unique constraint on
+   * `(account, event, source)` is what actually guarantees that, so a racing
+   * second worker cannot move somebody's starting line either.
+   */
+  writeBaseline(snapshot: SnapshotWrite): Promise<void>;
+  /**
+   * Records where a participant currently stands, overwriting the previous
+   * answer. When the event completes, whatever this last held is the final.
+   */
+  writeFinal(snapshot: SnapshotWrite): Promise<void>;
   /** Records the reading. Baselines are set on first write and never after. */
   upsertScore(write: EventScoreWrite): Promise<void>;
   /** Reported rather than thrown: one bad event must not end the pass. */
@@ -83,10 +113,10 @@ export interface EventTrackingDeps {
 /**
  * Poll every live tracked event. Returns how many score rows were written.
  *
- * The per-event poll interval is enforced by `snapshotProfiles`' own
- * "captured recently" filter rather than by a separate clock, so a participant
- * in two events at once is fetched once and scored twice — which is the point
- * of routing both through the same capture.
+ * The per-event poll interval is enforced by `refreshProfiles`' own "read
+ * recently" filter rather than by a separate clock, so a participant in two
+ * events at once is fetched once and scored twice — which is the point of
+ * routing both through the same read.
  */
 export async function trackEvents(deps: EventTrackingDeps): Promise<number> {
   let written = 0;
@@ -108,15 +138,29 @@ export async function trackEvents(deps: EventTrackingDeps): Promise<number> {
       if (participants.length === 0) continue;
       const byAccount = new Map(participants.map((p) => [p.minecraftAccountId, p]));
 
-      await snapshotProfiles({
+      const boundary = (reading: ProfileReading, source: SnapshotWrite["source"]): SnapshotWrite => ({
+        ...reading,
+        source,
+        eventId: event.id,
+        savedBy: null,
+        label: null,
+      });
+
+      await refreshProfiles({
         listTracked: async () => participants,
         capture: (account) => deps.capture(account),
-        write: (snapshot) => deps.writeSnapshot(snapshot),
-        async onSnapshot(snapshot) {
-          const participant = byAccount.get(snapshot.minecraftAccountId);
+        write: (reading) => deps.write(reading),
+        async onReading(reading) {
+          const participant = byAccount.get(reading.minecraftAccountId);
           if (participant === undefined) return;
+
+          // Baseline first, so a participant read for the first time on the
+          // pass that also turns out to be the last still has a starting line.
+          await deps.writeBaseline(boundary(reading, "EVENT_BASELINE"));
+          await deps.writeFinal(boundary(reading, "EVENT_FINAL"));
+
           for (const metric of metrics) {
-            const value = snapshot[metric];
+            const value = reading[metric];
             // A null reading is a profile that did not report the figure, not a
             // zero. Skipping it leaves the last good score standing rather than
             // dropping the member to the bottom of the board for one bad fetch.
@@ -134,9 +178,7 @@ export async function trackEvents(deps: EventTrackingDeps): Promise<number> {
         // Everyone who RSVP'd is in scope. The cohort is bounded by the event's
         // own guest list, so there is no batch to spread across runs.
         batchSize: participants.length,
-        minIntervalMs: Math.max(1, event.pollIntervalMinutes) * 60_000,
-        source: "EVENT_TRACKED",
-        eventId: event.id,
+        minIntervalMs: Math.max(EVENT_POLL_FLOOR_MINUTES, event.pollIntervalMinutes) * 60_000,
         ...(deps.now === undefined ? {} : { now: deps.now }),
       });
     } catch (error) {

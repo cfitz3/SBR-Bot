@@ -279,7 +279,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     const rows = await this.repo.listSnapshots(uuid, since);
     if (rows.length === 0) return ok(empty);
 
-    const points = rows.map((r) => ({ date: r.captureDate, value: r[metric] }));
+    const points = rows.map((r) => ({ date: r.capturedAt, value: r[metric] }));
     const { change, perDay } = paceOf(points);
 
     return ok({ metric, rangeDays, points, change, perDay });
@@ -348,7 +348,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     ]);
 
     return rows.map((r) => {
-      const pace = paceOf(history.map((h) => ({ date: h.captureDate, value: h[r.metric] })));
+      const pace = paceOf(history.map((h) => ({ date: h.capturedAt, value: h[r.metric] })));
       return toGoalView(r, latest?.[r.metric] ?? null, pace.perDay);
     });
   }

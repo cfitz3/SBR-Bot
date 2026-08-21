@@ -43,7 +43,7 @@ function snapshots(metric: keyof SnapshotMetricsDTO, values: readonly number[]):
     const at = new Date(start + i * day);
     return {
       capturedAt: at.toISOString(),
-      captureDate: at.toISOString().slice(0, 10),
+      label: null,
       skyblockLevel: null,
       networth: null,
       skillAverage: null,

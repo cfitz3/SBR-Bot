@@ -87,3 +87,47 @@ export function unpackJsonMetrics(value: unknown): Partial<Record<JsonMetric, nu
   }
   return out;
 }
+
+/**
+ * A whole reading — column-backed metrics and JSON ones alike — flattened into
+ * one object, for `ProfileCurrent.previousMetrics`.
+ *
+ * The displaced reading has no columns to live in, so it is stored whole. That
+ * is why `previousMetrics` carries all eighteen while `metrics` carries only
+ * the twelve without columns: they answer different questions. `metrics` is the
+ * overflow of a row that has columns; `previousMetrics` is a row that does not.
+ */
+export function packAllMetrics(
+  source: Partial<Record<(typeof COLUMN_METRICS)[number] | JsonMetric, number | null>>,
+): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  for (const key of [...COLUMN_METRICS, ...JSON_METRICS]) {
+    const value = source[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * The inverse. Column metrics come back as explicit nulls when missing, because
+ * `SnapshotMetrics` requires all six — absent and unread are the same fact once
+ * a reading has been displaced, and null is the honest one.
+ */
+export function unpackAllMetrics(value: unknown): Record<(typeof COLUMN_METRICS)[number], number | null> &
+  Partial<Record<JsonMetric, number | null>> {
+  const source =
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const read = (key: string): number | null => {
+    const raw = source[key];
+    return typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+  };
+  return {
+    skyblockLevel: read("skyblockLevel"),
+    networth: read("networth"),
+    skillAverage: read("skillAverage"),
+    catacombsLevel: read("catacombsLevel"),
+    slayerXp: read("slayerXp"),
+    senitherWeight: read("senitherWeight"),
+    ...unpackJsonMetrics(value),
+  };
+}

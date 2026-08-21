@@ -1,14 +1,21 @@
 /**
- * Progression jobs (WORKERS.md §2.5–2.6): `profile-snapshot` captures the
- * time-series rows that `/progress` and the panel charts read, and
- * `milestone-detect` turns a pair of consecutive snapshots into announceable
+ * Progression jobs (WORKERS.md §2.5–2.6): `profile-refresh` keeps each member's
+ * current reading up to date, and `milestone-detect` turns the pair of readings
+ * on that row — current and the one it displaced — into announceable
  * achievements.
  *
- * The Hypixel budget is the design constraint. A ~125-member guild refreshed
- * naively would spend its whole rate allowance on people who are offline, so
- * snapshots are batched, spread, and skipped when the account was captured
- * recently — and a member whose fetch fails is logged past, never retried in a
- * tight loop.
+ * **This job does not build a history, and that is a policy constraint rather
+ * than a design preference.** Appending a reading per member per run is the
+ * "session tracking" pattern the Hypixel Developer API Policy prohibits
+ * outright (docs/HYPIXEL_COMPLIANCE.md §1). So the write is an upsert: one row
+ * per `(account, profile)`, carrying its own previous reading and nothing
+ * older. Members who want to compare over time save snapshots explicitly.
+ *
+ * The Hypixel budget is the other design constraint. A ~125-member guild
+ * refreshed naively would spend its whole rate allowance on people who are
+ * offline, so refreshes are batched, spread, and skipped when the account was
+ * read recently — and a member whose fetch fails is logged past, never retried
+ * in a tight loop.
  */
 import {
   isCommunityMetric,
@@ -55,50 +62,73 @@ export interface SnapshotMetrics {
   readonly bestiaryMilestone?: number | null;
 }
 
+/**
+ * One refreshed reading, as `profile-refresh` writes it.
+ *
+ * Deliberately flat and deliberately without a sequence number: there is no
+ * ordering to establish because there is only ever one row per profile.
+ */
+export interface ProfileReading extends SnapshotMetrics {
+  readonly minecraftAccountId: string;
+  readonly profileId: string;
+  readonly capturedAt: string;
+}
+
+/** The only three ways a `ProfileSnapshot` row comes into existence. */
+export type SnapshotSource = "USER_SAVED" | "EVENT_BASELINE" | "EVENT_FINAL";
+
+/**
+ * A snapshot somebody asked for: a member saving a marker to compare against
+ * later, or an event recording where a participant started and finished.
+ *
+ * Nothing on a timer writes one of these. That is the distinction the whole
+ * redesign turns on — a row here exists because a person or a bounded event
+ * boundary called for it, not because a clock ticked.
+ */
 export interface SnapshotWrite extends SnapshotMetrics {
   readonly minecraftAccountId: string;
   readonly profileId: string;
-  /** YYYY-MM-DD bucket the unique key uses. */
-  readonly captureDate: string;
-  readonly seq: number;
   readonly capturedAt: string;
-  readonly source: "SCHEDULED" | "ON_DEMAND" | "EVENT_TRACKED" | "BACKFILL";
+  readonly source: SnapshotSource;
+  /** Set on the event boundaries, null on a member-saved marker. */
   readonly eventId: string | null;
+  /** Discord id of whoever pressed save, null for event boundaries. */
+  readonly savedBy: string | null;
+  readonly label: string | null;
 }
 
-export interface ProfileSnapshotDeps {
+export interface ProfileRefreshDeps {
   listTracked(): Promise<readonly TrackedAccount[]>;
   /** null when the account has no readable profile (API off, no profiles). */
   capture(account: TrackedAccount): Promise<{ profileId: string; metrics: SnapshotMetrics } | null>;
-  write(snapshot: SnapshotWrite): Promise<void>;
+  write(reading: ProfileReading): Promise<void>;
   /** Called after each write so `milestone-detect` can run per member. */
-  onSnapshot?: (snapshot: SnapshotWrite) => Promise<void>;
+  onReading?: (reading: ProfileReading) => Promise<void>;
   now?: () => Date;
   /** Cap per run, so one tick can't consume the whole rate budget. */
   batchSize?: number;
-  /** Skip accounts captured more recently than this. */
+  /** Skip accounts read more recently than this. */
   minIntervalMs?: number;
-  /** EVENT_TRACKED runs pass their event; bulk runs leave it null. */
-  source?: SnapshotWrite["source"];
-  eventId?: string | null;
 }
 
 const DEFAULT_BATCH = 25;
-/** Bulk cadence floor — the ~6–12h window WORKERS.md §2.5 specifies. */
+/**
+ * Refresh cadence floor. Sits well above the one-hour per-player cap the policy
+ * sets, so the schedule is inside the cap by construction rather than by the
+ * limiter having to catch it.
+ */
 const DEFAULT_MIN_INTERVAL_MS = 6 * 60 * 60_000;
 
 /**
- * One snapshot pass. Returns the number of rows written.
+ * One refresh pass. Returns the number of rows written.
  *
- * Accounts are ordered oldest-capture-first, which spreads the guild across
- * successive runs on its own: whoever went longest without a capture is always
+ * Accounts are ordered oldest-read-first, which spreads the guild across
+ * successive runs on its own: whoever went longest without a refresh is always
  * next, so no explicit scheduling table is needed.
  */
-export async function snapshotProfiles(deps: ProfileSnapshotDeps): Promise<number> {
+export async function refreshProfiles(deps: ProfileRefreshDeps): Promise<number> {
   const now = (deps.now ?? (() => new Date()))();
   const minInterval = deps.minIntervalMs ?? DEFAULT_MIN_INTERVAL_MS;
-  const source = deps.source ?? "SCHEDULED";
-  const eventId = deps.eventId ?? null;
 
   const due = [...(await deps.listTracked())]
     .filter((a) => {
@@ -114,23 +144,17 @@ export async function snapshotProfiles(deps: ProfileSnapshotDeps): Promise<numbe
     const captured = await deps.capture(account).catch(() => null);
     // A member whose profile can't be read (API access off, or an upstream
     // blip) is skipped silently rather than failing the batch — one unreadable
-    // account must not cost the other 124 their snapshot.
+    // account must not cost the other 124 their refresh.
     if (captured === null) continue;
 
-    const snapshot: SnapshotWrite = {
+    const reading: ProfileReading = {
       minecraftAccountId: account.minecraftAccountId,
       profileId: captured.profileId,
-      captureDate: now.toISOString().slice(0, 10),
-      // Bulk captures own seq 0 (one row per day, upserted). The event cohort
-      // writes many rows a day, so it needs a distinct sequence per capture.
-      seq: source === "EVENT_TRACKED" ? Math.floor(now.getTime() / 60_000) % 100_000 : 0,
       capturedAt: now.toISOString(),
-      source,
-      eventId,
       ...captured.metrics,
     };
-    await deps.write(snapshot);
-    if (deps.onSnapshot) await deps.onSnapshot(snapshot);
+    await deps.write(reading);
+    if (deps.onReading) await deps.onReading(reading);
     written += 1;
   }
   return written;
@@ -350,8 +374,14 @@ export function detectMilestones(
 }
 
 export interface MilestoneDetectDeps {
-  /** The two most recent snapshots for an account, newest first. */
-  recentSnapshots(minecraftAccountId: string): Promise<readonly SnapshotMetrics[]>;
+  /**
+   * The account's current reading and the one it displaced, newest first.
+   *
+   * Two entries at most, and by construction rather than by a `take: 2` — the
+   * row stores exactly one previous reading, so there is no third to ask for.
+   * A never-refreshed account returns empty; a first refresh returns one.
+   */
+  recentReadings(minecraftAccountId: string): Promise<readonly SnapshotMetrics[]>;
   /** Insert, ignoring a duplicate — the unique constraint is the real guard. */
   record(candidate: MilestoneCandidate): Promise<boolean>;
   /**
@@ -364,7 +394,7 @@ export interface MilestoneDetectDeps {
 
 /** Detects and records milestones for one account. Returns rows created. */
 export async function detectAndRecord(minecraftAccountId: string, deps: MilestoneDetectDeps): Promise<number> {
-  const [current, previous] = await deps.recentSnapshots(minecraftAccountId);
+  const [current, previous] = await deps.recentReadings(minecraftAccountId);
   if (!current) return 0;
 
   const definitions = resolveDefinitions(deps.definitions ?? []);

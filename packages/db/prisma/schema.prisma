@@ -221,11 +221,20 @@ enum AchievementTier {
   PLATINUM
 }
 
+/// Why a `ProfileSnapshot` row exists.
+///
+/// Every member of this enum is an *explicit, bounded* capture, and that is the
+/// whole point: there is no `SCHEDULED` any more. Scheduled reading writes
+/// `ProfileCurrent`, which is upserted in place and never grows — see
+/// `docs/HYPIXEL_COMPLIANCE.md` §1 for why a growing per-player series is not
+/// something this platform may keep.
 enum SnapshotSource {
-  SCHEDULED
-  ON_DEMAND
-  EVENT_TRACKED // sub-hourly cadence for progression-event leaderboards (WORKERS.md §2.5)
-  BACKFILL
+  /// A member (or staff) pressed save. The only source a person can produce.
+  USER_SAVED
+  /// Captured once when a progression event opened.
+  EVENT_BASELINE
+  /// Captured once when it closed. Score is final minus baseline.
+  EVENT_FINAL
 }
 
 enum CommandSurface {
@@ -275,6 +284,7 @@ model MinecraftAccount {
   linkedAccounts   LinkedAccount[]
   selectedProfiles SelectedSkyblockProfile[]
   snapshots        ProfileSnapshot[]
+  current          ProfileCurrent[]
   milestones       Milestone[]
   goals            ProgressionGoal[]
 
@@ -1253,17 +1263,70 @@ model NotificationSubscription {
 
 // ─────────────────────────── Progression & Analytics ───────────────────────────
 
+/// The current reading for one profile. **Upserted in place, never appended.**
+///
+/// This is what replaced the scheduled half of `ProfileSnapshot`, and the shape
+/// is the compliance argument: one row per (account, profile) means the table's
+/// size is the roster's size, not the roster's size times how long we have been
+/// running. There is no history here to show back to anyone, because there is no
+/// history here at all.
+///
+/// It still serves every feature the series did except two. Milestone detection
+/// compares a current reading against the one before it, so the row carries its
+/// own `previousMetrics` — exactly one step back, which is what detection reads
+/// and no more. Leaderboards and profile cards want the newest reading, which is
+/// the only reading. `/progress` and `/goal` are the two that genuinely wanted a
+/// series; they read user-saved `ProfileSnapshot` rows instead.
+model ProfileCurrent {
+  id                 String   @id @default(cuid())
+  minecraftAccountId String
+  profileId          String
+  capturedAt         DateTime @default(now())
+  networth           BigInt?
+  skillAverage       Float?
+  catacombsLevel     Float?
+  slayerXp           BigInt?
+  senitherWeight     Float?
+  skyblockLevel      Float?
+  metrics            Json     @default("{}")
+  /// The reading this row displaced, as a whole `SnapshotMetrics` object rather
+  /// than a parallel set of columns. Nothing queries inside it — detection reads
+  /// it whole and compares — so columns would buy nothing and cost a schema
+  /// change per metric.
+  ///
+  /// Empty on the first capture, which reads as "nothing to compare against yet"
+  /// and is exactly right: a member seen once has not crossed anything.
+  previousMetrics    Json     @default("{}")
+  /// When the displaced reading was taken. Null on a first capture.
+  previousCapturedAt DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([minecraftAccountId, profileId])
+  /// Leaderboards and the perms roster read newest-per-account across the guild.
+  @@index([minecraftAccountId, capturedAt])
+}
+
+/// A capture somebody asked for: a member saving a marker to compare against
+/// later, or an event's opening and closing readings.
+///
+/// Deliberately *not* a time series. Rows arrive because a person pressed a
+/// button or an event started or ended — never on a timer — and the retention
+/// sweep caps how many a member can accumulate.
 model ProfileSnapshot {
   id                 String         @id @default(cuid())
   minecraftAccountId String
   profileId          String
-  // Day bucket + intra-day sequence: normal snapshots use seq 0 (one/day); the
-  // event-tracked cohort writes many per day (seq 1..N) for live leaderboards.
-  captureDate        DateTime       @db.Date
-  seq                Int            @default(0)
   capturedAt         DateTime       @default(now())
-  source             SnapshotSource @default(SCHEDULED)
-  eventId            String? // set for EVENT_TRACKED snapshots
+  source             SnapshotSource @default(USER_SAVED)
+  /// Discord id of whoever pressed save. Null for the two event captures, which
+  /// no person asked for individually.
+  savedBy            String?
+  /// What the member called it ("before dungeon grind"). Free text, theirs.
+  label              String?
+  eventId            String?
   networth           BigInt?
   skillAverage       Float?
   catacombsLevel     Float?
@@ -1283,9 +1346,14 @@ model ProfileSnapshot {
   event            Event?           @relation(fields: [eventId], references: [id], onDelete: SetNull)
   milestones       Milestone[]
 
-  @@unique([minecraftAccountId, profileId, captureDate, seq])
-  @@index([minecraftAccountId, capturedAt]) // progression over time
-  @@index([eventId, minecraftAccountId, capturedAt]) // event leaderboard: latest per member
+  /// One baseline and one final per participant per event, enforced here rather
+  /// than in the job. A structural guarantee that event tracking cannot quietly
+  /// become a poll again: a third row for the same event simply will not insert.
+  /// Postgres treats nulls as distinct, so user-saved rows (null `eventId`) are
+  /// unconstrained by it.
+  @@unique([minecraftAccountId, eventId, source])
+  @@index([minecraftAccountId, capturedAt])
+  @@index([eventId, source])
 }
 
 /// A threshold a guild considers worth recognising.

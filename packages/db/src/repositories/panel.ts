@@ -314,9 +314,9 @@ export const panelRepository = {
     };
   },
 
-  /** Newest snapshot capture across the guild's linked accounts. */
+  /** Newest profile refresh across the guild's linked accounts. */
   async lastSnapshotAt(guildId: string): Promise<string | null> {
-    const row = await prisma.profileSnapshot.findFirst({
+    const row = await prisma.profileCurrent.findFirst({
       where: {
         minecraftAccount: {
           linkedAccounts: { some: { discordUser: { memberships: { some: { guildId } } } } },

@@ -607,7 +607,7 @@ export const RUNNABLE_JOBS: readonly string[] = [
   "guild-scan",
   "guild-roster-sync",
   "discord-member-sync",
-  "profile-snapshot",
+  "profile-refresh",
   "milestone-detect",
   "milestone-backfill",
   "xp-aggregate",

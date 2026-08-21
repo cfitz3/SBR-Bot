@@ -123,24 +123,25 @@ export function defineResourcesRefreshJob(refresh: () => Promise<number>): JobDe
 }
 
 /**
- * profile-snapshot: capture the time series behind `/progress` and the charts.
+ * profile-refresh: keep each member's current reading up to date.
  *
+ * Not a history — one upserted row per profile (docs/HYPIXEL_COMPLIANCE.md §1).
  * The long lock reflects a batch of paced Hypixel calls; retries stay low
  * because the next run picks up exactly the accounts this one missed — the
  * oldest-first ordering makes the job self-healing without retry logic.
  */
-export function defineProfileSnapshotJob(snapshot: () => Promise<number>): JobDefinition<number> {
+export function defineProfileRefreshJob(refresh: () => Promise<number>): JobDefinition<number> {
   return {
-    name: "profile-snapshot",
+    name: "profile-refresh",
     queue: "progression",
     lockKey: "lock:job:snapshot",
     lockTtlMs: 15 * 60_000,
     maxRetries: 1,
-    handler: snapshot,
+    handler: refresh,
   };
 }
 
-/** milestone-detect: turn consecutive snapshots into announceable achievements. */
+/** milestone-detect: turn a reading and the one it displaced into achievements. */
 export function defineMilestoneDetectJob(detect: () => Promise<number>): JobDefinition<number> {
   return {
     name: "milestone-detect",

@@ -36,12 +36,26 @@ export const progressionRepository: ProgressionRepository = {
     }));
   },
 
+  /**
+   * The member's own saved markers inside the window, oldest first.
+   *
+   * `USER_SAVED` only, and that filter is the whole point rather than a detail:
+   * this is the series `/progress` and `/goal` chart, and it may only contain
+   * readings a member asked for. Event boundaries live in the same table and are
+   * deliberately excluded — a member should not find a chart of themselves
+   * appearing because they RSVP'd to something.
+   */
   async listSnapshots(minecraftUuid: string, since: Date) {
     const rows = await prisma.profileSnapshot.findMany({
-      where: { minecraftAccount: { uuid: minecraftUuid }, captureDate: { gte: since } },
-      orderBy: [{ captureDate: "asc" }, { seq: "asc" }],
+      where: {
+        minecraftAccount: { uuid: minecraftUuid },
+        source: "USER_SAVED",
+        capturedAt: { gte: since },
+      },
+      orderBy: { capturedAt: "asc" },
       select: {
-        captureDate: true,
+        capturedAt: true,
+        label: true,
         skyblockLevel: true,
         networth: true,
         skillAverage: true,
@@ -49,8 +63,8 @@ export const progressionRepository: ProgressionRepository = {
       },
     });
     return rows.map((r) => ({
-      // Date-only column: the ISO day is the whole meaning of the bucket.
-      captureDate: r.captureDate.toISOString().slice(0, 10),
+      capturedAt: r.capturedAt.toISOString(),
+      label: r.label,
       skyblockLevel: r.skyblockLevel,
       networth: toNumber(r.networth),
       skillAverage: r.skillAverage,
@@ -58,10 +72,15 @@ export const progressionRepository: ProgressionRepository = {
     }));
   },
 
+  /**
+   * The current reading, off `ProfileCurrent` rather than off a series.
+   *
+   * Where a member has more than one profile the newest wins, which is the same
+   * rule the worker-side repository applies — a member's numbers are whichever
+   * profile they last played.
+   */
   async latestSnapshot(minecraftUuid: string) {
-    // Newest by capture time, not by day bucket: the event-tracked cohort writes
-    // several rows per day and the last one is the current reading.
-    const row = await prisma.profileSnapshot.findFirst({
+    const row = await prisma.profileCurrent.findFirst({
       where: { minecraftAccount: { uuid: minecraftUuid } },
       orderBy: { capturedAt: "desc" },
       select: {

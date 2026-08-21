@@ -446,17 +446,20 @@ export interface ProgressionRepository {
     minecraftUuid: string,
     since: Date,
   ): Promise<readonly {
-    readonly captureDate: string;
+    readonly capturedAt: string;
+    readonly label: string | null;
     readonly skyblockLevel: number | null;
     readonly networth: number | null;
     readonly skillAverage: number | null;
     readonly catacombsLevel: number | null;
   }[]>;
   /**
-   * The most recent snapshot's metrics, or null if the member has never been
-   * snapshotted. Separate from `listSnapshots` because achievements need one
-   * reading of every milestone metric — including `slayerXp`, which the charted
-   * series has no use for — rather than a window of four.
+   * The member's current reading, or null if they have never been refreshed.
+   *
+   * A different table from `listSnapshots`, not a different slice of the same
+   * one: this is the automatically-refreshed current value, while snapshots are
+   * markers a member chose to save. It also carries every milestone metric —
+   * including `slayerXp`, which the charted series has no use for.
    */
   latestSnapshot(minecraftUuid: string): Promise<SnapshotMetricsDTO | null>;
   /** The member's `/setprofile` choice, or null to follow their in-game selection. */

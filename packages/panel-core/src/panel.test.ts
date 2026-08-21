@@ -382,10 +382,10 @@ function job(type: string, agoMs: number | null): JobHealth {
 const HOUR = 3_600_000;
 
 test("a job well inside its cadence is not flagged stale", async () => {
-  // profile-snapshot tolerates 3h; the stub reports a run one hour ago.
+  // profile-refresh tolerates 3h; the stub reports a run one hour ago.
   const r = await svc({
     roles: admin(),
-    reads: reads({ async listJobHealth() { return [job("profile-snapshot", HOUR)]; } }),
+    reads: reads({ async listJobHealth() { return [job("profile-refresh", HOUR)]; } }),
   }).loadHealth(session(), "g1");
   assert.equal(r.data?.jobs[0]?.stale, false);
 });
@@ -402,7 +402,7 @@ test("a job past its threshold is flagged stale", async () => {
 test("a job that has never run is stale, not silently fresh", async () => {
   const r = await svc({
     roles: admin(),
-    reads: reads({ async listJobHealth() { return [job("profile-snapshot", null)]; } }),
+    reads: reads({ async listJobHealth() { return [job("profile-refresh", null)]; } }),
   }).loadHealth(session(), "g1");
   assert.equal(r.data?.jobs[0]?.stale, true);
 });
@@ -432,7 +432,7 @@ test("an unreadable pending count does not take the jobs table down with it", as
     roles: admin(),
     reads: reads({
       async pendingMilestones() { throw new Error("db down"); },
-      async listJobHealth() { return [job("profile-snapshot", HOUR)]; },
+      async listJobHealth() { return [job("profile-refresh", HOUR)]; },
     }),
   }).loadHealth(session(), "g1");
   assert.equal(r.data?.waiting.milestones, 0);

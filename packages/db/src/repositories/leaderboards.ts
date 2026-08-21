@@ -69,17 +69,17 @@ async function activeSnowflakes(guildId: string): Promise<ReadonlySet<string>> {
 type SnapshotMetric = "skyblockLevel" | "networth" | "skillAverage" | "catacombsLevel" | "slayerXp";
 
 /**
- * The newest snapshot per linked account, projected onto one metric.
+ * The current reading per linked account, projected onto one metric.
  *
- * `distinct` over an ordered `findMany` is Prisma's per-group-latest: order by
- * account then capture time descending and keep the first row per account. One
- * query for the whole guild, not one per member.
+ * Reads `ProfileCurrent`, which holds one row per profile — so the `distinct`
+ * is still doing work, but only to pick between a member's several profiles
+ * rather than to find the newest of a series. One query for the whole guild.
  *
  * A null metric is dropped rather than read as zero — a profile with its API
  * off is unknown, and unknown is not "poorest in the guild".
  */
 async function snapshotValues(guildId: string, metric: SnapshotMetric): Promise<readonly MemberValue[]> {
-  const rows = await prisma.profileSnapshot.findMany({
+  const rows = await prisma.profileCurrent.findMany({
     where: {
       minecraftAccount: {
         linkedAccounts: { some: { status: "VERIFIED", discordUser: activeMemberOfGuild(guildId) } },

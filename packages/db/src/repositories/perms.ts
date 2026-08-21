@@ -184,17 +184,16 @@ export const guildMemberDirectory: GuildMemberDirectory = {
 };
 
 /**
- * Newest snapshot per uuid.
+ * The current reading per uuid.
  *
- * `distinct` with an ordered `findMany` is Prisma's per-group-latest: order by
- * account then capture time descending, and the first row kept per account is
- * its most recent snapshot. One query for the whole roster rather than one per
- * member.
+ * `ProfileCurrent` holds one row per profile, so the `distinct` picks between a
+ * member's profiles — newest played wins — rather than walking a series. One
+ * query for the whole roster rather than one per member.
  */
 export const memberProgressSource: MemberProgressSource = {
   async forUuids(uuids: readonly string[]): Promise<Readonly<Record<string, MemberProgress>>> {
     if (uuids.length === 0) return {};
-    const rows = await prisma.profileSnapshot.findMany({
+    const rows = await prisma.profileCurrent.findMany({
       where: { minecraftAccount: { uuid: { in: [...uuids] } } },
       orderBy: [{ minecraftAccountId: "asc" }, { capturedAt: "desc" }],
       distinct: ["minecraftAccountId"],
