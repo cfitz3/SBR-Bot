@@ -34,12 +34,13 @@ import {
   screeningRepository,
   xpRepository,
   activitySink,
+  podiumRepository,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { fetchHttp, HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
 import { SkykingsClient } from "@sbr/skykings";
 import { ScreeningService } from "@sbr/screening";
-import { CommunityServiceImpl } from "@sbr/community";
+import { CommunityServiceImpl, memberPodiumSource } from "@sbr/community";
 import { PermServiceImpl } from "@sbr/perms";
 import { XpService } from "@sbr/xp";
 import { LeaderboardService } from "@sbr/leaderboards";
@@ -517,6 +518,10 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // read-only, one member at a time, and no escalation policy needed beyond the
   // one the warning ladder already reads, so `/me` can say what the next warning
   // would cost.
+  // The member's own event placings, over the same score rows the tracker
+  // board is drawn from. Read-only and one member at a time, like `record`.
+  const podiums = memberPodiumSource({ repo: podiumRepository });
+
   const record = memberRecordSource({
     repo: moderationRepository,
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
@@ -549,6 +554,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     xp,
     leaderboards,
     record,
+    podiums,
     screen,
     tallies: adapters.tallies,
     discord,

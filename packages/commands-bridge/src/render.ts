@@ -16,11 +16,13 @@ import type {
   BazaarQuoteDTO,
   DungeonsDTO,
   EmbedView,
+  EventPodiumDTO,
   GuildRosterDTO,
   HypixelFailureState,
   HypixelResult,
   LeaderboardEntryDTO,
   LeaderboardPageDTO,
+  LeaderboardPositionDTO,
   LeaderboardValueFormat,
   LinkError,
   LowestBinDTO,
@@ -467,6 +469,218 @@ export function renderStatsEmbed(
     footer: stalenessFooter(profile.value),
     color: "INFO",
   };
+}
+
+/**
+ * Everything `/me` knows about the caller, and each part optional.
+ *
+ * An object rather than nine positional arguments because every one of them can
+ * be absent for its own reason — XP switched off, no achievements configured, a
+ * deployment with no database behind the member bot — and a call site with four
+ * `null`s in a row is one where the next `null` lands in the wrong slot.
+ */
+export interface ProfileCardInput {
+  readonly profile: HypixelResult<ProfileSummaryDTO>;
+  readonly slayers: HypixelResult<SlayersDTO>;
+  readonly dungeons: HypixelResult<DungeonsDTO>;
+  readonly networth: HypixelResult<NetworthDTO>;
+  readonly standing?: XpStandingDTO | null;
+  readonly record?: MemberRecordDTO | null;
+  readonly achievements?: AchievementsDTO | null;
+  readonly podium?: EventPodiumDTO | null;
+  readonly positions?: readonly LeaderboardPositionDTO[] | null;
+}
+
+/** Latest unlocks named on the card. Three: it is a headline, not a history. */
+const CARD_UNLOCKS = 3;
+
+/** One field, built the way `padInlineRow` and the embed view expect it. */
+interface CardField {
+  readonly name: string;
+  readonly value: string;
+  readonly inline: boolean;
+}
+
+/**
+ * `/me` — the member's own card.
+ *
+ * Distinct from `/stats` on purpose. `/stats <player>` describes a Hypixel
+ * account and can be run against anybody; this describes a *member of this
+ * guild*, and every section below the Hypixel row — standing, achievements,
+ * podiums, ranks, record — is only ever true of the person who typed it.
+ *
+ * Each section is independently optional and independently absent. A section
+ * whose data did not arrive is missing rather than zeroed: "0 achievements" and
+ * "we could not read your achievements" are different claims, and only one of
+ * them is ours to make.
+ *
+ * A failed Hypixel read does not blank the card. The guild half is still true,
+ * and a member whose profile is briefly unreadable should still be told where
+ * they stand.
+ */
+export function renderProfileCardEmbed(ign: string, input: ProfileCardInput): EmbedView {
+  const p = input.profile.ok ? input.profile.value.data : null;
+  const nw =
+    input.networth.ok && input.networth.value.data.total !== null
+      ? `${formatCoins(input.networth.value.data.total)}${input.networth.value.data.exact ? "" : "+"}`
+      : "—";
+
+  const headline = input.profile.ok
+    ? `**SkyBlock Level ${formatLevel(input.profile.value.data.skyblockLevel)}** · Profile **${profileLabel(
+        input.profile.value.data,
+      )}**`
+    : renderFailure(input.profile.error.state);
+
+  const hypixelRow: CardField[] = [
+    { name: "Skill average", value: formatLevel(p === null ? null : p.skillAverage), inline: true },
+    {
+      name: "Catacombs",
+      value: formatLevel(input.dungeons.ok ? input.dungeons.value.data.catacombsLevel : null),
+      inline: true,
+    },
+    { name: "Weight", value: p === null ? "—" : weightText(p.senitherWeight), inline: true },
+    { name: "Networth", value: nw, inline: true },
+    {
+      name: "Slayer xp",
+      value: input.slayers.ok ? formatNumber(input.slayers.value.data.totalExperience) : "—",
+      inline: true,
+    },
+  ];
+
+  const standing = input.standing ?? null;
+  const standingRow: CardField[] =
+    standing === null
+      ? []
+      : [
+          {
+            name: "Guild standing",
+            value: `Level ${standing.level} · ${formatNumber(standing.totalXp)} XP${
+              standing.rank === null ? "" : ` · #${standing.rank}`
+            }`,
+            inline: true,
+          },
+          {
+            name: "Tenure",
+            value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
+            inline: true,
+          },
+        ];
+
+  const sections = [
+    achievementField(input.achievements ?? null),
+    podiumField(input.podium ?? null),
+    positionsField(input.positions ?? null),
+    input.record === undefined || input.record === null ? null : renderMemberRecordField(input.record),
+  ].filter((field): field is CardField => field !== null);
+
+  return {
+    title: `${ign} — profile`,
+    description: headline,
+    fields: [...padInlineRow([...hypixelRow, ...standingRow]), ...sections],
+    ...(input.profile.ok ? { footer: stalenessFooter(input.profile.value) } : {}),
+    color: input.profile.ok ? "INFO" : "NEUTRAL",
+  };
+}
+
+/**
+ * Achievements as one field: the tally, the tier breakdown, the latest few.
+ *
+ * Null in three different situations, and they are genuinely different: nothing
+ * was read (the port is absent, or the read failed), the guild has achievements
+ * switched off, or it has defined none. None of them means "you have earned
+ * nothing", so none of them prints a zero.
+ */
+function achievementField(data: AchievementsDTO | null): CardField | null {
+  if (data === null || !data.configured || data.totalCount === 0) return null;
+
+  const byTier = new Map<AchievementTier, number>();
+  for (const a of data.earned) byTier.set(a.tier, (byTier.get(a.tier) ?? 0) + 1);
+  // Rarest first, and a tier nobody has earned is left out rather than shown as
+  // a zero — the row is a record of what was done, not a checklist.
+  const badges = (["PLATINUM", "GOLD", "SILVER", "BRONZE"] as const)
+    .filter((tier) => (byTier.get(tier) ?? 0) > 0)
+    .map((tier) => `${TIER_BADGE[tier]} ${String(byTier.get(tier) ?? 0)}`)
+    .join(" · ");
+
+  const latest = [...data.earned]
+    .filter((a) => a.achievedAt !== null)
+    .sort((a, b) => (b.achievedAt ?? "").localeCompare(a.achievedAt ?? ""))
+    .slice(0, CARD_UNLOCKS)
+    .map((a) => `${glyph(a)} **${a.label}** · <t:${Math.floor(Date.parse(a.achievedAt ?? "") / 1000)}:R>`);
+
+  const lines = [
+    `**${data.earnedCount}/${data.totalCount}** earned${badges === "" ? "" : ` — ${badges}`}`,
+    ...latest,
+  ];
+  return { name: "Achievements", value: lines.join("\n"), inline: false };
+}
+
+/**
+ * Event podiums. Absent for a member who has never placed and never attended,
+ * rather than three zeroes — a card that shows everybody's empty medal rack
+ * teaches readers to skip the section that would one day have something in it.
+ */
+function podiumField(data: EventPodiumDTO | null): CardField | null {
+  if (data === null) return null;
+  const medals = data.gold + data.silver + data.bronze;
+  if (medals === 0 && data.attended === 0) return null;
+
+  const tally = [
+    data.gold > 0 ? `🥇 ${String(data.gold)}` : null,
+    data.silver > 0 ? `🥈 ${String(data.silver)}` : null,
+    data.bronze > 0 ? `🥉 ${String(data.bronze)}` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+
+  const attended =
+    data.attended === 0 ? "" : `${tally === "" ? "" : " · "}${formatNumber(data.attended)} attended`;
+
+  const recent = data.recent.map((placing) => {
+    const when = placing.at === null ? "" : ` · <t:${Math.floor(Date.parse(placing.at) / 1000)}:R>`;
+    const medal = placing.place === 1 ? "🥇" : placing.place === 2 ? "🥈" : "🥉";
+    return `${medal} **${placing.eventTitle}** — ${metricLabel(placing.metric)}${when}`;
+  });
+
+  return { name: "Events", value: [`${tally}${attended}`, ...recent].join("\n"), inline: false };
+}
+
+/**
+ * Where the member sits on the boards they are ranked on.
+ *
+ * One field rather than one per board, because the interesting thing is the
+ * shape of it: a member who is top ten on three boards out of four should see
+ * that at a glance instead of reading four rows to find out.
+ */
+function positionsField(positions: readonly LeaderboardPositionDTO[] | null): CardField | null {
+  if (positions === null || positions.length === 0) return null;
+  const value = positions
+    .map((row) => `${row.label} **#${String(row.rank)}** of ${formatNumber(row.totalRanked)}`)
+    .join(" · ");
+  return { name: "Leaderboards", value, inline: false };
+}
+
+/**
+ * A tracked metric's key as a member would say it. Deliberately forgiving:
+ * events name their own metrics off the snapshot's own keys, so one we have
+ * never seen is tidied and printed rather than dropped.
+ */
+function metricLabel(metric: string): string {
+  const known: Readonly<Record<string, string>> = {
+    catacombsLevel: "Catacombs",
+    catacombs: "Catacombs",
+    networth: "Networth",
+    skillAverage: "Skill average",
+    skyblockLevel: "SkyBlock Level",
+    slayerXp: "Slayer xp",
+    senitherWeight: "Weight",
+  };
+  const direct = known[metric];
+  if (direct !== undefined) return direct;
+  // `skill:mining` → `Mining`.
+  const parts = metric.split(":");
+  const tail = parts[parts.length - 1] ?? metric;
+  return tail.charAt(0).toUpperCase() + tail.slice(1);
 }
 
 /**

@@ -18,7 +18,14 @@ import type {
   RSVPState,
   RsvpEntryDTO,
 } from "@sbr/shared-types";
-import type { EventPatch, LfgInsert, LfgPatch, TicketPatch } from "@sbr/community";
+import type {
+  EventPatch,
+  LfgInsert,
+  LfgPatch,
+  PodiumRepository,
+  PodiumScoreRow,
+  TicketPatch,
+} from "@sbr/community";
 import { prisma } from "../client.js";
 import { ticketConfigRepository } from "./ticket-config.js";
 import { ticketRepository } from "./tickets.js";
@@ -459,5 +466,58 @@ export const communityRepository = {
       })
       .catch(() => null);
     return row ? toApplicationDTO(row) : null;
+  },
+};
+
+/**
+ * The read behind `/me`'s event section (`@sbr/community`'s `PodiumRepository`).
+ *
+ * Separate from `communityRepository` because its consumer is: the member bot
+ * holds this and nothing else of the community surface, so a card field cannot
+ * become a path to every ticket mutation.
+ */
+export const podiumRepository: PodiumRepository = {
+  async scoresForMemberEvents(
+    guildId: string,
+    discordId: string,
+    eventLimit: number,
+  ): Promise<readonly PodiumScoreRow[]> {
+    // Two queries rather than one join: the events the member competed in, most
+    // recent first and capped, then everybody's rows for exactly those events.
+    // A single query filtered on the member would return only their own numbers,
+    // which is the one thing a placing cannot be computed from.
+    const mine = await prisma.eventScore.findMany({
+      where: { discordId, event: { guildId, status: "COMPLETED" } },
+      select: { eventId: true, event: { select: { endsAt: true } } },
+      distinct: ["eventId"],
+      orderBy: { event: { endsAt: "desc" } },
+      take: Math.max(1, eventLimit),
+    });
+    if (mine.length === 0) return [];
+
+    const rows = await prisma.eventScore.findMany({
+      where: { eventId: { in: mine.map((row) => row.eventId) } },
+      select: {
+        eventId: true,
+        metric: true,
+        delta: true,
+        discordId: true,
+        event: { select: { title: true, status: true, endsAt: true } },
+      },
+    });
+
+    return rows.map((row) => ({
+      eventId: row.eventId,
+      eventTitle: row.event.title,
+      eventStatus: row.event.status,
+      endsAt: row.event.endsAt ? row.event.endsAt.toISOString() : null,
+      metric: row.metric,
+      discordId: row.discordId,
+      delta: row.delta,
+    }));
+  },
+
+  async countAttendance(guildId: string, discordId: string): Promise<number> {
+    return prisma.eventAttendance.count({ where: { discordId, event: { guildId } } });
   },
 };

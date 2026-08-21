@@ -21,6 +21,7 @@ import type {
   LeaderboardService,
   LFGPostDTO,
   MarketService,
+  MemberPodiumSource,
   MemberRecordSource,
   OptionType,
   PermService,
@@ -127,6 +128,12 @@ export interface HandlerDeps {
    * access simply shows a card without the section.
    */
   readonly record?: MemberRecordSource;
+  /**
+   * The caller's event placings, for `/me`. Narrow and read-only for the same
+   * reason `record` is: a card field must not be a way for the member bot to
+   * acquire the community service and every ticket mutation on it.
+   */
+  readonly podiums?: MemberPodiumSource;
   /**
    * What the server itself looks like, for `/userinfo`, `/serverinfo` and
    * `/avatar`. Optional because only a surface with a gateway connection can

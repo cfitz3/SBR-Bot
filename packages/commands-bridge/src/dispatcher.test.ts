@@ -911,7 +911,7 @@ test("unlink removes the caller's account", async () => {
 test("me is ephemeral and never accepts another player", async () => {
   const r = await makeDispatcher().dispatch("me", ctx({ args: recordArgs({ player: "Zed" }) }));
   assert.equal(r.ephemeral, true);
-  assert.match(r.embed?.title ?? "", /Aria — stats/);
+  assert.match(r.embed?.title ?? "", /Aria — profile/);
 });
 
 test("usage is captured for each dispatch", async () => {

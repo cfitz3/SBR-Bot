@@ -29,6 +29,7 @@ import type {
   CommandUsageDTO,
   DungeonsDTO,
   EventDTO,
+  EventPodiumDTO,
   FilterTestDTO,
   GuildRosterDTO,
   HealthReportDTO,
@@ -441,6 +442,18 @@ export interface ApplyActionInput {
  */
 export interface MemberRecordSource {
   forMember(guildId: string, discordId: string): Promise<Result<MemberRecordDTO>>;
+}
+
+/**
+ * A member's event placings, and only ever their own.
+ *
+ * Split out of `CommunityService` for the same reason `MemberRecordSource` is
+ * split out of `ModerationService`: `/me` needs one read, and handing the
+ * member bot the community service to get it would hand it every ticket and
+ * every event mutation as well. One member, one guild, no writes.
+ */
+export interface MemberPodiumSource {
+  forMember(guildId: string, discordId: string, recentLimit?: number): Promise<Result<EventPodiumDTO>>;
 }
 
 /** Moderation + audit (packages/moderation). Shared by admin-bot and web-panel. */
@@ -1327,8 +1340,37 @@ export interface LeaderboardQuery {
   readonly windowDays?: number;
 }
 
+/**
+ * One category a member appears on, for the profile card.
+ *
+ * Deliberately not a page: `/me` wants "3rd of 42 on Catacombs" and has no use
+ * for the rows around it.
+ */
+export interface LeaderboardPositionDTO {
+  readonly category: LeaderboardCategory;
+  readonly label: string;
+  readonly format: LeaderboardValueFormat;
+  /** 1-based competition rank, tied the same way a page ties. */
+  readonly rank: number;
+  readonly value: number;
+  /** How many members are ranked at all, so a rank can be read in proportion. */
+  readonly totalRanked: number;
+}
+
 export interface LeaderboardService {
   page(query: LeaderboardQuery): Promise<LeaderboardPageDTO>;
+  /**
+   * Where one member places across the categories asked for.
+   *
+   * A category the member is not ranked in is absent rather than reported last:
+   * a member with no networth reading has no wealth rank, and inventing one
+   * would be a claim about their coins rather than about our data.
+   */
+  positions(
+    guildId: string,
+    discordId: string,
+    categories?: readonly LeaderboardCategory[],
+  ): Promise<readonly LeaderboardPositionDTO[]>;
 }
 
 /** Analytics capture + reporting (packages/analytics). */

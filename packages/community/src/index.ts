@@ -16,3 +16,12 @@ export type {
   PermRosterLookup,
   TicketPatch,
 } from "./ports.js";
+export {
+  buildPodiums,
+  memberPodiumSource,
+  PODIUM_EVENT_LIMIT,
+  PODIUM_RECENT_LIMIT,
+  type MemberPodiumSourceDeps,
+  type PodiumRepository,
+  type PodiumScoreRow,
+} from "./podium.js";

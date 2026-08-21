@@ -32,7 +32,9 @@ import type {
   HypixelFailureState,
   HypixelResult,
   InfractionDTO,
+  EventPodiumDTO,
   LeaderboardPageDTO,
+  LeaderboardPositionDTO,
   LFGPostDTO,
   LowestBinDTO,
   MemberRecordDTO,
@@ -497,6 +499,38 @@ export const STANDING_NEW: XpStandingDTO = {
   rank: null,
   bySource: {},
 };
+
+// ── The member's own card ───────────────────────────────────────────────────
+
+export const PODIUM: EventPodiumDTO = {
+  attended: 14,
+  gold: 2,
+  silver: 1,
+  // Nobody has ever come third here, and the card must not print a zero for it.
+  bronze: 0,
+  recent: [
+    { eventTitle: "Catacombs push", metric: "catacombsLevel", place: 1, delta: 1.4, at: iso(-2 * 86_400_000) },
+    { eventTitle: "Slayer weekend", metric: "slayerXp", place: 2, delta: 412_000, at: iso(-9 * 86_400_000) },
+    // A metric nobody has hard-coded a label for, and an event with no end date.
+    { eventTitle: "Mining marathon", metric: "skill:mining", place: 1, delta: 3.1, at: null },
+  ],
+};
+
+/** Attended events, never placed. The medals row has to disappear entirely. */
+export const PODIUM_NO_MEDALS: EventPodiumDTO = {
+  attended: 3,
+  gold: 0,
+  silver: 0,
+  bronze: 0,
+  recent: [],
+};
+
+export const POSITIONS: readonly LeaderboardPositionDTO[] = [
+  { category: "level", label: "SkyBlock Level", format: "level", rank: 3, value: 312, totalRanked: 42 },
+  { category: "wealth", label: "Wealth", format: "coins", rank: 7, value: 8_240_000_000, totalRanked: 40 },
+  { category: "catacombs", label: "Catacombs", format: "level", rank: 12, value: 42, totalRanked: 38 },
+  { category: "xp", label: "Guild XP", format: "count", rank: 6, value: 48_200, totalRanked: 51 },
+];
 
 export const LEADERBOARD: LeaderboardPageDTO = {
   category: "wealth",

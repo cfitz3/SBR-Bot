@@ -32,21 +32,7 @@ export interface RankOptions {
 export function rank(values: readonly MemberValue[], options: RankOptions): LeaderboardPage {
   const pageSize = clamp(options.pageSize ?? DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE);
   const viewerKey = options.viewerKey ?? null;
-
-  const ordered = values
-    .filter((v) => Number.isFinite(v.value) && v.value > 0)
-    .sort((a, b) => (b.value - a.value) || a.label.localeCompare(b.label));
-
-  const ranked: LeaderboardEntry[] = [];
-  let lastValue: number | null = null;
-  let lastRank = 0;
-  ordered.forEach((row, index) => {
-    const tied = lastValue !== null && row.value === lastValue;
-    const position = tied ? lastRank : index + 1;
-    lastValue = row.value;
-    lastRank = position;
-    ranked.push({ ...row, rank: position, isViewer: viewerKey !== null && row.key === viewerKey });
-  });
+  const ranked = rankAll(values, viewerKey);
 
   const pageCount = Math.max(1, Math.ceil(ranked.length / pageSize));
   // Clamped rather than rejected: asking for page 9 of a 3-page board is a
@@ -68,6 +54,36 @@ export function rank(values: readonly MemberValue[], options: RankOptions): Lead
     viewer,
     oldestReadingAt: oldest(entries),
   };
+}
+
+/**
+ * Every eligible member, ordered and ranked — the whole board before it is cut
+ * into pages.
+ *
+ * Exported because a rank is useful without a page: the profile card asks where
+ * one member placed in half a dozen categories, and building six pages to keep
+ * one row from each would be six times the work for the same answer. Both
+ * callers share this function precisely so the two numbers can never disagree.
+ */
+export function rankAll(
+  values: readonly MemberValue[],
+  viewerKey: string | null = null,
+): readonly LeaderboardEntry[] {
+  const ordered = values
+    .filter((v) => Number.isFinite(v.value) && v.value > 0)
+    .sort((a, b) => (b.value - a.value) || a.label.localeCompare(b.label));
+
+  const ranked: LeaderboardEntry[] = [];
+  let lastValue: number | null = null;
+  let lastRank = 0;
+  ordered.forEach((row, index) => {
+    const tied = lastValue !== null && row.value === lastValue;
+    const position = tied ? lastRank : index + 1;
+    lastValue = row.value;
+    lastRank = position;
+    ranked.push({ ...row, rank: position, isViewer: viewerKey !== null && row.key === viewerKey });
+  });
+  return ranked;
 }
 
 /**

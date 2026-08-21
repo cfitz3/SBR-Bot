@@ -6,8 +6,14 @@
  * (WEB_PANEL.md §0): a leaderboard is something the guild reads, not something
  * staff administers.
  */
-export { LeaderboardService, DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, type LeaderboardQuery } from "./service.js";
-export { rank, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, type RankOptions } from "./rank.js";
+export {
+  LeaderboardService,
+  DEFAULT_POSITION_CATEGORIES,
+  DEFAULT_WINDOW_DAYS,
+  MAX_WINDOW_DAYS,
+  type LeaderboardQuery,
+} from "./service.js";
+export { rank, rankAll, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, type RankOptions } from "./rank.js";
 export type { LeaderboardSource } from "./ports.js";
 export {
   CATEGORY_SPECS,

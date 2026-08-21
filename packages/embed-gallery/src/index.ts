@@ -52,12 +52,19 @@ import {
   renderSkillsEmbed,
   renderSlayersEmbed,
   renderStandingEmbed,
+  renderProfileCardEmbed,
   renderStatsEmbed,
   renderTicketEmbed,
   renderTicketListEmbed,
   renderUserInfoEmbed,
 } from "@sbr/commands-bridge";
-import type { EmbedView } from "@sbr/shared-types";
+import type {
+  DungeonsDTO,
+  EmbedView,
+  NetworthDTO,
+  ProfileSummaryDTO,
+  SlayersDTO,
+} from "@sbr/shared-types";
 
 import * as f from "./fixtures.js";
 
@@ -159,6 +166,54 @@ export const GALLERY: readonly GalleryCard[] = [
     f.live(f.DUNGEONS),
     f.live(f.NETWORTH),
     f.STANDING,
+  ),
+  card(
+    "profile-card",
+    "`/me` — the member's own card, every section present.",
+    renderProfileCardEmbed,
+    IGN,
+    {
+      profile: f.live(f.PROFILE),
+      slayers: f.live(f.SLAYERS),
+      dungeons: f.live(f.DUNGEONS),
+      networth: f.live(f.NETWORTH),
+      standing: f.STANDING,
+      record: f.MEMBER_RECORD,
+      achievements: f.ACHIEVEMENTS,
+      podium: f.PODIUM,
+      positions: f.POSITIONS,
+    },
+  ),
+  card(
+    "profile-card-lean",
+    "`/me` on a deployment with XP, achievements and events all switched off.",
+    renderProfileCardEmbed,
+    IGN,
+    {
+      profile: f.live(f.PROFILE),
+      slayers: f.live(f.SLAYERS),
+      dungeons: f.live(f.DUNGEONS_UNPLAYED),
+      networth: f.live(f.NETWORTH),
+      achievements: f.ACHIEVEMENTS_OFF,
+      podium: f.PODIUM_NO_MEDALS,
+    },
+  ),
+  card(
+    "profile-card-offline",
+    "`/me` with Hypixel unreadable — the guild half of the card is still true.",
+    renderProfileCardEmbed,
+    IGN,
+    {
+      profile: f.failed<ProfileSummaryDTO>("RATE_LIMITED"),
+      slayers: f.failed<SlayersDTO>("RATE_LIMITED"),
+      dungeons: f.failed<DungeonsDTO>("RATE_LIMITED"),
+      networth: f.failed<NetworthDTO>("RATE_LIMITED"),
+      standing: f.STANDING,
+      record: f.MEMBER_RECORD_CLEAN,
+      achievements: f.ACHIEVEMENTS,
+      podium: f.PODIUM,
+      positions: f.POSITIONS,
+    },
   ),
   card(
     "stats-partial",

@@ -30,6 +30,7 @@ export {
   renderSkillsEmbed,
   renderSlayersEmbed,
   renderStandingEmbed,
+  renderProfileCardEmbed,
   renderStatsEmbed,
 } from "./render.js";
 export { communityButtonReplies, parseRsvpState } from "./handlers-community.js";

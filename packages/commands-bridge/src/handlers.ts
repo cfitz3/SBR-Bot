@@ -43,6 +43,7 @@ import {
   renderSkillsEmbed,
   renderSlayersEmbed,
   renderStandingEmbed,
+  renderProfileCardEmbed,
   renderStatsEmbed,
   formatCoins,
   formatLevel,
@@ -180,37 +181,59 @@ const stats: CommandHandler = async (ctx, deps) => {
   };
 };
 
-/** `/me` is `/stats` pinned to the caller — it never accepts a player. */
+/**
+ * `/me` — the caller's own card.
+ *
+ * Was `/stats` pinned to the caller. It is its own card now, because the
+ * question it answers is different: `/stats` describes a Hypixel account, and
+ * this describes a member of this guild — standing, achievements, event
+ * podiums, board positions and their record with staff, none of which is
+ * knowable about an IGN somebody else typed.
+ */
 const me: CommandHandler = async (ctx, deps) => {
   const linked = await deps.identity.resolveByDiscordId(ctx.userId);
   if (!linked.ok || linked.value === null) {
     return { ephemeral: true, text: renderFailure("NOT_LINKED") };
   }
-  const [summary, slayers, dungeons, nw, standingRow, record] = await Promise.all([
-    deps.progression.getProfileSummary(linked.value.minecraftUuid),
-    deps.progression.getSlayers(linked.value.minecraftUuid),
-    deps.progression.getDungeons(linked.value.minecraftUuid),
-    deps.progression.getNetworth(linked.value.minecraftUuid),
-    // `/me` is the one lookup that knows the account and the person are the
-    // same, so it is the one that can show both. Absorbed on failure: a stats
-    // card is still worth sending without the guild half.
-    deps.xp?.standing(ctx.guildId, ctx.userId).catch(() => null) ?? null,
-    // Same argument, and the same absorption — a member's own record is only
-    // ever readable here because the id is the caller's own.
-    deps.record?.forMember(ctx.guildId, ctx.userId).catch(() => null) ?? null,
-  ]);
+  const uuid = linked.value.minecraftUuid;
+  // Nine reads, each absorbing its own failure. A card is worth more with seven
+  // sections on it than with none, and the sections that did not arrive are
+  // absent rather than zeroed — see `renderProfileCardEmbed`.
+  const [summary, slayers, dungeons, nw, standingRow, record, achievements, podium, positions] =
+    await Promise.all([
+      deps.progression.getProfileSummary(uuid),
+      deps.progression.getSlayers(uuid),
+      deps.progression.getDungeons(uuid),
+      deps.progression.getNetworth(uuid),
+      // `/me` is the one lookup that knows the account and the person are the
+      // same, so it is the one that can show both. Absorbed on failure: a stats
+      // card is still worth sending without the guild half.
+      deps.xp?.standing(ctx.guildId, ctx.userId).catch(() => null) ?? null,
+      // Same argument, and the same absorption — a member's own record is only
+      // ever readable here because the id is the caller's own.
+      deps.record?.forMember(ctx.guildId, ctx.userId).catch(() => null) ?? null,
+      // Guild-scoped: what this guild recognises, and how far this member is
+      // through it. Not the same question `/milestones` asks in full.
+      deps.progression.getAchievements(uuid, ctx.guildId).catch(() => null),
+      deps.podiums?.forMember(ctx.guildId, ctx.userId).catch(() => null) ?? null,
+      // The default four categories. `/leaderboard` is where the whole catalog
+      // lives; a card that listed nine ranks is one nobody reads any of.
+      deps.leaderboards?.positions(ctx.guildId, ctx.userId).catch(() => null) ?? null,
+    ]);
   return {
     ephemeral: true,
     text: `${linked.value.ign}: ${renderNetworth(nw)}`,
-    embed: renderStatsEmbed(
-      linked.value.ign,
-      summary,
+    embed: renderProfileCardEmbed(linked.value.ign, {
+      profile: summary,
       slayers,
       dungeons,
-      nw,
-      standingRow,
-      record !== null && record.ok ? record.value : null,
-    ),
+      networth: nw,
+      standing: standingRow,
+      record: record !== null && record.ok ? record.value : null,
+      achievements: achievements !== null && achievements.ok ? achievements.value : null,
+      podium: podium !== null && podium.ok ? podium.value : null,
+      positions,
+    }),
   };
 };
 

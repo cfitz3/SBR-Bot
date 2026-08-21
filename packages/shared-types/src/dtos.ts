@@ -394,6 +394,35 @@ export interface MemberEscalationDTO {
   readonly durationSeconds: number | null;
 }
 
+/**
+ * A member's placings in this guild's tracked events, for their own card.
+ *
+ * Only *tracked* events count. An event with no scored metric has no order to
+ * come first in, so counting attendance at one as a podium would quietly turn
+ * "turned up" into "won".
+ */
+export interface EventPodiumDTO {
+  /** Events this member is recorded as having attended, tracked or not. */
+  readonly attended: number;
+  readonly gold: number;
+  readonly silver: number;
+  readonly bronze: number;
+  /** Newest first, capped by the caller. Podium finishes only. */
+  readonly recent: readonly EventPlacingDTO[];
+}
+
+export interface EventPlacingDTO {
+  readonly eventTitle: string;
+  /** The metric that was raced, as the event recorded it. */
+  readonly metric: string;
+  /** 1, 2 or 3. Ties share a place, exactly as a leaderboard does. */
+  readonly place: number;
+  /** How much the member gained. Rendered by the surface, never here. */
+  readonly delta: number;
+  /** When the event ended, ISO-8601. Null for one still running. */
+  readonly at: string | null;
+}
+
 export interface ApplicationDTO {
   readonly id: string;
   readonly guildId: string;
