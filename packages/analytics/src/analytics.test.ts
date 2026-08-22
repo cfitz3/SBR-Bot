@@ -86,3 +86,34 @@ test("rollupDaily breaks bridge relays down by direction", () => {
   assert.equal(rows.find((r) => r.dims.direction === "DISCORD_TO_GAME")?.count, 2);
   assert.equal(rows.find((r) => r.dims.direction === "GAME_TO_DISCORD")?.count, 1);
 });
+
+// ── No Hypixel data in analytics (docs/HYPIXEL_COMPLIANCE.md §6) ─────────────
+
+test("a Hypixel statistic riding along on an event is dropped, not rolled up", () => {
+  // The allow-list is the guard, and this is what it is guarding against: a
+  // well-meaning `props: { networth }` on a command event would turn the
+  // analytics store into a per-player stat history by the back door, and the
+  // CSV export would carry it out of the building.
+  const events: AnalyticsEvent[] = [
+    {
+      type: "command.used",
+      guildId: "g1",
+      surface: "BRIDGE_BOT",
+      ts: "2026-08-06T10:00:00Z",
+      props: {
+        command: "networth",
+        success: true,
+        // None of these are dimension keys for this metric.
+        networth: 8_240_000_000,
+        minecraftUuid: "uuid-aria",
+        catacombsLevel: 45,
+      },
+    },
+  ];
+
+  const row = rollupDaily(events)[0];
+  assert.ok(row);
+  // `command`, `success` and `surface` — the first-party three. Nothing about
+  // the player the command was about.
+  assert.deepEqual(Object.keys(row.dims).sort(), ["command", "success", "surface"]);
+});

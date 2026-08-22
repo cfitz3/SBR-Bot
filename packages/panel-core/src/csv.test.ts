@@ -56,3 +56,17 @@ test("a null latency exports as empty rather than the string 'null'", () => {
   const csv = commandStatsToCsv([{ command: "nw", count: 1, successCount: 1, avgLatencyMs: null }]);
   assert.match(csv, /\r\nnw,1,1,0,\r\n$/);
 });
+
+// ── The exportable column set is pinned (docs/HYPIXEL_COMPLIANCE.md §6) ──────
+
+test("the export carries first-party columns only, and the set is pinned", () => {
+  // Widening either header is the moment to re-read §6: a CSV is the one
+  // surface that carries data out of the platform, and a Hypixel-sourced
+  // column here would be a per-player stat export regardless of what the
+  // feature asking for it was called.
+  const rollups = rollupsToCsv([]).split("\r\n")[0];
+  const stats = commandStatsToCsv([]).split("\r\n")[0];
+
+  assert.equal(rollups, "metric,bucket_start,count,dimensions");
+  assert.equal(stats, "command,uses,successes,failures,avg_latency_ms");
+});

@@ -552,6 +552,29 @@ test("a player's profiles and museum claims are separate from their player claim
   assert.deepEqual([...limiter.seen].sort(), ["p1:museum", "uuid-aria:player", "uuid-aria:profiles"]);
 });
 
+test("a networth costs one profile read and one museum read, however often it is asked for", async () => {
+  // Task 2 of the compliance work, asserted rather than reasoned about: the
+  // pricing layer is keyed by item and never by player, so the only per-player
+  // cost in a networth is the profile behind it. Five members asking five times
+  // is still two upstream reads per member, not fifty.
+  const f = fakeFetcher((url) =>
+    url.includes("/museum")
+      ? res(200, { success: true, members: { "uuid-aria": { items: {} } } })
+      : res(200, {
+          success: true,
+          profiles: [{ profile_id: "p1", cute_name: "Mango", selected: true, members: { "uuid-aria": {} } }],
+        }),
+  );
+  const c = new HypixelClient({ logger: silentLogger, http: f.fetcher, sleep: noopSleep });
+
+  for (let i = 0; i < 5; i += 1) {
+    await c.getSkyblockProfiles("uuid-aria");
+    await c.getMuseum("p1");
+  }
+
+  assert.equal(f.count("hypixel"), 2);
+});
+
 test("an explicit refresh is the only route below the TTL", async () => {
   const cache = new PreloadCache();
   // Fresh by the TTL's reckoning, but PreloadCache stamps everything 2020.
