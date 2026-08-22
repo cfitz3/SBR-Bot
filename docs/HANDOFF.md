@@ -160,7 +160,9 @@ running (see "Not covered" under the bug sweep below).
 
 `/progress` gained a per-day pace line and came back off the retired list: it
 had gone dark with the advice engine, but it never read the auction house the
-advice engine relied on — it charts our own `ProfileSnapshot` rows.
+advice engine relied on — it charts our own `ProfileSnapshot` rows. Those rows
+have since narrowed to the ones members save with `/snapshot`; nothing scheduled
+writes them any more (docs/HYPIXEL_COMPLIANCE.md §1).
 
 `/goal` is new. One target per member per metric (`ProgressionGoal`, unique on
 `(guild, account, metric)`), because a goal is a current intention rather than a
