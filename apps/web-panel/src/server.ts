@@ -769,6 +769,14 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.setBridgeSuspended(session, guildId, b["suspended"]));
       case "moderation.action":
         return sendMutation(res, await m.applyModeration(session, guildId, b));
+      case "moderation.case.update":
+        return sendMutation(res, await m.editCase(session, guildId, b));
+      case "moderation.case.enforcement":
+        return sendMutation(res, await m.setCaseEnforcement(session, guildId, b));
+      case "moderation.case.retry":
+        return sendMutation(res, await m.retryCase(session, guildId, b));
+      case "moderation.case.void":
+        return sendMutation(res, await m.voidCase(session, guildId, b));
       case "application.decide":
         return sendMutation(
           res,

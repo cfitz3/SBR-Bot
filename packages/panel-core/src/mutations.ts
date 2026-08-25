@@ -29,6 +29,7 @@ import type {
   GuildConfigService,
   HypixelResult,
   IdentityService,
+  EnforcementStatus,
   MemberRole,
   MilestoneDefinitionInput,
   MilestoneDefinitionService,
@@ -67,6 +68,7 @@ import {
   RELAY_DISCORD_ACTIONS,
   RELAY_GAME_ACTIONS,
   RELAY_SYNC_SETTING_KEY,
+  rankOf,
   type AutomodActionType,
   type AutomodRule,
   type AutomodTrigger,
@@ -281,6 +283,22 @@ export const MUTATION_TIERS = {
    * outranks the actor — a gate this layer must not try to duplicate.
    */
   "moderation.action": "MODERATOR",
+  /**
+   * Correcting the wording of a case is Staff work; re-timing the punishment it
+   * describes is not, and `editCase` re-checks for Admin before touching a
+   * duration. The floor is the lower of the two because the common edit - a
+   * typo in a reason - should not need waking an admin up.
+   */
+  "moderation.case.update": "MODERATOR",
+  /**
+   * Admin, all three. Setting an enforcement status by hand overrides what the
+   * platform observed, retrying re-punishes somebody, and voiding withdraws a
+   * punishment and un-does it on Discord. None of those is a correction; each
+   * is a decision about whether the punishment stands.
+   */
+  "moderation.case.enforcement": "ADMIN",
+  "moderation.case.retry": "ADMIN",
+  "moderation.case.void": "ADMIN",
   /** Tickets are explicitly Staff work in §3.7, unlike application decisions. */
   "ticket.close": "MODERATOR",
   "ticket.claim": "MODERATOR",
@@ -684,6 +702,20 @@ const SETTING_MAX_CHARS = 64 * 1024;
 
 /** Database ids (cuid/uuid). Shape-checked so a lookup miss means "not found". */
 const ENTITY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The request body, or null when it is not one. */
+function asBody(input: unknown): Record<string, unknown> | null {
+  return typeof input === "object" && input !== null ? (input as Record<string, unknown>) : null;
+}
+
+/**
+ * The enforcement verdicts a person is allowed to write.
+ *
+ * `PENDING` is missing on purpose: it means "the platform is still waiting",
+ * and a human declaring a case pending would put it back into a queue the sweep
+ * would then escalate on a clock that has nothing to do with them.
+ */
+const MANUAL_ENFORCEMENT: readonly EnforcementStatus[] = ["CONFIRMED", "FAILED", "NOT_REQUIRED"];
 
 /** Minecraft uuids, dashed or not, as `unlink` takes them. */
 const MC_UUID = /^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$/;
@@ -2874,6 +2906,139 @@ export class PanelMutations {
     });
   }
 
+  /**
+   * Correct the metadata on a case that has already been issued.
+   *
+   * One field per request, which is why every branch here is independent: the
+   * page writes a reason without re-posting a duration, so a staffer fixing a
+   * typo cannot clobber a duration somebody else changed while their tab sat
+   * open.
+   */
+  async editCase(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "moderation.case.update", async (actorDiscordId, actorRole) => {
+      const body = asBody(input);
+      if (body === null) return invalid("body must be an object");
+      const actionId = body["actionId"];
+      if (typeof actionId !== "string" || !ENTITY_ID.test(actionId)) return invalid("actionId must be a case id");
+
+      const edit: { reason?: string; durationSeconds?: number | null } = {};
+      const change: Record<string, unknown> = { actionId };
+
+      if (body["reason"] !== undefined) {
+        if (typeof body["reason"] !== "string") return invalid("reason must be text");
+        const reason = body["reason"].trim();
+        if (reason.length === 0) return invalid("a reason is required");
+        if (reason.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
+        edit.reason = reason;
+        // Length, never the text. The reason lives on the case; a staff note
+        // about a member does not also belong in a log aggregator.
+        change["reasonLength"] = reason.length;
+      }
+
+      if (body["durationSeconds"] !== undefined) {
+        // Re-checked here rather than raising the whole mutation's floor: this
+        // changes how long somebody is punished for, which is a different kind
+        // of act from fixing the spelling of why.
+        if (rankOf(actorRole) < rankOf("ADMIN")) {
+          return invalid("changing how long a punishment lasts is an admin decision");
+        }
+        const raw = body["durationSeconds"];
+        if (raw === null) {
+          edit.durationSeconds = null;
+        } else if (
+          typeof raw !== "number" ||
+          !Number.isInteger(raw) ||
+          raw <= 0 ||
+          raw > MAX_DURATION_SECONDS
+        ) {
+          return invalid(`durationSeconds must be a whole number of seconds under ${MAX_DURATION_SECONDS}`);
+        } else {
+          edit.durationSeconds = raw;
+        }
+        change["durationSeconds"] = edit.durationSeconds;
+      }
+
+      if (Object.keys(edit).length === 0) return invalid("nothing to change");
+
+      const result = await this.d.moderation.updateAction({
+        guildId,
+        actionId,
+        editorDiscordId: actorDiscordId,
+        ...edit,
+      });
+      return { result, change };
+    });
+  }
+
+  /** "I did this by hand" — the only way a FAILED row ever leaves the queue. */
+  async setCaseEnforcement(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "moderation.case.enforcement", async (actorDiscordId) => {
+      const body = asBody(input);
+      if (body === null) return invalid("body must be an object");
+      const actionId = body["actionId"];
+      if (typeof actionId !== "string" || !ENTITY_ID.test(actionId)) return invalid("actionId must be a case id");
+      const status = body["enforcement"];
+      if (typeof status !== "string" || !MANUAL_ENFORCEMENT.includes(status as EnforcementStatus)) {
+        return invalid(`enforcement must be one of ${MANUAL_ENFORCEMENT.join(", ")}`);
+      }
+      const note = typeof body["note"] === "string" ? body["note"].trim() : "";
+      if (note.length > REASON_MAX) return invalid(`note must be under ${REASON_MAX} characters`);
+
+      const result = await this.d.moderation.setEnforcementManually(
+        guildId,
+        actionId,
+        actorDiscordId,
+        status as EnforcementStatus,
+        note,
+      );
+      return { result, change: { actionId, enforcement: status, noteLength: note.length } };
+    });
+  }
+
+  /** Try the enforcement again, down the same path the first attempt took. */
+  async retryCase(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "moderation.case.retry", async (actorDiscordId) => {
+      const body = asBody(input);
+      if (body === null) return invalid("body must be an object");
+      const actionId = body["actionId"];
+      if (typeof actionId !== "string" || !ENTITY_ID.test(actionId)) return invalid("actionId must be a case id");
+
+      const result = await this.d.moderation.retryEnforcement(guildId, actionId, actorDiscordId);
+      return {
+        result,
+        change: { actionId },
+        note: "Attempted again. The enforcement column is what says whether it took this time.",
+      };
+    });
+  }
+
+  /** Withdraw a case, and undo it on Discord if it is still being enforced. */
+  async voidCase(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "moderation.case.void", async (actorDiscordId) => {
+      const body = asBody(input);
+      if (body === null) return invalid("body must be an object");
+      const actionId = body["actionId"];
+      if (typeof actionId !== "string" || !ENTITY_ID.test(actionId)) return invalid("actionId must be a case id");
+      const reason = typeof body["reason"] === "string" ? body["reason"].trim() : "";
+      // Required. A withdrawn punishment with no stated why is the one thing on
+      // this page that a member reading their own history could not make sense
+      // of, and it is also the one staff will be asked about.
+      if (reason.length === 0) return invalid("a reason is required to void a case");
+      if (reason.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
+
+      const result = await this.d.moderation.voidAction(guildId, actionId, actorDiscordId, reason);
+      return {
+        result,
+        change: { actionId, reasonLength: reason.length },
+        note: "Voided. Any ban or mute it was holding has been lifted.",
+      };
+    });
+  }
+
   // ─────────────────────────── recruitment ───────────────────────────
 
   async decideApplication(
@@ -3318,7 +3483,7 @@ export class PanelMutations {
     session: PanelSession | null,
     guildId: string,
     mutation: MutationName,
-    body: (actorDiscordId: string) => Promise<Step>,
+    body: (actorDiscordId: string, actorRole: MemberRole) => Promise<Step>,
   ): Promise<MutationResult> {
     const startedAt = Date.now();
     // Checked here as well as inside authorizeRole so the actor's id is a plain
@@ -3342,7 +3507,7 @@ export class PanelMutations {
       });
     }
 
-    const step = await body(actorDiscordId);
+    const step = await body(actorDiscordId, access.role);
     if ("error" in step) {
       return this.fail(access, mutation, guildId, actorDiscordId, startedAt, step.error);
     }
