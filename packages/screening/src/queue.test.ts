@@ -247,9 +247,12 @@ test("a free-text argument that could become a second command is refused", async
   assert.deepEqual(sent, []);
 });
 
-test("an omitted kick reason is allowed and sends a bare command", async () => {
+test("an omitted kick reason is refused rather than sent bare", async () => {
+  // Hypixel drops `/guild kick <name>` with no reason. Sending it anyway
+  // reported success to the staffer and left the member in the guild.
   const { queue, sent } = harness();
   const out = await queue.kick("g1", "Jack", "staff-1");
-  assert.equal(out.ok, true);
-  assert.deepEqual(sent, ["/guild kick Jack"]);
+  assert.equal(out.ok, false);
+  if (!out.ok) assert.equal(out.reason, "BAD_REASON");
+  assert.deepEqual(sent, []);
 });
