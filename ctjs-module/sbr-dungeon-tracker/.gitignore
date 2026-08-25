@@ -1,0 +1,4 @@
+logs/
+*.jsonl
+!fixtures/*.jsonl
+config.local.json

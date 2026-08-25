@@ -1,0 +1,8 @@
+{
+  "name": "sbrDungeonTracker",
+  "entry": "index.js",
+  "version": "0.1.0",
+  "description": "Skyblock and Relax - client-side dungeon/session observer. Read-only: reads local chat, scoreboard, action bar and world events, and streams them to the guild's own backend. Makes no Hypixel API calls and automates no gameplay.",
+  "creator": "Skyblock and Relax",
+  "tags": ["skyblock", "dungeons", "guild"]
+}

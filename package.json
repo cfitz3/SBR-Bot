@@ -18,6 +18,7 @@
     "start": "node scripts/start.mjs",
     "dev": "node scripts/start.mjs --watch",
     "doctor": "node scripts/doctor.mjs",
+    "ctjs:dev": "node scripts/ctjs-dev.mjs",
     "embeds": "node scripts/embeds.mjs",
     "skykings:probe": "node scripts/skykings-probe.mjs",
     "start:workers": "node scripts/start.mjs workers",

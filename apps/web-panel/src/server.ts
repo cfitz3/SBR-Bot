@@ -12,6 +12,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createServer as createTlsServer } from "node:https";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import type { Duplex } from "node:stream";
+import type { UpgradeSocket } from "@sbr/client-ingest";
 import { copy, theme } from "@sbr/brand";
 import { panelOrigin } from "@sbr/config";
 import { pingDb } from "@sbr/db";
@@ -334,6 +336,46 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
       const [db, redis] = await Promise.all([pingDb(), pingRedis()]);
       const healthy = db.ok && redis.ok;
       return send(res, healthy ? 200 : 503, { status: healthy ? "ok" : "down", db, redis });
+    }
+
+    /**
+     * The ingest debug buffer: the last N raw events a member's client sent.
+     *
+     * Temporary, and scoped to Phase 1 — its job is to answer "is anything
+     * arriving at all" while the ctjs module is being developed. It reads an
+     * in-memory ring that holds nothing across a restart and writes nowhere.
+     *
+     * Staff-only. These are another person's client events, so the check is the
+     * ADMIN capability rather than a signed-in session, and an unauthorized
+     * caller is told nothing about whether that member exists.
+     */
+    const ingestDebug = /^\/debug\/ingest\/([A-Za-z0-9_-]{1,64})$/.exec(path);
+    if (ingestDebug) {
+      const session = await loadSession(req);
+      if (!session) return send(res, 401, { error: "not_authenticated" });
+      if (!(await app.canReadIngestDebug(session.discordId, session.manageableGuildIds))) {
+        return send(res, 403, { error: "forbidden" });
+      }
+      const limitParam = Number(url.searchParams.get("limit") ?? "50");
+      const limit = Number.isFinite(limitParam) ? Math.min(Math.max(Math.trunc(limitParam), 1), 200) : 50;
+      const recent = app.ingest.recent(ingestDebug[1]!, limit);
+      return send(res, 200, {
+        memberId: ingestDebug[1]!,
+        sessions: app.ingest.sessionCount(),
+        // Null rather than 404: "nothing has arrived from this member" is an
+        // answer, and the commonest one while the module is being set up.
+        buffer: recent,
+      });
+    }
+
+    // Who has sent anything at all. The index for the route above.
+    if (path === "/debug/ingest") {
+      const session = await loadSession(req);
+      if (!session) return send(res, 401, { error: "not_authenticated" });
+      if (!(await app.canReadIngestDebug(session.discordId, session.manageableGuildIds))) {
+        return send(res, 403, { error: "forbidden" });
+      }
+      return send(res, 200, { sessions: app.ingest.sessionCount(), members: app.ingest.members() });
     }
 
     /**
@@ -781,6 +823,23 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     return null;
   }
 
+  /**
+   * The ctjs client telemetry socket, on this server rather than its own.
+   *
+   * `upgrade` fires for requests that ask to stop being HTTP. Anything not
+   * aimed at the ingest path is destroyed rather than left hanging: an
+   * unanswered upgrade holds a socket open until a timeout that does not apply
+   * to it, and there is no other WebSocket route here to be polite to.
+   */
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const request = { method: req.method, url: req.url, headers: req.headers };
+    if (!app.ingest.matches(request)) {
+      socket.destroy();
+      return;
+    }
+    app.ingest.handleUpgrade(request, socket as unknown as UpgradeSocket, head);
+  });
+
   // Bound how long a client may hold a socket without completing a request.
   server.headersTimeout = HEADERS_TIMEOUT_MS;
   server.requestTimeout = REQUEST_TIMEOUT_MS;
@@ -789,6 +848,9 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
 
   return {
     async close() {
+      // Sockets that were upgraded are no longer requests, so `server.close`
+      // will not end them; without this the panel would wait on them forever.
+      app.ingest.shutdown();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
