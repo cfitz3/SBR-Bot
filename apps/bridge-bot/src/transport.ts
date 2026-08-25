@@ -22,6 +22,7 @@ import {
   readLevelOptOuts,
 } from "@sbr/commands-bridge";
 import { EchoLedger } from "@sbr/bridge";
+import type { ModAckOutcome } from "@sbr/redis";
 import {
   ComponentRouter,
   customId,
@@ -856,8 +857,16 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
    * The guild check is not a formality: one Redis instance backs every guild on
    * the platform, and this account has officer permissions in exactly one of
    * them. A command published for someone else's guild must not be typed here.
+   *
+   * `hooks` is how a punishment finds out what became of its `/g kick`. Staff
+   * commands pass nothing: `/guild accept` already reports through its own
+   * button, and the boolean below is the answer it wants.
    */
-  function sendGameCommand(guildId: string, command: string): boolean {
+  function sendGameCommand(
+    guildId: string,
+    command: string,
+    hooks: { onSent?: () => void; onExpired?: () => void } = {},
+  ): boolean {
     // Strict, including when the guild is unresolved: an unregistered bridge
     // already relays nothing, and "we don't know whose guild this is" is not a
     // reason to type a kick. Same posture as the relay's own inactive state.
@@ -865,7 +874,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       app.log.warn("moderation command ignored: not this bridge's guild", { guildId, bridgeGuildId: internalGuildId });
       return false;
     }
-    const accepted = gameCommands.push(command, commandUrgency(command));
+    const accepted = gameCommands.push(command, { ...commandUrgency(command), ...hooks });
     if (!accepted) {
       app.log.warn("moderation command dropped: bridge command backlog full", { guildId, ...gameCommands.stats() });
     }
@@ -907,13 +916,36 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     });
   }
 
-  app.setGameCommandSink((guildId, command) => {
+  app.setGameCommandSink((message) => {
+    const { guildId, command, correlationId } = message;
+    const ack = (outcome: ModAckOutcome, detail: string): void => {
+      void app.ackGameCommand({ guildId, correlationId, outcome, detail });
+    };
     // Resolve first: until the guild id is known every command would be typed
     // unconditionally, which is the one failure mode the check above exists for.
     void resolveInternalGuild()
-      .then(() => sendGameCommand(guildId, command))
+      .then(() => {
+        const accepted = sendGameCommand(guildId, command, {
+          // Typed, not done. The guild's own answer follows on the same
+          // correlation id if Hypixel says anything about it.
+          onSent: () => { ack("TYPED", `typed in guild chat: ${command}`); },
+          onExpired: () => { ack("EXPIRED", "discarded untyped: the session never came back in time"); },
+        });
+        if (!accepted) {
+          // Refused rather than delayed, and the caller has to hear which:
+          // waiting out a timeout would leave a ban PENDING that was never
+          // going to happen at all.
+          ack(
+            internalGuildId !== null && guildId === internalGuildId ? "REFUSED_BACKLOG" : "WRONG_GUILD",
+            internalGuildId !== null && guildId === internalGuildId
+              ? "the bridge's outbound command queue is full"
+              : "this is not the bridge for that guild",
+          );
+        }
+      })
       .catch((error: unknown) => {
         app.log.error("moderation command failed", { guildId, error: String(error) });
+        ack("WRONG_GUILD", `the bridge could not resolve its guild (${String(error)})`);
       });
   });
 

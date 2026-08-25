@@ -14,6 +14,7 @@ import type {
   DiscordEnforcer,
   EnforcementMirror,
   GameCommandBus,
+  GameCommandOutcome,
   IgnResolver,
   RelaySyncSource,
   StaffAlertSink,
@@ -31,7 +32,11 @@ interface EnforcementWrite {
   readonly detail: string | null;
 }
 
-function repo(): { repo: ModerationRepository; created: NewActionRecord[]; enforced: EnforcementWrite[] } {
+function repo(stale: readonly ModerationActionDTO[] = []): {
+  repo: ModerationRepository;
+  created: NewActionRecord[];
+  enforced: EnforcementWrite[];
+} {
   const created: NewActionRecord[] = [];
   const enforced: EnforcementWrite[] = [];
   return {
@@ -49,6 +54,7 @@ function repo(): { repo: ModerationRepository; created: NewActionRecord[]; enfor
       async deactivateExpired() { return 0; },
       async setEnforcement(actionId, status, detail) { enforced.push({ actionId, status, detail }); },
       async listExpiredActive() { return []; },
+      async listStalePending() { return stale; },
       async findAction() { return null; },
     },
   };
@@ -332,10 +338,13 @@ test("escalation does not recurse — the mute it applies is not itself escalate
 // first three.
 // -----------------------------------------------------------------------------
 
-/** A bus that records what it was asked to run, and whether it claims to be live. */
-function bus(live = true): { bus: GameCommandBus; sent: string[] } {
+/** A bus that records what it was asked to run, and what the guild made of it. */
+function bus(outcome: GameCommandOutcome = "CONFIRMED_INGAME"): { bus: GameCommandBus; sent: string[] } {
   const sent: string[] = [];
-  return { sent, bus: { async send(_g, command) { sent.push(command); return live; } } };
+  return {
+    sent,
+    bus: { async send(_g, command) { sent.push(command); return { outcome, detail: `stub: ${outcome}` }; } },
+  };
 }
 
 const linked: IgnResolver = { async ignFor() { return "TargetIGN"; } };
@@ -369,11 +378,11 @@ test("BAN relays a guild kick to guild chat for a linked member", async () => {
 });
 
 test("a ban the bridge cannot run is FAILED, not resolved", async () => {
-  // `send` returning false is the offline bridge: Redis accepted the publish and
-  // nobody was listening. The case must not read as a completed ban.
+  // The offline bridge: Redis accepted the publish and nobody was listening.
+  // The case must not read as a completed ban.
   const r = repo();
   const a = alerts();
-  const b = bus(false);
+  const b = bus("NO_SESSION");
   const result = await build({
     repoImpl: r.repo, gameCommands: b.bus, igns: linked, relaySync: defaultRelay, staffAlerts: a.sink,
   }).applyAction(input("BAN"));
@@ -558,4 +567,71 @@ test("a reversal that cannot be enforced still clears the flag, and is marked FA
   assert.deepEqual(r.enforced.map((w) => w.status), ["FAILED"]);
   assert.equal(r.sweeps(), 1);
   assert.equal(a.posted.length, 1);
+});
+
+test("a guild command Hypixel refused is FAILED and quotes the refusal", async () => {
+  // The failure this whole surface exists for: the bridge typed the line, so
+  // every older signal said success, and Hypixel threw it away.
+  const r = repo();
+  const a = alerts();
+  const b = bus("REFUSED_INGAME");
+  const result = await build({
+    repoImpl: r.repo, gameCommands: b.bus, igns: linked, relaySync: defaultRelay, staffAlerts: a.sink,
+  }).applyAction(input("BAN"));
+
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.value.enforcement, "FAILED");
+  assert.equal(a.posted.length, 1);
+});
+
+test("a guild command nothing answered for stays PENDING rather than claiming either way", async () => {
+  // Neither a success to record nor a failure to wake staff for. The sweep
+  // escalates it if the guild never gets round to answering.
+  const r = repo();
+  const a = alerts();
+  const b = bus("TIMED_OUT");
+  const result = await build({
+    repoImpl: r.repo, gameCommands: b.bus, igns: linked, relaySync: defaultRelay, staffAlerts: a.sink,
+  }).applyAction(input("BAN"));
+
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value.enforcement, "PENDING");
+    assert.match(result.value.enforcementDetail ?? "", /not confirmed in game/);
+  }
+  // Deliberately quiet: a busy outbound queue must not page anybody.
+  assert.deepEqual(a.posted, []);
+});
+
+test("a punishment the guild never answered for is escalated, not left pending", async () => {
+  // The backstop. PENDING is honest for fifteen seconds and a lie after ten
+  // minutes: by then nothing is coming, and a case still reading "pending" is a
+  // ban nobody has been told did not land.
+  const stalled = {
+    id: "act-9", guildId: "g1", type: "BAN", actorDiscordId: "staff-1", targetDiscordId: "target-1",
+    reason: "Ban evasion", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"], active: true,
+    enforcement: "PENDING", enforcementDetail: "sent but not confirmed", createdAt: "t",
+  } as ModerationActionDTO;
+  const r = repo([stalled]);
+  const a = alerts();
+  const out = await build({ repoImpl: r.repo, staffAlerts: a.sink }).settleStalePending();
+
+  assert.equal(out.ok, true);
+  if (out.ok) assert.equal(out.value, 1);
+  assert.deepEqual(r.enforced, [{
+    actionId: "act-9",
+    status: "FAILED",
+    detail: "the guild never confirmed the command; it was still pending when the sweep ran",
+  }]);
+  assert.equal(a.posted.length, 1);
+  assert.match(a.posted[0]!.text, /act-9/);
+});
+
+test("nothing stale means nothing said", async () => {
+  const r = repo();
+  const a = alerts();
+  const out = await build({ repoImpl: r.repo, staffAlerts: a.sink }).settleStalePending();
+  assert.equal(out.ok && out.value, 0);
+  assert.deepEqual(r.enforced, []);
+  assert.deepEqual(a.posted, []);
 });

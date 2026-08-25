@@ -222,6 +222,20 @@ export const moderationRepository = {
     return rows.map(mapAction);
   },
 
+  /**
+   * Rows the guild never answered for. Ordered oldest first so a long backlog
+   * is worked off in the order the punishments were issued rather than the
+   * order they happen to be indexed.
+   */
+  async listStalePending(before: Date, limit: number): Promise<readonly ModerationActionDTO[]> {
+    const rows = await prisma.moderationAction.findMany({
+      where: { enforcement: "PENDING", createdAt: { lte: before } },
+      orderBy: { createdAt: "asc" },
+      take: Math.min(Math.max(limit, 1), 200),
+    });
+    return rows.map(mapAction);
+  },
+
   async findAction(guildId: string, actionId: string): Promise<ModerationActionDTO | null> {
     const row = await prisma.moderationAction.findFirst({ where: { id: actionId, guildId } });
     return row === null ? null : mapAction(row);

@@ -28,6 +28,7 @@ import {
   parseBridgeBusMessage,
   parseJobTriggerMessage,
   parseMemberBusMessage,
+  parseModAckMessage,
   parseModBusMessage,
   startHeartbeat,
   RUNNABLE_JOBS,
@@ -410,6 +411,23 @@ test("a mod-bus payload is validated, not trusted", () => {
   );
   assert.equal(ok?.command, "/g mute Notch 1h");
   assert.equal(ok?.correlationId, "", "a missing correlation id is blank, not a rejection");
+});
+
+test("a mod-ack payload is validated too, because it settles a punishment", () => {
+  const base = { kind: "GAME_COMMAND_ACK", guildId: "g", correlationId: "c", outcome: "TYPED" };
+  assert.equal(parseModAckMessage("not json"), null);
+  assert.equal(parseModAckMessage(JSON.stringify({ ...base, kind: "GAME_COMMAND" })), null);
+  assert.equal(parseModAckMessage(JSON.stringify({ ...base, guildId: "" })), null);
+  // Unlike the instruction, a blank correlation id is useless here: an ack that
+  // answers no particular command would settle whichever one asked first.
+  assert.equal(parseModAckMessage(JSON.stringify({ ...base, correlationId: "" })), null);
+  // An unknown outcome must not be waved through as a confirmation.
+  assert.equal(parseModAckMessage(JSON.stringify({ ...base, outcome: "PROBABLY_FINE" })), null);
+
+  const ok = parseModAckMessage(JSON.stringify({ ...base, outcome: "REFUSED_INGAME", detail: "no such player" }));
+  assert.equal(ok?.outcome, "REFUSED_INGAME");
+  assert.equal(ok?.detail, "no such player");
+  assert.equal(parseModAckMessage(JSON.stringify(base))?.detail, "", "a missing detail is blank");
 });
 
 test("a reminder with an unusable time or title is dropped", () => {
