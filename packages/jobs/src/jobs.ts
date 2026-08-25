@@ -337,17 +337,22 @@ export function defineDiscordMemberSyncJob(sync: () => Promise<number>): JobDefi
 }
 
 /**
- * punishment-expiry: clear the `active` flag on mutes and bans whose duration
- * has run out.
+ * punishment-expiry: lift mutes and bans whose duration has run out, then clear
+ * the `active` flag on them.
  *
- * Enforcement itself needs nothing from this job — a Discord timeout lifts on
- * Discord's clock and the Redis mirror on its TTL. What expires without help is
- * the *record*: the audit tables would otherwise keep listing a member as muted
- * long after the mute stopped, which is what staff read when deciding whether
- * somebody is already being punished. Runs in the workers process rather than
- * the admin bot precisely because it needs no gateway.
+ * The comment that used to sit here said enforcement needed nothing from this
+ * job, because a Discord timeout lifts on Discord's clock and the Redis mirror
+ * on its TTL. That was true of mutes and wrong about everything else. A Discord
+ * **ban** does not expire, and neither does the Hypixel guild mute `/g mute`
+ * asked for. So a 7-day ban became permanent while its row went quietly
+ * inactive, and the platform's record said the punishment had ended.
  *
- * Idempotent, so retries are free. Returns the number of rows cleared.
+ * The job therefore reverses first and un-flags second, which is why it now
+ * runs in the admin bot: an unban needs the Discord gateway, and this is where
+ * the gateway is. Same reasoning, and same lock key, as `safety-expiry`.
+ *
+ * Idempotent, so retries are free — a row already reversed is no longer active
+ * and is not picked up twice. Returns the number of punishments reversed.
  */
 export function definePunishmentExpiryJob(sweep: () => Promise<number>): JobDefinition<number> {
   return {

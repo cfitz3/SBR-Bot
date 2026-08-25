@@ -26,7 +26,6 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `reminder-dispatch` | Scheduled (delayed jobs) | at offsets before events | Mark reminder sent (`reminderState`) | Backoff; skip if already sent | Missed/late reminder pings |
 | `event-transition` | Repeatable + delayed | every 1–5 min / at boundaries | Idempotent state guard (only valid transitions) | Backoff; re-evaluate from truth | Event status lags (SCHEDULED→LIVE→COMPLETED) |
 | `inactivity-scan` | Repeatable (cron) | daily/weekly | Deterministic over snapshot; flag not act | Backoff; recompute | Inactivity report delayed |
-| `punishment-expiry` | Repeatable (cron) | every 5 min (`3-59/5 * * * *`) | `updateMany` over rows already past `expiresAt`; a second pass matches nothing | 3 retries; global lock, 60 s TTL | Ended mutes/bans keep reading as "in force" to staff until the next pass |
 | `event-tracking` | Repeatable (cron) | every 10 min (`8-59/10 * * * *`), per-event interval on top | `EventScore` upsert on `(eventId,uuid,metric)`; baselines written once | 1 retry; global lock, 10 min TTL | Live event leaderboards age; recorded scores are unaffected |
 | `event-board` | Repeatable (cron) | every 30 min (`13,43 * * * *`) | The board is one message, edited in place; `boardFinal` stops a finished card being rewritten | 1 retry; global lock, 5 min TTL | Live boards show older numbers than the database holds; nothing is duplicated |
 | `leaderboard-post` | Repeatable (cron) | weekly, Sun 18:23 (`23 18 * * 0`) | **Not idempotent by design** — a re-run posts a second digest; the cadence and the global lock are the guard | 0 retries; global lock, 5 min TTL | A guild misses one week's digest; nothing reads what it writes |
@@ -281,16 +280,24 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Failure impact:** inactivity report delayed; no state mutated, so safe.
 - **Safety note:** deliberately advisory — automated removal is a staff decision, not a worker's, matching the Admin bot's "fail-safe" stance.
 
-### 2.9b `punishment-expiry`
-- **Trigger / frequency:** cron, every five minutes (`3-59/5 * * * *`), **timely** lane.
-- **Inputs:** `ModerationAction` rows that are `active`, of type `MUTE` or `BAN`, and whose `expiresAt` is in the past.
-- **Outputs:** those rows cleared to `active: false`.
-- **What it does not do:** it does not lift anything. The enforcement itself expires on Discord's own clock (a timeout ends when it ends) and on the Redis mirror's TTL; this job clears the *record*, so that what staff read matches what is actually being enforced. That is also why it lives in workers rather than the Admin bot — unlike `safety-sweep`, it never needs the gateway.
-- **Scope:** only `MUTE` and `BAN`. A `KICK` row stays flagged active forever because nothing lifts one, and clearing it would rewrite history to say somebody did.
-- **Idempotency:** the `WHERE` clause excludes everything it has already written, so a re-run is a no-op.
-- **Retry:** backoff, 3 attempts; a global lock stops two workers sweeping at once.
-- **Failure impact:** the `/audit in_force` list and the panel's "In force now" card over-report for up to one cadence — staff may believe a member is still muted after the mute ended.
-- **Timely, not bulk:** what it clears is what staff read to decide whether somebody is *already* being punished, and five minutes of "still muted" after a mute ended is a wrong answer to a question people act on.
+### 2.9b `punishment-expiry` — moved to the admin bot
+This job no longer runs in the workers process, and is no longer schedulable or
+manually runnable here. It lives on the admin bot's own five-minute loop
+(`apps/admin-bot/src/punishment-sweep.ts`), next to `safety-sweep`.
+
+The reason is the bug it was hiding. The description that used to sit here said
+the job "does not lift anything" because enforcement expires on Discord's own
+clock and on the Redis mirror's TTL. That is true of a **timeout** and false of
+everything else: a Discord *ban* never expires, and neither does the Hypixel
+guild mute we asked for with `/g mute`. So a seven-day ban became a permanent
+one, while this job dutifully cleared the row that said it was still in force —
+removing the only remaining evidence that anybody was owed a reversal.
+
+It now reverses first (a real audited `UNBAN`/`UNMUTE` through the moderation
+service, enforced on Discord and relayed to guild chat) and clears the flag
+second. Reversal needs the gateway, which is why the admin bot is the only place
+it can run — and why it must not *also* run here, where a concurrent sweep would
+clear the flags identifying the rows still owed a reversal.
 
 ### 2.9c `ticket-sweep`
 - **Trigger / frequency:** cron, every six minutes (`5-59/6 * * * *`), **timely** lane.

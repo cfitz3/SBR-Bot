@@ -684,17 +684,11 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     lockKey: keys.lockJob("inactivity"),
   };
 
-  /**
-   * Expired mutes and bans, cleared from the audit tables.
-   *
-   * The clock is read here rather than passed from the schedule so a job that
-   * waited behind a queue backlog sweeps up to when it actually ran, not to
-   * when it was due.
-   */
-  const punishmentExpiry: JobDefinition<number> = {
-    ...definePunishmentExpiryJob(() => moderationRepository.deactivateExpired(null, new Date())),
-    lockKey: keys.lockJob("punishment-expiry"),
-  };
+  // `punishment-expiry` used to live here, clearing the `active` flag and
+  // nothing else. It has moved to the admin bot, because lifting an expired ban
+  // takes a Discord gateway this process does not have — and because a sweep
+  // here would race the one there, clearing the flags that tell the admin bot
+  // which bans are still owed a reversal. See `apps/admin-bot/punishment-sweep`.
 
   /**
    * Quiet tickets: warned once, then closed if nobody comes back.
@@ -957,7 +951,6 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
     guildScan,
     discordMemberSync,
     inactivity,
-    punishmentExpiry,
     ticketSweep,
     eventTracking,
     eventBoard,

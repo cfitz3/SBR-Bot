@@ -4,6 +4,7 @@
  */
 export { ModerationServiceImpl, type ModerationServiceDeps } from "./service.js";
 export { rankOf, isPunitive, needsBotPermission } from "./rank.js";
+export { modLogEmbed, type ModLogSink } from "./mod-log.js";
 export {
   counterRequestsFor,
   evaluateAutomod,
@@ -46,11 +47,11 @@ export {
 } from "./escalation.js";
 export {
   describeState,
-  expiredButFlaggedActive,
   holdsEnforcement,
   inForce,
   isInForce,
   punishmentState,
+  EXPIRY_ACTOR,
   type PunishmentState,
 } from "./expiry.js";
 export {
@@ -94,7 +95,10 @@ export type {
   AutomodPolicySource,
   ModerationRepository,
   RankResolver,
+  DiscordEnforcer,
   EnforcementMirror,
+  EnforcementOutcome,
+  StaffAlertSink,
   EscalationPolicySource,
   GameCommandBus,
   IgnResolver,

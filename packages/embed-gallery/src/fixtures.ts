@@ -669,6 +669,8 @@ export const AUDIT: readonly ModerationActionDTO[] = [
     expiresAt: iso(6 * 3600_000),
     surfaces: ["DISCORD", "GUILD_CHAT"],
     active: true,
+    enforcement: "CONFIRMED",
+    enforcementDetail: null,
     createdAt: iso(-1 * 3600_000),
   },
   {
@@ -683,6 +685,10 @@ export const AUDIT: readonly ModerationActionDTO[] = [
     expiresAt: null,
     surfaces: ["GUILD_CHAT"],
     active: false,
+    // Reconstructed from Hypixel's own guild-chat notice: the platform did not
+    // enforce it and has nothing to confirm.
+    enforcement: "NOT_REQUIRED",
+    enforcementDetail: null,
     createdAt: iso(-5 * 86_400_000),
   },
 ];

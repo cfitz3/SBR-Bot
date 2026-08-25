@@ -26,6 +26,7 @@ const PRIMARY_DIMENSION: Readonly<Record<string, string>> = {
   "command.used": "command",
   "bridge.relay": "direction",
   "mod.action": "type",
+  "mod.action.failed": "type",
   "filter.hit": "rule",
 };
 
@@ -33,6 +34,7 @@ const METRIC_LABELS: Readonly<Record<string, string>> = {
   "command.used": "Command usage",
   "bridge.relay": "Bridge messages",
   "mod.action": "Moderation actions",
+  "mod.action.failed": "Failed enforcement",
   "filter.hit": "Filter hits",
 };
 

@@ -17,7 +17,7 @@ import type {
   WordMatchType,
 } from "@sbr/shared-types";
 import { withCommandCopy } from "@sbr/brand";
-import { isEscalation } from "@sbr/moderation";
+import { isEscalation, modLogEmbed } from "@sbr/moderation";
 import type {
   AdminCommandSpec,
   AdminContext,
@@ -34,6 +34,7 @@ import {
   renderApplicationListEmbed,
   renderAuditPages,
   renderEffectError,
+  renderEnforcement,
   renderFilterTestEmbed,
   renderInfractionPages,
   renderJoinAction,
@@ -81,7 +82,10 @@ const warn: AdminHandler = async (ctx, deps) => {
   const note = escalated
     ? ` Escalated automatically: ${escalated.type.toLowerCase()}${escalated.expiresAt ? ` until ${escalated.expiresAt}` : " (permanent)"}.`
     : "";
-  return { ephemeral: false, text: `Warned <@${target}>. (case ${result.value.id})${note}` };
+  return {
+    ephemeral: false,
+    text: `Warned <@${target}>. (case ${result.value.id})${note}${renderEnforcement(result.value)}`,
+  };
 };
 
 const mute: AdminHandler = async (ctx, deps) => {
@@ -98,7 +102,9 @@ const mute: AdminHandler = async (ctx, deps) => {
   if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
   return {
     ephemeral: false,
-    text: `Muted <@${target}> across ${result.value.surfaces.join(" + ")} until ${result.value.expiresAt}.`,
+    text:
+      `Muted <@${target}> across ${result.value.surfaces.join(" + ")} until ${result.value.expiresAt}. ` +
+      `(case ${result.value.id})${renderEnforcement(result.value)}`,
   };
 };
 
@@ -114,13 +120,65 @@ const ban: AdminHandler = async (ctx, deps) => {
     durationSeconds: parseDurationSeconds(ctx.args.getString("duration")) ?? null,
   });
   if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
-  return { ephemeral: false, text: `Banned <@${target}>. (case ${result.value.id})` };
+  return {
+    ephemeral: false,
+    text: `Banned <@${target}>. (case ${result.value.id})${renderEnforcement(result.value)}`,
+  };
+};
+
+/**
+ * `/unmute` and `/unban` — the other half of `/mute` and `/ban`, which the bot
+ * simply did not have.
+ *
+ * Lifting a punishment was panel-only: a staffer who muted somebody from Discord
+ * could not un-mute them from Discord, and a ban was irreversible without a
+ * server admin doing it by hand outside the platform. Both go through
+ * `applyAction` like everything else, so the reversal is audited, mirrored,
+ * relayed to guild chat as `/g unmute`, and confirmed on both surfaces.
+ */
+const unmute: AdminHandler = async (ctx, deps) => {
+  const target = ctx.args.getUser("target");
+  if (!target) return { ephemeral: true, text: "Usage: /unmute target:<user> [reason:<text>]" };
+  const result = await deps.moderation.applyAction({
+    guildId: ctx.guildId,
+    type: "UNMUTE",
+    actorDiscordId: ctx.actorId,
+    targetDiscordId: target,
+    reason: ctx.args.getString("reason") ?? NO_REASON,
+  });
+  if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
+  return {
+    ephemeral: false,
+    text: `Unmuted <@${target}>. (case ${result.value.id})${renderEnforcement(result.value)}`,
+  };
+};
+
+const unban: AdminHandler = async (ctx, deps) => {
+  const target = ctx.args.getUser("target");
+  if (!target) return { ephemeral: true, text: "Usage: /unban target:<user> [reason:<text>]" };
+  const result = await deps.moderation.applyAction({
+    guildId: ctx.guildId,
+    type: "UNBAN",
+    actorDiscordId: ctx.actorId,
+    targetDiscordId: target,
+    reason: ctx.args.getString("reason") ?? NO_REASON,
+  });
+  if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
+  return {
+    ephemeral: false,
+    text: `Unbanned <@${target}>. (case ${result.value.id})${renderEnforcement(result.value)}`,
+  };
 };
 
 /**
  * `/kick`. The audit entry is written first: a kick that Discord accepted but we
  * never logged is the worse of the two failures, since the member is gone either
  * way and only the record can explain why.
+ *
+ * The Discord call itself used to sit here, in the handler, which made `/kick`
+ * the only punishment that actually reached Discord — and made it the only one
+ * whose enforcement the automod path could not share. It now goes through the
+ * service like the rest, so manual and automatic kicks take exactly one route.
  */
 const kick: AdminHandler = async (ctx, deps) => {
   const target = ctx.args.getUser("target");
@@ -136,14 +194,10 @@ const kick: AdminHandler = async (ctx, deps) => {
   });
   if (!recorded.ok) return { ephemeral: true, text: renderModError(recorded.error) };
 
-  const effect = await deps.effects.kick(ctx.guildId, target, reason);
-  if (!effect.ok) {
-    return {
-      ephemeral: true,
-      text: `Logged as case ${recorded.value.id}, but the kick didn't go through — ${renderEffectError(effect.error)}`,
-    };
-  }
-  return { ephemeral: false, text: `Kicked <@${target}>. (case ${recorded.value.id})` };
+  return {
+    ephemeral: recorded.value.enforcement === "FAILED",
+    text: `Kicked <@${target}>. (case ${recorded.value.id})${renderEnforcement(recorded.value)}`,
+  };
 };
 
 /** `/purge`. Bounded at 100 by Discord's bulk-delete API; the spec caps it there too. */
@@ -244,6 +298,36 @@ const audit: AdminHandler = async (ctx, deps) => {
     ephemeral: true,
     text: inForceOnly ? `${count} still in force.` : `${count}.`,
     ...paged(renderAuditPages(rows, { truncated })),
+  };
+};
+
+/**
+ * `/case <id>` — one action, by the id every reply already quotes.
+ *
+ * The ids have been handed out since the first punishment landed — "(case
+ * act-1f3b)" in the confirmation, in the mod-log card, in whatever appeal the
+ * member opens afterwards — and until now there was nothing that took one back.
+ * Staff paged `/audit` until the row turned up, which stops working at exactly
+ * the point the log gets long enough to need searching.
+ *
+ * Rendered through `modLogEmbed`, the same renderer the log channel uses, so a
+ * case looked up months later reads identically to the card posted when it
+ * happened — including whether enforcement actually took.
+ */
+const caseLookup: AdminHandler = async (ctx, deps) => {
+  const id = ctx.args.getString("id")?.trim();
+  if (!id) return { ephemeral: true, text: "Usage: /case id:<case id>" };
+  const result = await deps.moderation.findAction(ctx.guildId, id);
+  if (!result.ok) return { ephemeral: true, text: "Couldn't load that case." };
+  if (result.value === null) {
+    // Deliberately not "no such case": the lookup is guild-scoped, so a real id
+    // from another server lands here too, and staff should not learn which.
+    return { ephemeral: true, text: `No case \`${id}\` in this server.` };
+  }
+  return {
+    ephemeral: true,
+    text: `Case ${result.value.id}:`,
+    embed: modLogEmbed(result.value),
   };
 };
 
@@ -934,6 +1018,16 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       handler: mute,
     },
     {
+      name: "unmute",
+      description: "Lift a mute early, on Discord and in guild chat",
+      options: [
+        { name: "target", description: "Member", type: "user", required: true },
+        { name: "reason", description: "Reason", type: "string" },
+      ],
+      minRole: "MODERATOR",
+      handler: unmute,
+    },
+    {
       name: "ban",
       description: "Ban a member",
       options: [
@@ -945,6 +1039,16 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       minRole: "OFFICER",
       destructive: true,
       handler: ban,
+    },
+    {
+      name: "unban",
+      description: "Lift a ban",
+      options: [
+        { name: "target", description: "Member (user ID — they aren't here to pick)", type: "user", required: true },
+        { name: "reason", description: "Reason", type: "string" },
+      ],
+      minRole: "OFFICER",
+      handler: unban,
     },
     {
       name: "kick",
@@ -1004,6 +1108,15 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       ],
       minRole: "MODERATOR",
       handler: audit,
+    },
+    {
+      name: "case",
+      description: "Look up one moderation case by its id",
+      options: [
+        { name: "id", description: "The case id, e.g. act-1f3b", type: "string", required: true },
+      ],
+      minRole: "MODERATOR",
+      handler: caseLookup,
     },
     {
       name: "lockdown",

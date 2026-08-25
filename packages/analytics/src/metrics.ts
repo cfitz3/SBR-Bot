@@ -26,6 +26,7 @@ export interface DomainMetricsOptions {
 
 export interface DomainMetrics {
   actionApplied(guildId: string, type: string): void;
+  actionFailed(guildId: string, type: string): void;
   filterHit(guildId: string, ruleId: string, action: string): void;
   relayed(guildId: string, direction: string): void;
 }
@@ -45,6 +46,9 @@ export function createDomainMetrics(opts: DomainMetricsOptions): DomainMetrics {
   return {
     actionApplied(guildId, type) {
       send("mod.action", guildId, { type });
+    },
+    actionFailed(guildId, type) {
+      send("mod.action.failed", guildId, { type });
     },
     filterHit(guildId, ruleId, action) {
       send("filter.hit", guildId, { rule: ruleId, action });

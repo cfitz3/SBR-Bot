@@ -32,6 +32,21 @@ export function relativeTs(iso: string): string {
   return Number.isNaN(ms) ? iso : `<t:${Math.floor(ms / 1000)}:R>`;
 }
 
+/**
+ * What to append to a punishment's confirmation, given how enforcement went.
+ *
+ * Empty when it worked, because a staffer who typed `/ban` does not need to be
+ * told the ban banned. Loud when it did not: the case is on the books, the
+ * member is not, and the person who typed the command is the one standing there
+ * able to do something about it. Silence here is exactly the bug this whole
+ * change is about — the old reply said "Banned" whether or not anybody was.
+ */
+export function renderEnforcement(action: ModerationActionDTO): string {
+  if (action.enforcement !== "FAILED") return "";
+  const detail = action.enforcementDetail ?? "no reason recorded";
+  return `\n\n⚠️ **It did not take effect.** ${detail}\nThe case is logged as \`enforcement_failed\` — this needs doing by hand.`;
+}
+
 export function renderEffectError(error: GuildEffectError): string {
   switch (error.kind) {
     case "MISSING_PERMISSION":

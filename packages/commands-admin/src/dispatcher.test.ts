@@ -47,6 +47,8 @@ function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
     actorDiscordId: "actor",
     targetDiscordId: "target",
     reason: "x",
+    enforcement: "CONFIRMED",
+    enforcementDetail: null,
     durationSeconds: null,
     expiresAt: null,
     surfaces: ["DISCORD"],
@@ -65,6 +67,7 @@ function moderation(over: Partial<ModerationService> = {}): ModerationService {
     async listActions() { return ok([]); },
     async listInForce() { return ok([]); },
     async sweepExpired() { return ok(0); },
+    async findAction() { return ok(null); },
     ...over,
   };
 }
@@ -162,6 +165,10 @@ function wordlist(over: Partial<WordlistService> = {}): WordlistService {
 function effects(over: Partial<GuildEffects> = {}): GuildEffects {
   return {
     async kick() { return ok(undefined); },
+    async ban() { return ok(undefined); },
+    async unban() { return ok(undefined); },
+    async timeout() { return ok(undefined); },
+    async untimeout() { return ok(undefined); },
     async purge() { return ok(0); },
     async setLocked() { return ok(0); },
     ...over,
@@ -310,16 +317,31 @@ test("every registered command carries a description Discord will accept", () =>
   }
 });
 
-test("kick logs the case even when Discord refuses the removal", async () => {
+test("kick reports an enforcement the service could not carry out", async () => {
+  // The Discord call moved into the service, so what the handler owes the
+  // staffer is no longer "did my effect call work" but "does the case the
+  // service handed back say it took effect". A reply that reads "Kicked" over a
+  // case marked enforcement_failed is the exact lie this whole change removes.
   let logged = false;
-  const mod = moderation({ async applyAction() { logged = true; return ok(action({ type: "KICK" })); } });
-  const r = await make({
-    moderation: mod,
-    effects: effects({ async kick() { return err<GuildEffectError>({ kind: "MISSING_PERMISSION" }); } }),
-  }).dispatch("kick", ctx({ args: recordArgs({ target: TARGET, confirm: "true" }) }));
+  const mod = moderation({
+    async applyAction() {
+      logged = true;
+      return ok(action({
+        type: "KICK",
+        enforcement: "FAILED",
+        enforcementDetail: "Discord: I don't have the Discord permission that needs.",
+      }));
+    },
+  });
+  const r = await make({ moderation: mod }).dispatch(
+    "kick",
+    ctx({ args: recordArgs({ target: TARGET, confirm: "true" }) }),
+  );
 
   assert.equal(logged, true, "the audit entry must survive a failed kick");
-  assert.match(r.text, /didn't go through/);
+  assert.match(r.text, /did not take effect/);
+  assert.match(r.text, /enforcement_failed/);
+  assert.equal(r.ephemeral, true, "a failure is for the staffer, not the channel");
 });
 
 test("purge refuses a count outside Discord's bulk-delete range", async () => {
@@ -587,6 +609,37 @@ test("an expired mute reads as expired, not as one a staffer lifted", async () =
   const names = (r.pages?.[0]?.fields ?? []).map((f) => f.name);
   assert.match(names[0] ?? "", /\(expired\)/);
   assert.match(names[1] ?? "", /\(lifted\)/);
+});
+
+test("/case renders the one row the id names", async () => {
+  let seen: readonly [string, string] | null = null;
+  const mod = moderation({
+    async findAction(g, id) {
+      seen = [g, id];
+      return ok(action({ id: "act-1f3b", type: "BAN" }));
+    },
+  });
+  const r = await make({ moderation: mod }).dispatch(
+    "case",
+    ctx({ args: recordArgs({ id: " act-1f3b " }) }),
+  );
+  // Guild-scoped, and the surrounding whitespace of a pasted id is not part of it.
+  assert.deepEqual(seen as unknown as string[], ["g1", "act-1f3b"]);
+  assert.match(r.embed?.footer ?? "", /act-1f3b/);
+});
+
+test("/case on an unknown id says nothing about other guilds", async () => {
+  const r = await make().dispatch("case", ctx({ args: recordArgs({ id: "nope" }) }));
+  assert.match(r.text, /No case/);
+  assert.equal(r.embed, undefined);
+});
+
+test("/case is not a member command", async () => {
+  const r = await make({ roles: roles({ actor: "MEMBER" }) }).dispatch(
+    "case",
+    ctx({ args: recordArgs({ id: "x" }) }),
+  );
+  assert.match(r.text, /requires MODERATOR/);
 });
 
 test("infractions reports the count", async () => {

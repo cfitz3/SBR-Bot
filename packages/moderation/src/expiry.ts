@@ -15,6 +15,18 @@
  */
 import type { ModActionType, ModerationActionDTO } from "@sbr/shared-types";
 
+/**
+ * The actor a reversal is attributed to when the clock, rather than a person,
+ * ended a punishment.
+ *
+ * A real staffer's snowflake would be a lie — nobody chose this — and the
+ * platform's own bot id is not available in every process that sweeps. Like
+ * `AUTOMOD_ACTOR`, this is a system actor, exempt from the rank hierarchy for
+ * the same reason: there is no rank question to answer when the guild's own
+ * clock is doing the acting.
+ */
+export const EXPIRY_ACTOR = "expiry";
+
 export type PunishmentState =
   /** Still being enforced right now. */
   | "ACTIVE"
@@ -63,16 +75,11 @@ export function inForce<T extends Pick<ModerationActionDTO, "type" | "active" | 
   return actions.filter((a) => isInForce(a, now));
 }
 
-/**
- * The rows a sweep should clear: flagged active, but their clock has run out.
- * Returned rather than mutated so the caller decides what a write costs.
- */
-export function expiredButFlaggedActive<T extends Pick<ModerationActionDTO, "type" | "active" | "expiresAt">>(
-  actions: readonly T[],
-  now: Date = new Date(),
-): readonly T[] {
-  return actions.filter((a) => a.active && punishmentState(a, now) === "EXPIRED");
-}
+// `expiredButFlaggedActive` used to sit here: an in-memory filter for "flagged
+// active, but the clock has run out". It never had a caller. The sweep asks the
+// database that question directly (`listExpiredActive`), because loading every
+// action row into a worker to filter it in JavaScript is not a thing this
+// platform should offer a way to do.
 
 /** Display word for the state, for embeds and the panel. */
 export function describeState(state: PunishmentState): string {

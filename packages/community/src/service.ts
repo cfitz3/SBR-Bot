@@ -125,6 +125,13 @@ export class CommunityServiceImpl implements CommunityService {
     const updated = await this.repo.setMemberRole(guildId, discordId, role);
     if (!updated) return err(new Error("that member isn't on this server's roster"));
     this.log.info("member role changed", { guildId, discordId, role });
+    // A rank change is the single most visible input to the auto-role rules —
+    // the promotion the member is waiting to see land. Linking and unlinking
+    // both mark the member dirty; this did not, so a promotion sat until the
+    // daily full sweep noticed it, up to a day later, and staff re-ran it by
+    // hand in the meantime. Best effort, exactly like the other two: the rank
+    // is already saved, and the sweep is the backstop if the mark is lost.
+    await this.rolesDirty?.mark(guildId, [discordId]).catch(() => undefined);
     return ok(updated);
   }
 

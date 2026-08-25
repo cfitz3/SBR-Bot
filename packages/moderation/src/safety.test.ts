@@ -29,6 +29,10 @@ function effects(over: Partial<GuildEffects> = {}): GuildEffects & { locked: boo
   return {
     locked,
     async kick() { return ok(undefined); },
+    async ban() { return ok(undefined); },
+    async unban() { return ok(undefined); },
+    async timeout() { return ok(undefined); },
+    async untimeout() { return ok(undefined); },
     async purge() { return ok(0); },
     async setLocked(_g, _c, on) { locked.push(on); return ok(1); },
     ...over,

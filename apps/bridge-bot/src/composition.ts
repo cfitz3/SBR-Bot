@@ -59,6 +59,7 @@ import {
   memberRecordSource,
   ModerationServiceImpl,
   RELAY_SYNC_SETTING_KEY,
+  type ModLogSink,
 } from "@sbr/moderation";
 import {
   ItemCatalog,
@@ -96,10 +97,12 @@ import {
   type PlayerLookup,
   type ProgressMetric,
   type TextScreen,
+  type EmbedView,
 } from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
+import { createBridgeEnforcer } from "./enforcement-effector.js";
 import type { TicketGateway } from "./tickets.js";
 import type { RoleMenuGateway } from "./role-menus.js";
 import type { StickyKeeper } from "./sticky.js";
@@ -287,6 +290,16 @@ export interface BridgeApp {
    * about to be stale, and there is nothing to queue it into.
    */
   setEventReminderSink(sink: ((message: EventReminderMessage) => void) | null): void;
+  /**
+   * Where moderation-log cards go, once the client exists.
+   *
+   * Late-bound like every other poster here. This process is the one that runs
+   * automod, so it is the one that issues the punishments nobody typed - and
+   * those are precisely the moderation events staff have no other way to see
+   * happen. An unset poster drops the card with a log line rather than failing
+   * the punishment.
+   */
+  setModLogPoster(post: ((channelId: string, embed: EmbedView) => Promise<boolean>) | null): void;
   /**
    * Record a moderation action that happened in-game, as parsed from Hypixel's
    * own guild-chat notices.
@@ -609,16 +622,61 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // escalation, the audit trail and the in-game relay sync, and a member would
   // have two histories depending on who muted them. Built here rather than
   // passed in because bridge-bot is the only process that sees guild chat.
+  // Declared ahead of the moderation service because that service now asks
+  // whether a guild command can actually be delivered before reporting a
+  // punishment enforced. The sink is attached when the Minecraft session
+  // spawns; until then a `/g kick` has nowhere to go, and saying so is the
+  // whole point.
+  let gameCommandSink: ((guildId: string, command: string) => void) | null = null;
+  let modLogPost: ((channelId: string, embed: EmbedView) => Promise<boolean>) | null = null;
+
+  /**
+   * The guild's moderation log, same contract as the admin bot's.
+   *
+   * Both processes write to it deliberately: a member is warned by a staffer on
+   * one bot and muted by automod on the other, and a log that held only half of
+   * that would be worse than none - it would look complete.
+   */
+  const modLog: ModLogSink = {
+    async post(guildId, embed) {
+      if (modLogPost === null) return;
+      const row = await guildConfigRepository.get(guildId).catch(() => null);
+      for (const slot of ["modlog", "staff"] as const) {
+        const channelId = row?.channels[slot] ?? null;
+        if (channelId !== null && (await modLogPost(channelId, embed))) return;
+      }
+    },
+  };
+
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
     enforcement: adapters.enforcement,
+    // The Discord half, over the loopback hop to the admin bot.
+    //
+    // Without this, every automod punishment issued here was a Redis mirror
+    // entry and nothing else: the member kept talking in Discord, because the
+    // mirror is a cache the relay reads and not a call that silences anybody.
+    // The admin bot owns privileged writes to the member server, so this asks
+    // it, the same way a role press and a ticket close do.
+    modLog,
+    discord: createBridgeEnforcer({
+      baseUrl: config.internalApi.baseUrl,
+      token: config.internalApi.token,
+      logger: log,
+    }),
     botCaps: { async canPerform() { return true; } },
     metrics,
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
     gameCommands: {
-      send: (guildId, command) =>
-        adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() }),
+      async send(guildId, command) {
+        if (gameCommandSink === null) {
+          log.warn("guild command not sent: no Minecraft session", { guildId });
+          return false;
+        }
+        await adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() });
+        return true;
+      },
     },
     igns: {
       async ignFor(_guildId, discordId) {
@@ -693,7 +751,6 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     log.debug("guild config invalidated by broadcast", { guildId });
   });
 
-  let gameCommandSink: ((guildId: string, command: string) => void) | null = null;
   const unsubscribeMod = await adapters.modBus.subscribe((message) => {
     if (gameCommandSink === null) {
       log.warn("moderation command dropped: bridge not connected", { guildId: message.guildId });
@@ -822,6 +879,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setEventReminderSink(sink) {
       eventReminderSink = sink;
+    },
+    setModLogPoster(post) {
+      modLogPost = post;
     },
     async recordInGameAction(guildId, notice) {
       // Best-effort on both ends: the target may not be linked, and the actor is

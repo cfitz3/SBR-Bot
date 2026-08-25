@@ -8,8 +8,10 @@ import {
   err,
   ok,
   type ApplyActionInput,
+  type EnforcementStatus,
   type AuditQuery,
   type InfractionDTO,
+  type ModActionType,
   type ModerationActionDTO,
   type ModerationError,
   type ModerationService,
@@ -25,25 +27,58 @@ import {
   rungFor,
   type EscalationRung,
 } from "./escalation.js";
-import { inForce } from "./expiry.js";
+import { EXPIRY_ACTOR, inForce } from "./expiry.js";
+import { modLogEmbed, type ModLogSink } from "./mod-log.js";
 import { isPunitive, needsBotPermission, rankOf } from "./rank.js";
 import { parseRelaySync, resolveGameCommand } from "./relay-sync.js";
 import type {
   BotCapabilities,
+  DiscordEnforcer,
   EnforcementMirror,
+  EnforcementOutcome,
   EscalationPolicySource,
   GameCommandBus,
   IgnResolver,
   ModerationRepository,
   RankResolver,
   RelaySyncSource,
+  StaffAlertSink,
 } from "./ports.js";
+import { AUTOMOD_ACTOR } from "./automod-runner.js";
 
 export interface ModerationServiceDeps {
   readonly repo: ModerationRepository;
   readonly ranks: RankResolver;
   readonly enforcement: EnforcementMirror;
+  /**
+   * The half of a punishment that removes a person from Discord.
+   *
+   * Optional only so a process with no gateway can be composed at all; omitting
+   * it does **not** mean "enforce nothing quietly". Every action that needs
+   * Discord is then recorded `FAILED` and alerted on, because a deployment that
+   * writes ban rows and bans nobody is the bug this whole port exists to close.
+   */
+  readonly discord?: DiscordEnforcer;
+  /** Where an enforcement failure is announced. Omit and it is only logged. */
+  readonly staffAlerts?: StaffAlertSink;
+  /**
+   * Where the guild's moderation log is kept. Optional: a process with no
+   * gateway cannot post, and a missing log is not a reason to refuse a
+   * punishment.
+   */
+  readonly modLog?: ModLogSink;
   readonly botCaps: BotCapabilities;
+  /**
+   * Actor ids that stand outside the rank ladder — automod, and anything else
+   * the platform issues on its own behalf.
+   *
+   * Without this, automod was refused every single punishment it tried to
+   * issue: its actor id is the sentinel `"automod"`, no `GuildMember` row
+   * carries that id, `RankResolver` answered null, and null actor means "no
+   * standing to act". The exemptions inside the automod policy are what keep
+   * staff safe from it, not the rank guard it could never pass.
+   */
+  readonly systemActorIds?: readonly string[];
   /**
    * Omit to turn auto-escalation off entirely. A deployment that has not wired
    * a policy source gets warnings that are only warnings, which is the safe
@@ -70,6 +105,10 @@ export class ModerationServiceImpl implements ModerationService {
   private readonly repo: ModerationRepository;
   private readonly ranks: RankResolver;
   private readonly enforcement: EnforcementMirror;
+  private readonly discord: DiscordEnforcer | null;
+  private readonly staffAlerts: StaffAlertSink | null;
+  private readonly modLog: ModLogSink | null;
+  private readonly systemActorIds: ReadonlySet<string>;
   private readonly botCaps: BotCapabilities;
   private readonly escalationSource: EscalationPolicySource | null;
   private readonly gameCommands: GameCommandBus | null;
@@ -83,6 +122,10 @@ export class ModerationServiceImpl implements ModerationService {
     this.repo = deps.repo;
     this.ranks = deps.ranks;
     this.enforcement = deps.enforcement;
+    this.discord = deps.discord ?? null;
+    this.staffAlerts = deps.staffAlerts ?? null;
+    this.modLog = deps.modLog ?? null;
+    this.systemActorIds = new Set(deps.systemActorIds ?? [AUTOMOD_ACTOR, EXPIRY_ACTOR]);
     this.botCaps = deps.botCaps;
     this.escalationSource = deps.escalation ?? null;
     this.gameCommands = deps.gameCommands ?? null;
@@ -112,6 +155,18 @@ export class ModerationServiceImpl implements ModerationService {
   }
 
   /**
+   * One case, by the id every reply and every mod-log card already quotes.
+   *
+   * The ids were being handed out long before anything could look one up:
+   * "(case act-1f3b)" appeared in the confirmation, in the log channel and in
+   * appeals, and the only way to find it again was to page `/audit` until it
+   * turned up. Guild-scoped in the port, not here, so no caller can forget.
+   */
+  async findAction(guildId: string, actionId: string): Promise<Result<ModerationActionDTO | null>> {
+    return ok(await this.repo.findAction(guildId, actionId.trim()));
+  }
+
+  /**
    * Filtered twice on purpose: the store narrows to flagged-active rows that
    * have not passed their expiry, and `inForce` re-checks against this
    * process's clock. The second pass costs nothing and covers the seconds
@@ -137,6 +192,59 @@ export class ModerationServiceImpl implements ModerationService {
     return ok(cleared);
   }
 
+  /**
+   * Lift punishments whose clock has run out — on Discord and in guild chat,
+   * not merely in the database.
+   *
+   * `sweepExpired` clears the `active` column and stops there, which is correct
+   * bookkeeping and was, until now, the *only* thing that happened when a temp
+   * ban expired. Discord bans do not expire; neither does a Hypixel guild mute
+   * we asked for in `/g mute`. So a 7-day ban became a permanent one with a row
+   * claiming otherwise, and the only person who could tell was the member still
+   * locked out on day eight.
+   *
+   * Each reversal is a real UNMUTE/UNBAN action: audited, attributed to
+   * `EXPIRY_ACTOR`, enforced on both surfaces and marked FAILED with a staff
+   * alert if either refuses. Reversals are attempted one at a time rather than
+   * in parallel — this is a handful of rows an hour, and a burst of ban-removal
+   * calls is a good way to meet Discord's rate limiter.
+   *
+   * Returns how many were reversed. Rows that could not be reversed still have
+   * their flag cleared by the final sweep: the punishment *has* expired, and
+   * leaving it flagged active would make the audit log wrong in the other
+   * direction. The failed enforcement is what carries the alarm.
+   */
+  async reverseExpired(now: Date = this.now(), limit = 50): Promise<Result<number>> {
+    const due = await this.repo.listExpiredActive(null, now, limit);
+
+    let reversed = 0;
+    for (const action of due) {
+      if (action.targetDiscordId === null) continue;
+      const type = action.type === "BAN" ? "UNBAN" : "UNMUTE";
+      const result = await this.applyAction({
+        guildId: action.guildId,
+        type,
+        actorDiscordId: EXPIRY_ACTOR,
+        targetDiscordId: action.targetDiscordId,
+        reason: `Automatic: ${action.type.toLowerCase()} from case ${action.id} expired`,
+      });
+      if (result.ok) reversed += 1;
+      else {
+        this.log.error("an expired punishment could not be reversed", {
+          guildId: action.guildId,
+          actionId: action.id,
+          reason: result.error.kind,
+        });
+      }
+    }
+
+    const cleared = await this.repo.deactivateExpired(null, now);
+    if (reversed > 0 || cleared > 0) {
+      this.log.info("expired punishments swept", { reversed, cleared });
+    }
+    return ok(reversed);
+  }
+
   async applyAction(input: ApplyActionInput): Promise<Result<ModerationActionDTO, ModerationError>> {
     const punitive = isPunitive(input.type);
 
@@ -146,7 +254,15 @@ export class ModerationServiceImpl implements ModerationService {
     }
 
     // Guard: rank hierarchy — can't action an equal-or-higher rank.
-    if (punitive && input.targetDiscordId !== null) {
+    //
+    // System actors are exempt, and have to be. Automod acts as the literal id
+    // `automod`, which has no `GuildMember` row, so `getRole` returned null, so
+    // "an actor with no membership has no standing" refused *every* automod
+    // warn and mute — a whole enforcement path dead on arrival, and invisible
+    // because the service test's rank fake defaulted unknown ids to MEMBER
+    // instead of null. There is no hierarchy question to answer here anyway:
+    // automod is not a member competing for rank, it is the guild's own rule.
+    if (punitive && input.targetDiscordId !== null && !this.systemActorIds.has(input.actorDiscordId)) {
       const [actorRole, targetRole] = await Promise.all([
         this.ranks.getRole(input.guildId, input.actorDiscordId),
         this.ranks.getRole(input.guildId, input.targetDiscordId),
@@ -175,7 +291,11 @@ export class ModerationServiceImpl implements ModerationService {
       duration && duration > 0 ? new Date(this.now().getTime() + duration * 1000).toISOString() : null;
     const surfaces = surfacesFor(input.type);
 
-    const action = await this.repo.createAction({
+    // The row is written *before* anything is attempted, and written as
+    // PENDING. An enforcement that throws, times out or takes the process down
+    // with it then leaves evidence behind; a row written only after success
+    // would leave none, which is the shape the original bug had.
+    const written = await this.repo.createAction({
       guildId: input.guildId,
       infractionId: input.infractionId ?? null,
       type: input.type,
@@ -189,80 +309,245 @@ export class ModerationServiceImpl implements ModerationService {
       active: isActiveState(input.type),
     });
 
-    // Counted here rather than at `createAction`, so the count means "a
-    // punishment took effect" and not "a row was written" — the two differ
-    // whenever enforcement is the thing that failed.
-    this.metrics?.actionApplied(action.guildId, action.type);
+    const action = await this.enforce(written);
 
-    await this.enforcement.apply(action);
-    await this.relayToGame(action);
     // Escalation runs after the warning is recorded, never before: the count it
     // reads must include the warning that prompted it, and a warning that
     // failed to store is not one anybody should be punished for.
     if (action.type === "WARN") await this.escalate(action);
-    this.log.info("moderation action applied", {
-      guildId: action.guildId,
-      type: action.type,
-      actor: action.actorDiscordId,
-      target: action.targetDiscordId,
-      surfaces: action.surfaces,
-      expiresAt: action.expiresAt,
-    });
     return ok(action);
+  }
+
+  /**
+   * Carry a recorded action out on both surfaces and say what happened.
+   *
+   * The ordering is the point of this method. Mirror first, because the mirror
+   * is what the bridge and the dispatchers read and it must hold even if
+   * Discord refuses — a failed timeout should not also leave someone unmuted
+   * everywhere the platform *does* control. Then Discord, then guild chat, both
+   * awaited and both able to fail. Only once both have answered is the row
+   * given its verdict.
+   *
+   * Neither surface is allowed to fail the *call*. The action is recorded, and
+   * `/ban` returning an error after the row exists would be a second kind of
+   * lie. What it returns instead is an action carrying its own enforcement
+   * status, which the caller shows to the staffer who typed the command.
+   */
+  private async enforce(action: ModerationActionDTO): Promise<ModerationActionDTO> {
+    await this.mirror(action);
+
+    const discord = await this.enforceDiscord(action);
+    const game = await this.relayToGame(action);
+
+    const failures: string[] = [];
+    if (!discord.ok) failures.push(`Discord: ${discord.reason}`);
+    if (!game.ok) failures.push(`guild chat: ${game.reason}`);
+
+    const status: EnforcementStatus =
+      failures.length > 0 ? "FAILED" : requiresEnforcement(action.type) ? "CONFIRMED" : "NOT_REQUIRED";
+    const detail = failures.length > 0 ? failures.join("; ") : null;
+
+    // Counted only once both surfaces have answered, so the Analytics chart
+    // means "a punishment took effect" rather than "a row was written". The
+    // comment claiming exactly that used to sit above a call that ran before
+    // either surface had been touched.
+    if (status === "FAILED") this.metrics?.actionFailed(action.guildId, action.type);
+    else this.metrics?.actionApplied(action.guildId, action.type);
+
+    await this.repo.setEnforcement(action.id, status, detail).catch((error: unknown) => {
+      this.log.error("could not record the enforcement outcome", {
+        guildId: action.guildId,
+        actionId: action.id,
+        error: message(error),
+      });
+    });
+
+    if (status === "FAILED") {
+      this.log.error("moderation action was recorded but not enforced", {
+        guildId: action.guildId,
+        actionId: action.id,
+        type: action.type,
+        target: action.targetDiscordId,
+        detail,
+      });
+      await this.alertStaff(action, detail ?? "unknown");
+    } else {
+      this.log.info("moderation action applied", {
+        guildId: action.guildId,
+        type: action.type,
+        actor: action.actorDiscordId,
+        target: action.targetDiscordId,
+        surfaces: action.surfaces,
+        expiresAt: action.expiresAt,
+        enforcement: status,
+      });
+    }
+
+    const settled: ModerationActionDTO = { ...action, enforcement: status, enforcementDetail: detail };
+    // Posted after the verdict is known, so the card can say whether it took.
+    // Awaited rather than fired and forgotten, for the same reason everything
+    // else in this method is: an unawaited failure here is an unhandled
+    // rejection, and the sink already swallows its own errors.
+    await this.postModLog(settled);
+    return settled;
+  }
+
+  /**
+   * The moderation log card.
+   *
+   * Best-effort and never a reason to fail the action: the punishment has
+   * already happened, and refusing it because a channel was deleted would be
+   * the tail wagging the dog. A guild with no `modlog` slot bound has no sink
+   * wired, and this costs nothing.
+   */
+  private async postModLog(action: ModerationActionDTO): Promise<void> {
+    if (this.modLog === null) return;
+    try {
+      await this.modLog.post(action.guildId, modLogEmbed(action, this.now()));
+    } catch (error) {
+      this.log.warn("moderation log post failed", {
+        guildId: action.guildId,
+        actionId: action.id,
+        error: message(error),
+      });
+    }
+  }
+
+  /**
+   * The Redis mirror. Best-effort by design and never a reason to call the
+   * action failed: it is a cache in front of the audit table, and the audit
+   * table is already written by the time this runs.
+   */
+  private async mirror(action: ModerationActionDTO): Promise<void> {
+    try {
+      await this.enforcement.apply(action);
+    } catch (error) {
+      this.log.warn("enforcement mirror did not update", {
+        guildId: action.guildId,
+        actionId: action.id,
+        error: message(error),
+      });
+    }
+  }
+
+  /** The Discord API half — the part that actually removes or silences someone. */
+  private async enforceDiscord(action: ModerationActionDTO): Promise<EnforcementOutcome> {
+    if (!requiresEnforcement(action.type)) return { ok: true };
+    if (action.targetDiscordId === null) return { ok: true, skipped: true, reason: "no Discord target" };
+    if (this.discord === null) {
+      // Not silently skipped. A process wired without an enforcer cannot punish
+      // anybody, and the whole point of the audit column is that this shows up
+      // on the first action rather than on the first appeal.
+      return { ok: false, reason: "no Discord enforcer is wired into this process" };
+    }
+    try {
+      return await this.discord.enforce(action);
+    } catch (error) {
+      return { ok: false, reason: message(error) };
+    }
+  }
+
+  private async alertStaff(action: ModerationActionDTO, detail: string): Promise<void> {
+    if (this.staffAlerts === null) return;
+    const target = action.targetDiscordId === null ? "the target" : `<@${action.targetDiscordId}>`;
+    try {
+      await this.staffAlerts.alert(
+        action.guildId,
+        `⚠️ **Enforcement failed** — case \`${action.id}\` (${action.type}) against ${target} ` +
+          `was written to the log but did not take effect.\n> ${detail}\n` +
+          `The case is marked \`enforcement_failed\` and needs doing by hand.`,
+      );
+    } catch (error) {
+      this.log.error("could not reach staff about a failed enforcement", {
+        guildId: action.guildId,
+        actionId: action.id,
+        error: message(error),
+      });
+    }
   }
 
   /**
    * Carry a Discord action into guild chat, if the guild's mapping says to.
    *
-   * Failures are logged and swallowed, for the same reason escalation failures
-   * are: the punishment has already been recorded and mirrored, the staffer has
-   * been told it worked, and an offline bridge must not retroactively undo a
-   * mute that is in force everywhere else. What it must not do is fail silently
-   * — every skipped send says why.
+   * Every "nothing was sent" answer is now one of two *different* things, and
+   * telling them apart is the whole change here. A mapping that resolves to no
+   * command — sync off, row off, an action with no in-game equivalent, a target
+   * who never linked an account — is `skipped`: nothing was supposed to go, and
+   * nothing did. A command that resolved and could not be delivered is a
+   * failure, and the case says so.
+   *
+   * That second case was the silent one. `GameCommandBus` publishes to Redis
+   * pub/sub, which has no store-and-forward: with the bridge down, the publish
+   * succeeded, the message evaporated, and the only trace was a log line
+   * nobody was reading. A banned member kept their guild slot.
    */
-  private async relayToGame(action: ModerationActionDTO): Promise<void> {
-    if (this.gameCommands === null || this.igns === null) return;
-    if (action.targetDiscordId === null) return;
+  private async relayToGame(action: ModerationActionDTO): Promise<EnforcementOutcome> {
+    if (this.gameCommands === null || this.igns === null) {
+      return { ok: true, skipped: true, reason: "no relay wired into this process" };
+    }
+    if (action.targetDiscordId === null) {
+      return { ok: true, skipped: true, reason: "no Discord target" };
+    }
 
+    let command: string | null;
+    let ign: string | null;
     try {
       const policy = parseRelaySync(
         this.relaySyncSource === null ? null : await this.relaySyncSource.readRelaySync(action.guildId),
       );
-      if (!policy.enabled) return;
+      if (!policy.enabled) return { ok: true, skipped: true, reason: "relay sync is off for this guild" };
 
-      const ign = await this.igns.ignFor(action.guildId, action.targetDiscordId);
-      const command = resolveGameCommand(policy, {
+      ign = await this.igns.ignFor(action.guildId, action.targetDiscordId);
+      command = resolveGameCommand(policy, {
         type: action.type,
         ign,
         durationSeconds: action.durationSeconds,
       });
-      if (command === null) {
-        // Worth a line only when a mapping existed and the target was the
-        // reason it could not fire — "this action maps to nothing" is the
-        // configured answer, not an incident.
-        if (ign === null) {
-          this.log.debug("relay sync skipped: target has no linked account", {
-            guildId: action.guildId,
-            type: action.type,
-            target: action.targetDiscordId,
-          });
-        }
-        return;
-      }
+    } catch (error) {
+      // Reading the mapping or the link failed. That is not "no command
+      // applies" — it is not knowing, which for a ban means the guild kick may
+      // still be owed.
+      this.log.error("relay sync could not resolve a command", {
+        guildId: action.guildId,
+        type: action.type,
+        error: message(error),
+      });
+      return { ok: false, reason: `could not resolve the guild command (${message(error)})` };
+    }
 
-      await this.gameCommands.send(action.guildId, command);
+    if (command === null) {
+      const reason =
+        ign === null
+          ? "target has no linked Minecraft account"
+          : "this action maps to no guild command";
+      this.log.debug("relay sync skipped", {
+        guildId: action.guildId,
+        type: action.type,
+        target: action.targetDiscordId,
+        reason,
+      });
+      return { ok: true, skipped: true, reason };
+    }
+
+    try {
+      const delivered = await this.gameCommands.send(action.guildId, command);
+      if (!delivered) {
+        return { ok: false, reason: `the bridge could not run \`${command}\` (offline or not in-game)` };
+      }
       this.log.info("relay sync sent", {
         guildId: action.guildId,
         type: action.type,
         target: action.targetDiscordId,
         command,
       });
+      return { ok: true };
     } catch (error) {
-      this.log.warn("relay sync failed", {
+      this.log.error("relay sync failed", {
         guildId: action.guildId,
         type: action.type,
-        error: error instanceof Error ? error.message : String(error),
+        error: message(error),
       });
+      return { ok: false, reason: `sending \`${command}\` failed (${message(error)})` };
     }
   }
 
@@ -359,6 +644,24 @@ export class ModerationServiceImpl implements ModerationService {
     });
     return err(error);
   }
+}
+
+/**
+ * Whether this action type is supposed to *do* something on Discord.
+ *
+ * NOTE and WARN are records: they are complete the moment the row exists, and
+ * marking them CONFIRMED would claim an API call that never needed making. The
+ * rest remove, silence or release somebody, and for those "recorded" is not the
+ * same as "done".
+ */
+function requiresEnforcement(type: ModActionType): boolean {
+  return type === "MUTE" || type === "UNMUTE" || type === "KICK" || type === "BAN" || type === "UNBAN";
+}
+
+/** Whatever was thrown, rendered short enough to sit in an audit column. */
+function message(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
 function surfacesFor(type: string): readonly ModerationSurface[] {

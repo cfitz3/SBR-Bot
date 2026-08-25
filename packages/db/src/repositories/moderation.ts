@@ -5,6 +5,7 @@
  */
 import type {
   AuditQuery,
+  EnforcementStatus,
   InfractionDTO,
   ModActionType,
   ModerationActionDTO,
@@ -49,6 +50,8 @@ type ActionRow = {
   expiresAt: Date | null;
   surfaces: string[];
   active: boolean;
+  enforcement: string;
+  enforcementDetail: string | null;
   createdAt: Date;
 };
 
@@ -76,6 +79,8 @@ function mapAction(r: ActionRow): ModerationActionDTO {
     expiresAt: r.expiresAt ? r.expiresAt.toISOString() : null,
     surfaces: r.surfaces as ModerationSurface[],
     active: r.active,
+    enforcement: r.enforcement as EnforcementStatus,
+    enforcementDetail: r.enforcementDetail,
     createdAt: r.createdAt.toISOString(),
   };
 }
@@ -108,6 +113,10 @@ export const moderationRepository = {
         surfaces: [...input.surfaces],
         active: input.active,
         sourceContext: input.sourceContext ?? "DISCORD",
+        // Born PENDING on purpose. The service stamps the verdict once both
+        // surfaces have answered, so a process that dies mid-enforcement leaves
+        // a row that says so rather than one that looks finished.
+        enforcement: "PENDING",
       },
     });
     return mapAction(row);
@@ -177,5 +186,44 @@ export const moderationRepository = {
       data: { active: false },
     });
     return result.count;
+  },
+
+  async setEnforcement(actionId: string, status: EnforcementStatus, detail: string | null): Promise<void> {
+    await prisma.moderationAction.update({
+      where: { id: actionId },
+      data: { enforcement: status, enforcementDetail: detail },
+    });
+  },
+
+  /**
+   * Rows the expiry sweep has to *reverse* rather than merely un-flag.
+   *
+   * `deactivateExpired` clears the flag in one statement and returns a count,
+   * which is right for bookkeeping and useless for lifting: a temp-banned member
+   * whose row flipped to inactive is still banned on Discord. The sweep needs
+   * the rows themselves to know who to unban, so it reads them first and clears
+   * the flag per row as each reversal lands.
+   */
+  async listExpiredActive(
+    guildId: string | null,
+    now: Date,
+    limit: number,
+  ): Promise<readonly ModerationActionDTO[]> {
+    const rows = await prisma.moderationAction.findMany({
+      where: {
+        ...(guildId === null ? {} : { guildId }),
+        active: true,
+        type: { in: ["MUTE", "BAN"] },
+        expiresAt: { not: null, lte: now },
+      },
+      orderBy: { expiresAt: "asc" },
+      take: Math.min(Math.max(limit, 1), 200),
+    });
+    return rows.map(mapAction);
+  },
+
+  async findAction(guildId: string, actionId: string): Promise<ModerationActionDTO | null> {
+    const row = await prisma.moderationAction.findFirst({ where: { id: actionId, guildId } });
+    return row === null ? null : mapAction(row);
   },
 };
