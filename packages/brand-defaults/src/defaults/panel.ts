@@ -142,6 +142,7 @@ export const DEFAULT_PANEL = {
       moderationInForceGuild: "Nobody in this guild is muted or banned right now.",
       moderationActionsMember: "No panel or bot actions recorded against this member.",
       moderationActionsGuild: "No moderation actions recorded yet.",
+      moderationRelay: "No guild commands have been relayed recently.",
       moderationAutomod:
         "No automod rules yet. Start one on “record it” and watch what it catches before it acts.",
 
@@ -851,6 +852,7 @@ export const DEFAULT_PANEL = {
     cardActionsMember: "Actions on this member",
     cardActionsRecent: "Recent actions",
     cardRecentInfractions: "Recent infractions",
+    cardRelay: "Guild chat relay",
     cardAutomod: "Automod",
     cardTest: "Test a message",
     cardRules: "Rules",
@@ -909,6 +911,33 @@ export const DEFAULT_PANEL = {
     colEnds: "Ends",
     colSince: "Since",
     colDuration: "Duration",
+
+    /**
+     * The relay strip. A punishment is only half issued until the guild has run
+     * the command, and until now the only record of whether it had was a log
+     * line in whichever process happened to publish it.
+     */
+    relayIntro:
+      "Every punishment that maps to a guild command is typed by the bridge and answered by Hypixel. This is what it was asked to do and what came back.",
+    relayLive: "Bridge in game",
+    relayDown: "No Minecraft session",
+    relayUnknown: "Bridge status unavailable",
+    relaySeen: "last heartbeat {when}",
+    relayQueued: "{count} waiting",
+    relayCounts: "{sent} sent · {dropped} refused · {expired} expired · {evicted} displaced",
+    relayNoLog: "The command log could not be read, so recent commands are not shown.",
+    colCommand: "Command",
+    colOutcome: "Outcome",
+    colDetail: "What came back",
+    /** Keyed by the wire outcome. An unknown value falls back to itself. */
+    relayOutcome: {
+      TYPED: "typed, no answer yet",
+      CONFIRMED_INGAME: "confirmed in game",
+      REFUSED_INGAME: "Hypixel refused",
+      REFUSED_BACKLOG: "refused: queue full",
+      WRONG_GUILD: "wrong guild",
+      EXPIRED: "never typed",
+    },
 
     badgeInForce: "in force",
     badgeExpired: "expired",

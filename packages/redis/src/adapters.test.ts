@@ -30,6 +30,8 @@ import {
   parseMemberBusMessage,
   parseModAckMessage,
   parseModBusMessage,
+  parseRelayLogEntry,
+  RedisRelayLog,
   startHeartbeat,
   RUNNABLE_JOBS,
 } from "./adapters.js";
@@ -40,7 +42,7 @@ import type { RedisContext } from "./client.js";
 const NO_TTL = -1;
 
 interface Entry {
-  value: string | Record<string, string> | Set<string>;
+  value: string | string[] | Record<string, string> | Set<string>;
   /** Epoch ms, or null for no expiry. */
   expiresAt: number | null;
 }
@@ -140,7 +142,10 @@ class FakeRedis {
   async hGetAll(key: string): Promise<Record<string, string>> {
     this.guard();
     const entry = this.live(key);
-    return entry && !(entry.value instanceof Set) && typeof entry.value !== "string"
+    return entry &&
+      !(entry.value instanceof Set) &&
+      !Array.isArray(entry.value) &&
+      typeof entry.value !== "string"
       ? { ...entry.value }
       : {};
   }
@@ -151,6 +156,40 @@ class FakeRedis {
     const next = Number(hash[field] ?? 0) + by;
     await this.hSet(key, field, String(next));
     return next;
+  }
+
+  private list(key: string): string[] {
+    const entry = this.live(key);
+    return Array.isArray(entry?.value) ? entry.value : [];
+  }
+
+  async lPush(key: string, value: string): Promise<number> {
+    this.guard();
+    const entry = this.live(key);
+    const rows = this.list(key);
+    rows.unshift(value);
+    this.store.set(key, { value: rows, expiresAt: entry?.expiresAt ?? null });
+    return rows.length;
+  }
+
+  async lTrim(key: string, start: number, stop: number): Promise<string> {
+    this.guard();
+    const entry = this.live(key);
+    const rows = this.list(key).slice(start, stop + 1);
+    this.store.set(key, { value: rows, expiresAt: entry?.expiresAt ?? null });
+    return "OK";
+  }
+
+  async lRange(key: string, start: number, stop: number): Promise<string[]> {
+    this.guard();
+    return this.list(key).slice(start, stop + 1);
+  }
+
+  async lSet(key: string, index: number, value: string): Promise<string> {
+    this.guard();
+    const rows = this.list(key);
+    rows[index] = value;
+    return "OK";
   }
 
   async sAdd(key: string, members: readonly string[]): Promise<number> {
@@ -428,6 +467,67 @@ test("a mod-ack payload is validated too, because it settles a punishment", () =
   assert.equal(ok?.outcome, "REFUSED_INGAME");
   assert.equal(ok?.detail, "no such player");
   assert.equal(parseModAckMessage(JSON.stringify(base))?.detail, "", "a missing detail is blank");
+});
+
+test("a relay-log row is validated too, because the panel renders it", () => {
+  const base = {
+    at: "2026-08-25T10:00:00.000Z",
+    command: "/g kick Notch Ban evasion",
+    correlationId: "c1",
+    outcome: "CONFIRMED_INGAME",
+    detail: "",
+  };
+  assert.equal(parseRelayLogEntry("not json"), null);
+  assert.equal(parseRelayLogEntry(JSON.stringify({ ...base, at: "" })), null);
+  assert.equal(parseRelayLogEntry(JSON.stringify({ ...base, command: "" })), null);
+  assert.equal(parseRelayLogEntry(JSON.stringify({ ...base, correlationId: "" })), null);
+  // An outcome this build does not know is one row missing from the strip, not
+  // a moderation page that throws on a payload an older bridge wrote.
+  assert.equal(parseRelayLogEntry(JSON.stringify({ ...base, outcome: "PROBABLY_FINE" })), null);
+
+  const ok = parseRelayLogEntry(JSON.stringify(base));
+  assert.equal(ok?.command, "/g kick Notch Ban evasion");
+  assert.equal(ok?.outcome, "CONFIRMED_INGAME");
+});
+
+test("a command acked twice occupies one relay-log row, not two", async () => {
+  const { ctx } = harness();
+  const log = new RedisRelayLog(ctx);
+  const row = (outcome: string, detail: string) => ({
+    at: "2026-08-25T10:00:00.000Z",
+    command: "/g kick Notch Ban evasion",
+    correlationId: "c1",
+    outcome: outcome as never,
+    detail,
+  });
+
+  // Every relayed command is acked on the way out and again when the guild
+  // answers. Appending both would show one kick twice while halving what the
+  // strip can remember, so the second ack overwrites the first in place.
+  await log.record("g1", row("TYPED", ""));
+  await log.record("g1", row("CONFIRMED_INGAME", "the guild echoed it back"));
+
+  const listed = await log.list("g1");
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]?.outcome, "CONFIRMED_INGAME");
+  assert.equal(listed[0]?.detail, "the guild echoed it back");
+});
+
+test("a relay log Redis cannot serve is an empty strip, not a failed punishment", async () => {
+  const { redis, ctx } = harness();
+  const log = new RedisRelayLog(ctx);
+  redis.broken = true;
+
+  // Deliberately unobservable from the caller: the receipt is worth less than
+  // the command it is a receipt for.
+  await log.record("g1", {
+    at: "2026-08-25T10:00:00.000Z",
+    command: "/g kick Notch Ban evasion",
+    correlationId: "c1",
+    outcome: "TYPED" as never,
+    detail: "",
+  });
+  assert.deepEqual(await log.list("g1"), []);
 });
 
 test("a reminder with an unusable time or title is dropped", () => {

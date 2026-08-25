@@ -286,6 +286,20 @@ export interface BridgeStatus {
   /** Configured *and* spawned — a bot mid-reconnect is not a live bridge. */
   readonly mcSpawned: boolean;
   readonly mcConfigured: boolean;
+  /**
+   * The outbound guild-command queue, flat because the heartbeat carries
+   * `Record<string, string | number | boolean | null>` and a nested object
+   * would need a parallel encoding on both ends to say the same thing.
+   *
+   * Rides to Redis through the existing status passthrough, which is what puts
+   * "is the relay backed up" in front of an operator instead of leaving it in a
+   * log line in whichever process happens to be holding the socket.
+   */
+  readonly relayQueued: number;
+  readonly relaySent: number;
+  readonly relayDropped: number;
+  readonly relayExpired: number;
+  readonly relayEvicted: number;
 }
 
 /**
@@ -1586,6 +1600,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     roster: rosterSource,
     status() {
       const ping = discord.ws.ping;
+      const stats = gameCommands.stats();
       return {
         discordReady: discord.isReady(),
         // discord.js reports -1 until the first gateway heartbeat lands;
@@ -1593,6 +1608,11 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
         gatewayPingMs: Number.isFinite(ping) && ping >= 0 ? Math.round(ping) : null,
         mcSpawned: spawned,
         mcConfigured: opts.mc !== null,
+        relayQueued: stats.queued,
+        relaySent: stats.sent,
+        relayDropped: stats.dropped,
+        relayExpired: stats.expired,
+        relayEvicted: stats.evicted,
       };
     },
     sendGameCommand,

@@ -473,6 +473,104 @@ const ACK_OUTCOMES: readonly ModAckOutcome[] = [
  * arrives an hour late, after the mute has expired, is worse than one that never
  * arrives. The Discord side of the punishment is already durable in Postgres.
  */
+/** One settled guild command, as the panel's relay strip shows it. */
+export interface RelayLogEntry {
+  readonly at: string;
+  readonly command: string;
+  readonly correlationId: string;
+  readonly outcome: ModAckOutcome;
+  readonly detail: string;
+}
+
+/** How many commands the strip remembers. */
+const RELAY_LOG_LENGTH = 50;
+/** A week. Long enough to answer "what happened on Saturday", short enough to forget. */
+const RELAY_LOG_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * The last few guild commands and what became of them.
+ *
+ * The answer to "did that /g kick work" existed only as a log line in whichever
+ * process happened to publish it, which is to say nowhere anyone could look.
+ * This is the same information, written where the panel can read it.
+ *
+ * Capped and expiring: it is a monitor, not an audit trail. The audit trail is
+ * the moderation table, which holds every one of these as an `enforcement`
+ * verdict on a real case.
+ */
+export class RedisRelayLog {
+  constructor(private readonly ctx: RedisContext) {}
+
+  /**
+   * One row per command, updated in place as its answer arrives.
+   *
+   * A command is acked twice — `TYPED` when the bridge types it, then the
+   * guild's own verdict — and appending both would show every kick twice while
+   * halving what the strip can remember. Rewriting the row instead means a
+   * command that was typed and never answered *stays* on the strip reading
+   * "typed", which is the state an operator most needs to be able to see.
+   *
+   * Best-effort throughout. A relay log that failed to write is a strip missing
+   * a row; one that threw would be a punishment failing over its own receipt.
+   */
+  async record(guildId: string, entry: RelayLogEntry): Promise<void> {
+    const key = this.ctx.keys.relayLog(guildId);
+    try {
+      const existing = await this.ctx.client.lRange(key, 0, RELAY_LOG_LENGTH - 1);
+      const at = existing.findIndex((line) => parseRelayLogEntry(line)?.correlationId === entry.correlationId);
+      if (at === -1) {
+        await this.ctx.client.lPush(key, JSON.stringify(entry));
+        await this.ctx.client.lTrim(key, 0, RELAY_LOG_LENGTH - 1);
+      } else {
+        await this.ctx.client.lSet(key, at, JSON.stringify(entry));
+      }
+      await this.ctx.client.expire(key, RELAY_LOG_TTL_SECONDS);
+    } catch {
+      // Swallowed deliberately — see above.
+    }
+  }
+
+  /** Newest first. Unreadable or malformed rows are skipped, never thrown over. */
+  async list(guildId: string, limit = RELAY_LOG_LENGTH): Promise<readonly RelayLogEntry[]> {
+    const capped = Math.min(Math.max(limit, 1), RELAY_LOG_LENGTH);
+    let raw: string[];
+    try {
+      raw = await this.ctx.client.lRange(this.ctx.keys.relayLog(guildId), 0, capped - 1);
+    } catch {
+      return [];
+    }
+    const out: RelayLogEntry[] = [];
+    for (const line of raw) {
+      const entry = parseRelayLogEntry(line);
+      if (entry !== null) out.push(entry);
+    }
+    return out;
+  }
+}
+
+/**
+ * Validated rather than trusted, like every other thing read back off Redis
+ * here: a row written by an older build with a different shape must render as
+ * one missing row, not as an exception on the moderation page.
+ */
+export function parseRelayLogEntry(raw: string): RelayLogEntry | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Record<string, unknown>;
+  const { at, command, correlationId, outcome, detail } = v;
+  if (typeof at !== "string" || at === "") return null;
+  if (typeof command !== "string" || command === "") return null;
+  if (typeof correlationId !== "string" || correlationId === "") return null;
+  if (typeof outcome !== "string" || !ACK_OUTCOMES.includes(outcome as ModAckOutcome)) return null;
+  if (typeof detail !== "string") return null;
+  return { at, command, correlationId, outcome: outcome as ModAckOutcome, detail };
+}
+
 export class RedisModBus {
   constructor(private readonly ctx: RedisContext) {}
 
@@ -1298,6 +1396,7 @@ export function createRedisAdapters(ctx: RedisContext, opts: RedisAdapterOptions
     priceSource: new RedisPriceSource(ctx),
     configBus: new RedisConfigBus(ctx),
     modBus: new RedisModBus(ctx),
+    relayLog: new RedisRelayLog(ctx),
     bridgeBus: new RedisBridgeBus(ctx),
     jobTriggers: new RedisJobTriggerBus(ctx),
     memberBus: new RedisMemberBus(ctx),

@@ -283,6 +283,37 @@ export interface HeartbeatReader {
   list(): Promise<readonly ServiceHeartbeat[]>;
 }
 
+/**
+ * One guild command and what became of it.
+ *
+ * Declared here rather than imported from `@sbr/redis` for the usual reason
+ * every port in this file is: the panel renders a shape, not a store, and a
+ * panel that imports a Redis type cannot be tested without one.
+ */
+export interface RelayCommandRecord {
+  readonly at: string;
+  readonly command: string;
+  readonly correlationId: string;
+  /**
+   * The wire vocabulary, deliberately not narrowed to a union here. A row
+   * written by a newer build with an outcome this one has never heard of should
+   * render as itself, not vanish from the strip that exists to show it.
+   */
+  readonly outcome: string;
+  readonly detail: string;
+}
+
+/**
+ * Port: the last few guild commands the bridge was asked to type.
+ *
+ * Optional everywhere it is used. Absent means the relay strip says it cannot
+ * see the relay — which is the honest rendering, and materially different from
+ * showing an empty list that reads as "nothing has been sent".
+ */
+export interface RelayLogReader {
+  list(guildId: string, limit: number): Promise<readonly RelayCommandRecord[]>;
+}
+
 export type RollupPeriod = "HOURLY" | "DAILY" | "WEEKLY" | "MONTHLY";
 
 export type PermSubjectKind = "DISCORD_ROLE" | "DISCORD_USER" | "GUILD_RANK";

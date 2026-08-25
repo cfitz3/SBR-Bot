@@ -102,6 +102,8 @@ import type {
   DirectorySide,
   GuildCard,
   HeartbeatReader,
+  RelayCommandRecord,
+  RelayLogReader,
   JobHealth,
   JoinAttempt,
   MembershipStats,
@@ -192,6 +194,31 @@ export interface WordlistVM {
   readonly relaySync: RelaySyncPolicy;
 }
 
+/**
+ * What the bridge is doing with the commands it has been handed.
+ *
+ * The answer to "did that `/g kick` actually work" used to exist only as a log
+ * line in whichever process happened to publish it. This is that answer, on the
+ * page where the case is.
+ */
+export interface RelayVM {
+  /**
+   * Whether a bridge with a live Minecraft session has reported in recently.
+   * Null means liveness could not be read at all — not the same as "no".
+   */
+  readonly bridgeLive: boolean | null;
+  /** When that bridge last said so. */
+  readonly lastSeenAt: string | null;
+  /** Outbound queue depth and totals, straight off the heartbeat. */
+  readonly queued: number | null;
+  readonly sent: number | null;
+  readonly dropped: number | null;
+  readonly expired: number | null;
+  readonly evicted: number | null;
+  /** Newest first. Null when no reader is wired — say so rather than show none. */
+  readonly commands: readonly RelayCommandRecord[] | null;
+}
+
 export interface ModerationVM {
   readonly target: string;
   readonly infractionCount: number;
@@ -211,6 +238,8 @@ export interface ModerationVM {
    * and only the second one is expiry-aware.
    */
   readonly inForce: readonly ModerationActionDTO[];
+  /** The bridge and its outbound queue — the monitor that used to not exist. */
+  readonly relay: RelayVM;
   /**
    * Whether this session may edit the configuration sections — the automod
    * rules, the filter, the ladder, the mapping table and the cooldowns. The
@@ -783,6 +812,12 @@ export interface PanelServiceDeps {
   /** Optional: without it the Health page shows jobs only, not live processes. */
   readonly heartbeats?: HeartbeatReader;
   /**
+   * Optional: without it the Moderation page's relay strip says it cannot see
+   * the relay, rather than showing an empty list that would read as "nothing
+   * has been sent".
+   */
+  readonly relayLog?: RelayLogReader;
+  /**
    * Optional: without it the Permissions page renders its levels, floors and
    * command table but reports that per-person exceptions are unavailable —
    * rather than showing an empty list, which would read as "none configured".
@@ -908,7 +943,7 @@ export class PanelService {
     // for the member whose id is the empty string, which is nobody.
     const targeted =
       targetDiscordId === "" ? null : this.d.moderation.listInfractions(guildId, targetDiscordId);
-    const [infractions, recent, actions, inForce, filter, storedAutomod, storedCooldowns] = await Promise.all([
+    const [infractions, recent, actions, inForce, filter, storedAutomod, storedCooldowns, relay] = await Promise.all([
       targeted,
       this.d.moderation.listRecentInfractions(guildId, 50),
       this.d.moderation.listActions(query),
@@ -918,6 +953,10 @@ export class PanelService {
       this.loadFilter(guildId),
       this.d.config.getSetting<unknown>(guildId, AUTOMOD_SETTING_KEY),
       this.d.config.getSetting<unknown>(guildId, COOLDOWN_SETTING_KEY),
+      // Never a reason to fail the page: the case log is why anybody is here,
+      // and an unreachable Redis is itself something worth seeing the rest of
+      // the page during.
+      this.loadRelay(guildId),
     ]);
 
     const list = infractions !== null && infractions.ok ? infractions.value : [];
@@ -932,8 +971,58 @@ export class PanelService {
       filter,
       automod: parseAutomod(storedAutomod),
       cooldowns: parseCooldowns(storedCooldowns),
+      relay,
     };
     return { access, data };
+  }
+
+  /**
+   * The relay strip: is the bridge there, is it backed up, and what happened to
+   * the last few commands.
+   *
+   * Every field is independently nullable and nothing here throws. The two
+   * sources fail separately — heartbeats are a Redis hash, the command log is a
+   * Redis list — and a page that blanked because one of them was unreachable
+   * would be least useful exactly when the relay is most broken.
+   */
+  private async loadRelay(guildId: string): Promise<RelayVM> {
+    const unknown: RelayVM = {
+      bridgeLive: null, lastSeenAt: null,
+      queued: null, sent: null, dropped: null, expired: null, evicted: null,
+      commands: null,
+    };
+
+    const [beats, commands] = await Promise.all([
+      this.d.heartbeats?.list().catch(() => null) ?? Promise.resolve(null),
+      this.d.relayLog?.list(guildId, 50).catch(() => null) ?? Promise.resolve(null),
+    ]);
+
+    if (beats === null) return { ...unknown, commands };
+
+    // The freshest bridge heartbeat, whichever instance produced it. A bridge
+    // mid-reconnect reports `mcSpawned: false` and is still a bridge — the
+    // strip's job is to say which of those two it is.
+    const bridge = beats
+      .filter((b) => b.service === "bridge-bot")
+      .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+    if (bridge === undefined) {
+      return { ...unknown, bridgeLive: false, commands };
+    }
+
+    const num = (key: string): number | null => {
+      const v = bridge.details[key];
+      return typeof v === "number" ? v : null;
+    };
+    return {
+      bridgeLive: bridge.details["mcSpawned"] === true,
+      lastSeenAt: bridge.at,
+      queued: num("relayQueued"),
+      sent: num("relaySent"),
+      dropped: num("relayDropped"),
+      expired: num("relayExpired"),
+      evicted: num("relayEvicted"),
+      commands,
+    };
   }
 
   // ─────────────────────────── analytics ───────────────────────────
