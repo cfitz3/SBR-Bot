@@ -46,7 +46,7 @@ function repo(stale: readonly ModerationActionDTO[] = []): {
       async createInfraction(input) { return { ...input, id: "inf-1", createdAt: "t" }; },
       async createAction(input) {
         created.push(input);
-        return { ...input, id: "act-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null } as ModerationActionDTO;
+        return { ...input, id: "act-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO;
       },
       async listInfractions() { return []; },
       async listRecentInfractions() { return []; },
@@ -56,6 +56,7 @@ function repo(stale: readonly ModerationActionDTO[] = []): {
       async listExpiredActive() { return []; },
       async listStalePending() { return stale; },
       async findAction() { return null; },
+      async updateAction() { return null; },
     },
   };
 }
@@ -198,6 +199,7 @@ test("listInForce narrows in the store and re-checks against this process's cloc
     reason: "spam", durationSeconds: 60, expiresAt: "2026-08-05T23:59:00.000Z",
     surfaces: ["DISCORD"], active: true, createdAt: "2026-08-05T23:58:00.000Z",
     enforcement: "CONFIRMED", enforcementDetail: null,
+    updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
   };
   const live: ModerationActionDTO = { ...stale, id: "a2", expiresAt: null, type: "BAN" };
   const svc = build({
@@ -250,10 +252,11 @@ function repoWithWarns(count: number): { repo: ModerationRepository; created: Ne
     reason: "spam", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"],
     active: true, createdAt: "2026-08-05T00:00:00.000Z",
     enforcement: "NOT_REQUIRED", enforcementDetail: null,
+    updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
   }));
   return {
     created: base.created,
-    repo: { ...base.repo, async createAction(i) { base.created.push(i); return { ...i, id: "act", createdAt: "t", enforcement: "PENDING", enforcementDetail: null } as ModerationActionDTO; }, async listActions() { return history; } },
+    repo: { ...base.repo, async createAction(i) { base.created.push(i); return { ...i, id: "act", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO; }, async listActions() { return history; } },
   };
 }
 
@@ -611,6 +614,7 @@ test("a punishment the guild never answered for is escalated, not left pending",
     id: "act-9", guildId: "g1", type: "BAN", actorDiscordId: "staff-1", targetDiscordId: "target-1",
     reason: "Ban evasion", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"], active: true,
     enforcement: "PENDING", enforcementDetail: "sent but not confirmed", createdAt: "t",
+    updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
   } as ModerationActionDTO;
   const r = repo([stalled]);
   const a = alerts();

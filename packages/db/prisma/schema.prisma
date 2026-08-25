@@ -779,6 +779,17 @@ model ModerationAction {
   /// order to finish the job by hand.
   enforcementDetail        String?
   createdAt                DateTime      @default(now())
+  /// When the case was last edited by a person, or null while it is as issued.
+  /// Deliberately not `@updatedAt`: the service stamping an enforcement verdict
+  /// is it finishing its own work, not somebody editing the case, and a column
+  /// that moved on both could not tell the two apart.
+  updatedAt                DateTime?
+  editedByDiscordId        String?
+  /// A void is soft. The record of a punishment that should not have happened is
+  /// worth keeping, and deleting the row would dangle the case id in every
+  /// mod-log card that already quoted it.
+  voidedAt                 DateTime?
+  voidReason               String?
 
   guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
   infraction Infraction? @relation(fields: [infractionId], references: [id], onDelete: SetNull)

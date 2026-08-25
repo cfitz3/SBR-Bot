@@ -49,6 +49,10 @@ function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
     reason: "x",
     enforcement: "CONFIRMED",
     enforcementDetail: null,
+    updatedAt: null,
+    editedByDiscordId: null,
+    voidedAt: null,
+    voidReason: null,
     durationSeconds: null,
     expiresAt: null,
     surfaces: ["DISCORD"],
@@ -330,6 +334,10 @@ test("kick reports an enforcement the service could not carry out", async () => 
         type: "KICK",
         enforcement: "FAILED",
         enforcementDetail: "Discord: I don't have the Discord permission that needs.",
+        updatedAt: null,
+        editedByDiscordId: null,
+        voidedAt: null,
+        voidReason: null,
       }));
     },
   });

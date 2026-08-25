@@ -35,7 +35,16 @@ export type PunishmentState =
   /** Ended early by a staffer (`/unmute`, `/unban`). */
   | "LIFTED"
   /** Never held enforcement state: a warning, a kick, a note, a role change. */
-  | "MOMENTARY";
+  | "MOMENTARY"
+  /**
+   * Withdrawn: this punishment should not have happened.
+   *
+   * Distinct from LIFTED, which is a punishment that ran its course and was
+   * ended. A void says the case itself was a mistake, and it takes precedence
+   * over every other state because it is a statement about the record rather
+   * than about the clock.
+   */
+  | "VOID";
 
 /**
  * The action types that hold enforcement state over time.
@@ -51,9 +60,12 @@ export function holdsEnforcement(type: ModActionType): boolean {
 }
 
 export function punishmentState(
-  action: Pick<ModerationActionDTO, "type" | "active" | "expiresAt">,
+  action: Pick<ModerationActionDTO, "type" | "active" | "expiresAt"> & { readonly voidedAt?: string | null },
   now: Date = new Date(),
 ): PunishmentState {
+  // Ahead of the type check: a voided kick is still a voided case, and
+  // "momentary" would say nothing about the only thing that happened to it.
+  if (action.voidedAt !== null && action.voidedAt !== undefined) return "VOID";
   if (!holdsEnforcement(action.type)) return "MOMENTARY";
   if (action.expiresAt !== null && Date.parse(action.expiresAt) <= now.getTime()) return "EXPIRED";
   return action.active ? "ACTIVE" : "LIFTED";
@@ -61,14 +73,14 @@ export function punishmentState(
 
 /** Is this action being enforced at `now`? Permanent bans have no expiry and stay true. */
 export function isInForce(
-  action: Pick<ModerationActionDTO, "type" | "active" | "expiresAt">,
+  action: Pick<ModerationActionDTO, "type" | "active" | "expiresAt"> & { readonly voidedAt?: string | null },
   now: Date = new Date(),
 ): boolean {
   return punishmentState(action, now) === "ACTIVE";
 }
 
 /** The punishments a member is currently serving, newest first (input order preserved). */
-export function inForce<T extends Pick<ModerationActionDTO, "type" | "active" | "expiresAt">>(
+export function inForce<T extends Pick<ModerationActionDTO, "type" | "active" | "expiresAt"> & { readonly voidedAt?: string | null }>(
   actions: readonly T[],
   now: Date = new Date(),
 ): readonly T[] {
@@ -92,5 +104,7 @@ export function describeState(state: PunishmentState): string {
       return "lifted";
     case "MOMENTARY":
       return "";
+    case "VOID":
+      return "voided";
   }
 }

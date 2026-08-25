@@ -373,6 +373,23 @@ export interface ModerationActionDTO {
   readonly enforcement: EnforcementStatus;
   /** Why enforcement failed, verbatim, for the staff alert and the audit page. */
   readonly enforcementDetail: string | null;
+  /**
+   * When a person last corrected this case, or null while it stands as issued.
+   *
+   * Not "when the row last changed": the service stamping an enforcement
+   * verdict is it finishing its own work, and a case that reads as edited
+   * because the platform did its job would make every real edit unfindable.
+   */
+  readonly updatedAt: string | null;
+  /** Who made that edit. An edit with no author is a rumour. */
+  readonly editedByDiscordId: string | null;
+  /**
+   * When the case was voided, or null. Soft, and deliberately: the record of a
+   * punishment that should not have happened is worth keeping, and deleting the
+   * row would dangle its id in every mod-log card that already quoted it.
+   */
+  readonly voidedAt: string | null;
+  readonly voidReason: string | null;
 }
 
 /**
