@@ -19,7 +19,7 @@
  * that rule here would be one that drifts — so a refusal arrives as a message on
  * the form rather than as a control that was never offered.
  */
-import type { ModerationActionVM, ModerationVM } from "@sbr/panel-core";
+import type { ModerationActionVM, ModerationVM, RelayVM } from "@sbr/panel-core";
 import type { InfractionDTO } from "@sbr/shared-types";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import {
@@ -234,6 +234,10 @@ function historySection(guildId: string, data: ModerationVM, rerender: () => voi
     card(t("cardIssue"), actionForm(guildId, rerender)),
     data.target ? card(t("cardInfractions"), infractionsBody(data.infractions, true)) : null,
     card(t("cardInForce"), inForceBody(data)),
+    // Above the case log rather than below it: "did the last command work" is
+    // the question somebody arrives with when something is wrong, and it was
+    // previously answerable only by reading a process log.
+    card(t("cardRelay"), relayBody(data.relay)),
     card(data.target ? t("cardActionsMember") : t("cardActionsRecent"), actionsBody(data)),
     // Only worth showing when no target is picked: with one, the card above it
     // is the same list narrowed to the person actually being asked about.
@@ -469,6 +473,67 @@ function inForceBody(data: ModerationVM): HTMLElement {
       relativeTime(row.createdAt),
     ]),
   );
+}
+
+/**
+ * The relay strip.
+ *
+ * Three separate truths, each rendered as itself: whether a bridge is in game,
+ * what its outbound queue is doing, and what became of the last few commands.
+ * Any of them can be unreadable, and an unreadable one says so rather than
+ * rendering as a zero — the whole reason this exists is that silence used to be
+ * indistinguishable from success.
+ */
+function relayBody(relay: RelayVM): HTMLElement {
+  const tone: BadgeTone = relay.bridgeLive === null ? "neutral" : relay.bridgeLive ? "ok" : "bad";
+  const label =
+    relay.bridgeLive === null ? t("relayUnknown") : relay.bridgeLive ? t("relayLive") : t("relayDown");
+
+  const counts: (HTMLElement | string)[] = [badge(label, tone)];
+  if (relay.lastSeenAt !== null) {
+    counts.push(t("relaySeen").replace("{when}", relativeTime(relay.lastSeenAt)));
+  }
+  if (relay.queued !== null) counts.push(t("relayQueued").replace("{count}", count(relay.queued)));
+  if (relay.sent !== null) {
+    counts.push(
+      t("relayCounts")
+        .replace("{sent}", count(relay.sent))
+        .replace("{dropped}", count(relay.dropped ?? 0))
+        .replace("{expired}", count(relay.expired ?? 0))
+        .replace("{evicted}", count(relay.evicted ?? 0)),
+    );
+  }
+
+  const head = h("div", { class: "job-cell" }, ...counts);
+  const intro = h("p", { class: "hint" }, t("relayIntro"));
+
+  if (relay.commands === null) {
+    return h("div", {}, intro, head, h("p", { class: "hint" }, t("relayNoLog")));
+  }
+  if (relay.commands.length === 0) {
+    return h("div", {}, intro, head, emptyState("moderationRelay"));
+  }
+  return h("div", {}, intro, head, table(
+    [t("colCommand"), t("colOutcome"), t("colDetail"), t("colWhen")],
+    relay.commands.map((row) => [
+      h("code", {}, row.command),
+      badge(lookup(t("relayOutcome"), row.outcome, row.outcome), relayTone(row.outcome)),
+      row.detail,
+      relativeTime(row.at),
+    ]),
+  ));
+}
+
+/** Confirmed is good, typed is not yet anything, everything else is a failure. */
+function relayTone(outcome: string): BadgeTone {
+  switch (outcome) {
+    case "CONFIRMED_INGAME":
+      return "ok";
+    case "TYPED":
+      return "neutral";
+    default:
+      return "bad";
+  }
 }
 
 function actionsBody(data: ModerationVM): HTMLElement {

@@ -58,9 +58,29 @@ test("a warning prints no enforcement field at all", () => {
   assert.equal(view.fields?.some((f) => /nforce/.test(f.name)), false);
 });
 
-test("an enforced action lists the surfaces it reached", () => {
+test("an enforced action lists the surfaces it reached, and says the guild answered", () => {
   const view = modLogEmbed(action(), NOW);
-  assert.equal(field(view, "Enforced"), "DISCORD + GUILD_CHAT");
+  // Only an in-game confirmation settles the guild-chat leg as CONFIRMED, so a
+  // row that reached GUILD_CHAT is one Hypixel echoed back. Worth saying: the
+  // bare surface list previously meant no more than "we typed something".
+  assert.equal(field(view, "Enforced"), "DISCORD + GUILD_CHAT\nConfirmed in game by the guild.");
+  assert.equal(
+    field(modLogEmbed(action({ surfaces: ["DISCORD"] }), NOW), "Enforced"),
+    "DISCORD",
+    "a Discord-only action makes no claim about the guild",
+  );
+});
+
+test("a pending action names what it is waiting on", () => {
+  const waiting = action({ enforcement: "PENDING", enforcementDetail: "`/g kick Notch x` was sent but not confirmed" });
+  assert.equal(
+    field(modLogEmbed(waiting, NOW), "Enforcement"),
+    "Still in progress — `/g kick Notch x` was sent but not confirmed",
+  );
+  assert.equal(
+    field(modLogEmbed(action({ enforcement: "PENDING" }), NOW), "Enforcement"),
+    "Still in progress.",
+  );
 });
 
 test("the automatic actors read as themselves, not as a snowflake mention", () => {

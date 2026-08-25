@@ -290,6 +290,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     tickets: ticketConfigRepository,
     wordlist,
     heartbeats: adapters.heartbeat,
+    relayLog: adapters.relayLog,
     permissionExceptions: bridgePermissionRepository,
     // The roster the dry run resolves against, and the reconciler's own
     // diagnostics. Constructed unconditionally: both halves degrade to an

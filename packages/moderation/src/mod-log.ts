@@ -99,9 +99,33 @@ function enforcementField(action: ModerationActionDTO): readonly { name: string;
         },
       ];
     case "PENDING":
-      return [{ name: "Enforcement", value: "Still in progress." }];
+      // The detail is the whole point here: "still in progress" beside a kick
+      // nobody can see the state of is the same non-answer this card used to
+      // give, and the reader's next question is always which surface is
+      // waiting. Named, it is either "the guild has not answered yet" or a
+      // reason to go and look.
+      return [
+        {
+          name: "Enforcement",
+          value:
+            action.enforcementDetail === null
+              ? "Still in progress."
+              : `Still in progress — ${action.enforcementDetail}`,
+        },
+      ];
     case "CONFIRMED":
-      return [{ name: "Enforced", value: action.surfaces.join(" + ") }];
+      // Only a `CONFIRMED_INGAME` ack settles the guild-chat leg as confirmed,
+      // so a CONFIRMED row that lists GUILD_CHAT means Hypixel itself echoed
+      // the command back. Worth saying out loud, because "Enforced: GUILD_CHAT"
+      // previously meant no more than "we typed something".
+      return [
+        {
+          name: "Enforced",
+          value: action.surfaces.includes("GUILD_CHAT")
+            ? `${action.surfaces.join(" + ")}\nConfirmed in game by the guild.`
+            : action.surfaces.join(" + "),
+        },
+      ];
     default:
       return [];
   }

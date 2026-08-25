@@ -654,6 +654,18 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   let modLogPost: ((channelId: string, embed: EmbedView) => Promise<boolean>) | null = null;
 
   /**
+   * The command line behind each correlation id still awaiting a verdict.
+   *
+   * The ack carries the id and the outcome but not the command — the publisher
+   * already knows what it sent — and the relay strip needs the text, since
+   * "REFUSED_INGAME" beside nothing is not a monitor. Entries are dropped on the
+   * first non-`TYPED` answer, and bounded so a bridge that somehow never hears
+   * one cannot grow this without limit.
+   */
+  const outboundCommands = new Map<string, string>();
+  const OUTBOUND_MEMORY = 200;
+
+  /**
    * The answer half of the moderation bus.
    *
    * Best effort by design: a failed ack costs the publisher a timeout and a
@@ -661,6 +673,20 @@ export async function createBridgeApp(): Promise<BridgeApp> {
    * would be worse — the kick may well have landed.
    */
   async function publishAck(ack: Omit<ModAckMessage, "kind">): Promise<void> {
+    // Every answer passes through here, which makes it the one place the relay
+    // strip can be written from without a second, subtly different notion of
+    // what "settled" means.
+    const command = outboundCommands.get(ack.correlationId);
+    if (command !== undefined) {
+      await adapters.relayLog.record(ack.guildId, {
+        at: new Date().toISOString(),
+        command,
+        correlationId: ack.correlationId,
+        outcome: ack.outcome,
+        detail: ack.detail,
+      });
+      if (ack.outcome !== "TYPED") outboundCommands.delete(ack.correlationId);
+    }
     try {
       await adapters.modBus.publishAck({ ...ack, kind: "GAME_COMMAND_ACK" });
     } catch (error) {
@@ -826,6 +852,15 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   });
 
   const unsubscribeMod = await adapters.modBus.subscribe((message) => {
+    // Remembered before anything else answers, so a command refused on the spot
+    // still reaches the relay strip with the line it was refused for — which is
+    // the row an operator most wants to find there.
+    if (outboundCommands.size >= OUTBOUND_MEMORY) {
+      const oldest = outboundCommands.keys().next();
+      if (!oldest.done) outboundCommands.delete(oldest.value);
+    }
+    outboundCommands.set(message.correlationId, message.command);
+
     if (gameCommandSink === null) {
       log.warn("moderation command dropped: bridge not connected", { guildId: message.guildId });
       // Answered rather than merely logged. The publisher checked a heartbeat

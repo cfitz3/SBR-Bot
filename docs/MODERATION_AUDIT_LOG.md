@@ -434,6 +434,46 @@ transport checks it before mirroring a kick notice — without which a Discord b
 a `/g kick`, read its own notice back, and mirror it into a second punishment.
 
 
+## Part 2c — The visible monitor
+
+The user's words were "we need some kind of clear monitor that these commands have worked as
+currently, we have nothing." That was accurate. Parts 2a and 2b produced a real verdict for every
+relayed command; nothing rendered it anywhere a person would look.
+
+Three surfaces, in order of how far they are from the incident:
+
+**The mod-log card.** `enforcementField` (`packages/moderation/src/mod-log.ts`) used to print
+`Enforced: DISCORD + GUILD_CHAT` for a CONFIRMED row and `Still in progress.` for a PENDING one.
+The first implied success on a surface that had only been *typed at*; the second withheld the one
+fact the reader wanted. Both now say what actually happened — a CONFIRMED row listing
+`GUILD_CHAT` has been echoed back by Hypixel itself and says so, and a PENDING row carries its
+detail. `/case` renders the same embed, so it picks this up for free.
+
+**The bridge heartbeat.** `CommandQueue.stats()` already counted `queued/sent/dropped/expired/
+evicted` and nobody read it. Folded into `BridgeStatus` as five flat numbers, which ride to Redis
+verbatim through the existing status passthrough (`apps/bridge-bot/src/main.ts`). Flat because the
+heartbeat carries `Record<string, string | number | boolean | null>`; no new plumbing.
+
+**The relay log.** `RedisRelayLog` (`packages/redis/src/adapters.ts`) keeps the last 50 settled
+commands per guild on `sbr:relay:log:<guildId>`, 7-day TTL, surfaced as a "Guild chat relay" card on
+the panel's Moderation page: bridge live or not, the queue counters, and each command with its
+outcome and detail.
+
+**Deviation from the plan, deliberate.** The plan said LPUSH each ack. A command is acked twice —
+`TYPED` when the bridge types it, then the guild's own verdict — so appending both would show
+every kick twice while halving what the strip can remember. Instead one row per `correlationId`,
+updated in place (`lSet`), which also means a command stuck at `TYPED` stays visible as a command
+stuck at `TYPED` rather than scrolling away behind a verdict that never came.
+
+The bridge holds a small `correlationId -> command` map (200 entries, evicted oldest-first) because
+the ack carries the id and the outcome but not the text, and `REFUSED_INGAME` beside nothing is not
+a monitor. It is populated before the sink is consulted, so a command rejected on the spot still
+reaches the strip.
+
+Everything on this path is best-effort and swallows its own failures. A receipt is worth less than
+the command it is a receipt for, and no punishment should fail because Redis was briefly away. The
+`enforcement` column on the moderation row remains the durable record; this is a window onto it.
+
 ## Part 3 — In-game kicks reach Discord
 
 **Open decision #2 from the first pass, now closed.** `BridgeApp.recordInGameAction`
