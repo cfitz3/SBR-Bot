@@ -39,6 +39,19 @@ type InfractionRow = {
   createdAt: Date;
 };
 
+/** Mirrors `ModerationActionPatch` in @sbr/moderation, like `NewActionRecord`. */
+interface ModerationActionPatch {
+  reason?: string;
+  durationSeconds?: number | null;
+  expiresAt?: string | null;
+  active?: boolean;
+  enforcement?: EnforcementStatus;
+  enforcementDetail?: string | null;
+  voidedAt?: string | null;
+  voidReason?: string | null;
+  editedByDiscordId: string;
+}
+
 type ActionRow = {
   id: string;
   guildId: string;
@@ -53,6 +66,10 @@ type ActionRow = {
   enforcement: string;
   enforcementDetail: string | null;
   createdAt: Date;
+  updatedAt: Date | null;
+  editedByDiscordId: string | null;
+  voidedAt: Date | null;
+  voidReason: string | null;
 };
 
 function mapInfraction(r: InfractionRow): InfractionDTO {
@@ -82,6 +99,10 @@ function mapAction(r: ActionRow): ModerationActionDTO {
     enforcement: r.enforcement as EnforcementStatus,
     enforcementDetail: r.enforcementDetail,
     createdAt: r.createdAt.toISOString(),
+    updatedAt: r.updatedAt === null ? null : r.updatedAt.toISOString(),
+    editedByDiscordId: r.editedByDiscordId,
+    voidedAt: r.voidedAt === null ? null : r.voidedAt.toISOString(),
+    voidReason: r.voidReason,
   };
 }
 
@@ -234,6 +255,42 @@ export const moderationRepository = {
       take: Math.min(Math.max(limit, 1), 200),
     });
     return rows.map(mapAction);
+  },
+
+  /**
+   * Correct a case in place.
+   *
+   * Scoped by `updateMany` on `{ guildId, id }` rather than `update` by primary
+   * key, the same shape `bridgeRepository` uses: a case id pasted from another
+   * guild must come back as "no such case", not as a cross-guild write by
+   * somebody who happens to be an admin somewhere. `count === 0` is the only
+   * signal Prisma gives for that, so it is the one this returns null on.
+   */
+  async updateAction(
+    guildId: string,
+    actionId: string,
+    patch: ModerationActionPatch,
+  ): Promise<ModerationActionDTO | null> {
+    const data: Record<string, unknown> = {};
+    if (patch.reason !== undefined) data.reason = patch.reason;
+    if (patch.durationSeconds !== undefined) data.durationSeconds = patch.durationSeconds;
+    if (patch.expiresAt !== undefined) {
+      data.expiresAt = patch.expiresAt === null ? null : new Date(patch.expiresAt);
+    }
+    if (patch.active !== undefined) data.active = patch.active;
+    if (patch.enforcement !== undefined) data.enforcement = patch.enforcement;
+    if (patch.enforcementDetail !== undefined) data.enforcementDetail = patch.enforcementDetail;
+    if (patch.voidedAt !== undefined) {
+      data.voidedAt = patch.voidedAt === null ? null : new Date(patch.voidedAt);
+    }
+    if (patch.voidReason !== undefined) data.voidReason = patch.voidReason;
+    data.updatedAt = new Date();
+    data.editedByDiscordId = patch.editedByDiscordId;
+
+    const result = await prisma.moderationAction.updateMany({ where: { id: actionId, guildId }, data });
+    if (result.count === 0) return null;
+    const row = await prisma.moderationAction.findFirst({ where: { id: actionId, guildId } });
+    return row === null ? null : mapAction(row);
   },
 
   async findAction(guildId: string, actionId: string): Promise<ModerationActionDTO | null> {

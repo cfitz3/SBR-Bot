@@ -671,6 +671,10 @@ export const AUDIT: readonly ModerationActionDTO[] = [
     active: true,
     enforcement: "CONFIRMED",
     enforcementDetail: null,
+    updatedAt: null,
+    editedByDiscordId: null,
+    voidedAt: null,
+    voidReason: null,
     createdAt: iso(-1 * 3600_000),
   },
   {
@@ -689,6 +693,10 @@ export const AUDIT: readonly ModerationActionDTO[] = [
     // enforce it and has nothing to confirm.
     enforcement: "NOT_REQUIRED",
     enforcementDetail: null,
+    updatedAt: null,
+    editedByDiscordId: null,
+    voidedAt: null,
+    voidReason: null,
     createdAt: iso(-5 * 86_400_000),
   },
 ];

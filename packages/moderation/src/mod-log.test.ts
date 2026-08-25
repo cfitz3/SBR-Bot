@@ -22,6 +22,10 @@ function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
     enforcementDetail: null,
     active: true,
     createdAt: "2026-03-01T11:00:00.000Z",
+    updatedAt: null,
+    editedByDiscordId: null,
+    voidedAt: null,
+    voidReason: null,
     ...over,
   };
 }

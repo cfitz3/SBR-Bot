@@ -22,6 +22,10 @@ function action(over: Partial<ModerationActionDTO>): ModerationActionDTO {
     enforcementDetail: null,
     active: false,
     createdAt: NOW.toISOString(),
+    updatedAt: null,
+    editedByDiscordId: null,
+    voidedAt: null,
+    voidReason: null,
     ...over,
   };
 }

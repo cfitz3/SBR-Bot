@@ -38,6 +38,27 @@ export interface NewActionRecord {
   readonly sourceContext?: "BRIDGE" | "DISCORD" | "INGAME";
 }
 
+/**
+ * A sparse correction to an existing case.
+ *
+ * Every field is optional and `undefined` means "leave it alone", so the panel
+ * can write one field at a time without reading and re-posting the rest of the
+ * case; `null` where the type allows it is a real value, meaning "clear this".
+ * `editedByDiscordId` is not optional: the store stamps it on every write,
+ * because a case that changed with no author beside the change is a rumour.
+ */
+export interface ModerationActionPatch {
+  readonly reason?: string;
+  readonly durationSeconds?: number | null;
+  readonly expiresAt?: string | null;
+  readonly active?: boolean;
+  readonly enforcement?: EnforcementStatus;
+  readonly enforcementDetail?: string | null;
+  readonly voidedAt?: string | null;
+  readonly voidReason?: string | null;
+  readonly editedByDiscordId: string;
+}
+
 export interface ModerationRepository {
   createInfraction(input: Omit<InfractionDTO, "id" | "createdAt">): Promise<InfractionDTO>;
   createAction(input: NewActionRecord): Promise<ModerationActionDTO>;
@@ -77,6 +98,16 @@ export interface ModerationRepository {
    * still reads "pending" is a ban nobody has been told did not happen.
    */
   listStalePending(before: Date, limit: number): Promise<readonly ModerationActionDTO[]>;
+  /**
+   * Correct a case in place, guild-scoped. Null when no row in this guild has
+   * that id — an id from another guild must read as "no such case", never as a
+   * cross-guild write.
+   */
+  updateAction(
+    guildId: string,
+    actionId: string,
+    patch: ModerationActionPatch,
+  ): Promise<ModerationActionDTO | null>;
   /**
    * One action by its case id, scoped to the guild asking.
    *
