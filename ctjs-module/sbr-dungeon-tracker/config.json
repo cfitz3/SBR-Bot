@@ -1,0 +1,17 @@
+{
+  "//": "Local settings. Yours alone - this file is not distributed with the module.",
+
+  "ingestUrl": "ws://localhost:8080/ingest",
+
+  "//streaming": "false means capture to disk only and never open a socket. Phase 1 default: explore locally first, turn streaming on when you have a backend to point at.",
+  "streaming": false,
+
+  "//capture": "false means the harness registers nothing until you run /sbrtrack start.",
+  "captureOnLoad": false,
+
+  "//verboseTriggers": "tick/step/sound/particle fire thousands of times a session. Off by default so a capture file stays readable; turn on when hunting for a boss-phase signal.",
+  "verboseTriggers": false,
+
+  "//debugChat": "print a line in-game for every captured event. Extremely noisy - a last resort.",
+  "debugChat": false
+}

@@ -67,6 +67,54 @@ function endpoint(url, fallbackPort) {
   }
 }
 
+/**
+ * Does `/ws/ingest` answer a WebSocket upgrade?
+ *
+ * Spoken over a raw socket rather than with a client library, because the thing
+ * being checked *is* the handshake: a 101 carrying the right accept value proves
+ * the route is mounted and the framing code is reachable. `fetch` cannot ask
+ * that question, and a library would be a dependency added for one probe.
+ *
+ * Resolves "ok", "missing" (something answered, but not with an upgrade), or
+ * null when nothing was listening at all.
+ */
+function ingestUpgrade(host, port, timeout = 2000) {
+  return new Promise((resolve) => {
+    const socket = connect({ host, port });
+    let seen = "";
+    const done = (result) => {
+      socket.destroy();
+      resolve(result);
+    };
+    socket.setTimeout(timeout);
+    socket.once("timeout", () => done(null));
+    socket.once("error", () => done(null));
+    socket.once("connect", () => {
+      socket.write(
+        [
+          "GET /ws/ingest HTTP/1.1",
+          `Host: ${host}:${port}`,
+          "Upgrade: websocket",
+          "Connection: Upgrade",
+          "Sec-WebSocket-Version: 13",
+          // The fixed nonce from RFC 6455, so the accept value we expect back is
+          // a constant rather than something this script has to compute.
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    });
+    socket.on("data", (chunk) => {
+      seen += chunk.toString("utf8");
+      if (!seen.includes("\r\n\r\n")) return;
+      const upgraded = seen.startsWith("HTTP/1.1 101") && seen.includes("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+      done(upgraded ? "ok" : "missing");
+    });
+  });
+}
+
+
 say(c.bold("\nSBR Guild Platform — doctor"));
 
 // ── toolchain ───────────────────────────────────────────────────────────────
@@ -278,6 +326,39 @@ for (const app of APPS) {
   if (missing.length === 0) line(PASS(), app.id, `will start — ${app.label}`);
   else line(SKIP(), app.id, `will be skipped — needs ${missing.join(", ")}`);
 }
+
+// ── client ingest ───────────────────────────────────────────────────────────
+
+heading("Client ingest (ctjs)");
+{
+  const moduleDir = join(ROOT, "ctjs-module", "sbr-dungeon-tracker");
+  if (existsSync(join(moduleDir, "metadata.json"))) {
+    line(PASS(), "ctjs module", "ctjs-module/sbr-dungeon-tracker");
+  } else {
+    line(FAIL(), "ctjs module", "ctjs-module/sbr-dungeon-tracker is missing");
+    note("The ChatTriggers module is missing. `npm run ctjs:dev` has nothing to install.");
+  }
+
+  const scheme = env.get("WEB_PANEL_SCHEME") ?? "https";
+  const port = Number(env.get("WEB_PANEL_PORT")) || 3000;
+
+  if (scheme !== "http") {
+    // The probe speaks plaintext. Over TLS a failure here would mean nothing, so
+    // it says that rather than reporting a red mark it cannot justify.
+    line(SKIP(), "/ws/ingest", `not probed — WEB_PANEL_SCHEME is ${scheme}`);
+  } else {
+    const result = await ingestUpgrade("127.0.0.1", port);
+    if (result === "ok") {
+      line(PASS(), "/ws/ingest", `upgrade accepted on 127.0.0.1:${port}`);
+    } else if (result === "missing") {
+      line(FAIL(), "/ws/ingest", "the panel answered, but did not upgrade");
+      note("The web panel is listening but /ws/ingest refused a WebSocket upgrade — rebuild it with `npm run build`.");
+    } else {
+      line(SKIP(), "/ws/ingest", `nothing listening on 127.0.0.1:${port} — start the panel first`);
+    }
+  }
+}
+
 
 // ── verdict ─────────────────────────────────────────────────────────────────
 

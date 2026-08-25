@@ -26,6 +26,7 @@ import {
   leaderboardSource,
 } from "@sbr/db";
 import { AnalyticsServiceImpl, createDomainMetrics } from "@sbr/analytics";
+import { createClientIngestService, type ClientIngestService } from "@sbr/client-ingest";
 import { buildAdminRegistry } from "@sbr/commands-admin";
 import { CommunityServiceImpl } from "@sbr/community";
 import { LeaderboardService } from "@sbr/leaderboards";
@@ -59,7 +60,17 @@ export interface PanelApp {
   readonly log: Logger;
   readonly panel: PanelService;
   readonly mutations: PanelMutations;
+  /** The ctjs client telemetry endpoint, mounted on this process's HTTP server. */
+  readonly ingest: ClientIngestService;
   resolveGuild(discordGuildId: string): Promise<string | null>;
+  /**
+   * Whether a signed-in Discord user may read the ingest debug buffer.
+   *
+   * Lives here rather than in the server because the answer needs the identity
+   * service and the guild resolver, and because it is an authorization decision
+   * that deserves to sit next to the others rather than inline in a route.
+   */
+  canReadIngestDebug(discordId: string, manageableGuildIds: readonly string[]): Promise<boolean>;
   shutdown(): Promise<void>;
 }
 
@@ -374,6 +385,44 @@ export async function createPanelApp(): Promise<PanelApp> {
     log.debug("guild config invalidated by broadcast", { guildId });
   });
 
+  /**
+   * The client telemetry endpoint.
+   *
+   * The resolver is composed rather than imported: `@sbr/client-ingest` asks
+   * only for "turn this IGN into a member", and the answer here is the IGN
+   * index plus the real identity service, so a connection is accepted on the
+   * same evidence a `/link` produced. An account nobody has linked resolves to
+   * null and the socket is closed — which is the point of checking at all.
+   */
+  const ingest = createClientIngestService({
+    log: log.child({ component: "client-ingest" }),
+    resolver: {
+      async resolveByIgn(ign) {
+        const discordId = await identityRepository.findDiscordIdByIgn(ign).catch(() => null);
+        if (discordId === null) return null;
+        const link = await identity.resolveByDiscordId(discordId);
+        // A row in the IGN index is not on its own a live link — it can be a
+        // stale or unverified one. The service is what says the link stands.
+        if (!link.ok || link.value === null) return null;
+        return { memberId: discordId, ign: link.value.ign };
+      },
+    },
+  });
+
+  /**
+   * ADMIN in any guild the viewer can manage. Reading another member's raw
+   * client events is a staff action, so it takes the capability that gates the
+   * other staff surfaces rather than a bare signed-in session.
+   */
+  async function canReadIngestDebug(discordId: string, manageableGuildIds: readonly string[]): Promise<boolean> {
+    for (const discordGuildId of manageableGuildIds.slice(0, 25)) {
+      const internalId = await guildRepository.resolveInternalId(discordGuildId).catch(() => null);
+      if (internalId === null) continue;
+      if (await identity.hasCapability(internalId, discordId, "ADMIN").catch(() => false)) return true;
+    }
+    return false;
+  }
+
   const stopHeartbeat = startHeartbeat(adapters.heartbeat, () => ({
     service: "web-panel",
     instance: INSTANCE_ID,
@@ -385,8 +434,11 @@ export async function createPanelApp(): Promise<PanelApp> {
     log,
     panel,
     mutations,
+    ingest,
     resolveGuild: guildRepository.resolveInternalId,
+    canReadIngestDebug,
     async shutdown() {
+      ingest.shutdown();
       stopHeartbeat();
       await unsubscribe().catch(() => undefined);
       await disconnectDb();

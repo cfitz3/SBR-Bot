@@ -53,6 +53,10 @@ packages/
   commands-bridge member command dispatcher
   commands-admin  staff command dispatcher
   panel-core      two-gate access control + page view-models
+  client-ingest   WebSocket ingest for the in-game ctjs module
+
+ctjs-module/
+  sbr-dungeon-tracker/   ChatTriggers module (NOT an npm workspace)
 ```
 
 Workspaces use **npm** with **TypeScript project references**. The layout is
@@ -132,6 +136,7 @@ refusal, run `docker compose ps` first.
 | `npm start` | run the configured apps (add `-- <app>` to pick) |
 | `npm run dev` | same, with `tsc --watch` + auto-restart |
 | `npm run doctor` | diagnose config, infra, build and schema state |
+| `npm run ctjs:dev` | install the ChatTriggers module into a local Minecraft |
 | `npm run build` | `prisma generate` then `tsc -b` (whole workspace) |
 | `npm run typecheck` | type-check all projects |
 | `npm test` | run every package's test suite (offline, no infra needed) |
@@ -141,6 +146,51 @@ refusal, run `docker compose ps` first.
 | `npm run db:studio` | open Prisma Studio |
 | `npm run db:reset` | **drop and rebuild** the database from migrations |
 | `npm run clean` | clear TS build outputs |
+
+## In-game client module (ctjs)
+
+`ctjs-module/sbr-dungeon-tracker` is a [ChatTriggers](https://www.chattriggers.com)
+module that runs inside a member's own Minecraft client. It watches local
+Skyblock state — chat, scoreboard, action bar, world events — and streams what it
+sees to the web panel over WebSocket.
+
+It is deliberately **not** an npm workspace. ChatTriggers runs Rhino-flavoured JS
+inside the game, not Node; it has no build step, no dependencies, and `tsc -b`
+has nothing to say about it. Keeping it out of the workspace keeps that honest.
+
+Two properties are worth knowing before reading further. It never calls the
+Hypixel HTTP API — it only reads what the player can already see on their own
+screen, so it sits entirely outside the constraints in
+[`HYPIXEL_COMPLIANCE.md`](docs/HYPIXEL_COMPLIANCE.md). And it never performs an
+in-game action: no commands, no clicks, no warps. It is read-only observation.
+
+**Current phase.** Phase 1 is exploration. The module captures raw events to a
+local JSONL file so we can find out what is actually observable, and the backend
+logs what arrives without persisting it. There is no dungeon schema, no
+dashboard, and no history yet — those wait on real captures.
+
+### Installing it
+
+1. Install ChatTriggers into your Minecraft instance and launch the game once, so
+   its `config/ChatTriggers/modules` directory exists.
+2. Set `CTJS_MODULES_DIR` in `.env` if you use MultiMC, Prism or Modrinth — the
+   default guesses the vanilla launcher's path, which is wrong for all three.
+3. `npm run ctjs:dev` — symlinks on macOS/Linux, copies on Windows (a symlink
+   there needs Developer Mode, which is a lot to ask for a dev loop). Re-run it
+   after editing on Windows; on macOS/Linux `/ct reload` in game is enough.
+
+### Pointing it at a local backend
+
+Start the panel (`npm run dev`), then set `ingestUrl` in the installed copy's
+`config.json` to `ws://127.0.0.1:3000/ws/ingest`, matching `WEB_PANEL_PORT`. In
+game: `/sbrtrack start`, then `/sbrtrack stream on`. `/sbrtrack status` shows the
+socket phase and queue depth, and `npm run doctor` reports whether `/ws/ingest`
+is answering upgrades.
+
+Capture and streaming are separate switches on purpose — running the module with
+streaming off keeps everything on the player's own disk. See
+[`docs/CLIENT_INGEST.md`](docs/CLIENT_INGEST.md) for the wire protocol, the close
+codes, the debug endpoint, and the consent posture.
 
 ## Status
 

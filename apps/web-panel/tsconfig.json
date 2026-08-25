@@ -9,6 +9,7 @@
   "references": [
     { "path": "../../packages/analytics" },
     { "path": "../../brand" },
+    { "path": "../../packages/client-ingest" },
     { "path": "../../packages/commands-admin" },
     { "path": "../../packages/community" },
     { "path": "../../packages/config" },
