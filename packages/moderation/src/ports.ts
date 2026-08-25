@@ -69,6 +69,15 @@ export interface ModerationRepository {
    */
   listExpiredActive(guildId: string | null, now: Date, limit: number): Promise<readonly ModerationActionDTO[]>;
   /**
+   * Punishments still waiting on an answer long after anyone could arrive.
+   *
+   * A row goes PENDING when the guild command was sent and the guild said
+   * nothing back inside the wait. That is a fair reading for fifteen seconds
+   * and a lie after ten minutes: by then nothing is coming, and a case that
+   * still reads "pending" is a ban nobody has been told did not happen.
+   */
+  listStalePending(before: Date, limit: number): Promise<readonly ModerationActionDTO[]>;
+  /**
    * One action by its case id, scoped to the guild asking.
    *
    * Guild-scoped rather than a bare lookup because a case id is quoted in
@@ -180,6 +189,17 @@ export interface EnforcementMirror {
 export type EnforcementOutcome =
   | { readonly ok: true }
   | { readonly ok: true; readonly skipped: true; readonly reason: string }
+  /**
+   * Handed over, and not yet answered for.
+   *
+   * Only the guild-chat leg produces this. The command reached the bridge and
+   * the bridge is expected to type it, but nothing has come back within the
+   * wait — a paced backlog, or a Hypixel that printed nothing we recognised.
+   * Calling that a success would repeat the bug this whole surface exists to
+   * close; calling it a failure would alert staff every time the queue is
+   * busy. It leaves the row PENDING for the sweep to settle or escalate.
+   */
+  | { readonly ok: true; readonly pending: true; readonly reason: string }
   | { readonly ok: false; readonly reason: string };
 
 /**
@@ -237,16 +257,44 @@ export interface RelaySyncSource {
  * not wait to see it land, because a punishment that was recorded and enforced
  * in Discord must not be rolled back by a bridge that happens to be offline.
  */
+export type GameCommandOutcome =
+  /** Hypixel printed the notice this command was supposed to produce. */
+  | "CONFIRMED_INGAME"
+  /** Hypixel printed a refusal instead. Named in `detail`. */
+  | "REFUSED_INGAME"
+  /** The bridge typed it. Hypixel said nothing we recognised either way. */
+  | "UNCONFIRMED"
+  /** No Minecraft session, so there was nowhere to type it. */
+  | "NO_SESSION"
+  /** A bridge answered, but it is not this guild's bridge. */
+  | "WRONG_GUILD"
+  /** The outbound queue was full; the command was refused, not delayed. */
+  | "REFUSED_BACKLOG"
+  /** It sat in the queue past its useful life and was discarded untyped. */
+  | "EXPIRED"
+  /** Nothing came back inside the wait. Still possible it lands. */
+  | "TIMED_OUT";
+
+/** What became of one guild command, in the words of whoever found out. */
+export interface GameCommandReceipt {
+  readonly outcome: GameCommandOutcome;
+  /** The guild-chat line that settled it, or why it never got typed. */
+  readonly detail: string;
+}
+
 export interface GameCommandBus {
   /**
-   * Returns whether the command was handed to a bridge that could actually run
-   * it. This used to be `Promise<void>`, which was a lie in the one case that
-   * mattered: the production implementation is a Redis publish, Redis pub/sub
-   * has no store-and-forward, and publishing to a channel with no subscriber
-   * succeeds and drops the message. A `/g kick` for a banned member vanished
-   * exactly that way, so callers now get told.
+   * Returns what became of the command, not whether it was published.
+   *
+   * This used to be `Promise<void>`, then `Promise<boolean>`, and both were a
+   * lie in the case that mattered. The production implementation is a Redis
+   * publish; pub/sub has no store-and-forward, so publishing to a channel with
+   * no subscriber succeeds and drops the message. A `/g kick` for a banned
+   * member vanished exactly that way. `true` then meant "a heartbeat said a
+   * bridge was alive up to 45 seconds ago", which is not the same as "Hypixel
+   * ran it" — so implementations now wait for the bridge to answer for it.
    */
-  send(guildId: string, command: string): Promise<boolean>;
+  send(guildId: string, command: string): Promise<GameCommandReceipt>;
 }
 
 /**

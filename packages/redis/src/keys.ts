@@ -27,6 +27,25 @@ export function createKeyFactory(prefix: string) {
     chanConfig: (guildId: string) => p(`chan:config:${guildId}`),
     chanMod: (guildId: string) => p(`chan:mod:${guildId}`),
     /**
+     * The answer to a `chan:mod` command: whether it was typed, and what the
+     * server said back.
+     *
+     * A separate channel rather than a reply on the same one, because the
+     * audiences are opposite. `chan:mod` runs bridge-ward and only the bridge
+     * listens; this runs back and only the process that issued the punishment
+     * cares. Sharing a channel would have every publisher parsing its own
+     * commands back out again.
+     */
+    chanModAck: (guildId: string) => p(`chan:mod-ack:${guildId}`),
+    /**
+     * The last few guild commands and how each one ended, newest first.
+     *
+     * A capped list, not a stream: this exists so staff can open the panel and
+     * see whether the relay is working, and fifty lines answers that. The audit
+     * row in Postgres is the durable record.
+     */
+    relayLog: (guildId: string) => p(`relay:log:${guildId}`),
+    /**
      * Discord members arriving and leaving, observed by the admin bot.
      *
      * A separate channel from `chan:bridge` because the audiences differ: the

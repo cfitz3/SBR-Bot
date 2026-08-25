@@ -33,7 +33,13 @@ import { LeaderboardService } from "@sbr/leaderboards";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { HypixelClient } from "@sbr/hypixel";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { ESCALATION_SETTING_KEY, ModerationServiceImpl, RELAY_SYNC_SETTING_KEY, WordlistServiceImpl } from "@sbr/moderation";
+import {
+  createGameCommandBus,
+  ESCALATION_SETTING_KEY,
+  ModerationServiceImpl,
+  RELAY_SYNC_SETTING_KEY,
+  WordlistServiceImpl,
+} from "@sbr/moderation";
 import { PanelMutations, PanelService, type ConfigAuditSink } from "@sbr/panel-core";
 import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
@@ -119,6 +125,27 @@ export async function createPanelApp(): Promise<PanelApp> {
     logger: log,
   });
 
+  /**
+   * The same bus, for punishments, with a verdict attached.
+   *
+   * `guildCommands` above answers "was it handed over", which is the right
+   * question for a staffer pressing Accept and the wrong one for a ban: a
+   * `/g kick` Hypixel refuses is handed over just as successfully as one it
+   * honours. This waits for the bridge to say what became of the line, so the
+   * case records the guild's answer instead of Redis's.
+   */
+  const punishmentCommands = createGameCommandBus({
+    publish: (message) => adapters.modBus.publish(message),
+    subscribeAcks: (onAck) => adapters.modBus.subscribeAcks(onAck),
+    live: async (guildId) => {
+      const live = await adapters.heartbeat.list().catch(() => []);
+      const up = live.some((r) => r.service === "bridge-bot" && r.details["mcSpawned"] === true);
+      if (!up) log.warn("guild command not sent: no bridge is in-game", { guildId });
+      return up;
+    },
+    logger: log,
+  });
+
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
@@ -161,21 +188,13 @@ export async function createPanelApp(): Promise<PanelApp> {
     // only the bridge process holds a Minecraft session, and only it knows how
     // fast Hypixel will let that account speak.
     //
-    // The heartbeat check is what makes the publish honest. Redis pub/sub has
-    // no store-and-forward, so publishing to a channel with no subscriber
-    // succeeds and drops the message: without this, a ban issued from the panel
-    // would report its `/g kick` sent every time the bridge was down.
-    gameCommands: {
-      async send(guildId, command) {
-        const live = await adapters.heartbeat.list().catch(() => []);
-        if (!live.some((r) => r.service === "bridge-bot" && r.details["mcSpawned"] === true)) {
-          log.warn("guild command not sent: no bridge is in-game", { guildId });
-          return false;
-        }
-        await adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() });
-        return true;
-      },
-    },
+    // The heartbeat check is what makes the publish honest, and the ack wait is
+    // what makes the *answer* honest. Redis pub/sub has no store-and-forward,
+    // so publishing to a channel with no subscriber succeeds and drops the
+    // message; and a bridge that types a line Hypixel refuses has still typed
+    // it. A ban issued from the panel used to report its `/g kick` sent in both
+    // of those cases.
+    gameCommands: punishmentCommands,
     igns: {
       async ignFor(_guildId, discordId) {
         // Guild-agnostic on purpose: a link is to a person, not to a server, and

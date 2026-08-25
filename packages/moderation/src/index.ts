@@ -83,6 +83,12 @@ export {
   type AutomodRunnerDeps,
   type AutomodSubject,
 } from "./automod-runner.js";
+export {
+  createGameCommandBus,
+  type GameRelayDeps,
+  type RelayAck,
+  type RelayInstruction,
+} from "./game-relay.js";
 export { memberRecordSource, type MemberRecordSourceDeps } from "./record.js";
 export { SafetyServiceImpl, type SafetyServiceDeps } from "./safety.js";
 export {
@@ -104,6 +110,8 @@ export type {
   StaffAlertSink,
   EscalationPolicySource,
   GameCommandBus,
+  GameCommandOutcome,
+  GameCommandReceipt,
   IgnResolver,
   RelaySyncSource,
   BotCapabilities,

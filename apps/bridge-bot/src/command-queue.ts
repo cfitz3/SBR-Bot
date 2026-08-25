@@ -77,6 +77,23 @@ export interface CommandOptions {
    * answers with an error, against a row we would then have marked ACCEPTED.
    */
   readonly maxAgeMs?: number;
+  /**
+   * Called the moment the line reaches the session, and once only.
+   *
+   * `push` returning true means the queue accepted the command, not that
+   * anybody typed it — the two can be ten minutes and a reconnect apart. The
+   * caller waiting to hear whether a ban took effect needs the second event,
+   * so the queue reports it rather than leaving it to be inferred from stats.
+   */
+  readonly onSent?: () => void;
+  /**
+   * Called instead of `onSent` when the command is discarded untyped — aged
+   * out waiting for a session, or displaced to make room for an urgent one.
+   *
+   * Exactly one of the two hooks fires for any command `push` accepted, which
+   * is what lets a caller wait on an answer instead of on a timeout.
+   */
+  readonly onExpired?: () => void;
 }
 
 interface QueuedCommand {
@@ -84,6 +101,24 @@ interface QueuedCommand {
   readonly at: number;
   readonly urgent: boolean;
   readonly maxAgeMs: number;
+  readonly onSent: (() => void) | undefined;
+  readonly onExpired: (() => void) | undefined;
+}
+
+/**
+ * Run a caller's callback without letting it break the drain.
+ *
+ * These fire into a Redis publish and a log write, either of which can throw
+ * on a bad day. A queue that stopped pacing commands because an ack failed to
+ * send would trade the small problem for the one the pacing exists to prevent.
+ */
+function notify(hook: (() => void) | undefined): void {
+  if (hook === undefined) return;
+  try {
+    hook();
+  } catch {
+    // Reported by whatever the hook was writing to, or not at all.
+  }
 }
 
 export class CommandQueue {
@@ -135,6 +170,8 @@ export class CommandQueue {
       at: this.now(),
       urgent,
       maxAgeMs: opts.maxAgeMs ?? this.maxAgeMs,
+      onSent: opts.onSent,
+      onExpired: opts.onExpired,
     };
 
     if (this.pending.length >= this.maxBacklog) {
@@ -173,9 +210,11 @@ export class CommandQueue {
   /** Drop the newest ordinary command to make room. False when there is none. */
   private displaceOrdinary(): boolean {
     for (let i = this.pending.length - 1; i >= 0; i -= 1) {
-      if (this.pending[i]?.urgent !== true) {
+      const victim = this.pending[i];
+      if (victim !== undefined && !victim.urgent) {
         this.pending.splice(i, 1);
         this.evicted += 1;
+        notify(victim.onExpired);
         return true;
       }
     }
@@ -200,6 +239,7 @@ export class CommandQueue {
         if (this.now() - entry.at >= entry.maxAgeMs) {
           this.pending.shift();
           this.expired += 1;
+          notify(entry.onExpired);
           continue;
         }
         if (!this.deliver(entry.command)) {
@@ -213,6 +253,7 @@ export class CommandQueue {
         this.pending.shift();
         this.lastSentAt = this.now();
         this.sent += 1;
+        notify(entry.onSent);
       }
     } finally {
       this.draining = false;

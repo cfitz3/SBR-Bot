@@ -154,3 +154,39 @@ test("a join answer that outlived its window is abandoned, not delivered late", 
   assert.deepEqual(sent, []);
   assert.equal(q.stats().expired, 1);
 });
+
+test("exactly one hook fires for every command the queue accepts", async () => {
+  // The ack channel rests on this. A caller waiting to hear whether a ban
+  // reached the game has to be told either way; a command that leaves the
+  // queue silently costs it a full timeout and records a punishment as
+  // unconfirmed that in fact never left the building.
+  const seen: string[] = [];
+  const hooks = (name: string) => ({
+    onSent: () => seen.push(`sent:${name}`),
+    onExpired: () => seen.push(`gone:${name}`),
+  });
+
+  // Held with no session, then aged out.
+  const held = queue(() => false, { maxAgeMs: 5_000 });
+  held.q.push("/g kick A late", hooks("A"));
+  await held.q.idle();
+  assert.deepEqual(seen, ["gone:A"]);
+
+  // Delivered.
+  seen.length = 0;
+  const sent: string[] = [];
+  const live = queue((c) => (sent.push(c), true));
+  live.q.push("/g kick B spam", hooks("B"));
+  await live.q.idle();
+  assert.deepEqual(sent, ["/g kick B spam"]);
+  assert.deepEqual(seen, ["sent:B"]);
+
+  // Displaced by an urgent command. Not the entry's fault, and still an
+  // answer its caller is owed.
+  seen.length = 0;
+  const full = queue(() => false, { maxBacklog: 2 });
+  full.q.push("/g mute C 1h", hooks("C"));
+  full.q.push("/g kick D spam", hooks("D"));
+  full.q.push("/guild accept Jack", { urgent: true });
+  assert.deepEqual(seen, ["gone:D"]);
+});

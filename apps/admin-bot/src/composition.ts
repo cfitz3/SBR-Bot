@@ -21,6 +21,7 @@ import {
   wordlistRepository,
 } from "@sbr/db";
 import {
+  createGameCommandBus,
   ESCALATION_SETTING_KEY,
   ModerationServiceImpl,
   RELAY_SYNC_SETTING_KEY,
@@ -189,6 +190,27 @@ export async function createAdminApp(): Promise<AdminApp> {
   };
 
   /**
+   * The same bus, for punishments, with a verdict attached.
+   *
+   * `guildCommands` above answers "was it handed over", which is the right
+   * question for a staffer pressing Accept and the wrong one for a ban: a
+   * `/g kick` Hypixel refuses is handed over just as successfully as one it
+   * honours. This waits for the bridge to say what became of the line, so the
+   * case records the guild's answer instead of Redis's.
+   */
+  const punishmentCommands = createGameCommandBus({
+    publish: (message) => adapters.modBus.publish(message),
+    subscribeAcks: (onAck) => adapters.modBus.subscribeAcks(onAck),
+    live: async (guildId) => {
+      const live = await adapters.heartbeat.list().catch(() => []);
+      const up = live.some((r) => r.service === "bridge-bot" && r.details["mcSpawned"] === true);
+      if (!up) log.warn("guild command not sent: no bridge is in-game", { guildId });
+      return up;
+    },
+    logger: log,
+  });
+
+  /**
    * The Discord half of enforcement, over the same `GuildEffects` the commands
    * use. This is the port whose absence was the bug: the service was handed the
    * Redis mirror as its only "enforcement", the mirror is a cache, and so
@@ -296,9 +318,8 @@ export async function createAdminApp(): Promise<AdminApp> {
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
     // Punishment sync into guild chat. The command is published, not typed:
     // only the bridge process holds a Minecraft session, and only it knows how
-    // fast Hypixel will let that account speak. Deliverability is checked
-    // first — see `guildCommands`.
-    gameCommands: { send: async (guildId, command) => guildCommands.send(guildId, command) },
+    // fast Hypixel will let that account speak.
+    gameCommands: punishmentCommands,
     igns: {
       async ignFor(_guildId, discordId) {
         // Guild-agnostic on purpose: a link is to a person, not to a server, and
@@ -440,6 +461,13 @@ export async function createAdminApp(): Promise<AdminApp> {
     effects,
     sweepSafety: () => safety.sweepExpired(),
     async sweepPunishments() {
+      // Two jobs on one cadence. Reversal lifts what has expired; the second
+      // call settles what was never answered for, so a `/g kick` the guild
+      // ignored ends up as a FAILED case with an alert rather than a row that
+      // reads "pending" until somebody happens to open it.
+      await moderation.settleStalePending().catch((error: unknown) => {
+        log.error("could not settle unconfirmed punishments", { error: String(error) });
+      });
       const r = await moderation.reverseExpired();
       return r.ok ? r.value : 0;
     },

@@ -245,6 +245,41 @@ export class ModerationServiceImpl implements ModerationService {
     return ok(reversed);
   }
 
+  /**
+   * Settle the rows the guild never answered for.
+   *
+   * PENDING is an honest answer for the fifteen seconds a `/g kick` is allowed
+   * to take, and a dishonest one after ten minutes: nothing is coming, and a
+   * case still reading "pending" is a punishment nobody has been told did not
+   * land. This is the backstop that guarantees no row sits in limbo — it turns
+   * the silence into a FAILED case and a staff alert, which is the same
+   * treatment a refusal gets, because the consequence is identical.
+   *
+   * The grace period is generous on purpose. It has to outlast the bridge's own
+   * outbound queue, which holds a command for as long as ten minutes waiting
+   * for a Minecraft session to come back.
+   */
+  async settleStalePending(graceMs = 10 * 60_000, limit = 50): Promise<Result<number>> {
+    const before = new Date(this.now().getTime() - graceMs);
+    const stale = await this.repo.listStalePending(before, limit);
+
+    let escalated = 0;
+    for (const action of stale) {
+      const detail = "the guild never confirmed the command; it was still pending when the sweep ran";
+      await this.repo.setEnforcement(action.id, "FAILED", detail).catch((error: unknown) => {
+        this.log.error("could not escalate a stale pending enforcement", {
+          guildId: action.guildId,
+          actionId: action.id,
+          error: message(error),
+        });
+      });
+      await this.alertStaff(action, detail);
+      escalated += 1;
+    }
+    if (escalated > 0) this.log.warn("unconfirmed punishments escalated", { escalated });
+    return ok(escalated);
+  }
+
   async applyAction(input: ApplyActionInput): Promise<Result<ModerationActionDTO, ModerationError>> {
     const punitive = isPunitive(input.type);
 
@@ -343,9 +378,21 @@ export class ModerationServiceImpl implements ModerationService {
     if (!discord.ok) failures.push(`Discord: ${discord.reason}`);
     if (!game.ok) failures.push(`guild chat: ${game.reason}`);
 
+    // Unsettled, not failed. The row stays PENDING and `punishment-sweep`
+    // escalates it if the guild never answers, which is what keeps an
+    // unconfirmed kick from reading as a finished one without alerting staff
+    // every time the outbound queue happens to be busy.
+    const unsettled = "pending" in game && game.pending ? game.reason : null;
+
     const status: EnforcementStatus =
-      failures.length > 0 ? "FAILED" : requiresEnforcement(action.type) ? "CONFIRMED" : "NOT_REQUIRED";
-    const detail = failures.length > 0 ? failures.join("; ") : null;
+      failures.length > 0
+        ? "FAILED"
+        : !requiresEnforcement(action.type)
+          ? "NOT_REQUIRED"
+          : unsettled !== null
+            ? "PENDING"
+            : "CONFIRMED";
+    const detail = failures.length > 0 ? failures.join("; ") : unsettled;
 
     // Counted only once both surfaces have answered, so the Analytics chart
     // means "a punishment took effect" rather than "a row was written". The
@@ -539,17 +586,29 @@ export class ModerationServiceImpl implements ModerationService {
 
     const command = plan.command;
     try {
-      const delivered = await this.gameCommands.send(action.guildId, command);
-      if (!delivered) {
-        return { ok: false, reason: `the bridge could not run \`${command}\` (offline or not in-game)` };
-      }
+      const receipt = await this.gameCommands.send(action.guildId, command);
       this.log.info("relay sync sent", {
         guildId: action.guildId,
         type: action.type,
         target: action.targetDiscordId,
         command,
+        outcome: receipt.outcome,
+        detail: receipt.detail,
       });
-      return { ok: true };
+      // Three answers, not two. Hypixel accepting the line is the only
+      // success; Hypixel refusing it, or the bridge never typing it, is a
+      // failure the case has to name. Everything in between — typed but
+      // unacknowledged, or nothing back inside the wait — is neither, and is
+      // left for the sweep rather than guessed at in either direction.
+      switch (receipt.outcome) {
+        case "CONFIRMED_INGAME":
+          return { ok: true };
+        case "UNCONFIRMED":
+        case "TIMED_OUT":
+          return { ok: true, pending: true, reason: `\`${command}\` was sent but not confirmed in game (${receipt.detail})` };
+        default:
+          return { ok: false, reason: `the guild did not run \`${command}\` (${receipt.detail})` };
+      }
     } catch (error) {
       this.log.error("relay sync failed", {
         guildId: action.guildId,

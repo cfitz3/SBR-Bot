@@ -416,6 +416,48 @@ export interface ModBusMessage {
 }
 
 /**
+ * How one guild command ended.
+ *
+ * Two layers, because they fail differently and staff need to tell them apart.
+ * The first four are the bridge answering for itself - did it type the line.
+ * The last two are Hypixel answering - did it accept the line that was typed.
+ * `TYPED` is therefore not success; it is the absence of an answer yet.
+ */
+export type ModAckOutcome =
+  /** Handed to Minecraft. Whether the server liked it is not known yet. */
+  | "TYPED"
+  /** The bridge is up but not this guild's bridge. */
+  | "WRONG_GUILD"
+  /** The outbound queue is full; the command was refused, not delayed. */
+  | "REFUSED_BACKLOG"
+  /** Sat in the queue past its useful life and was discarded untyped. */
+  | "EXPIRED"
+  /** Hypixel printed the notice this command was supposed to produce. */
+  | "CONFIRMED_INGAME"
+  /** Hypixel printed a refusal instead. */
+  | "REFUSED_INGAME";
+
+/** What became of one instruction from the moderation bus. */
+export interface ModAckMessage {
+  readonly guildId: string;
+  readonly kind: "GAME_COMMAND_ACK";
+  /** The `correlationId` of the `ModBusMessage` this answers. */
+  readonly correlationId: string;
+  readonly outcome: ModAckOutcome;
+  /** The guild-chat line that settled it, or why it could not be typed. */
+  readonly detail: string;
+}
+
+const ACK_OUTCOMES: readonly ModAckOutcome[] = [
+  "TYPED",
+  "WRONG_GUILD",
+  "REFUSED_BACKLOG",
+  "EXPIRED",
+  "CONFIRMED_INGAME",
+  "REFUSED_INGAME",
+];
+
+/**
  * The moderation bus: how a decision made in one process reaches the process
  * that can act on it.
  *
@@ -457,6 +499,68 @@ export class RedisModBus {
       await sub.pUnsubscribe(pattern).catch(() => undefined);
       await sub.quit().catch(() => undefined);
     };
+  }
+
+  /** Answer one instruction. Published by the bridge, read by whoever issued it. */
+  async publishAck(message: ModAckMessage): Promise<void> {
+    await this.ctx.client.publish(this.ctx.keys.chanModAck(message.guildId), JSON.stringify(message));
+  }
+
+  /**
+   * Listen for answers.
+   *
+   * Also pattern-subscribed, and for a reason worth stating: the admin bot and
+   * the panel both publish commands for guilds they learn about at runtime, so
+   * a subscription per guild would have to be opened at the moment the first
+   * punishment is issued — which is exactly too late to hear its answer.
+   */
+  async subscribeAcks(onAck: (ack: ModAckMessage) => void): Promise<() => Promise<void>> {
+    const sub = this.ctx.client.duplicate();
+    sub.on("error", () => {
+      // Same reasoning as `subscribe`: a blip on a channel this process only
+      // listens to must not take the process down.
+    });
+    await sub.connect();
+
+    const pattern = this.ctx.keys.chanModAck("*");
+    await sub.pSubscribe(pattern, (raw: string) => {
+      const parsed = parseModAckMessage(raw);
+      if (parsed !== null) onAck(parsed);
+    });
+
+    return async () => {
+      await sub.pUnsubscribe(pattern).catch(() => undefined);
+      await sub.quit().catch(() => undefined);
+    };
+  }
+}
+
+/**
+ * Validated like the instruction it answers.
+ *
+ * Less dangerous than a command — nothing here gets typed anywhere — but an
+ * unchecked `outcome` would let a malformed payload mark a punishment confirmed
+ * that never landed, which is the state this whole channel exists to prevent.
+ */
+export function parseModAckMessage(raw: string): ModAckMessage | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    const { guildId, kind, correlationId, outcome, detail } = record;
+    if (kind !== "GAME_COMMAND_ACK") return null;
+    if (typeof guildId !== "string" || guildId.length === 0) return null;
+    if (typeof correlationId !== "string" || correlationId.length === 0) return null;
+    if (typeof outcome !== "string" || !ACK_OUTCOMES.includes(outcome as ModAckOutcome)) return null;
+    return {
+      guildId,
+      kind,
+      correlationId,
+      outcome: outcome as ModAckOutcome,
+      detail: typeof detail === "string" ? detail : "",
+    };
+  } catch {
+    return null;
   }
 }
 

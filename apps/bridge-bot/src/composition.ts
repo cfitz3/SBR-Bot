@@ -54,6 +54,7 @@ import {
 } from "@sbr/guild-config";
 import {
   AutomodRunner,
+  createGameCommandBus,
   AUTOMOD_SETTING_KEY,
   ESCALATION_SETTING_KEY,
   memberRecordSource,
@@ -81,7 +82,15 @@ import {
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
 import { createLogger, type Logger } from "@sbr/observability";
-import { closeRedis, createRedisAdapters, getRedis, startHeartbeat, type EventReminderMessage } from "@sbr/redis";
+import {
+  closeRedis,
+  createRedisAdapters,
+  getRedis,
+  startHeartbeat,
+  type EventReminderMessage,
+  type ModAckMessage,
+  type ModBusMessage,
+} from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import {
   err,
@@ -279,7 +288,17 @@ export interface BridgeApp {
    * published before the bridge is up are dropped deliberately, since a
    * punishment that waits for a boot is one nobody is expecting any more.
    */
-  setGameCommandSink(sink: ((guildId: string, command: string) => void) | null): void;
+  /**
+   * Where a moderation instruction goes once it reaches this process.
+   *
+   * Handed the whole message rather than `(guildId, command)`, because the
+   * `correlationId` is what lets the transport answer for the command. It used
+   * to be dropped here, which is why nothing anywhere could tell a `/g kick`
+   * Hypixel ran from one it threw away.
+   */
+  setGameCommandSink(sink: ((message: ModBusMessage) => void) | null): void;
+  /** Say what became of one instruction, for whoever is waiting on it. */
+  ackGameCommand(ack: Omit<ModAckMessage, "kind">): Promise<void>;
   /**
    * Hand the composition somewhere to put event reminders arriving on the
    * bridge bus.
@@ -627,8 +646,27 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // punishment enforced. The sink is attached when the Minecraft session
   // spawns; until then a `/g kick` has nowhere to go, and saying so is the
   // whole point.
-  let gameCommandSink: ((guildId: string, command: string) => void) | null = null;
+  let gameCommandSink: ((message: ModBusMessage) => void) | null = null;
   let modLogPost: ((channelId: string, embed: EmbedView) => Promise<boolean>) | null = null;
+
+  /**
+   * The answer half of the moderation bus.
+   *
+   * Best effort by design: a failed ack costs the publisher a timeout and a
+   * PENDING row, which the sweep settles. Failing the command itself over it
+   * would be worse — the kick may well have landed.
+   */
+  async function publishAck(ack: Omit<ModAckMessage, "kind">): Promise<void> {
+    try {
+      await adapters.modBus.publishAck({ ...ack, kind: "GAME_COMMAND_ACK" });
+    } catch (error) {
+      log.warn("guild command ack could not be published", {
+        guildId: ack.guildId,
+        outcome: ack.outcome,
+        error: String(error),
+      });
+    }
+  }
 
   /**
    * The guild's moderation log, same contract as the admin bot's.
@@ -668,16 +706,20 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     botCaps: { async canPerform() { return true; } },
     metrics,
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
-    gameCommands: {
-      async send(guildId, command) {
-        if (gameCommandSink === null) {
-          log.warn("guild command not sent: no Minecraft session", { guildId });
-          return false;
-        }
-        await adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() });
-        return true;
+    // Automod's guild commands take the same round trip as the admin bot's,
+    // even though the subscriber that types them is in this very process. The
+    // alternative — calling the sink directly — would skip the ack channel, and
+    // an automod kick would be the one punishment nobody could tell had landed.
+    gameCommands: createGameCommandBus({
+      publish: (message) => adapters.modBus.publish(message),
+      subscribeAcks: (onAck) => adapters.modBus.subscribeAcks(onAck),
+      live: async (guildId) => {
+        if (gameCommandSink !== null) return true;
+        log.warn("guild command not sent: no Minecraft session", { guildId });
+        return false;
       },
-    },
+      logger: log,
+    }),
     igns: {
       async ignFor(_guildId, discordId) {
         const link = await identityRepository.findPrimaryLinkByDiscordId(discordId).catch(() => null);
@@ -754,9 +796,18 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   const unsubscribeMod = await adapters.modBus.subscribe((message) => {
     if (gameCommandSink === null) {
       log.warn("moderation command dropped: bridge not connected", { guildId: message.guildId });
+      // Answered rather than merely logged. The publisher checked a heartbeat
+      // up to 45 seconds old before sending this, so "the session went away in
+      // between" is a real race, and silence would cost it a full timeout.
+      void publishAck({
+        guildId: message.guildId,
+        correlationId: message.correlationId,
+        outcome: "EXPIRED",
+        detail: "the bridge has no Minecraft session",
+      });
       return;
     }
-    gameCommandSink(message.guildId, message.command);
+    gameCommandSink(message);
   });
 
   let eventReminderSink: ((message: EventReminderMessage) => void) | null = null;
@@ -874,6 +925,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     get roleMenus() {
       return liveRoleMenus;
     },
+    ackGameCommand: publishAck,
     setGameCommandSink(sink) {
       gameCommandSink = sink;
     },

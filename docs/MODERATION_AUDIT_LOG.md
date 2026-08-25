@@ -328,3 +328,74 @@ In `packages/moderation/src/service.test.ts`, enforcement block:
 - *a BAN relays `/g kick TargetIGN`*.
 - *a BAN with the bridge offline is FAILED and alerts staff* — the exact reported symptom,
   now a red case and a staff ping instead of silence.
+
+---
+
+# Second pass — confirmation, mirroring, and case management
+
+The first pass closed the Discord half of a punishment. This one is about the half that
+happens in Hypixel, and about being able to see and correct either. Five things were asked
+for: mirror in-game guild kicks back to Discord, sync immediately when a punishment is
+issued, manage cases from the panel, require a reason on guild commands, and have some way
+of knowing any of it worked.
+
+## Part 1 — `/g kick` was sent without a reason
+
+**Confirmed, root cause, fixed.** `RelayCommandInput` had no `reason` field and
+`service.ts` never passed `action.reason`, so every relayed ban typed `/g kick Notch`.
+Hypixel requires a reason and discards the line. The case recorded a guild kick that had
+never happened — not a race, not an outage, a command that was *never once* going to work.
+
+- `resolveGameCommand` now returns a three-way `GameCommandPlan` (`send` / `skip` /
+  `blocked`) instead of `string | null`. The old `null` conflated "the mapping says do
+  nothing" with "the mapping says do something and we cannot build it", and both landed as
+  `NOT_REQUIRED` — the same silent-success shape as the original bug.
+- `sanitizeGameReason` strips rather than rejects (moderation reasons are free text up to
+  500 chars, guild chat is not), which also removes newlines and a leading `/`, i.e. chat
+  injection. 64-char cap.
+- `/g mute` keeps Hypixel's documented `<name> <time>` grammar. A trailing reason is parsed
+  as part of the duration and refuses the line — so the reason goes on kick only.
+- `/g kick` from the staff surface (`packages/screening`) now refuses an empty reason
+  instead of sending a bare command that reported success.
+
+**Deviation from the plan, deliberate:** the plan said an *unlinked* target on a mapped
+action should be `blocked`. It is `skip`. Nobody verified the account, so the roles sync
+never gave them a guild slot; there is genuinely nothing in game to act on, and alerting
+staff every time a Discord-only member is banned would bury the alerts that matter. The
+skip reason names the cause, so the mod-log card does not read as though the mapping had
+no opinion.
+
+## Part 2a — Nothing anywhere knew whether a command ran
+
+**Confirmed gap, by design, now closed.** `RedisModBus` was one-way. `ModBusMessage`
+carried a `correlationId` that was generated, transported, validated — and dropped at the
+subscriber, which called `sink(message.guildId, message.command)`. `gameCommands.send()`
+returning `true` proved only that a heartbeat had said `mcSpawned` up to 45 seconds ago.
+Three separate copies of that check existed, all wrong in the same way.
+
+- **Answer channel.** `chan:mod-ack:<guildId>` carries `ModAckMessage` with a validated
+  `ModAckOutcome`. The bridge answers for every instruction it is handed.
+- **`createGameCommandBus`** (`packages/moderation/src/game-relay.ts`) replaces all three
+  hand-rolled publishers. Pre-flight on the heartbeat, publish, then wait for an answer on
+  the correlation id. Transport is injected, so the moderation package still knows nothing
+  about Redis.
+- **`TYPED` is not a verdict.** The bridge saying it typed the line is exactly the old false
+  success. It is remembered, not settled on, so a command Hypixel never comments on reports
+  `UNCONFIRMED` rather than success — and a command that was never typed reports
+  `TIMED_OUT` rather than the same thing.
+- **A third enforcement state.** `EnforcementOutcome` gained `{ ok: true, pending: true }`,
+  and an unconfirmed guild command leaves the row `PENDING` with a detail. Calling it
+  CONFIRMED repeats the original bug; calling it FAILED alerts staff every time the queue
+  is busy.
+- **Nothing sits in limbo.** `settleStalePending` runs on the existing 5-minute punishment
+  sweep and escalates any row still `PENDING` after 10 minutes to `FAILED` with the same
+  staff alert a refusal gets. The grace period outlasts the bridge's own outbound queue,
+  which holds a command for up to ten minutes waiting for a session.
+- **The queue tells the truth about every entry.** `CommandQueue` gained `onSent`/`onExpired`
+  hooks, and eviction-by-urgent-command now fires `onExpired` too. Exactly one hook fires
+  for every command `push` accepted — without that, a displaced command costs its caller a
+  full timeout.
+
+Every one of these is a way a `/g kick` used to read as done: bridge offline, wrong guild,
+queue full, aged out, displaced, typed-and-refused, or typed-and-ignored. They are now
+seven distinguishable outcomes rather than one boolean.
