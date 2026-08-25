@@ -950,6 +950,53 @@ export const DEFAULT_PANEL = {
     colEnds: "Ends",
     colSince: "Since",
     colDuration: "Duration",
+    colManage: "",
+
+    /**
+     * Correcting a case after the fact.
+     *
+     * A case log nobody can fix is a case log that gets worked around: the
+     * wrong reason stays wrong, the mistaken ban gets undone by hand somewhere
+     * the log never hears about, and the row stops describing reality. These
+     * are the words on the controls that keep the row honest instead.
+     */
+    manage: "Manage",
+    manageClose: "Close",
+    caseTitle: "Case {id}",
+    caseIntro:
+      "Editing a case corrects the record. It does not re-run the punishment — use Try again for that, or Void to withdraw it and lift whatever it is still holding.",
+    caseVoidedReason: "Voided: {reason}",
+    caseVoidedNote: "This case has been withdrawn. Nothing further can be changed on it.",
+    caseEditedBy: "Last corrected by {who}, {when}",
+
+    caseReasonLabel: "Reason",
+    caseReasonHint: "What the audit row says. Correcting it does not notify the member again.",
+    caseDurationLabel: "Duration",
+    caseDurationHint:
+      "Measured from when the punishment was issued, not from now. Leave blank for permanent. Admins only.",
+    caseEnforcementLabel: "Enforcement",
+    caseEnforcementHint:
+      "Say what actually happened. Use this when you carried the punishment out by hand, or when it never took.",
+    caseEnforcementPending: "Waiting on the guild — pick a settled answer to close it by hand",
+    caseNoteLabel: "Note",
+    caseNotePlaceholder: "e.g. banned manually in the Discord client",
+    caseNoteHint: "Kept with the enforcement record, so the next reader knows who settled it and how.",
+    /** Keyed by the statuses a person is allowed to declare. */
+    enforcementName: {
+      CONFIRMED: "Enforced",
+      FAILED: "Not enforced",
+      NOT_REQUIRED: "Nothing to enforce",
+      PENDING: "In progress",
+    },
+
+    caseRetry: "Try again",
+    caseRetryHint: "Runs the same enforcement the original action ran, and restamps the result.",
+    caseVoid: "Void case",
+    caseVoidConfirm: "Void it — click again",
+    caseVoidPlaceholder: "Why this case is being withdrawn",
+    caseVoidHint: "Withdraws the case and lifts any ban or mute it is still holding.",
+    errCaseEnforcement: "Pick what actually happened before recording it.",
+    errCaseVoidReason: "A reason is required — a withdrawn case with no why is one staff will be asked about.",
 
     /**
      * The relay strip. A punishment is only half issued until the guild has run
@@ -981,6 +1028,7 @@ export const DEFAULT_PANEL = {
     badgeInForce: "in force",
     badgeExpired: "expired",
     badgeLifted: "lifted",
+    badgeVoid: "voided",
     permanent: "permanent",
     /** A run-out mute reads as "2h (14m left)" while it still has time on it. */
     remaining: "{span} ({left} left)",

@@ -41,6 +41,11 @@ export interface ModLogSink {
  * apart — colour alone cannot carry two independent facts.
  */
 function colorFor(action: ModerationActionDTO): ViewColor {
+  // A withdrawn case is not a punishment any more, whatever it was issued as.
+  // Leaving a voided ban red would keep it reading as one at a glance, which is
+  // the same class of mistake as a card that says "banned" about someone who is
+  // still here.
+  if (action.voidedAt !== null) return "NEUTRAL";
   if (action.enforcement === "FAILED") return "DANGER";
   switch (action.type) {
     case "BAN":
@@ -165,9 +170,13 @@ export function modLogEmbed(action: ModerationActionDTO, now: Date = new Date())
   }
   fields.push(...enforcementField(action));
 
+  if (action.voidedAt !== null && action.voidReason !== null) {
+    fields.push({ name: "Voided", value: action.voidReason });
+  }
+
   const state = punishmentState(action, now);
   const footer =
-    state === "LIFTED" || state === "EXPIRED"
+    state === "LIFTED" || state === "EXPIRED" || state === "VOID"
       ? `Case ${action.id} · ${describeState(state)}`
       : `Case ${action.id}`;
 

@@ -95,10 +95,19 @@ const sectionLabel = (id: Section): string => {
  * which rule you had open, because saving a rule re-reads the page and landing
  * back on a collapsed list would lose the edit you were halfway through.
  */
-const state: { target: string; section: Section; editing: string | null } = {
+const state: {
+  target: string;
+  section: Section;
+  editing: string | null;
+  managing: string | null;
+} = {
   target: "",
   section: "history",
   editing: null,
+  // The case whose management controls are open, if any. One at a time: these
+  // controls change a punishment somebody is currently serving, and a page of
+  // them all unfolded at once makes it far too easy to correct the wrong row.
+  managing: null,
 };
 
 // ─────────────────────────── client-side bounds ───────────────────────────
@@ -238,7 +247,7 @@ function historySection(guildId: string, data: ModerationVM, rerender: () => voi
     // the question somebody arrives with when something is wrong, and it was
     // previously answerable only by reading a process log.
     card(t("cardRelay"), relayBody(data.relay)),
-    card(data.target ? t("cardActionsMember") : t("cardActionsRecent"), actionsBody(data)),
+    card(data.target ? t("cardActionsMember") : t("cardActionsRecent"), actionsBody(guildId, data, rerender)),
     // Only worth showing when no target is picked: with one, the card above it
     // is the same list narrowed to the person actually being asked about.
     data.target ? null : card(t("cardRecentInfractions"), infractionsBody(data.recentInfractions, false)),
@@ -536,21 +545,224 @@ function relayTone(outcome: string): BadgeTone {
   }
 }
 
-function actionsBody(data: ModerationVM): HTMLElement {
+function actionsBody(guildId: string, data: ModerationVM, rerender: () => void): HTMLElement {
   if (data.actions.length === 0) {
     return emptyState(data.target ? "moderationActionsMember" : "moderationActionsGuild");
   }
 
-  return table(
-    [t("colAction"), t("colMember"), t("colBy"), t("colReason"), t("colDuration"), t("colWhen")],
+  const managed = data.actions.find((row) => row.id === state.managing) ?? null;
+
+  const rows = table(
+    [t("colAction"), t("colMember"), t("colBy"), t("colReason"), t("colDuration"), t("colWhen"), t("colManage")],
     data.actions.map((row) => [
-      h("div", { class: "job-cell" }, row.type, stateBadge(row)),
+      // Two badges, because they answer different questions: what the case is
+      // now, and whether it ever actually happened. A row that says BAN and
+      // nothing else is the shape this whole page exists to stop.
+      h("div", { class: "job-cell" }, row.type, stateBadge(row), enforcementBadge(row)),
       h("code", {}, row.targetDiscordId ?? c("dash")),
       h("code", {}, row.actorDiscordId),
       row.reason,
       describeDuration(row),
       relativeTime(row.createdAt),
+      manageButton(row, rerender),
     ]),
+  );
+
+  return h("div", {}, rows, managed === null ? null : caseCard(guildId, managed, rerender));
+}
+
+/** Opens the controls for one case, and closes whichever was open before. */
+function manageButton(row: ModerationActionVM, rerender: () => void): HTMLElement {
+  const open = state.managing === row.id;
+  const button = h("button", { class: "button", type: "button" }, open ? t("manageClose") : t("manage"));
+  button.addEventListener("click", () => {
+    state.managing = open ? null : row.id;
+    rerender();
+  });
+  return button;
+}
+
+/** Nothing to enforce prints nothing: a note carries no badge worth the space. */
+function enforcementBadge(row: ModerationActionVM): HTMLElement | null {
+  const label = lookup(t("enforcementName"), row.enforcement, row.enforcement);
+  switch (row.enforcement) {
+    case "NOT_REQUIRED":
+      return null;
+    case "CONFIRMED":
+      return badge(label, "ok");
+    case "FAILED":
+      return badge(label, "bad");
+    default:
+      return badge(label, "warn");
+  }
+}
+
+/** The statuses a person may declare by hand; the sweep owns PENDING. */
+const MANUAL_ENFORCEMENT: readonly string[] = ["CONFIRMED", "FAILED", "NOT_REQUIRED"];
+
+function enforcementOptions(current: string): readonly (readonly [string, string])[] {
+  const settable = MANUAL_ENFORCEMENT.map(
+    (value) => [value, lookup(t("enforcementName"), value, value)] as const,
+  );
+  // A row sitting in PENDING still has to show what it is sitting in, even
+  // though picking it back is not on offer.
+  return MANUAL_ENFORCEMENT.includes(current)
+    ? settable
+    : [["", t("caseEnforcementPending")] as const, ...settable];
+}
+
+/** `30m`, `2h`, `7d` -- written the way the duration box parses it back. */
+function compactSpan(seconds: number): string {
+  for (const [unit, size] of [["d", 86_400], ["h", 3_600], ["m", 60]] as const) {
+    if (seconds % size === 0) return `${seconds / size}${unit}`;
+  }
+  return `${seconds}s`;
+}
+
+/**
+ * Correcting one case.
+ *
+ * Every control writes only its own field, the wordlist card's idiom, because
+ * the fields here are independent in a way a rule's are not: fixing the wording
+ * of a reason should not resend a duration, and re-declaring enforcement should
+ * not quietly reassert a reason somebody else edited in the meantime.
+ *
+ * `expiresAt` is deliberately not offered. The server derives it from the
+ * duration and the time the case was issued; two controls that could disagree
+ * about when a mute ends would reintroduce exactly the divergence between the
+ * log and reality that this page exists to close.
+ */
+function caseCard(guildId: string, row: ModerationActionVM, rerender: () => void): HTMLElement {
+  const title = t("caseTitle").replace("{id}", row.id);
+  const trail: (HTMLElement | null)[] = [
+    h("p", { class: "hint" }, t("caseIntro")),
+    row.editedByDiscordId === null || row.updatedAt === null
+      ? null
+      : h(
+          "p",
+          { class: "field-hint" },
+          t("caseEditedBy")
+            .replace("{who}", row.editedByDiscordId)
+            .replace("{when}", relativeTime(row.updatedAt)),
+        ),
+  ];
+
+  // A void is terminal. Offering edit boxes on a withdrawn case would invite a
+  // correction the server will refuse, so the card says what happened instead.
+  if (row.voidedAt !== null) {
+    return card(
+      title,
+      h(
+        "div",
+        {},
+        ...trail,
+        h("p", { class: "field-hint" }, t("caseVoidedNote")),
+        row.voidReason === null
+          ? null
+          : h("p", { class: "field-hint" }, t("caseVoidedReason").replace("{reason}", row.voidReason)),
+      ),
+      badge(t("badgeVoid"), "neutral"),
+    );
+  }
+
+  const status = statusSlot();
+
+  const note = h("input", {
+    class: "control control-text",
+    type: "text",
+    placeholder: t("caseNotePlaceholder"),
+    autocomplete: "off",
+    "aria-label": t("caseNoteLabel"),
+  }) as HTMLInputElement;
+
+  const why = reasonBox(t("caseVoidPlaceholder"), 2);
+
+  const retry = actionButton({
+    label: t("caseRetry"),
+    status,
+    run: () => postAction(guildId, "moderation.case.retry", { actionId: row.id }),
+    onDone: rerender,
+  });
+
+  const scrap = actionButton({
+    label: t("caseVoid"),
+    tone: "danger",
+    confirm: t("caseVoidConfirm"),
+    status,
+    run: async () => {
+      const reason = why.value.trim();
+      if (reason.length === 0) return { kind: "error", message: t("errCaseVoidReason") };
+      return postAction(guildId, "moderation.case.void", { actionId: row.id, reason });
+    },
+    onDone: () => {
+      // The row it belonged to is about to render as voided; leaving the panel
+      // open on it would show controls that no longer apply to it.
+      state.managing = null;
+      rerender();
+    },
+  });
+
+  return card(
+    title,
+    h(
+      "div",
+      {},
+      ...trail,
+      fieldGroup(
+        textField({
+          label: t("caseReasonLabel"),
+          hint: t("caseReasonHint"),
+          value: row.reason ?? "",
+          validate: (raw) => (raw.trim().length === 0 ? t("errNoReason") : null),
+          save: (raw) => postAction(guildId, "moderation.case.update", { actionId: row.id, reason: raw.trim() }),
+        }),
+        // Only where there is a clock to move: an untimed action has no
+        // duration to correct, and a blank box on a kick reads as a missing one.
+        TIMED.has(row.type)
+          ? textField({
+              label: t("caseDurationLabel"),
+              hint: t("caseDurationHint"),
+              value: row.durationSeconds === null ? "" : compactSpan(row.durationSeconds),
+              validate: (raw) => (parseDurationSeconds(raw) === "invalid" ? t("errDuration") : null),
+              save: async (raw) => {
+                const parsed = parseDurationSeconds(raw);
+                if (parsed === "invalid") return { kind: "error", message: t("errDuration") };
+                return postAction(guildId, "moderation.case.update", {
+                  actionId: row.id,
+                  durationSeconds: parsed,
+                });
+              },
+            })
+          : null,
+        selectField({
+          label: t("caseEnforcementLabel"),
+          hint: t("caseEnforcementHint"),
+          value: MANUAL_ENFORCEMENT.includes(row.enforcement) ? row.enforcement : "",
+          options: enforcementOptions(row.enforcement),
+          save: async (next) => {
+            if (next === "") return { kind: "error", message: t("errCaseEnforcement") };
+            return postAction(guildId, "moderation.case.enforcement", {
+              actionId: row.id,
+              enforcement: next,
+              note: note.value.trim(),
+            });
+          },
+        }),
+        h(
+          "div",
+          { class: "field" },
+          h("label", { class: "field-label" }, t("caseNoteLabel")),
+          h("div", { class: "field-row" }, note),
+          h("p", { class: "field-hint" }, t("caseNoteHint")),
+        ),
+      ),
+      h("p", { class: "field-hint" }, t("caseRetryHint")),
+      h("div", { class: "field-row" }, retry),
+      h("p", { class: "field-hint" }, t("caseVoidHint")),
+      h("div", { class: "field-row" }, why),
+      h("div", { class: "field-row" }, scrap, status.el),
+    ),
+    stateBadge(row),
   );
 }
 
@@ -1355,6 +1567,8 @@ function stateBadge(row: ModerationActionVM): HTMLElement | null {
       return badge(t("badgeExpired"), "neutral");
     case "LIFTED":
       return badge(t("badgeLifted"), "ok");
+    case "VOID":
+      return badge(t("badgeVoid"), "neutral");
     default:
       // MOMENTARY — a warn or a kick had no duration to run out.
       return null;

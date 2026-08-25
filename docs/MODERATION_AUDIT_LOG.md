@@ -535,3 +535,64 @@ surface immediately and on another whenever the sweep next came round.
 Marked before either surface is touched, and failures are swallowed, because a mark is a
 promptness hint: the reconciler's daily full sweep is what makes the answer correct regardless.
 Nothing should fail a punishment because Redis was briefly unavailable.
+
+## Part 5 — Correcting a case from the panel
+
+**The gap.** `ModerationAction` was append-only at every layer. There was no `updateAction` in the
+repository, no port method, no mutation, no control. Staff could create a case and read it back;
+nothing could fix one. That is not a missing convenience — an audit log nobody can correct is an
+audit log that gets worked around. The wrong reason stays wrong. The mistaken ban gets lifted by
+hand in the Discord client, where the case log never hears about it, and the row goes on saying
+"banned" about somebody who is not banned. That is the same divergence between the log and reality
+this whole audit was opened over, arriving by a different route.
+
+**Schema** (`20260825180000_moderation_case_edits`): four nullable columns —
+`updatedAt`, `editedByDiscordId`, `voidedAt`, `voidReason`. `updatedAt` is deliberately *not*
+Prisma's `@updatedAt`: it means "a person corrected this", and an automatic stamp would fire on the
+sweep's own expiry writes, making every row look hand-edited.
+
+**Repository.** `updateAction(guildId, actionId, patch)` follows `bridge.ts`: `updateMany` scoped by
+`{ id, guildId }`, never `update` by primary key. A case id pasted from another guild must read as
+"no such case", not as a write to somebody else's server.
+
+**Service — four operations, because they are four different acts:**
+
+| operation | what it does | tier |
+|---|---|---|
+| `updateAction` | corrects reason and/or duration. A changed duration recomputes `expiresAt` from `createdAt`, then re-runs `mirror()` so the enforcement cache TTL follows | `MODERATOR`, re-checked for `ADMIN` before a duration |
+| `setEnforcementManually` | records what actually happened, for "I did this by hand" | `ADMIN` |
+| `retryEnforcement` | re-runs the real `enforce()` on the stored row and restamps from the result | `ADMIN` |
+| `voidAction` | withdraws the case — **and issues the compensating `UNBAN`/`UNMUTE` through `applyAction` when the row still holds enforcement** | `ADMIN` |
+
+That last clause is the invariant, pointed the other way: a void that only wrote `voidedAt` would
+produce a log reading "withdrawn" about somebody still banned. `PunishmentState` gained `VOID`, and
+`mod-log.ts` now renders a voided case neutral rather than red, with its stated why on the card.
+
+**A duration is re-timed from when the punishment started, not from now.** Shortening a 24h mute to
+2h four hours in expires it immediately, which is what "make it two hours" means. Re-timing from
+`now` would hand the member six hours total and read as a correction that made the punishment
+longer.
+
+**Deviation from the plan (4 of 4).** The plan offered `expiresAt` as an editable field alongside
+the duration. It is not exposed. The server derives it; two controls that could disagree about when
+a mute ends is the divergence this audit exists to remove, and offering both would have rebuilt it
+inside the fix.
+
+**`PENDING` is not a status a person may declare.** It is on the wire and on the row, but the panel
+will not set it. A case a human marks pending re-enters the sweep's escalation queue and is stamped
+`FAILED` out from under them ten minutes later — a worse lie than the one they were correcting. The
+three settled answers are offered; a row already sitting in `PENDING` can display it but not
+re-select it.
+
+**Panel.** Four mutations (`moderation.case.update` / `.enforcement` / `.retry` / `.void`), four
+routes, and a per-case card on the Moderation page opened from a Manage button on each row — one
+open at a time, since these controls change a punishment somebody is currently serving. Each field
+writes only itself, the wordlist card's idiom. Void is armed by two clicks and requires a stated
+reason. Voided cases render as a closed record with no controls at all.
+
+Audit `change` payloads carry `reasonLength`, never the reason text, following `upsertWordlistRule`:
+a staff note about a member belongs on the case, not in whatever aggregates the audit stream.
+
+**The case table now carries an enforcement badge** beside the state badge. They answer different
+questions — what the case is now, and whether it ever actually happened — and a row that said `BAN`
+and nothing else is the exact shape this audit began with.
