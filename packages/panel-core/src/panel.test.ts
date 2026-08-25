@@ -99,6 +99,10 @@ const moderation = (n: number): ModerationService => ({
   async listInForce() { return ok([]); },
   async sweepExpired() { return ok(0); },
   async findAction() { return ok(null); },
+  async updateAction() { throw new Error("unused"); },
+  async setEnforcementManually() { throw new Error("unused"); },
+  async retryEnforcement() { throw new Error("unused"); },
+  async voidAction() { throw new Error("unused"); },
   // The guild-wide feed the Moderation page shows with nobody selected. Empty
   // by default: the tests that care about it supply their own rows.
   async listRecentInfractions() { return ok([]); },

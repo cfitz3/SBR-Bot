@@ -29,6 +29,7 @@ import type {
   CommandUsageDTO,
   DungeonsDTO,
   EventDTO,
+  EnforcementStatus,
   EventPodiumDTO,
   FilterTestDTO,
   GuildRosterDTO,
@@ -625,6 +626,50 @@ export interface ModerationService {
    * this method on its own turns a temp ban into a permanent one.
    */
   sweepExpired(now?: Date): Promise<Result<number>>;
+  /**
+   * Correct the metadata on a case that has already been issued.
+   *
+   * Metadata only, and deliberately: this re-times the punishment through the
+   * enforcement mirror so a shortened mute really is shorter, but it does not
+   * re-run the Discord or guild-chat legs. Re-punishing somebody as a side
+   * effect of fixing their case's spelling is not what anybody typing an edit
+   * is asking for; `retryEnforcement` is how you ask for that.
+   */
+  updateAction(input: CaseEditInput): Promise<Result<ModerationActionDTO, ModerationError>>;
+  /**
+   * Record what a human knows that the platform does not: "I did this by hand."
+   *
+   * The enforcement column is only useful if the queue of FAILED rows can be
+   * cleared by the person who cleared the failure. Without this, one refused
+   * API call left a red row on the moderation page for ever.
+   */
+  setEnforcementManually(
+    guildId: string,
+    actionId: string,
+    editorDiscordId: string,
+    status: EnforcementStatus,
+    note: string,
+  ): Promise<Result<ModerationActionDTO, ModerationError>>;
+  /** Attempt the enforcement again and restamp the row from the real result. */
+  retryEnforcement(
+    guildId: string,
+    actionId: string,
+    editorDiscordId: string,
+  ): Promise<Result<ModerationActionDTO, ModerationError>>;
+  /**
+   * Withdraw a case: this punishment should not have happened.
+   *
+   * Soft, and compensating. If the case still holds enforcement — an active
+   * mute or ban — voiding it also issues the matching UNMUTE or UNBAN, because
+   * a log reading "voided" beside somebody who is still banned is the exact
+   * shape of lie this whole surface exists to prevent.
+   */
+  voidAction(
+    guildId: string,
+    actionId: string,
+    editorDiscordId: string,
+    reason: string,
+  ): Promise<Result<ModerationActionDTO, ModerationError>>;
 }
 
 /**
@@ -652,7 +697,33 @@ export type ModerationError =
   | { readonly kind: "TARGET_OUTRANKS_ACTOR" }
   | { readonly kind: "SELF_TARGET" }
   | { readonly kind: "BOT_MISSING_PERMISSION" }
-  | { readonly kind: "DURATION_REQUIRED" };
+  | { readonly kind: "DURATION_REQUIRED" }
+  /** No case with that id in this guild. Never "some other guild has it". */
+  | { readonly kind: "NO_SUCH_CASE" }
+  /** A case can be corrected once. Voiding it again is not a second decision. */
+  | { readonly kind: "ALREADY_VOID" };
+
+/**
+ * A correction to a case that has already been issued.
+ *
+ * Sparse: every field bar the identifiers is optional, and `undefined` means
+ * "leave it". The panel writes one field per request, so a staffer fixing a
+ * typo cannot silently overwrite a duration somebody else changed while the
+ * page was open.
+ */
+export interface CaseEditInput {
+  readonly guildId: string;
+  readonly actionId: string;
+  /** Who is making the change. Stamped on the row and quoted in the mod log. */
+  readonly editorDiscordId: string;
+  readonly reason?: string;
+  /**
+   * Re-times the punishment. `expiresAt` is recomputed from `createdAt`, not
+   * from now: a two-hour mute corrected to one hour should end an hour after it
+   * started, otherwise every correction silently extends the sentence.
+   */
+  readonly durationSeconds?: number | null;
+}
 
 /** Guild config / feature flags (packages/guild-config domain service). */
 export interface GuildConfigService {

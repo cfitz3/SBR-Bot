@@ -792,3 +792,165 @@ test("a marker that throws does not fail the punishment", async () => {
   assert.equal(out.ok, true);
   assert.equal(out.ok && out.value.enforcement, "CONFIRMED");
 });
+
+// ── correcting a case after the fact ────────────────────────────────────────
+
+/**
+ * A store holding exactly one case, which records the patches it is asked for.
+ *
+ * Deliberately applies them, rather than returning a canned row: half of what
+ * these methods do is decide *what* to write, and a fake that ignored the patch
+ * would let every one of those decisions pass untested.
+ */
+function caseRepo(seed: ModerationActionDTO): {
+  repo: ModerationRepository;
+  patches: Record<string, unknown>[];
+  created: NewActionRecord[];
+  row: () => ModerationActionDTO;
+} {
+  let row = seed;
+  const patches: Record<string, unknown>[] = [];
+  const inner = repo();
+  return {
+    patches,
+    created: inner.created,
+    row: () => row,
+    repo: {
+      ...inner.repo,
+      async findAction(guildId, actionId) {
+        return guildId === row.guildId && actionId === row.id ? row : null;
+      },
+      async updateAction(guildId, actionId, patch) {
+        if (guildId !== row.guildId || actionId !== row.id) return null;
+        patches.push({ ...patch });
+        row = { ...row, ...(patch as Partial<ModerationActionDTO>) };
+        return row;
+      },
+    },
+  };
+}
+
+function seededCase(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
+  return {
+    id: "act-1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
+    reason: "spam", durationSeconds: 7200, expiresAt: "2026-08-05T21:00:00.000Z",
+    surfaces: ["DISCORD"], active: true, createdAt: "2026-08-05T19:00:00.000Z",
+    enforcement: "CONFIRMED", enforcementDetail: null,
+    updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
+    ...over,
+  };
+}
+
+test("a case id from another guild reads as no such case, not as a write", async () => {
+  const c = caseRepo(seededCase());
+  const svc = build({ repoImpl: c.repo });
+
+  for (const out of [
+    await svc.updateAction({ guildId: "g2", actionId: "act-1", editorDiscordId: "boss", reason: "x" }),
+    await svc.setEnforcementManually("g2", "act-1", "boss", "CONFIRMED", "did it"),
+    await svc.retryEnforcement("g2", "act-1", "boss"),
+    await svc.voidAction("g2", "act-1", "boss", "wrong person"),
+  ]) {
+    assert.equal(out.ok, false);
+    assert.equal(!out.ok && out.error.kind, "NO_SUCH_CASE");
+  }
+  assert.deepEqual(c.patches, [], "nothing was written for a guild that does not own the case");
+});
+
+test("shortening a mute re-times it from when it started, not from now", async () => {
+  // Recomputing from the moment of the edit would make every correction quietly
+  // extend the sentence: a two-hour mute cut to one hour would end an hour from
+  // the edit rather than an hour after it began.
+  const c = caseRepo(seededCase());
+  const e = enforcement();
+  const svc = build({ repoImpl: c.repo, mirror: e.mirror });
+
+  const out = await svc.updateAction({
+    guildId: "g1", actionId: "act-1", editorDiscordId: "boss", durationSeconds: 3600,
+  });
+  assert.equal(out.ok, true);
+  assert.equal(out.ok && out.value.expiresAt, "2026-08-05T20:00:00.000Z");
+  assert.equal(c.patches[0]?.editedByDiscordId, "boss");
+  // The mirror carries the TTL the bridge enforces. An edit that never reached
+  // it would be true on the page and false in the world.
+  assert.equal(e.applied.at(-1)?.expiresAt, "2026-08-05T20:00:00.000Z");
+});
+
+test("editing only the reason leaves the clock alone", async () => {
+  const c = caseRepo(seededCase());
+  const svc = build({ repoImpl: c.repo });
+
+  const out = await svc.updateAction({
+    guildId: "g1", actionId: "act-1", editorDiscordId: "boss", reason: "spam, repeatedly",
+  });
+  assert.equal(out.ok && out.value.reason, "spam, repeatedly");
+  assert.equal(out.ok && out.value.expiresAt, "2026-08-05T21:00:00.000Z");
+  assert.ok(!("expiresAt" in (c.patches[0] ?? {})), "a sparse patch must not touch what it was not given");
+});
+
+test("an enforcement set by hand carries who set it", async () => {
+  // The queue of FAILED rows is only useful if the person who cleared the
+  // failure can clear the row, and "CONFIRMED" with no author beside it reads
+  // as the platform having confirmed something it never did.
+  const c = caseRepo(seededCase({ enforcement: "FAILED", enforcementDetail: "Discord refused" }));
+  const svc = build({ repoImpl: c.repo });
+
+  const out = await svc.setEnforcementManually("g1", "act-1", "boss", "CONFIRMED", "banned by hand");
+  assert.equal(out.ok && out.value.enforcement, "CONFIRMED");
+  assert.match(String(out.ok && out.value.enforcementDetail), /banned by hand/);
+  assert.match(String(out.ok && out.value.enforcementDetail), /boss/);
+});
+
+test("voiding an active ban actually unbans them", async () => {
+  // The invariant, in its last form: a case reading "voided" beside somebody
+  // who is still banned is the same lie as one reading "banned" beside somebody
+  // who is still here.
+  const c = caseRepo(seededCase({ type: "BAN", durationSeconds: null, expiresAt: null }));
+  const svc = build({ repoImpl: c.repo, ranks: ranks({ boss: "ADMIN", target: "MEMBER" }) });
+
+  const out = await svc.voidAction("g1", "act-1", "boss", "wrong person");
+  assert.equal(out.ok, true);
+  assert.equal(out.ok && out.value.voidedAt, "2026-08-06T00:00:00.000Z");
+  assert.equal(out.ok && out.value.active, false, "a voided punishment stops being enforced");
+
+  // Issued as a real punishment reversal, not a column flipped in the database:
+  // it goes through the same enforcer, gets its own verdict and its own card.
+  assert.equal(c.created.length, 1);
+  assert.equal(c.created[0]?.type, "UNBAN");
+  assert.equal(c.created[0]?.targetDiscordId, "target");
+  assert.match(String(c.created[0]?.reason), /^Case act-1 voided: wrong person$/);
+});
+
+test("voiding a warning corrects the record without inventing a reversal", async () => {
+  // Nothing to undo. A warning holds no enforcement, so a void is a statement
+  // about the record and only that.
+  const c = caseRepo(seededCase({ type: "WARN", durationSeconds: null, expiresAt: null, active: false }));
+  const svc = build({ repoImpl: c.repo });
+
+  const out = await svc.voidAction("g1", "act-1", "boss", "issued in error");
+  assert.equal(out.ok && out.value.voidReason, "issued in error");
+  assert.deepEqual(c.created, [], "nothing to undo, so nothing was issued");
+});
+
+test("a case is voided once, not repeatedly", async () => {
+  const c = caseRepo(seededCase({ type: "WARN", active: false, voidedAt: "2026-08-05T22:00:00.000Z" }));
+  const svc = build({ repoImpl: c.repo });
+
+  const out = await svc.voidAction("g1", "act-1", "boss", "again");
+  assert.equal(!out.ok && out.error.kind, "ALREADY_VOID");
+});
+
+test("retrying a failed case runs the real enforcement path and restamps it", async () => {
+  const c = caseRepo(seededCase({ type: "BAN", enforcement: "FAILED", enforcementDetail: "Discord refused" }));
+  const seen: ModerationActionDTO[] = [];
+  const svc = build({
+    repoImpl: c.repo,
+    discord: { async enforce(a) { seen.push(a); return { ok: true }; } },
+  });
+
+  const out = await svc.retryEnforcement("g1", "act-1", "boss");
+  assert.equal(out.ok, true);
+  assert.equal(seen.length, 1, "the retry went to the same enforcer the first attempt used");
+  assert.equal(seen[0]?.id, "act-1");
+  assert.equal(c.patches.at(-1)?.editedByDiscordId, "boss");
+});
