@@ -635,3 +635,156 @@ test("nothing stale means nothing said", async () => {
   assert.deepEqual(r.enforced, []);
   assert.deepEqual(a.posted, []);
 });
+
+
+/**
+ * The in-game kick mirror.
+ *
+ * These are the tests for the gap the audit log carried as open decision #2:
+ * a member kicked from the Hypixel guild kept their Discord account, because
+ * the bridge wrote the row and stopped. The row is not the point — the kick is.
+ */
+function external(over: Record<string, unknown> = {}) {
+  return {
+    guildId: "g1",
+    type: "KICK" as const,
+    targetDiscordId: "target",
+    targetIgn: "TargetIGN",
+    actorDiscordId: "ingame",
+    actorIgn: "OfficerIGN",
+    reason: "In-game kick of TargetIGN by OfficerIGN",
+    durationSeconds: null,
+    ...over,
+  };
+}
+
+test("an in-game kick reaches Discord instead of stopping at the row", async () => {
+  const seen: ModerationActionDTO[] = [];
+  const discord: DiscordEnforcer = { async enforce(a) { seen.push(a); return { ok: true }; } };
+  const r = repo();
+  const out = await build({ repoImpl: r.repo, discord }).recordExternalAction(external());
+
+  assert.equal(out.ok, true);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]?.targetDiscordId, "target");
+  assert.equal(r.created[0]?.sourceContext, "INGAME");
+  assert.deepEqual(r.created[0]?.surfaces, ["GUILD_CHAT", "DISCORD"]);
+  // Not held by the platform: nothing to expire, nothing for the sweep to own.
+  assert.equal(r.created[0]?.active, false);
+  assert.deepEqual(r.enforced, [{ actionId: "act-1", status: "CONFIRMED", detail: null }]);
+  assert.equal(out.ok && out.value.enforcement, "CONFIRMED");
+});
+
+test("recording an in-game kick never relays it back into the game", async () => {
+  // The reason the bypass existed. Issuing the notice as an instruction would
+  // type `/g kick` at the guild that just told us it kicked them.
+  const b = bus();
+  const out = await build({
+    discord: enforcerOk, gameCommands: b.bus, igns: linked, relaySync: defaultRelay,
+  }).recordExternalAction(external());
+
+  assert.equal(out.ok, true);
+  assert.deepEqual(b.sent, []);
+});
+
+test("an in-game kick of an unlinked member is recorded, not enforced, and said out loud", async () => {
+  const seen: ModerationActionDTO[] = [];
+  const discord: DiscordEnforcer = { async enforce(a) { seen.push(a); return { ok: true }; } };
+  const r = repo();
+  const a = alerts();
+  const out = await build({ repoImpl: r.repo, discord, staffAlerts: a.sink })
+    .recordExternalAction(external({ targetDiscordId: null }));
+
+  assert.equal(out.ok, true);
+  assert.deepEqual(seen, []);
+  assert.deepEqual(r.created[0]?.surfaces, ["GUILD_CHAT"]);
+  assert.equal(r.enforced[0]?.status, "NOT_REQUIRED");
+  assert.match(r.enforced[0]?.detail ?? "", /no linked Discord account/);
+  // The gap staff have to close by hand is the one they most need telling about.
+  assert.equal(a.posted.length, 1);
+  assert.match(a.posted[0]?.text ?? "", /TargetIGN/);
+});
+
+test("an in-game kick of a staff member is not mirrored", async () => {
+  // Far more likely a mistake or a compromised account than a decision to strip
+  // an officer of their Discord access, and nothing here is waiting to undo it.
+  const seen: ModerationActionDTO[] = [];
+  const discord: DiscordEnforcer = { async enforce(a) { seen.push(a); return { ok: true }; } };
+  const r = repo();
+  const a = alerts();
+  await build({
+    repoImpl: r.repo, discord, staffAlerts: a.sink, ranks: ranks({ target: "OFFICER" }),
+  }).recordExternalAction(external());
+
+  assert.deepEqual(seen, []);
+  assert.equal(r.enforced[0]?.status, "NOT_REQUIRED");
+  assert.match(r.enforced[0]?.detail ?? "", /staff role/);
+  assert.equal(a.posted.length, 1);
+});
+
+test("an in-game mute is history, not a Discord punishment", async () => {
+  // Hypixel holds it and Hypixel lifts it. Timing somebody out of Discord for a
+  // Minecraft guild mute is a punishment nobody asked for.
+  const seen: ModerationActionDTO[] = [];
+  const discord: DiscordEnforcer = { async enforce(a) { seen.push(a); return { ok: true }; } };
+  const r = repo();
+  await build({ repoImpl: r.repo, discord })
+    .recordExternalAction(external({ type: "MUTE", durationSeconds: 3_600 }));
+
+  assert.deepEqual(seen, []);
+  assert.deepEqual(r.created[0]?.surfaces, ["GUILD_CHAT"]);
+  assert.equal(r.created[0]?.expiresAt, "2026-08-06T01:00:00.000Z");
+  assert.equal(r.enforced[0]?.status, "NOT_REQUIRED");
+});
+
+test("a mirror Discord refuses is a FAILED case and a staff alert", async () => {
+  // The invariant: never a log that says kicked while the member is still here
+  // and nobody has been told.
+  const discord: DiscordEnforcer = { async enforce() { return { ok: false, reason: "missing permission" }; } };
+  const r = repo();
+  const a = alerts();
+  const out = await build({ repoImpl: r.repo, discord, staffAlerts: a.sink })
+    .recordExternalAction(external());
+
+  assert.equal(out.ok && out.value.enforcement, "FAILED");
+  assert.deepEqual(r.enforced, [{ actionId: "act-1", status: "FAILED", detail: "missing permission" }]);
+  assert.match(a.posted[0]?.text ?? "", /Enforcement failed/);
+});
+
+
+test("a punishment marks the target's roles stale straight away", async () => {
+  // Otherwise a banned member's auto-roles wait for the reconciler's next full
+  // sweep - the punishment lands on one surface now and another whenever.
+  const marked: { guildId: string; ids: readonly string[] }[] = [];
+  const svc = new ModerationServiceImpl({
+    repo: repo().repo,
+    ranks: ranks({ actor: "OFFICER", target: "MEMBER" }),
+    enforcement: enforcement().mirror,
+    discord: enforcerOk,
+    rolesDirty: { async mark(guildId, ids) { marked.push({ guildId, ids }); } },
+    botCaps: allowAll,
+    logger: silent,
+    now: () => new Date("2026-08-06T00:00:00.000Z"),
+  });
+
+  await svc.applyAction(input("BAN"));
+  assert.deepEqual(marked, [{ guildId: "g1", ids: ["target"] }]);
+});
+
+test("a marker that throws does not fail the punishment", async () => {
+  // A promptness hint, not a step. The daily sweep is what makes it correct.
+  const svc = new ModerationServiceImpl({
+    repo: repo().repo,
+    ranks: ranks({ actor: "OFFICER", target: "MEMBER" }),
+    enforcement: enforcement().mirror,
+    discord: enforcerOk,
+    rolesDirty: { async mark() { throw new Error("redis is down"); } },
+    botCaps: allowAll,
+    logger: silent,
+    now: () => new Date("2026-08-06T00:00:00.000Z"),
+  });
+
+  const out = await svc.applyAction(input("BAN"));
+  assert.equal(out.ok, true);
+  assert.equal(out.ok && out.value.enforcement, "CONFIRMED");
+});

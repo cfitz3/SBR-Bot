@@ -17,6 +17,7 @@ import {
   type ModerationService,
   type ModerationSurface,
   type Result,
+  type RoleDirtyMarker,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type { ModerationMetrics } from "./metrics.js";
@@ -46,6 +47,28 @@ import type {
 } from "./ports.js";
 import { AUTOMOD_ACTOR } from "./automod-runner.js";
 
+/**
+ * A punishment that happened somewhere this platform does not control.
+ *
+ * Today that means Hypixel: a staffer typing `/g kick` in game, read back out
+ * of the guild-chat notice. Deliberately not an `ApplyActionInput` - this is a
+ * record of something that has already happened, not an instruction, and the
+ * distinction is load-bearing. Issuing it as an instruction would relay it
+ * straight back into the game the notice came from, kicking somebody twice.
+ */
+export interface ExternalActionInput {
+  readonly guildId: string;
+  readonly type: "KICK" | "MUTE" | "UNMUTE";
+  /** Resolved from the IGN, or null when the member never linked an account. */
+  readonly targetDiscordId: string | null;
+  readonly targetIgn: string;
+  /** A snowflake when the staffer is linked, otherwise a sentinel. */
+  readonly actorDiscordId: string;
+  readonly actorIgn: string | null;
+  readonly reason: string;
+  readonly durationSeconds: number | null;
+}
+
 export interface ModerationServiceDeps {
   readonly repo: ModerationRepository;
   readonly ranks: RankResolver;
@@ -61,6 +84,17 @@ export interface ModerationServiceDeps {
   readonly discord?: DiscordEnforcer;
   /** Where an enforcement failure is announced. Omit and it is only logged. */
   readonly staffAlerts?: StaffAlertSink;
+  /**
+   * Somewhere to say "this member's auto-roles may be stale".
+   *
+   * A ban strips roles as a side effect of removing the member, and a mute
+   * changes what the auto-role reconciler should be granting. Without a mark,
+   * both waited for the next full sweep - so a punishment took effect on one
+   * surface immediately and on another whenever the sweep next came round.
+   * Optional and forgiving, like everywhere else it is used: a mark is a
+   * promptness hint and the sweep is what makes the answer correct.
+   */
+  readonly rolesDirty?: RoleDirtyMarker;
   /**
    * Where the guild's moderation log is kept. Optional: a process with no
    * gateway cannot post, and a missing log is not a reason to refuse a
@@ -107,6 +141,7 @@ export class ModerationServiceImpl implements ModerationService {
   private readonly enforcement: EnforcementMirror;
   private readonly discord: DiscordEnforcer | null;
   private readonly staffAlerts: StaffAlertSink | null;
+  private readonly rolesDirty: RoleDirtyMarker | null;
   private readonly modLog: ModLogSink | null;
   private readonly systemActorIds: ReadonlySet<string>;
   private readonly botCaps: BotCapabilities;
@@ -124,6 +159,7 @@ export class ModerationServiceImpl implements ModerationService {
     this.enforcement = deps.enforcement;
     this.discord = deps.discord ?? null;
     this.staffAlerts = deps.staffAlerts ?? null;
+    this.rolesDirty = deps.rolesDirty ?? null;
     this.modLog = deps.modLog ?? null;
     this.systemActorIds = new Set(deps.systemActorIds ?? [AUTOMOD_ACTOR, EXPIRY_ACTOR]);
     this.botCaps = deps.botCaps;
@@ -243,6 +279,136 @@ export class ModerationServiceImpl implements ModerationService {
       this.log.info("expired punishments swept", { reversed, cleared });
     }
     return ok(reversed);
+  }
+
+  /**
+   * Mirror a punishment that happened in game.
+   *
+   * This replaces a deliberate bypass. `recordInGameAction` used to hand-write
+   * the audit row and stop there, because routing it through `applyAction`
+   * would have relayed the kick straight back into the game the notice came
+   * from. That reasoning was sound and the consequence was not: somebody
+   * kicked from the Hypixel guild kept their Discord membership, their roles
+   * and their access, and the only trace was a row on a page nobody had reason
+   * to open. Staff had to remember to do the Discord half by hand.
+   *
+   * So the row is written the same way, and then the Discord half is carried
+   * out - with the game relay skipped, because the game has already acted.
+   *
+   * Only KICK mirrors. An in-game mute is Hypixel's to hold and Hypixel's to
+   * lift; the platform cannot do either, and timing somebody out of Discord
+   * because they were muted in a Minecraft guild is a punishment nobody asked
+   * for.
+   */
+  async recordExternalAction(input: ExternalActionInput): Promise<Result<ModerationActionDTO>> {
+    const mirrors = input.type === "KICK";
+    const written = await this.repo.createAction({
+      guildId: input.guildId,
+      infractionId: null,
+      type: input.type,
+      actorDiscordId: input.actorDiscordId,
+      targetDiscordId: input.targetDiscordId,
+      targetMinecraftUuid: null,
+      reason: input.reason,
+      durationSeconds: input.durationSeconds,
+      expiresAt:
+        input.durationSeconds === null
+          ? null
+          : new Date(this.now().getTime() + input.durationSeconds * 1_000).toISOString(),
+      surfaces: mirrors && input.targetDiscordId !== null ? ["GUILD_CHAT", "DISCORD"] : ["GUILD_CHAT"],
+      // Not a punishment the platform holds. An in-game mute is Hypixel's to
+      // expire and a kick has nothing to expire, so marking either active would
+      // make the sweep think it owned something it cannot touch.
+      active: false,
+      sourceContext: "INGAME",
+    });
+
+    const settled = await this.settleExternal(written, input);
+    await this.postModLog(settled);
+    return ok(settled);
+  }
+
+  /**
+   * The Discord half of an in-game punishment, and its verdict.
+   *
+   * Every refusal below is stamped on the row and said out loud to staff. A
+   * mirror that quietly declines is the same silence this whole surface exists
+   * to remove - worse here, because nobody typed anything, so nobody is waiting
+   * for a reply that would have told them.
+   */
+  private async settleExternal(
+    action: ModerationActionDTO,
+    input: ExternalActionInput,
+  ): Promise<ModerationActionDTO> {
+    const stamp = async (status: EnforcementStatus, detail: string | null): Promise<ModerationActionDTO> => {
+      await this.repo.setEnforcement(action.id, status, detail).catch((error: unknown) => {
+        this.log.error("could not record the mirrored enforcement outcome", {
+          guildId: action.guildId,
+          actionId: action.id,
+          error: message(error),
+        });
+      });
+      return { ...action, enforcement: status, enforcementDetail: detail };
+    };
+
+    if (input.type !== "KICK") {
+      return stamp("NOT_REQUIRED", "recorded from in game; Hypixel holds and lifts its own mutes");
+    }
+
+    if (action.targetDiscordId === null) {
+      // Not a failure - there is no Discord account to remove. Said out loud
+      // anyway, because "kicked in game, still in Discord under a name we
+      // cannot match" is exactly the gap staff need to close by hand.
+      const detail = `${input.targetIgn} has no linked Discord account, so nothing was mirrored`;
+      await this.alertStaffText(
+        action.guildId,
+        `ℹ️ **In-game kick not mirrored** — \`${input.targetIgn}\` was kicked from the guild but has ` +
+          `no linked Discord account, so nobody could be removed. Case \`${action.id}\`.`,
+      );
+      return stamp("NOT_REQUIRED", detail);
+    }
+
+    // Staff are not mirrored. An officer kicked in game is far more likely to
+    // be a mistake, a test, or somebody's account being misused than a decision
+    // to strip a staff member of their Discord access - and this path has no
+    // human waiting on it to notice and undo it.
+    const targetRole = await this.ranks.getRole(action.guildId, action.targetDiscordId).catch(() => null);
+    if (targetRole !== null && rankOf(targetRole) > rankOf("MEMBER")) {
+      const detail = "the target holds a staff role; the Discord half was left for a human";
+      await this.alertStaffText(
+        action.guildId,
+        `⚠️ **In-game kick not mirrored** — <@${action.targetDiscordId}> was kicked from the guild in ` +
+          `game, but they hold a staff role, so they were **not** removed from Discord. ` +
+          `Case \`${action.id}\`.`,
+      );
+      return stamp("NOT_REQUIRED", detail);
+    }
+
+    if (this.discord === null) {
+      const detail = "no Discord enforcer is wired into this process";
+      await this.alertStaff(action, detail);
+      return stamp("FAILED", detail);
+    }
+
+    const outcome = await this.discord
+      .enforce(action)
+      .catch((error: unknown): EnforcementOutcome => ({ ok: false, reason: message(error) }));
+
+    if (!outcome.ok) {
+      this.metrics?.actionFailed(action.guildId, action.type);
+      await this.alertStaff(action, outcome.reason);
+      return stamp("FAILED", outcome.reason);
+    }
+    if ("skipped" in outcome && outcome.skipped) return stamp("NOT_REQUIRED", outcome.reason);
+
+    this.metrics?.actionApplied(action.guildId, action.type);
+    this.log.info("in-game kick mirrored to Discord", {
+      guildId: action.guildId,
+      actionId: action.id,
+      target: action.targetDiscordId,
+      ign: input.targetIgn,
+    });
+    return stamp("CONFIRMED", null);
   }
 
   /**
@@ -371,6 +537,15 @@ export class ModerationServiceImpl implements ModerationService {
   private async enforce(action: ModerationActionDTO): Promise<ModerationActionDTO> {
     await this.mirror(action);
 
+    // Before either surface is touched, because it is a hint and not a step: a
+    // punishment that changes what roles somebody should hold should not wait
+    // for the reconciler's daily sweep to notice.
+    if (action.targetDiscordId !== null) {
+      await this.rolesDirty
+        ?.mark(action.guildId, [action.targetDiscordId])
+        .catch(() => undefined);
+    }
+
     const discord = await this.enforceDiscord(action);
     const game = await this.relayToGame(action);
 
@@ -491,6 +666,16 @@ export class ModerationServiceImpl implements ModerationService {
       return await this.discord.enforce(action);
     } catch (error) {
       return { ok: false, reason: message(error) };
+    }
+  }
+
+  /** Say something to staff that is not an enforcement failure. */
+  private async alertStaffText(guildId: string, text: string): Promise<void> {
+    if (this.staffAlerts === null) return;
+    try {
+      await this.staffAlerts.alert(guildId, text);
+    } catch (error) {
+      this.log.error("could not reach staff", { guildId, error: message(error) });
     }
   }
 

@@ -61,6 +61,7 @@ import {
   ModerationServiceImpl,
   RELAY_SYNC_SETTING_KEY,
   type ModLogSink,
+  type StaffAlertSink,
 } from "@sbr/moderation";
 import {
   ItemCatalog,
@@ -323,11 +324,14 @@ export interface BridgeApp {
    * Record a moderation action that happened in-game, as parsed from Hypixel's
    * own guild-chat notices.
    *
-   * Deliberately writes the audit row directly rather than going through
-   * `ModerationServiceImpl`: the service *issues* punishments, and issuing one
-   * here would relay it straight back into the game the notice came from — a
-   * kick echoing into a second kick. This is a record of something that has
-   * already happened, so it is recorded and nothing more.
+   * Routed through `ModerationService.recordExternalAction`, which records
+   * rather than issues — the distinction that used to be kept by bypassing the
+   * service entirely. Issuing it would relay the kick straight back into the
+   * game the notice came from, a kick echoing into a second kick; recording it
+   * writes the same row and then carries out the Discord half the game cannot
+   * reach. That half is the point: without it, somebody kicked from the guild
+   * in game kept their Discord membership, their roles and their access, and
+   * the only trace was a row on a page nobody had reason to open.
    */
   recordInGameAction(guildId: string, notice: InGameModAction): Promise<void>;
   shutdown(): Promise<void>;
@@ -686,9 +690,36 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
   };
 
+  /**
+   * Where "this punishment did not land" goes.
+   *
+   * The admin bot has had one of these all along; this process has not, so an
+   * automod mute that failed to enforce was a warning in a log file nobody
+   * reads. It matters more now: the in-game kick mirror runs here, and every
+   * case it declines to mirror is a member still sitting in Discord after being
+   * kicked from the guild. Nobody typed anything, so nobody is waiting for a
+   * reply — the alert is the only way anyone finds out.
+   *
+   * Staff first, moderation log second, ordered by who needs to act.
+   */
+  const staffAlerts: StaffAlertSink = {
+    async alert(guildId, text) {
+      if (modLogPost === null) return;
+      const row = await guildConfigRepository.get(guildId).catch(() => null);
+      for (const slot of ["staff", "modlog"] as const) {
+        const channelId = row?.channels[slot] ?? null;
+        if (channelId !== null && (await modLogPost(channelId, { description: text, color: "WARNING" }))) return;
+      }
+    },
+  };
+
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
+    // A punishment changes what auto-roles the target should hold, and waiting
+    // for the reconciler's next full sweep to notice made a ban land on one
+    // surface now and another later.
+    rolesDirty: adapters.rolesDirty,
     enforcement: adapters.enforcement,
     // The Discord half, over the loopback hop to the admin bot.
     //
@@ -698,6 +729,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     // The admin bot owns privileged writes to the member server, so this asks
     // it, the same way a role press and a ticket close do.
     modLog,
+    staffAlerts,
     discord: createBridgeEnforcer({
       baseUrl: config.internalApi.baseUrl,
       token: config.internalApi.token,
@@ -939,38 +971,43 @@ export async function createBridgeApp(): Promise<BridgeApp> {
       // Best-effort on both ends: the target may not be linked, and the actor is
       // an in-game name that need not correspond to a Discord account at all.
       // Neither absence is a reason to drop the record — an unlinked member's
-      // kick is still the guild's history.
+      // kick is still the guild's history. What the target's link decides is
+      // whether the Discord half can happen; the service says so on the row and
+      // to staff either way.
       const targetDiscordId = await identityRepository.findDiscordIdByIgn(notice.targetIgn).catch(() => null);
       const actorDiscordId = notice.actorIgn === null
         ? null
         : await identityRepository.findDiscordIdByIgn(notice.actorIgn).catch(() => null);
 
-      await moderationRepository.createAction({
+      const recorded = await moderation.recordExternalAction({
         guildId,
-        infractionId: null,
         type: notice.type,
+        targetDiscordId,
+        targetIgn: notice.targetIgn,
         // The column is non-null, and there is no snowflake to put in it when
         // the action was taken by someone with no linked account. The IGN is
         // preserved in the reason, which is where the page reads it from.
         actorDiscordId: actorDiscordId ?? INGAME_ACTOR,
-        targetDiscordId,
-        targetMinecraftUuid: null,
+        actorIgn: notice.actorIgn,
         reason: notice.actorIgn === null
           ? `In-game ${notice.type.toLowerCase()} of ${notice.targetIgn}`
           : `In-game ${notice.type.toLowerCase()} of ${notice.targetIgn} by ${notice.actorIgn}`,
         durationSeconds: notice.durationSeconds,
-        expiresAt: notice.durationSeconds === null
-          ? null
-          : new Date(Date.now() + notice.durationSeconds * 1_000).toISOString(),
-        surfaces: ["GUILD_CHAT"],
-        // An in-game mute is not enforced by us and we cannot lift it, so it is
-        // recorded as history rather than as a live punishment the platform
-        // holds. Marking it active would make the expiry sweeper think it owned
-        // something it cannot touch.
-        active: false,
-        sourceContext: "INGAME",
       });
-      log.info("recorded in-game moderation action", { guildId, type: notice.type, target: notice.targetIgn });
+      if (!recorded.ok) {
+        log.error("could not record in-game moderation action", {
+          guildId,
+          type: notice.type,
+          target: notice.targetIgn,
+        });
+        return;
+      }
+      log.info("recorded in-game moderation action", {
+        guildId,
+        type: notice.type,
+        target: notice.targetIgn,
+        enforcement: recorded.value.enforcement,
+      });
     },
     async shutdown() {
       stopHeartbeat();
