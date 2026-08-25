@@ -30,7 +30,7 @@ import {
 import { EXPIRY_ACTOR, inForce } from "./expiry.js";
 import { modLogEmbed, type ModLogSink } from "./mod-log.js";
 import { isPunitive, needsBotPermission, rankOf } from "./rank.js";
-import { parseRelaySync, resolveGameCommand } from "./relay-sync.js";
+import { type GameCommandPlan, parseRelaySync, resolveGameCommand } from "./relay-sync.js";
 import type {
   BotCapabilities,
   DiscordEnforcer,
@@ -489,19 +489,19 @@ export class ModerationServiceImpl implements ModerationService {
       return { ok: true, skipped: true, reason: "no Discord target" };
     }
 
-    let command: string | null;
-    let ign: string | null;
+    let plan: GameCommandPlan;
     try {
       const policy = parseRelaySync(
         this.relaySyncSource === null ? null : await this.relaySyncSource.readRelaySync(action.guildId),
       );
       if (!policy.enabled) return { ok: true, skipped: true, reason: "relay sync is off for this guild" };
 
-      ign = await this.igns.ignFor(action.guildId, action.targetDiscordId);
-      command = resolveGameCommand(policy, {
+      const ign = await this.igns.ignFor(action.guildId, action.targetDiscordId);
+      plan = resolveGameCommand(policy, {
         type: action.type,
         ign,
         durationSeconds: action.durationSeconds,
+        reason: action.reason,
       });
     } catch (error) {
       // Reading the mapping or the link failed. That is not "no command
@@ -515,20 +515,29 @@ export class ModerationServiceImpl implements ModerationService {
       return { ok: false, reason: `could not resolve the guild command (${message(error)})` };
     }
 
-    if (command === null) {
-      const reason =
-        ign === null
-          ? "target has no linked Minecraft account"
-          : "this action maps to no guild command";
+    if (plan.kind === "skip") {
       this.log.debug("relay sync skipped", {
         guildId: action.guildId,
         type: action.type,
         target: action.targetDiscordId,
-        reason,
+        reason: plan.why,
       });
-      return { ok: true, skipped: true, reason };
+      return { ok: true, skipped: true, reason: plan.why };
     }
 
+    // Owed and unbuildable. Reported as a failure so the case says the guild
+    // kick is still outstanding instead of quietly reading as "not required".
+    if (plan.kind === "blocked") {
+      this.log.warn("relay sync could not build the guild command", {
+        guildId: action.guildId,
+        type: action.type,
+        target: action.targetDiscordId,
+        reason: plan.why,
+      });
+      return { ok: false, reason: plan.why };
+    }
+
+    const command = plan.command;
     try {
       const delivered = await this.gameCommands.send(action.guildId, command);
       if (!delivered) {

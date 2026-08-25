@@ -364,7 +364,7 @@ test("BAN relays a guild kick to guild chat for a linked member", async () => {
   const result = await build({ gameCommands: b.bus, igns: linked, relaySync: defaultRelay })
     .applyAction(input("BAN"));
   assert.equal(result.ok, true);
-  assert.deepEqual(b.sent, ["/g kick TargetIGN"]);
+  assert.deepEqual(b.sent, ["/g kick TargetIGN because"]);
   if (result.ok) assert.equal(result.value.enforcement, "CONFIRMED");
 });
 
@@ -421,6 +421,26 @@ test("a process with no Discord enforcer wired fails the action rather than clai
     assert.equal(result.value.enforcement, "FAILED");
     assert.match(result.value.enforcementDetail ?? "", /Discord/);
   }
+});
+
+test("a ban whose reason has nothing sendable fails rather than kicking nobody", async () => {
+  // Hypixel refuses `/g kick <name>` with no reason. Sending it anyway was the
+  // silent failure: the case said banned, the guild slot stayed filled.
+  const b = bus();
+  const a = alerts();
+  const result = await build({
+    gameCommands: b.bus,
+    igns: linked,
+    relaySync: defaultRelay,
+    staffAlerts: a.sink,
+  }).applyAction(input("BAN", { reason: "###" }));
+  assert.deepEqual(b.sent, []);
+  assert.equal(result.ok, true);
+  if (result.ok) {
+    assert.equal(result.value.enforcement, "FAILED");
+    assert.match(result.value.enforcementDetail ?? "", /reason/);
+  }
+  assert.match(a.posted.map((p) => p.text).join(" "), /reason/);
 });
 
 test("an unlinked member is skipped in guild chat, not treated as a failure", async () => {

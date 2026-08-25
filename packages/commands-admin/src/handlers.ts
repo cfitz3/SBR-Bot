@@ -639,7 +639,9 @@ const guildKick = rosterHandler(
   "guild-kick",
   (queue, g, ign, actor, extra) => queue.kick(g, ign, actor, extra),
   "kick",
-  { option: "reason", required: false },
+  // Required, because Hypixel refuses `/g kick <name>` with nothing after it.
+  // Left optional, the command read as accepted here and did nothing in game.
+  { option: "reason", required: true },
 );
 
 const guildMute = rosterHandler(
@@ -1425,7 +1427,12 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       description: "Remove a member from the in-game guild",
       options: [
         { name: "ign", description: "Minecraft username", type: "string", required: true },
-        { name: "reason", description: "Shown in-game; letters, numbers and basic punctuation", type: "string" },
+        {
+          name: "reason",
+          description: "Shown in-game; letters, numbers and basic punctuation",
+          type: "string",
+          required: true,
+        },
       ],
       minRole: "MODERATOR",
       handler: guildKick,

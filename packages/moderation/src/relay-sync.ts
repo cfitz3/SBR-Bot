@@ -182,33 +182,95 @@ export interface RelayCommandInput {
   /** The target's in-game name. Null when they have no verified link. */
   readonly ign: string | null;
   readonly durationSeconds: number | null;
+  /** Why the punishment was issued. Hypixel refuses a `/g kick` without one. */
+  readonly reason: string;
 }
 
 /**
- * The guild-chat command this action should produce, or null for none.
+ * What to do with one action, in game.
  *
- * Null covers every "nothing to do" case on purpose — sync off, row off, no
- * mapping, an action with no in-game equivalent, an unlinked target, an
- * unbounded mute — because each of them is the same instruction to the caller:
- * do not send anything. Distinguishing them is the log's job, not the return
- * type's.
+ * Three answers, not two, because "the mapping says send nothing" and "the
+ * mapping says send something and we cannot build it" were both `null` before
+ * and both landed on the case as `NOT_REQUIRED`. A ban whose target never
+ * linked an account read exactly like a warning that was never meant to relay,
+ * and the guild slot stayed filled with nobody the wiser.
  */
-export function resolveGameCommand(policy: RelaySyncPolicy, input: RelayCommandInput): string | null {
-  if (!policy.enabled) return null;
-  if (input.ign === null || input.ign.trim().length === 0) return null;
-  if (!isDiscordAction(input.type)) return null;
+export type GameCommandPlan =
+  /** Type this line in guild chat. */
+  | { readonly kind: "send"; readonly command: string }
+  /** Nothing was owed. Not a failure, and not worth alerting anyone about. */
+  | { readonly kind: "skip"; readonly why: string }
+  /** Something was owed and could not be built. The case must say so. */
+  | { readonly kind: "blocked"; readonly why: string };
+
+/** The longest reason Hypixel will carry on one command. */
+export const MAX_GAME_REASON_LENGTH = 64;
+
+/**
+ * Everything outside the set Hypixel accepts on a guild command, including
+ * newlines and the leading slash that would turn a reason into a command.
+ */
+const UNSENDABLE = /[^A-Za-z0-9 .,!?'()_-]+/g;
+
+/**
+ * Reduce a moderation reason to something typable in guild chat.
+ *
+ * Stripped rather than rejected: a Discord reason is free text up to 500
+ * characters and routinely carries a link, an emoji or a case id, and refusing
+ * the whole punishment over a curly quote would be worse than sending a
+ * slightly plainer sentence. Null only when nothing at all survives — at which
+ * point there is genuinely no reason to send, and `/g kick` needs one.
+ */
+export function sanitizeGameReason(raw: string): string | null {
+  const cleaned = raw.replace(UNSENDABLE, " ").replace(/\s+/g, " ").trim();
+  if (cleaned.length === 0) return null;
+  if (cleaned.length <= MAX_GAME_REASON_LENGTH) return cleaned;
+  return cleaned.slice(0, MAX_GAME_REASON_LENGTH).trimEnd();
+}
+
+/** The guild-chat command this action should produce, and why, if it produces none. */
+export function resolveGameCommand(policy: RelaySyncPolicy, input: RelayCommandInput): GameCommandPlan {
+  if (!policy.enabled) return { kind: "skip", why: "relay sync is off for this guild" };
+  if (!isDiscordAction(input.type)) {
+    return { kind: "skip", why: "this action maps to no guild command" };
+  }
 
   const row = policy.rows.find((r) => r.discordAction === input.type);
-  if (row === undefined || !row.enabled || row.gameAction === "none") return null;
+  if (row === undefined || !row.enabled || row.gameAction === "none") {
+    return { kind: "skip", why: "this action maps to no guild command" };
+  }
 
-  const ign = input.ign.trim();
-  if (row.gameAction !== "g mute") return `/${row.gameAction} ${ign}`;
+  // An unlinked target is a skip, not a failure. Nothing verified their
+  // account, so the roles sync never gave them a guild slot either - there is
+  // genuinely nothing in game to act on, and alerting staff on every ban of a
+  // Discord-only member would bury the alerts that mean something.
+  const ign = input.ign === null ? "" : input.ign.trim();
+  if (ign.length === 0) {
+    return { kind: "skip", why: "target has no linked Minecraft account, so nothing was sent in game" };
+  }
+
+  // Past here a command is owed, so every remaining gap is a failure to report
+  // rather than a quiet no-op.
+
+  if (row.gameAction === "g kick") {
+    const reason = sanitizeGameReason(input.reason);
+    if (reason === null) {
+      return { kind: "blocked", why: "/g kick needs a reason and this one has nothing Hypixel accepts" };
+    }
+    return { kind: "send", command: `/g kick ${ign} ${reason}` };
+  }
+
+  // `/g mute` takes `<name> <time>` and nothing else. A reason appended here is
+  // read as part of the duration argument, so it is deliberately left off.
+  if (row.gameAction !== "g mute") return { kind: "send", command: `/${row.gameAction} ${ign}` };
 
   const seconds =
     row.durationMode === "fixed" ? row.fixedSeconds : (input.durationSeconds ?? row.fixedSeconds);
-  if (seconds === null || seconds <= 0) return null;
+  if (seconds === null || seconds <= 0) {
+    return { kind: "blocked", why: "an unbounded mute has no in-game equivalent and the row sets no fixed time" };
+  }
 
-  return `/g mute ${ign} ${formatGameDuration(seconds)}`;
+  return { kind: "send", command: `/g mute ${ign} ${formatGameDuration(seconds)}` };
 }
 
 /**

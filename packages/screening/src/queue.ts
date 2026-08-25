@@ -300,8 +300,9 @@ export class JoinQueueService {
       this.log.warn("guild action refused: not a duration", { action, guildId });
       return { ok: false, reason: "BAD_DURATION" };
     }
-    // A reason is optional; only a reason that was *given* has to be clean.
-    if (arg === "reason" && extra !== "" && !REASON.test(extra)) {
+    // Hypixel will not run `/g kick <name>` without a reason, so an empty one
+    // is refused here rather than sent and silently dropped in game.
+    if (arg === "reason" && !REASON.test(extra)) {
       this.log.warn("guild action refused: reason contains something unsendable", { action, guildId });
       return { ok: false, reason: "BAD_REASON" };
     }
