@@ -302,6 +302,10 @@ export async function createAdminApp(): Promise<AdminApp> {
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
+    // A punishment changes what auto-roles the target should hold, and waiting
+    // for the reconciler's next full sweep to notice made a ban land on one
+    // surface now and another later.
+    rolesDirty: adapters.rolesDirty,
     // The Redis mirror: a cache the bridge and the dispatchers read, and
     // nothing more. Kept separate from `discord` now that the two are no longer
     // confused for one another.

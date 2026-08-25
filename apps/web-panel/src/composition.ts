@@ -149,6 +149,10 @@ export async function createPanelApp(): Promise<PanelApp> {
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
+    // A punishment changes what auto-roles the target should hold, and waiting
+    // for the reconciler's next full sweep to notice made a ban land on one
+    // surface now and another later.
+    rolesDirty: adapters.rolesDirty,
     metrics,
     // The real Redis mirror, same object the admin bot uses: a mute issued from
     // the panel has to be visible to the bridge immediately, and a no-op stub

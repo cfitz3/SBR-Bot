@@ -432,3 +432,66 @@ confirmation are the same piece of state; a cross-process key would only add a w
 two to disagree. `CommandEcho.claimedKick` remembers our own kicks for 120s, and the
 transport checks it before mirroring a kick notice — without which a Discord ban would relay
 a `/g kick`, read its own notice back, and mirror it into a second punishment.
+
+
+## Part 3 — In-game kicks reach Discord
+
+**Open decision #2 from the first pass, now closed.** `BridgeApp.recordInGameAction`
+(`apps/bridge-bot/src/composition.ts`) hand-wrote a `moderationRepository.createAction` row and
+stopped there. Its comment explained why, and the reasoning was sound: routing the notice through
+`ModerationServiceImpl.applyAction` would have *issued* the punishment, relaying a `/g kick`
+straight back into the game the notice came from — a kick echoing into a second kick.
+
+The consequence was not sound. Somebody kicked from the Hypixel guild kept their Discord
+membership, their roles and their access. There was no card, no alert, no enforcement column —
+the only trace was a row on a page nobody had reason to open, and staff had to remember to do the
+Discord half by hand. That is the same shape as the original bug this whole task started from: a
+log that says "kicked" beside a person who is still here.
+
+**The fix** is a new service method rather than a new caller of the old one:
+
+`ModerationService.recordExternalAction(input)` — records rather than issues. It writes the same
+row (`sourceContext: "INGAME"`, `active: false`), then carries out the Discord half, stamps a real
+`enforcement` verdict, and posts the mod-log card. **It never touches the game relay**, which is
+exactly the skip the bypass comment was protecting; the distinction the bypass kept by avoiding
+the service is now kept inside it, where the guards and the alerting live.
+
+`ExternalActionInput` is deliberately not an `ApplyActionInput`. The type is the documentation:
+one is a record of something that has already happened, the other is an instruction.
+
+**Guards, in order, each of them stamped on the row *and* said out loud to staff:**
+
+| case | verdict | why |
+|---|---|---|
+| our own outbound kick | not recorded at all | `CommandEcho.claimedKick` (Part 2b), before this is ever called |
+| MUTE / UNMUTE | `NOT_REQUIRED` | Hypixel holds it and Hypixel lifts it; the platform can do neither, and timing somebody out of Discord for a Minecraft guild mute is a punishment nobody asked for |
+| target has no linked Discord account | `NOT_REQUIRED` + staff message | not a failure — there is no account to remove — but "kicked in game, still in Discord under a name we cannot match" is precisely the gap staff have to close by hand |
+| target holds a staff role | `NOT_REQUIRED` + staff warning | an officer kicked in game is far more likely a mistake, a test, or a misused account than a decision to strip a staff member of their Discord access, and nothing on this path is waiting to notice and undo it |
+| no enforcer wired | `FAILED` + alert | same treatment as everywhere else: a process that cannot punish anybody says so on the first action, not on the first appeal |
+| Discord refused | `FAILED` + alert | the invariant |
+
+The Discord kick is awaited through the existing `createBridgeEnforcer` loopback to the admin bot,
+which owns privileged writes.
+
+**A second gap found while wiring this.** The bridge process had no `StaffAlertSink` at all — only
+the admin bot did. Every automod enforcement failure in that process has been a line in a log file
+and nothing else. It matters more now, because the mirror runs here and every case it declines to
+mirror is a member still sitting in Discord: nobody typed anything, so nobody is waiting for a
+reply, and the alert is the only way anyone finds out. A sink was added, posting to `staff` then
+`modlog` through the existing mod-log poster.
+
+## Part 4 — Immediate full sync
+
+`applyAction` already awaited mirror → Discord → game inline, and after Part 2a the game leg blocks
+on a real in-game ack rather than on a publish, so the verdict stamped on the row now reflects what
+Hypixel did. One thing was still deferred: auto-roles.
+
+`enforce()` now calls `rolesDirty.mark(guildId, [targetDiscordId])`, the same marker
+`packages/community` and `packages/identity` already use, wired at all three composition roots. A
+ban changes what roles somebody should hold and a mute changes what the reconciler should be
+granting; without the mark, both waited for the next full sweep — the punishment landing on one
+surface immediately and on another whenever the sweep next came round.
+
+Marked before either surface is touched, and failures are swallowed, because a mark is a
+promptness hint: the reconciler's daily full sweep is what makes the answer correct regardless.
+Nothing should fail a punishment because Redis was briefly unavailable.
