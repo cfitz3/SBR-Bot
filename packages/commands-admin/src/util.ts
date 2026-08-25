@@ -21,5 +21,9 @@ export function renderModError(error: ModerationError): string {
       return "I'm missing the Discord permission to perform that action.";
     case "DURATION_REQUIRED":
       return "A duration is required for a mute (e.g. duration:1h).";
+    case "NO_SUCH_CASE":
+      return "No case with that id in this server.";
+    case "ALREADY_VOID":
+      return "That case has already been voided.";
   }
 }

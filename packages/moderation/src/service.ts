@@ -10,6 +10,7 @@ import {
   type ApplyActionInput,
   type EnforcementStatus,
   type AuditQuery,
+  type CaseEditInput,
   type InfractionDTO,
   type ModActionType,
   type ModerationActionDTO,
@@ -28,7 +29,7 @@ import {
   rungFor,
   type EscalationRung,
 } from "./escalation.js";
-import { EXPIRY_ACTOR, inForce } from "./expiry.js";
+import { EXPIRY_ACTOR, inForce, isInForce } from "./expiry.js";
 import { modLogEmbed, type ModLogSink } from "./mod-log.js";
 import { isPunitive, needsBotPermission, rankOf } from "./rank.js";
 import { type GameCommandPlan, parseRelaySync, resolveGameCommand } from "./relay-sync.js";
@@ -40,6 +41,7 @@ import type {
   EscalationPolicySource,
   GameCommandBus,
   IgnResolver,
+  ModerationActionPatch,
   ModerationRepository,
   RankResolver,
   RelaySyncSource,
@@ -56,6 +58,16 @@ import { AUTOMOD_ACTOR } from "./automod-runner.js";
  * distinction is load-bearing. Issuing it as an instruction would relay it
  * straight back into the game the notice came from, kicking somebody twice.
  */
+/**
+ * What undoes what. Only the two types that hold enforcement over time appear:
+ * a kick or a warning has nothing to reverse, so voiding one is a correction to
+ * the record and nothing more.
+ */
+const REVERSALS: Partial<Record<ModActionType, ModActionType>> = {
+  BAN: "UNBAN",
+  MUTE: "UNMUTE",
+};
+
 export interface ExternalActionInput {
   readonly guildId: string;
   readonly type: "KICK" | "MUTE" | "UNMUTE";
@@ -220,6 +232,161 @@ export class ModerationServiceImpl implements ModerationService {
       limit: 200,
     });
     return ok(inForce(rows, this.now()));
+  }
+
+  // ── correcting a case after the fact ──────────────────────────────────────
+  //
+  // Everything below shares one shape: find the row inside this guild, refuse
+  // if it is not there, change it, and return what the row now says. The find
+  // is the ownership check - a case id is quoted in public, so an id from
+  // another guild has to read as "no such case" rather than as a write.
+
+  async updateAction(input: CaseEditInput): Promise<Result<ModerationActionDTO, ModerationError>> {
+    const found = await this.repo.findAction(input.guildId, input.actionId.trim());
+    if (found === null) return err({ kind: "NO_SUCH_CASE" });
+
+    const patch: {
+      -readonly [K in keyof ModerationActionPatch]: ModerationActionPatch[K];
+    } = { editedByDiscordId: input.editorDiscordId };
+    if (input.reason !== undefined) patch.reason = input.reason;
+    if (input.durationSeconds !== undefined) {
+      patch.durationSeconds = input.durationSeconds;
+      // From `createdAt`, not from now. A two-hour mute corrected to one hour
+      // should end an hour after it started; recomputing from the moment of the
+      // edit would make every correction quietly extend the sentence.
+      patch.expiresAt =
+        input.durationSeconds !== null && input.durationSeconds > 0
+          ? new Date(Date.parse(found.createdAt) + input.durationSeconds * 1000).toISOString()
+          : null;
+    }
+
+    const updated = await this.repo.updateAction(input.guildId, input.actionId.trim(), patch);
+    if (updated === null) return err({ kind: "NO_SUCH_CASE" });
+
+    // The mirror is what the bridge and the dispatchers actually read, and it
+    // carries the TTL. A shortened mute that never reached it would go on being
+    // enforced for its original duration, so the edit would be true on the page
+    // and false in the world.
+    if (input.durationSeconds !== undefined) await this.mirror(updated);
+
+    this.log.info("moderation case edited", {
+      guildId: updated.guildId,
+      actionId: updated.id,
+      editor: input.editorDiscordId,
+      // Length, not text: the reason is on the row already and staff notes do
+      // not belong in a log aggregator.
+      reasonLength: input.reason?.length ?? null,
+      durationSeconds: input.durationSeconds ?? null,
+    });
+    await this.postModLog(updated);
+    return ok(updated);
+  }
+
+  async setEnforcementManually(
+    guildId: string,
+    actionId: string,
+    editorDiscordId: string,
+    status: EnforcementStatus,
+    note: string,
+  ): Promise<Result<ModerationActionDTO, ModerationError>> {
+    const id = actionId.trim();
+    const found = await this.repo.findAction(guildId, id);
+    if (found === null) return err({ kind: "NO_SUCH_CASE" });
+
+    // Attributed rather than bare. "CONFIRMED" with no author reads as the
+    // platform having confirmed something it never did; the point of this call
+    // is that a person is vouching for it.
+    const trimmed = note.trim();
+    const detail = trimmed === "" ? `set by hand by ${editorDiscordId}` : `${trimmed} (by hand, ${editorDiscordId})`;
+
+    const updated = await this.repo.updateAction(guildId, id, {
+      enforcement: status,
+      enforcementDetail: detail,
+      editedByDiscordId: editorDiscordId,
+    });
+    if (updated === null) return err({ kind: "NO_SUCH_CASE" });
+
+    this.log.info("enforcement status set by hand", { guildId, actionId: id, editor: editorDiscordId, status });
+    await this.postModLog(updated);
+    return ok(updated);
+  }
+
+  async retryEnforcement(
+    guildId: string,
+    actionId: string,
+    editorDiscordId: string,
+  ): Promise<Result<ModerationActionDTO, ModerationError>> {
+    const id = actionId.trim();
+    const found = await this.repo.findAction(guildId, id);
+    if (found === null) return err({ kind: "NO_SUCH_CASE" });
+
+    this.log.info("retrying enforcement", { guildId, actionId: id, editor: editorDiscordId, type: found.type });
+    // The same path the original attempt took, verdict and staff alert and mod
+    // log card included. A retry that reported success differently from a first
+    // attempt would be a second thing to trust.
+    const enforced = await this.enforce(found);
+    const stamped = await this.repo.updateAction(guildId, id, { editedByDiscordId: editorDiscordId });
+    return ok(stamped ?? enforced);
+  }
+
+  async voidAction(
+    guildId: string,
+    actionId: string,
+    editorDiscordId: string,
+    reason: string,
+  ): Promise<Result<ModerationActionDTO, ModerationError>> {
+    const id = actionId.trim();
+    const found = await this.repo.findAction(guildId, id);
+    if (found === null) return err({ kind: "NO_SUCH_CASE" });
+    if (found.voidedAt !== null) return err({ kind: "ALREADY_VOID" });
+
+    // The compensating action comes first, and its failure is not swallowed
+    // into the void: a case marked void beside somebody who is still banned is
+    // the exact shape of lie this surface exists to prevent. Issued through
+    // `applyAction` so it is a real, enforced, logged punishment reversal
+    // rather than a column flipped in the database.
+    const reversal = REVERSALS[found.type];
+    if (reversal !== undefined && isInForce(found, this.now())) {
+      const undone = await this.applyAction({
+        guildId,
+        type: reversal,
+        actorDiscordId: editorDiscordId,
+        targetDiscordId: found.targetDiscordId,
+        reason: `Case ${found.id} voided: ${reason}`,
+        durationSeconds: null,
+      });
+      if (!undone.ok) return undone;
+      if (undone.value.enforcement === "FAILED") {
+        // Recorded, not hidden. The reversal row carries its own FAILED verdict
+        // and has already alerted staff; voiding on top of it would leave two
+        // rows disagreeing about whether the person is still banned.
+        this.log.error("a voided case could not be reversed", {
+          guildId,
+          actionId: id,
+          detail: undone.value.enforcementDetail,
+        });
+      }
+    }
+
+    const updated = await this.repo.updateAction(guildId, id, {
+      voidedAt: this.now().toISOString(),
+      voidReason: reason,
+      active: false,
+      editedByDiscordId: editorDiscordId,
+    });
+    if (updated === null) return err({ kind: "NO_SUCH_CASE" });
+
+    // The mirror holds what the bridge enforces. A voided punishment that stayed
+    // in it would go on being enforced by every surface that reads it.
+    await this.mirror(updated);
+    this.log.warn("moderation case voided", {
+      guildId,
+      actionId: id,
+      editor: editorDiscordId,
+      reasonLength: reason.length,
+    });
+    await this.postModLog(updated);
+    return ok(updated);
   }
 
   async sweepExpired(now: Date = this.now()): Promise<Result<number>> {
