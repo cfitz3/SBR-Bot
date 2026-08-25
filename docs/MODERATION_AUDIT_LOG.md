@@ -399,3 +399,36 @@ Three separate copies of that check existed, all wrong in the same way.
 Every one of these is a way a `/g kick` used to read as done: bridge offline, wrong guild,
 queue full, aged out, displaced, typed-and-refused, or typed-and-ignored. They are now
 seven distinguishable outcomes rather than one boolean.
+
+## Part 2b — Hypixel refusing a command looked exactly like Hypixel running it
+
+**Confirmed gap, now closed as far as it can be.** The delivery ack says the bridge typed
+the line. Hypixel refuses a kick with no reason, a kick against a name it does not know,
+and a kick by an account without the rank — and from the bridge's side all three look
+identical to a kick that worked.
+
+`apps/bridge-bot/src/command-echo.ts` watches guild chat for ten seconds after each
+moderation command and settles it on the guild's own reply.
+
+- Successes come from the existing `parseModNotice`, matched on kind **and** target.
+- Refusals come from `HYPIXEL_REFUSALS`, a hand-collected table of strings Hypixel prints
+  today. Each entry has its own test asserting the real line, and the test asserts the table
+  length too, so a reworded entry cannot quietly stop matching while the suite stays green.
+  **These strings are not versioned by Hypixel and will drift.** That is why an
+  unrecognised window is reported *unconfirmed*, never as failure: an unrecognised line must
+  not turn a kick that landed into a red case.
+- A refusal names the command, not the player (`You cannot kick yourself` carries nobody to
+  match on), so it settles the oldest command still waiting. Sound because the outbound
+  queue is serial and paced at 1.2s.
+- **Colour codes.** `mod-notice.ts` anchors with `^…$` and did *not* strip `§`, while
+  `join.ts` did. Every coloured line from Hypixel — which is to say every real line —
+  therefore missed every pattern. Lines are stripped before matching now, and there is a
+  test for it.
+
+**Deviation from the plan, deliberate:** the echo guard is in-process, not the
+`sbr:relay:echo:kick:<guildId>:<ign>` Redis key the plan sketched. The bridge that types the
+command is the same process that reads the notice it produces, so the guard and the
+confirmation are the same piece of state; a cross-process key would only add a way for the
+two to disagree. `CommandEcho.claimedKick` remembers our own kicks for 120s, and the
+transport checks it before mirroring a kick notice — without which a Discord ban would relay
+a `/g kick`, read its own notice back, and mirror it into a second punishment.

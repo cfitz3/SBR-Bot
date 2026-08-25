@@ -47,6 +47,7 @@ import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
 import { acceptCommand, denyCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
 import { CommandQueue, type CommandOptions } from "./command-queue.js";
+import { CommandEcho } from "./command-echo.js";
 import { isPunitiveNotice, parseModNotice, type ModNotice } from "./mod-notice.js";
 import {
   JOIN_WINDOW_MS,
@@ -916,6 +917,20 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     });
   }
 
+  /**
+   * The second half of the answer: what the guild made of the line.
+   *
+   * In-process rather than the Redis echo key the plan sketched, because the
+   * bridge that types the command is the same process that reads the notice it
+   * produces — so the guard and the confirmation are the same piece of state,
+   * and a cross-process key would only add a way for them to disagree.
+   */
+  const commandEcho = new CommandEcho({
+    onSettle: (verdict) => {
+      void app.ackGameCommand(verdict);
+    },
+  });
+
   app.setGameCommandSink((message) => {
     const { guildId, command, correlationId } = message;
     const ack = (outcome: ModAckOutcome, detail: string): void => {
@@ -928,7 +943,10 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
         const accepted = sendGameCommand(guildId, command, {
           // Typed, not done. The guild's own answer follows on the same
           // correlation id if Hypixel says anything about it.
-          onSent: () => { ack("TYPED", `typed in guild chat: ${command}`); },
+          onSent: () => {
+            commandEcho.watch(guildId, correlationId, command);
+            ack("TYPED", `typed in guild chat: ${command}`);
+          },
           onExpired: () => { ack("EXPIRED", "discarded untyped: the session never came back in time"); },
         });
         if (!accepted) {
@@ -1102,8 +1120,18 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // Hypixel's own moderation notices. Also server messages, so they are
       // read before the chat parse and never reach the relay — a kick notice
       // belongs in the audit log, not repeated into the Discord channel.
+      // Was this the guild answering a command we typed? `observe` settles the
+      // waiting punishment either way, and returning true means the line is our
+      // own kick coming back — which must not also be recorded as somebody's
+      // in-game decision, or a Discord ban becomes two punishments.
+      if (commandEcho.observe(str)) return;
+
       const notice = parseModNotice(str);
       if (notice !== null && isPunitiveNotice(notice)) {
+        if (notice.kind === "KICK" && commandEcho.claimedKick(notice.target)) {
+          app.log.debug("suppressed our own guild kick notice", { target: notice.target });
+          return;
+        }
         relay("ingame-moderation", () => recordNotice(notice));
         return;
       }
