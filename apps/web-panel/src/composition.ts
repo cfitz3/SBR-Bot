@@ -115,28 +115,27 @@ export async function createPanelApp(): Promise<PanelApp> {
     // The real Redis mirror, same object the admin bot uses: a mute issued from
     // the panel has to be visible to the bridge immediately, and a no-op stub
     // would have written the audit row while enforcing nothing.
-    enforcement: {
-      async apply(action) {
-        // Mirror first. The mirror is what the bridge and the dispatchers read
-        // to decide whether someone is muted, and it must land even if Discord
-        // refuses — otherwise a failed timeout would also leave the person
-        // un-muted everywhere else.
-        await adapters.enforcement.apply(action);
+    // The mirror, and only the mirror. It is what the bridge and the dispatchers
+    // read to decide whether someone is muted, and it must land even if Discord
+    // refuses - otherwise a failed timeout would also leave the person un-muted
+    // everywhere else.
+    //
+    // The real Discord call used to be hidden in here too, with its failure
+    // reduced to a `log.warn`. That is how the panel could report a completed
+    // ban against a member who was never banned: the mirror is a cache, and a
+    // cache entry is not a removal. It is now the `discord` port below, whose
+    // failure marks the case `enforcement_failed` and tells staff.
+    enforcement: adapters.enforcement,
+    discord: {
+      async enforce(action) {
         const request = discordEnforcementFor(action);
-        if (request === null) return;
-        const outcome = await enforcer.enforce(action.guildId, request);
-        if (!outcome.ok) {
-          // Logged, not thrown: the audit row is already written and the mirror
-          // already holds, so failing the whole action here would leave the
-          // panel reporting an error against work that partly succeeded. The
-          // Health page is where a persistently unreachable bot shows up.
-          log.warn("discord enforcement did not apply", {
-            guildId: action.guildId,
-            type: action.type,
-            target: action.targetDiscordId,
-            error: outcome.error,
-          });
+        // Nothing to ask Discord for is not a failure: a WARN has no Discord
+        // effect, and an unbounded mute has no timeout to express.
+        if (request === null) {
+          return { ok: true, skipped: true, reason: "no Discord effect for this action" };
         }
+        const outcome = await enforcer.enforce(action.guildId, request);
+        return outcome.ok ? { ok: true } : { ok: false, reason: outcome.error };
       },
     },
     // Still assumed, exactly as in the admin bot: proving the bot holds a
@@ -150,7 +149,22 @@ export async function createPanelApp(): Promise<PanelApp> {
     // Punishment sync into guild chat. The command is published, not typed:
     // only the bridge process holds a Minecraft session, and only it knows how
     // fast Hypixel will let that account speak.
-    gameCommands: { send: (guildId, command) => adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() }) },
+    //
+    // The heartbeat check is what makes the publish honest. Redis pub/sub has
+    // no store-and-forward, so publishing to a channel with no subscriber
+    // succeeds and drops the message: without this, a ban issued from the panel
+    // would report its `/g kick` sent every time the bridge was down.
+    gameCommands: {
+      async send(guildId, command) {
+        const live = await adapters.heartbeat.list().catch(() => []);
+        if (!live.some((r) => r.service === "bridge-bot" && r.details["mcSpawned"] === true)) {
+          log.warn("guild command not sent: no bridge is in-game", { guildId });
+          return false;
+        }
+        await adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() });
+        return true;
+      },
+    },
     igns: {
       async ignFor(_guildId, discordId) {
         // Guild-agnostic on purpose: a link is to a person, not to a server, and

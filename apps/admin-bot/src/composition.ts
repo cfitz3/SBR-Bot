@@ -26,14 +26,18 @@ import {
   RELAY_SYNC_SETTING_KEY,
   SafetyServiceImpl,
   WordlistServiceImpl,
+  type DiscordEnforcer,
+  type ModLogSink,
+  type StaffAlertSink,
 } from "@sbr/moderation";
+import type { EmbedView } from "@sbr/shared-types";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { JoinQueueService, ScreeningService, type GuildCommandSender } from "@sbr/screening";
 import { HypixelClient } from "@sbr/hypixel";
 import { CommunityServiceImpl } from "@sbr/community";
 import { GuildConfigServiceImpl } from "@sbr/guild-config";
 import { AnalyticsServiceImpl, createDomainMetrics } from "@sbr/analytics";
-import { AdminDispatcher, buildAdminRegistry } from "@sbr/commands-admin";
+import { AdminDispatcher, buildAdminRegistry, renderEffectError } from "@sbr/commands-admin";
 import {
   createLogger,
   createLogShipper,
@@ -62,6 +66,11 @@ export interface AdminApp {
   readonly effects: DiscordGuildEffects;
   /** Lifts every lockdown or anti-raid posture whose `expiresAt` has passed. */
   sweepSafety(): Promise<number>;
+  /**
+   * Lift punishments whose clock has run out, on both surfaces, and clear their
+   * flags. Returns how many were lifted.
+   */
+  sweepPunishments(): Promise<number>;
   /** Redis lock, so a second admin-bot instance doesn't double-run the sweep. */
   readonly lock: ReturnType<typeof createRedisAdapters>["lock"];
   /**
@@ -85,6 +94,13 @@ export interface AdminApp {
    * than no alert.
    */
   setOpsPoster(post: ((channelId: string, text: string) => Promise<boolean>) | null): void;
+  /**
+   * Where moderation-log cards go. Separate from the ops poster because this one
+   * sends an embed rather than a line of plain text, and because the two have
+   * different audiences: ops alerts are for whoever runs the platform, the mod
+   * log is for the guild's own staff.
+   */
+  setModLogPoster(post: ((channelId: string, embed: EmbedView) => Promise<boolean>) | null): void;
   /** The infrastructure probes, for the watchtower's own reading. */
   readonly health: HealthRegistry;
   /** Live heartbeats across the fleet. */
@@ -101,6 +117,7 @@ export async function createAdminApp(): Promise<AdminApp> {
   // The ops poster is set by the transport at ready; everything built before
   // then closes over this rather than over a client that does not exist yet.
   let opsPost: ((channelId: string, text: string) => Promise<boolean>) | null = null;
+  let modLogPost: ((channelId: string, embed: EmbedView) => Promise<boolean>) | null = null;
   const errorChannelId = config.ops.errorChannelId ?? null;
   const shipper =
     errorChannelId === null
@@ -136,10 +153,140 @@ export async function createAdminApp(): Promise<AdminApp> {
   const analytics = new AnalyticsServiceImpl({ buffer: adapters.analyticsBuffer, logger: log });
   const metrics = createDomainMetrics({ analytics, surface: "ADMIN_BOT", logger: log });
 
+  /**
+   * Guild commands from staff and from punishments, over one bus.
+   *
+   * The liveness check is not decoration. Redis pub/sub has no store-and-forward:
+   * publishing to a channel nobody is subscribed to succeeds and the message is
+   * gone. Without this, `/join-accept` would answer "sent" whenever the bridge
+   * happened to be down, and staff would come back to an applicant still waiting
+   * with the platform insisting they had been admitted. A bridge that is up but
+   * not spawned in-game is equally no use, so `mcSpawned` is what is checked
+   * rather than mere presence.
+   *
+   * The moderation service is wired to this same sender rather than to a bare
+   * publish. It used to have its own, publishing blind and returning void, which
+   * is how a `/ban` could report success while the `/g kick` that should have
+   * removed the same person from the Hypixel guild evaporated into a channel
+   * with no subscriber.
+   */
+  const guildCommands: GuildCommandSender = {
+    async send(guildId, command) {
+      const live = await adapters.heartbeat.list().catch(() => []);
+      const bridge = live.find((r) => r.service === "bridge-bot" && r.details["mcSpawned"] === true);
+      if (!bridge) {
+        log.warn("guild command not sent: no bridge is in-game", { guildId });
+        return false;
+      }
+      try {
+        await adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() });
+        return true;
+      } catch (error) {
+        log.error("guild command could not be published", { guildId, error: String(error) });
+        return false;
+      }
+    },
+  };
+
+  /**
+   * The Discord half of enforcement, over the same `GuildEffects` the commands
+   * use. This is the port whose absence was the bug: the service was handed the
+   * Redis mirror as its only "enforcement", the mirror is a cache, and so
+   * nothing in this process ever asked Discord to remove anybody.
+   *
+   * Reversal types are mapped as carefully as the punitive ones. An UNBAN that
+   * quietly did nothing would be the same failure wearing the opposite sign.
+   */
+  const discordEnforcer: DiscordEnforcer = {
+    async enforce(action) {
+      const target = action.targetDiscordId;
+      if (target === null) return { ok: true, skipped: true, reason: "no Discord target" };
+      const reason = `case ${action.id}: ${action.reason}`;
+
+      const outcome = await (async () => {
+        switch (action.type) {
+          case "BAN":
+            return effects.ban(action.guildId, target, reason);
+          case "UNBAN":
+            return effects.unban(action.guildId, target, reason);
+          case "KICK":
+            return effects.kick(action.guildId, target, reason);
+          case "MUTE":
+            // Guarded by the service, which refuses an unbounded MUTE outright;
+            // the fallback keeps this total rather than relying on that.
+            return effects.timeout(action.guildId, target, action.durationSeconds ?? 0, reason);
+          case "UNMUTE":
+            return effects.untimeout(action.guildId, target, reason);
+          default:
+            return null;
+        }
+      })();
+
+      if (outcome === null) return { ok: true, skipped: true, reason: "no Discord counterpart" };
+      if (outcome.ok) return { ok: true };
+      return { ok: false, reason: renderEffectError(outcome.error) };
+    },
+  };
+
+  /**
+   * Where a failed enforcement is announced.
+   *
+   * The staff channel first, the moderation log second, the ops error channel
+   * last. Ordered by who needs to act: a punishment that did not land needs a
+   * human to finish it, and the people who can are in `staff`. The ops channel
+   * is the floor rather than the target — it catches guilds that have configured
+   * neither, which are exactly the guilds most likely to have this go wrong.
+   */
+  const staffAlerts: StaffAlertSink = {
+    async alert(guildId, text) {
+      if (opsPost === null) return;
+      // Read straight from the repository rather than through the cached
+      // config service: this runs a handful of times a month, and the service
+      // is built further down the file anyway.
+      const row = await guildConfigRepository.get(guildId).catch(() => null);
+      for (const slot of ["staff", "modlog"] as const) {
+        const channelId = row?.channels[slot] ?? null;
+        if (channelId !== null && (await opsPost(channelId, text))) return;
+      }
+      if (errorChannelId !== null) await opsPost(errorChannelId, text);
+    },
+  };
+
+  /**
+   * The guild's moderation log.
+   *
+   * The `modlog` channel slot has been offered in the panel all along and
+   * nothing has ever written to it — a guild could bind it, see it bound, and
+   * receive nothing. Every action now lands here, including the ones nobody
+   * typed: an automod mute and an expired ban lifting itself are exactly the
+   * events staff cannot otherwise see happen.
+   *
+   * Falls back to `staff` rather than going quiet, and gives up rather than
+   * escalating to the ops channel: an unbound mod log is a configuration
+   * preference, not an incident, and filling the platform's error channel with
+   * one guild's warnings would bury the alerts that are.
+   */
+  const modLog: ModLogSink = {
+    async post(guildId, embed) {
+      if (modLogPost === null) return;
+      const row = await guildConfigRepository.get(guildId).catch(() => null);
+      for (const slot of ["modlog", "staff"] as const) {
+        const channelId = row?.channels[slot] ?? null;
+        if (channelId !== null && (await modLogPost(channelId, embed))) return;
+      }
+    },
+  };
+
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
+    // The Redis mirror: a cache the bridge and the dispatchers read, and
+    // nothing more. Kept separate from `discord` now that the two are no longer
+    // confused for one another.
     enforcement: adapters.enforcement,
+    discord: discordEnforcer,
+    staffAlerts,
+    modLog,
     metrics,
     // Until the discord.js permission check exists, assume the bot can enforce.
     botCaps: { async canPerform() { return true; } },
@@ -149,8 +296,9 @@ export async function createAdminApp(): Promise<AdminApp> {
     escalation: { readPolicy: (guildId) => guildConfigRepository.getSetting(guildId, ESCALATION_SETTING_KEY) },
     // Punishment sync into guild chat. The command is published, not typed:
     // only the bridge process holds a Minecraft session, and only it knows how
-    // fast Hypixel will let that account speak.
-    gameCommands: { send: (guildId, command) => adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() }) },
+    // fast Hypixel will let that account speak. Deliverability is checked
+    // first — see `guildCommands`.
+    gameCommands: { send: async (guildId, command) => guildCommands.send(guildId, command) },
     igns: {
       async ignFor(_guildId, discordId) {
         // Guild-agnostic on purpose: a link is to a person, not to a server, and
@@ -213,35 +361,6 @@ export async function createAdminApp(): Promise<AdminApp> {
    * and a way to answer one.
    */
   const screening = new ScreeningService({ repo: screeningRepository, logger: log });
-
-  /**
-   * Guild commands from staff, over the same bus punishments use.
-   *
-   * The liveness check is not decoration. Redis pub/sub has no store-and-forward:
-   * publishing to a channel nobody is subscribed to succeeds and the message is
-   * gone. Without this, `/join-accept` would answer "sent" whenever the bridge
-   * happened to be down, and staff would come back to an applicant still waiting
-   * with the platform insisting they had been admitted. A bridge that is up but
-   * not spawned in-game is equally no use, so `mcSpawned` is what is checked
-   * rather than mere presence.
-   */
-  const guildCommands: GuildCommandSender = {
-    async send(guildId, command) {
-      const live = await adapters.heartbeat.list().catch(() => []);
-      const bridge = live.find((r) => r.service === "bridge-bot" && r.details["mcSpawned"] === true);
-      if (!bridge) {
-        log.warn("guild command not sent: no bridge is in-game", { guildId });
-        return false;
-      }
-      try {
-        await adapters.modBus.publish({ guildId, kind: "GAME_COMMAND", command, correlationId: randomUUID() });
-        return true;
-      } catch (error) {
-        log.error("guild command could not be published", { guildId, error: String(error) });
-        return false;
-      }
-    },
-  };
 
   const joinQueue = new JoinQueueService({
     screening,
@@ -320,11 +439,18 @@ export async function createAdminApp(): Promise<AdminApp> {
     dispatcher,
     effects,
     sweepSafety: () => safety.sweepExpired(),
+    async sweepPunishments() {
+      const r = await moderation.reverseExpired();
+      return r.ok ? r.value : 0;
+    },
     lock: adapters.lock,
     memberBus: adapters.memberBus,
     resolveGuild: guildRepository.resolveInternalId,
     setStatusSource(source) {
       liveStatus = source;
+    },
+    setModLogPoster(post) {
+      modLogPost = post;
     },
     setOpsPoster(post) {
       opsPost = post;

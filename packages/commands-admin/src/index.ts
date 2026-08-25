@@ -11,6 +11,7 @@ export {
   renderApplicationListEmbed,
   renderAuditPages,
   renderEffectError,
+  renderEnforcement,
   renderFilterTestEmbed,
   renderInfractionPages,
   renderSafetyError,

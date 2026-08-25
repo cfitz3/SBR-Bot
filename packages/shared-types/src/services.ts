@@ -601,6 +601,13 @@ export interface ModerationService {
   /** `/audit` — the moderation log, filtered and newest-first. */
   listActions(query: AuditQuery): Promise<Result<readonly ModerationActionDTO[]>>;
   /**
+   * `/case` — one action by the id every reply and mod-log card already quotes.
+   *
+   * Guild-scoped: a case id is quoted in public, and one guild's id must never
+   * read another guild's moderation history.
+   */
+  findAction(guildId: string, actionId: string): Promise<Result<ModerationActionDTO | null>>;
+  /**
    * The punishments being enforced right now, newest first. Expiry-aware: a
    * mute whose clock has run out is not listed even if the sweep has not
    * cleared its flag yet, so the list matches what the bridge and Discord are
@@ -609,8 +616,13 @@ export interface ModerationService {
   listInForce(guildId: string, targetDiscordId?: string | null): Promise<Result<readonly ModerationActionDTO[]>>;
   /**
    * Clear the `active` flag on punishments whose duration has run out, and
-   * report how many. Enforcement itself expires on its own (Redis TTLs, Discord
-   * timeouts); this only stops the audit tables claiming otherwise.
+   * report how many.
+   *
+   * Bookkeeping only. The comment here used to say enforcement expires on its
+   * own — true of a Discord timeout and a Redis TTL, false of a Discord ban and
+   * of the Hypixel guild mute a relayed `/g mute` set. Lifting those is
+   * `reverseExpired` on the implementation, which the admin bot's sweep calls;
+   * this method on its own turns a temp ban into a permanent one.
    */
   sweepExpired(now?: Date): Promise<Result<number>>;
 }
@@ -1200,6 +1212,27 @@ export type SafetyError =
  */
 export interface GuildEffects {
   kick(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>>;
+  /**
+   * Ban and unban. These are the half of `/ban` that removes a person, as
+   * opposed to the half that writes a row about it — the two were separated
+   * for long enough that a ban could be logged and never served.
+   */
+  ban(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>>;
+  unban(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>>;
+  /**
+   * Discord's own communication timeout, which is the only server-wide silence
+   * Discord offers. `durationSeconds` is clamped to Discord's 28-day ceiling by
+   * the implementation rather than refused, since a longer silence is a ban's
+   * job and the platform mirror holds the full duration regardless.
+   */
+  timeout(
+    guildId: string,
+    userId: string,
+    durationSeconds: number,
+    reason: string,
+  ): Promise<Result<void, GuildEffectError>>;
+  /** Lift a timeout early. Succeeds when there was none to lift. */
+  untimeout(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>>;
   /** Returns how many messages were actually deleted. */
   purge(input: PurgeInput): Promise<Result<number, GuildEffectError>>;
   /** Locks or unlocks a channel (or every text channel when `channelId` is null). */

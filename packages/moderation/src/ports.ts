@@ -4,6 +4,7 @@
  */
 import type {
   AntiRaidStateDTO,
+  EnforcementStatus,
   AuditQuery,
   InfractionDTO,
   LockdownStateDTO,
@@ -52,6 +53,29 @@ export interface ModerationRepository {
    * race with anything applied in between.
    */
   deactivateExpired(guildId: string | null, now: Date): Promise<number>;
+  /**
+   * Record what became of the enforcement attempt for one action.
+   *
+   * Written after the fact rather than passed to `createAction`, because the
+   * row has to exist before anything is attempted: an enforcement that crashes
+   * the process must leave evidence behind, and a row written only on success
+   * leaves none.
+   */
+  setEnforcement(actionId: string, status: EnforcementStatus, detail: string | null): Promise<void>;
+  /**
+   * Punishments whose clock has run out but which are still flagged active —
+   * the ones a sweep has to *reverse*, not merely un-flag. Returned newest
+   * first and capped, since the sweep issues an API call per row.
+   */
+  listExpiredActive(guildId: string | null, now: Date, limit: number): Promise<readonly ModerationActionDTO[]>;
+  /**
+   * One action by its case id, scoped to the guild asking.
+   *
+   * Guild-scoped rather than a bare lookup because a case id is quoted in
+   * public - it goes in a command reply, a mod-log card and an appeal ticket -
+   * and an id from one guild must not read another guild's moderation history.
+   */
+  findAction(guildId: string, actionId: string): Promise<ModerationActionDTO | null>;
 }
 
 /**
@@ -144,6 +168,50 @@ export interface EnforcementMirror {
   apply(action: ModerationActionDTO): Promise<void>;
 }
 
+/**
+ * How an enforcement attempt ended.
+ *
+ * `skipped` is not a failure and not a success: it is "this action has no
+ * counterpart on that surface", which is the true answer for a note reaching
+ * Discord or a ban reaching a guild the target was never in. Keeping it
+ * distinct from `ok` is what stops the audit row claiming a punishment landed
+ * somewhere nothing was ever sent.
+ */
+export type EnforcementOutcome =
+  | { readonly ok: true }
+  | { readonly ok: true; readonly skipped: true; readonly reason: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Port: the Discord API call that actually punishes somebody.
+ *
+ * Deliberately separate from `EnforcementMirror`. The mirror is a cache the
+ * bridge and the dispatchers read; this is the thing that removes a person from
+ * a server. They were conflated for long enough that the admin bot wired only
+ * the mirror and `/ban` banned nobody while reporting success — so the port
+ * that performs the punishment now has its own name, its own outcome type, and
+ * a return value the service is obliged to look at.
+ *
+ * Optional at the composition root, but a deployment that omits it gets every
+ * Discord-enforced action recorded as `FAILED` with `no Discord enforcer
+ * wired`, rather than recorded as though it worked.
+ */
+export interface DiscordEnforcer {
+  enforce(action: ModerationActionDTO): Promise<EnforcementOutcome>;
+}
+
+/**
+ * Port: somewhere staff will actually see that an enforcement did not happen.
+ *
+ * A log line is not this. The failure mode being closed here is a punishment
+ * that silently did not take, and a warning in a log file nobody tails is the
+ * same silence with extra steps. Implementations post to the guild's staff
+ * channel.
+ */
+export interface StaffAlertSink {
+  alert(guildId: string, text: string): Promise<void>;
+}
+
 /** Whether the bot currently has the Discord permission to perform an action. */
 export interface BotCapabilities {
   canPerform(guildId: string, type: ModActionType): Promise<boolean>;
@@ -170,7 +238,15 @@ export interface RelaySyncSource {
  * in Discord must not be rolled back by a bridge that happens to be offline.
  */
 export interface GameCommandBus {
-  send(guildId: string, command: string): Promise<void>;
+  /**
+   * Returns whether the command was handed to a bridge that could actually run
+   * it. This used to be `Promise<void>`, which was a lie in the one case that
+   * mattered: the production implementation is a Redis publish, Redis pub/sub
+   * has no store-and-forward, and publishing to a channel with no subscriber
+   * succeeds and drops the message. A `/g kick` for a banned member vanished
+   * exactly that way, so callers now get told.
+   */
+  send(guildId: string, command: string): Promise<boolean>;
 }
 
 /**

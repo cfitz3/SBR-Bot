@@ -1,7 +1,8 @@
 /**
- * DiscordGuildEffects — the discord.js half of `/kick`, `/purge` and
- * `/lockdown`. The command layer never touches discord.js; it reaches Discord
- * only through the `GuildEffects` port, and this is the single implementation.
+ * DiscordGuildEffects — the discord.js half of `/kick`, `/ban`, `/mute`,
+ * `/purge` and `/lockdown`. The command layer never touches discord.js; it
+ * reaches Discord only through the `GuildEffects` port, and this is the single
+ * implementation.
  *
  * The client is supplied lazily because the composition root builds the
  * dispatcher before the gateway logs in: a `null` client means "not connected
@@ -21,6 +22,28 @@ import type { Logger } from "@sbr/observability";
 
 /** Discord's bulk delete silently ignores anything older than this. */
 const BULK_DELETE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Discord refuses a communication timeout longer than 28 days. Clamped rather
+ * than refused: the mirror and the audit row hold the real duration, the expiry
+ * sweep lifts it at the real time, and a 60-day mute that silences someone for
+ * 28 days is strictly better than one that silences them for none. Anything
+ * genuinely longer wants to be a ban.
+ */
+const MAX_TIMEOUT_MS = 28 * 24 * 60 * 60 * 1000;
+
+/**
+ * Codes that mean "the end state you asked for already holds".
+ *
+ * 10026 Unknown Ban and 10013 Unknown User on an unban, 10007 Unknown Member on
+ * a kick or an untimeout. Treating these as failures would put a case into the
+ * enforcement-failed queue for the one reason staff can do nothing about: the
+ * person is already gone, or already not banned. The desired state is the
+ * observed state, so the call succeeded.
+ */
+function isAlreadyDone(error: unknown, codes: readonly number[]): boolean {
+  return error instanceof DiscordAPIError && codes.includes(Number(error.code));
+}
 
 function classify(error: unknown): GuildEffectError {
   if (error instanceof DiscordAPIError) {
@@ -72,6 +95,70 @@ export class DiscordGuildEffects implements GuildEffects {
       await guild.value.members.kick(userId, reason);
       return ok(undefined);
     } catch (error) {
+      return err(classify(error));
+    }
+  }
+
+  /**
+   * The call that was missing entirely. `/ban` wrote its row, set its Redis
+   * mirror key, published its relay command and replied "Banned" — and no code
+   * path anywhere in the admin bot ever asked Discord to ban anybody.
+   *
+   * `deleteMessageSeconds` is deliberately zero: purging a banned member's
+   * history is `/purge`'s decision to make, not a silent side effect of a ban.
+   */
+  async ban(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>> {
+    const guild = await this.guild(guildId);
+    if (!guild.ok) return err(guild.error);
+    try {
+      await guild.value.bans.create(userId, { reason, deleteMessageSeconds: 0 });
+      return ok(undefined);
+    } catch (error) {
+      return err(classify(error));
+    }
+  }
+
+  async unban(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>> {
+    const guild = await this.guild(guildId);
+    if (!guild.ok) return err(guild.error);
+    try {
+      await guild.value.bans.remove(userId, reason);
+      return ok(undefined);
+    } catch (error) {
+      // Not banned is the state an unban was after.
+      if (isAlreadyDone(error, [10026, 10013])) return ok(undefined);
+      return err(classify(error));
+    }
+  }
+
+  async timeout(
+    guildId: string,
+    userId: string,
+    durationSeconds: number,
+    reason: string,
+  ): Promise<Result<void, GuildEffectError>> {
+    const guild = await this.guild(guildId);
+    if (!guild.ok) return err(guild.error);
+    try {
+      const member = await guild.value.members.fetch(userId);
+      await member.timeout(Math.min(durationSeconds * 1000, MAX_TIMEOUT_MS), reason);
+      return ok(undefined);
+    } catch (error) {
+      return err(classify(error));
+    }
+  }
+
+  async untimeout(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>> {
+    const guild = await this.guild(guildId);
+    if (!guild.ok) return err(guild.error);
+    try {
+      const member = await guild.value.members.fetch(userId);
+      await member.timeout(null, reason);
+      return ok(undefined);
+    } catch (error) {
+      // Nobody to un-silence: an unmute for someone who has left the server is
+      // done, not failed.
+      if (isAlreadyDone(error, [10007])) return ok(undefined);
       return err(classify(error));
     }
   }

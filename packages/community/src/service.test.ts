@@ -736,6 +736,36 @@ test("setMemberRole returns the updated member", async () => {
   if (r.ok) assert.equal(r.value.role, "MODERATOR");
 });
 
+test("a rank change marks the member for a role reconcile", async () => {
+  // Otherwise the promotion's Discord roles wait for the daily full sweep, and
+  // the member watches nothing happen for up to a day.
+  const member: MemberSummaryDTO = {
+    guildId: "g1", discordId: "111", ign: "Notch", role: "OFFICER",
+    status: "ACTIVE", guildRank: null, joinedAt: null,
+  };
+  const marked: { guildId: string; ids: readonly string[] }[] = [];
+  const svc = new CommunityServiceImpl({
+    repo: repo({ async setMemberRole() { return member; } }).repo,
+    logger: silent,
+    now: NOW,
+    rolesDirty: { async mark(guildId, ids) { marked.push({ guildId, ids: [...ids] }); } },
+  });
+  await svc.setMemberRole("g1", "111", "OFFICER");
+  assert.deepEqual(marked, [{ guildId: "g1", ids: ["111"] }]);
+});
+
+test("a rank change that hit nobody marks nobody", async () => {
+  const marked: string[] = [];
+  const svc = new CommunityServiceImpl({
+    repo: repo().repo,
+    logger: silent,
+    now: NOW,
+    rolesDirty: { async mark(_g, ids) { marked.push(...ids); } },
+  });
+  await svc.setMemberRole("g1", "999", "OFFICER");
+  assert.deepEqual(marked, []);
+});
+
 test("setMemberRole fails for someone not on the roster", async () => {
   const r = await svcOf(repo()).setMemberRole("g1", "999", "MODERATOR");
   assert.equal(r.ok, false);

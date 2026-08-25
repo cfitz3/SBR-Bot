@@ -491,6 +491,12 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       text: "Message to test",
     },
   },
+  case: {
+    description: "Look up one moderation case by its id",
+    option: {
+      id: "The case id, e.g. act-1f3b",
+    },
+  },
   infractions: {
     description: "View a member's infraction history",
     option: {
@@ -564,6 +570,20 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       type: "member (default) or mapping",
       target: "Member (type:member)",
       discord_role: "Discord role id (type:mapping); empty clears it",
+    },
+  },
+  unban: {
+    description: "Lift a ban",
+    option: {
+      target: "Member (user ID — they aren't here to pick)",
+      reason: "Reason",
+    },
+  },
+  unmute: {
+    description: "Lift a mute early, on Discord and in guild chat",
+    option: {
+      target: "Member",
+      reason: "Reason",
     },
   },
   warn: {

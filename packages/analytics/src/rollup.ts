@@ -18,6 +18,7 @@ const DIM_KEYS: Readonly<Record<string, readonly string[]>> = {
   "command.used": ["command", "surface", "success"],
   "bridge.relay": ["direction"],
   "mod.action": ["type"],
+  "mod.action.failed": ["type"],
   "filter.hit": ["rule", "action"],
 };
 

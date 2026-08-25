@@ -101,6 +101,21 @@ enum SourceContext {
   INGAME
 }
 
+/// What became of the attempt to actually carry an action out.
+///
+/// NOT_REQUIRED covers the record-only types (NOTE, WARN) — complete the moment
+/// the row exists. PENDING is what a row is born as, so an enforcement that
+/// crashes the process leaves evidence rather than a row that looks finished.
+/// FAILED is the state this enum exists for: the case log says "banned" and the
+/// member is still in the server, which is precisely the discrepancy that went
+/// unnoticed before the column existed.
+enum EnforcementStatus {
+  NOT_REQUIRED
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
 enum InfractionType {
   SPAM
   PROFANITY
@@ -757,6 +772,12 @@ model ModerationAction {
   // Hypixel's own guild-chat notices, so they carry no actor snowflake and are
   // best-effort by nature — the panel labels them rather than mixing them in.
   sourceContext            SourceContext @default(DISCORD)
+  /// Whether the punishment actually landed. Written after both surfaces have
+  /// answered, never at insert time.
+  enforcement              EnforcementStatus @default(PENDING)
+  /// Why it did not land, when it did not: the specific reason staff need in
+  /// order to finish the job by hand.
+  enforcementDetail        String?
   createdAt                DateTime      @default(now())
 
   guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
@@ -765,6 +786,8 @@ model ModerationAction {
   @@index([guildId, targetDiscordId, active])
   @@index([guildId, type, createdAt])
   @@index([guildId, expiresAt])
+  // The staff view of "what did we record but not do".
+  @@index([guildId, enforcement, createdAt])
 }
 
 model Ticket {

@@ -555,6 +555,19 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // this side of the line.
   app.setDiscordDirectory(createDiscordDirectory(discord));
 
+  // The moderation log. Automod runs in this process, so this is the only place
+  // an automatic punishment can be announced from. Mentions are parsed off: the
+  // card names the member it is about, and a mod log that pings somebody every
+  // time they are muted is a mod log staff mute.
+  app.setModLogPoster(async (channelId, embed) => {
+    const channel = await discord.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+    const sent = await channel
+      .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+      .catch(() => null);
+    return sent !== null;
+  });
+
   // The announcer needs a live client, so like the board it is built here and
   // torn down with the transport.
   const announcer = startMilestoneAnnouncer({
@@ -1535,6 +1548,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // sink pointing at a queue whose session is closing would just age out.
       app.setGameCommandSink(null);
       app.setEventReminderSink(null);
+      app.setModLogPoster(null);
       // The board gateway holds the client this is about to destroy; a board
       // pass arriving after it should be told "not ready", not handed a corpse.
       app.setEventBoard(null);

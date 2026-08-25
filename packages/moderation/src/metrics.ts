@@ -14,8 +14,24 @@
  * nobody charts, which is why they are fixed here rather than passed in.
  */
 export interface ModerationMetrics {
-  /** One applied action. Rejected ones are not counted — nothing happened. */
+  /**
+   * One action that took effect on every surface it was owed on. Rejected ones
+   * are not counted — nothing happened — and neither are ones that were
+   * recorded but not enforced, which go to `actionFailed` instead. The
+   * distinction is the whole reason this port has two methods now: the old
+   * single counter was incremented before enforcement was even attempted, so
+   * the "Moderation actions" chart counted rows written rather than
+   * punishments delivered, and the two diverge in exactly the case worth
+   * seeing.
+   */
   actionApplied(guildId: string, type: string): void;
+  /**
+   * One action written to the audit log that could not be carried out — a
+   * missing permission, an offline relay, a target already gone. Charted
+   * separately as `mod.action.failed` so a run of them is visible as a spike
+   * rather than hidden inside the applied count.
+   */
+  actionFailed(guildId: string, type: string): void;
   /**
    * One rule firing on one message. A message matching three rules records
    * three hits: the question this answers is "which rule is doing the work",

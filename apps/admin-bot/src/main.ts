@@ -6,8 +6,11 @@
  */
 import { installLifecycle } from "@sbr/observability";
 import { guildRepository } from "@sbr/db";
+import { toEmbed } from "@sbr/discord-kit";
+import type { EmbedView } from "@sbr/shared-types";
 import { createAdminApp } from "./composition.js";
 import { startInternalApi } from "./internal-api.js";
+import { startPunishmentSweep } from "./punishment-sweep.js";
 import { startSafetySweep } from "./safety-sweep.js";
 import { startAdminGateway } from "./transport.js";
 import { startWatchtower } from "./watchtower.js";
@@ -27,6 +30,13 @@ async function main(): Promise<void> {
   // without a client, and a sweep that "succeeded" without unlocking anything
   // would leave the record cleared and the channels shut.
   const stopSweep = startSafetySweep({ lock: app.lock, sweep: app.sweepSafety, logger: app.log });
+  // Same reasoning: lifting an expired ban is a gateway call, so it waits for
+  // one. Without this loop a temp ban is a permanent ban with a tidy audit row.
+  const stopPunishmentSweep = startPunishmentSweep({
+    lock: app.lock,
+    sweep: app.sweepPunishments,
+    logger: app.log,
+  });
   app.setStatusSource(() => {
     // discord.js reports -1 until the first gateway heartbeat lands; forwarding
     // that verbatim would render as a negative latency on the Health page.
@@ -64,6 +74,21 @@ async function main(): Promise<void> {
     return sent !== null;
   };
   app.setOpsPoster(postOps);
+
+  // The moderation log. An embed rather than a line, rendered through the same
+  // `toEmbed` every other card in the platform goes through, so the house style
+  // applies here too. Mentions are parsed off for a reason particular to this
+  // channel: the card names the member it is about, and a mod log that pings
+  // somebody every time they are warned is a mod log staff mute.
+  const postModLog = async (channelId: string, embed: EmbedView): Promise<boolean> => {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
+    const sent = await channel
+      .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+      .catch(() => null);
+    return sent !== null;
+  };
+  app.setModLogPoster(postModLog);
   if (!app.config.ops.errorChannelId) {
     app.log.warn("OPS_ERROR_CHANNEL_ID not set — errors stay in the process log only");
   }
@@ -89,6 +114,7 @@ async function main(): Promise<void> {
     logger: app.log,
     async shutdown() {
       stopSweep();
+      stopPunishmentSweep();
       watchtower.stop();
       await internalApi?.stop();
       // `app.shutdown()` flushes the last log batch, so the gateway has to stay

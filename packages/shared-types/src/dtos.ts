@@ -360,7 +360,31 @@ export interface ModerationActionDTO {
   readonly surfaces: readonly ModerationSurface[];
   readonly active: boolean;
   readonly createdAt: string;
+  /**
+   * Whether the punishment this row describes was actually carried out.
+   *
+   * Separate from `active` on purpose: `active` says the platform still
+   * *intends* to enforce, and this says whether the enforcement ever landed.
+   * A ban written to the log while Discord refused the API call is
+   * `active: true, enforcement: "FAILED"` — the state that used to be
+   * indistinguishable from a successful ban, and the reason a member could be
+   * "banned" in the audit log and still sitting in the server.
+   */
+  readonly enforcement: EnforcementStatus;
+  /** Why enforcement failed, verbatim, for the staff alert and the audit page. */
+  readonly enforcementDetail: string | null;
 }
+
+/**
+ * The life of an enforcement attempt.
+ *
+ * `NOT_REQUIRED` is the honest answer for a note or a warning: nothing was
+ * supposed to reach Discord, so neither "confirmed" nor "failed" would be true.
+ * `PENDING` exists for the window between writing the row and hearing back, and
+ * is what a row is left on if the process dies mid-action — which is itself
+ * worth seeing rather than assuming.
+ */
+export type EnforcementStatus = "NOT_REQUIRED" | "PENDING" | "CONFIRMED" | "FAILED";
 
 /**
  * What a member is told about their own record on `/me`.

@@ -18,6 +18,8 @@ function action(over: Partial<ModerationActionDTO>): ModerationActionDTO {
     durationSeconds: null,
     expiresAt: null,
     surfaces: ["DISCORD"],
+    enforcement: "NOT_REQUIRED",
+    enforcementDetail: null,
     active: false,
     createdAt: NOW.toISOString(),
     ...over,

@@ -3,7 +3,6 @@ import test from "node:test";
 import type { ModerationActionDTO } from "@sbr/shared-types";
 import {
   describeState,
-  expiredButFlaggedActive,
   holdsEnforcement,
   inForce,
   isInForce,
@@ -23,6 +22,8 @@ function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
     durationSeconds: 3600,
     expiresAt: "2026-03-01T13:00:00.000Z",
     surfaces: ["DISCORD", "GUILD_CHAT"],
+    enforcement: "CONFIRMED",
+    enforcementDetail: null,
     active: true,
     createdAt: "2026-03-01T11:00:00.000Z",
     ...over,
@@ -87,19 +88,6 @@ test("inForce keeps only the live rows, in the order given", () => {
   assert.deepEqual(
     inForce(rows, NOW).map((r) => r.id),
     ["live", "perm"],
-  );
-});
-
-test("the sweep list is exactly the rows whose flag disagrees with their clock", () => {
-  const rows = [
-    action({ id: "live" }),
-    action({ id: "stale", expiresAt: "2026-03-01T09:00:00.000Z" }),
-    action({ id: "already-swept", expiresAt: "2026-03-01T09:00:00.000Z", active: false }),
-    action({ id: "lifted-early", active: false }),
-  ];
-  assert.deepEqual(
-    expiredButFlaggedActive(rows, NOW).map((r) => r.id),
-    ["stale"],
   );
 });
 

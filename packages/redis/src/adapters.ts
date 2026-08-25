@@ -619,7 +619,8 @@ export const RUNNABLE_JOBS: readonly string[] = [
   "inactivity-scan",
   "event-transition",
   "reminder-dispatch",
-  "punishment-expiry",
+  // `punishment-expiry` is deliberately absent: it moved to the admin bot, so a
+  // manual-run request routed to workers would be accepted and then do nothing.
   "ticket-sweep",
   "event-tracking",
   "event-board",
