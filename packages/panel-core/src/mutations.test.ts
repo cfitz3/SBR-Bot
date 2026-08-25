@@ -155,7 +155,13 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
     recorded.calls.push({ method, args });
     return result;
   };
-  const moderation = { applyAction: record("applyAction") } as unknown as ModerationService;
+  const moderation = {
+    applyAction: record("applyAction"),
+    updateAction: record("updateAction"),
+    setEnforcementManually: record("setEnforcementManually"),
+    retryEnforcement: record("retryEnforcement"),
+    voidAction: record("voidAction"),
+  } as unknown as ModerationService;
   const community = {
     decideApplication: record("decideApplication"),
     closeTicket: record("closeTicket"),
@@ -3339,3 +3345,96 @@ test("a bot that refuses the post is surfaced, not swallowed", async () => {
   assert.equal(result.ok, false);
 });
 
+// ── case management ─────────────────────────────────────────────────────────
+
+test("a case edit sends only the field it was given", async () => {
+  // The page writes one field per request, so a staffer fixing a typo must not
+  // clobber a duration somebody else changed while their tab sat open.
+  const { mutations, recorded } = make({ roleMap: { "111": "MODERATOR" } });
+
+  const out = await mutations.editCase(session(), "g1", { actionId: "act-1", reason: "spam, repeatedly" });
+  assert.equal(out.ok, true);
+  assert.deepEqual(recorded.calls, [
+    {
+      method: "updateAction",
+      args: [{ guildId: "g1", actionId: "act-1", editorDiscordId: "111", reason: "spam, repeatedly" }],
+    },
+  ]);
+});
+
+test("re-timing a punishment is an admin decision even though editing it is not", async () => {
+  // The floor on the mutation is MODERATOR so the common edit - a typo in a
+  // reason - does not need waking an admin. Changing how long somebody is
+  // punished for is a different kind of act, so it is re-checked here.
+  const { mutations, recorded } = make({ roleMap: { "111": "MODERATOR" } });
+
+  const refused = await mutations.editCase(session(), "g1", { actionId: "act-1", durationSeconds: 3600 });
+  assert.equal(refused.ok, false);
+  assert.deepEqual(recorded.calls, [], "the service was never asked");
+
+  const admin = make({ roleMap: { "111": "ADMIN" } });
+  const allowed = await admin.mutations.editCase(session(), "g1", { actionId: "act-1", durationSeconds: 3600 });
+  assert.equal(allowed.ok, true);
+  assert.equal(admin.recorded.calls[0]?.method, "updateAction");
+});
+
+test("an empty case edit is refused rather than sent as a no-op write", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "ADMIN" } });
+  assert.equal((await mutations.editCase(session(), "g1", { actionId: "act-1" })).ok, false);
+  assert.equal((await mutations.editCase(session(), "g1", { actionId: "act-1", reason: "  " })).ok, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("a human cannot declare a case pending", async () => {
+  // PENDING means "the platform is still waiting". A person writing it would
+  // put the case into a queue the sweep then escalates on a clock that has
+  // nothing to do with them.
+  const { mutations, recorded } = make({ roleMap: { "111": "ADMIN" } });
+
+  const bad = await mutations.setCaseEnforcement(session(), "g1", { actionId: "act-1", enforcement: "PENDING" });
+  assert.equal(bad.ok, false);
+  assert.deepEqual(recorded.calls, []);
+
+  const ok2 = make({ roleMap: { "111": "ADMIN" } });
+  const good = await ok2.mutations.setCaseEnforcement(session(), "g1", {
+    actionId: "act-1",
+    enforcement: "CONFIRMED",
+    note: "banned by hand",
+  });
+  assert.equal(good.ok, true);
+  assert.deepEqual(ok2.recorded.calls.at(0)?.args, ["g1", "act-1", "111", "CONFIRMED", "banned by hand"]);
+});
+
+test("voiding a case requires a stated why", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "ADMIN" } });
+  assert.equal((await mutations.voidCase(session(), "g1", { actionId: "act-1" })).ok, false);
+  assert.deepEqual(recorded.calls, []);
+
+  const ok2 = make({ roleMap: { "111": "ADMIN" } });
+  const out = await ok2.mutations.voidCase(session(), "g1", { actionId: "act-1", reason: "wrong person" });
+  assert.equal(out.ok, true);
+  assert.deepEqual(ok2.recorded.calls.at(0)?.args, ["g1", "act-1", "111", "wrong person"]);
+});
+
+test("case management is closed to a moderator except for the wording", async () => {
+  const { mutations } = make({ roleMap: { "111": "MODERATOR" } });
+  for (const out of [
+    await mutations.setCaseEnforcement(session(), "g1", { actionId: "act-1", enforcement: "CONFIRMED" }),
+    await mutations.retryCase(session(), "g1", { actionId: "act-1" }),
+    await mutations.voidCase(session(), "g1", { actionId: "act-1", reason: "wrong person" }),
+  ]) {
+    assert.equal(out.ok, false);
+    assert.equal(out.access.allowed, false);
+  }
+});
+
+test("a case edit logs how long the reason was, never what it said", async () => {
+  // The precedent the wordlist set. A staff note about a member belongs on the
+  // case, not in whatever aggregates the audit stream.
+  const { mutations, recorded } = make({ roleMap: { "111": "MODERATOR" } });
+  await mutations.editCase(session(), "g1", { actionId: "act-1", reason: "ban evasion, third time" });
+
+  const change = recorded.audits.at(-1)?.change as Record<string, unknown> | undefined;
+  assert.equal(change?.["reasonLength"], 23);
+  assert.ok(!("reason" in (change ?? {})), "the text itself was not written to the audit trail");
+});
