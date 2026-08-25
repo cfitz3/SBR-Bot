@@ -114,3 +114,16 @@ test("an action on a member with no Discord account still renders", () => {
   const view = modLogEmbed(action({ targetDiscordId: null }), NOW);
   assert.equal(field(view, "Member"), "an unlinked member");
 });
+
+test("a voided ban stops reading as a ban", () => {
+  // The card outlives the decision it recorded. A withdrawn case that kept its
+  // red bar and said nothing about being withdrawn is the same silence this
+  // module was written to remove, pointed the other way.
+  const view = modLogEmbed(
+    action({ type: "BAN", active: false, voidedAt: "2026-03-01T11:45:00.000Z", voidReason: "wrong person" }),
+    NOW,
+  );
+  assert.equal(view.color, "NEUTRAL");
+  assert.equal(field(view, "Voided"), "wrong person");
+  assert.match(view.footer ?? "", /voided/);
+});
