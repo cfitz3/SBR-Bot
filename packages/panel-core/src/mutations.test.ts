@@ -995,6 +995,64 @@ test("cancelling passes the actor through, so the host check has something to co
  * mutation already required the Officer tier, and an officer who cannot fix a
  * colleague's typo has to cancel and re-create the event to do it.
  */
+test("a poll interval under the Hypixel floor is refused rather than silently clamped", async () => {
+  // The bug this replaced: the panel accepted 15, stored 15, and the tracker
+  // polled hourly anyway — a control that lied about what it did.
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", pollIntervalMinutes: 15 });
+
+  assert.equal(result.ok, false);
+  assert.match(JSON.stringify(result), /60 to 1440 minutes/);
+  assert.equal(recorded.calls.some((c) => c.method === "updateEvent"), false, "nothing was written");
+});
+
+test("an unknown metric is refused, and a known one from the widened catalog is not", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const bad = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", trackedMetrics: ["vibes"] });
+  assert.equal(bad.ok, false);
+
+  // `classHealer` is one of the twelve the catalog gained: it is captured by
+  // the snapshot, so it has a baseline to measure against.
+  const good = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", trackedMetrics: ["classHealer"] });
+  assert.equal(good.ok, true);
+  const call = recorded.calls.find((c) => c.method === "updateEvent");
+  assert.deepEqual((call?.args[0] as Record<string, unknown>)["trackedMetrics"], ["classHealer"]);
+});
+
+test("an event is created with its tracker settings rather than defaulted and corrected", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.createEvent(session(), "g1", {
+    title: "Slayer race",
+    type: "CUSTOM",
+    startsAt: "2026-09-01T18:00:00.000Z",
+    trackedMetrics: ["slayerEnderman"],
+    pollIntervalMinutes: 180,
+    endsAt: "2026-09-01T22:00:00.000Z",
+    prize: "  50m coins  ",
+  });
+
+  assert.equal(result.ok, true);
+  const call = recorded.calls.find((c) => c.method === "createEvent");
+  const sent = call?.args[0] as Record<string, unknown>;
+  assert.deepEqual(sent["trackedMetrics"], ["slayerEnderman"]);
+  assert.equal(sent["pollIntervalMinutes"], 180);
+  assert.equal(sent["endsAt"], "2026-09-01T22:00:00.000Z");
+  assert.equal(sent["prize"], "50m coins", "trimmed, because an operator's stray spaces are not a prize");
+});
+
+test("an empty prize clears it rather than storing whitespace", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", prize: "   " });
+
+  assert.equal(result.ok, true);
+  const call = recorded.calls.find((c) => c.method === "updateEvent");
+  assert.equal((call?.args[0] as Record<string, unknown>)["prize"], null);
+});
+
 test("an edit is sent as staff, with only the fields the form supplied", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
 
@@ -1002,7 +1060,7 @@ test("an edit is sent as staff, with only the fields the form supplied", async (
     eventId: "evt_1",
     title: "  F7 carry night  ",
     trackedMetrics: ["networth"],
-    pollIntervalMinutes: 15,
+    pollIntervalMinutes: 120,
     tracksProgression: true,
   });
 
@@ -1016,7 +1074,7 @@ test("an edit is sent as staff, with only the fields the form supplied", async (
         isStaff: true,
         title: "F7 carry night",
         trackedMetrics: ["networth"],
-        pollIntervalMinutes: 15,
+        pollIntervalMinutes: 120,
         tracksProgression: true,
       },
     ],

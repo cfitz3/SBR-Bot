@@ -229,6 +229,8 @@ export interface PanelEvent {
   readonly trackedMetrics: readonly string[];
   readonly pollIntervalMinutes: number;
   readonly tracksProgression: boolean;
+  /** Free text, shown on the board and the result card. Never paid out here. */
+  readonly prize: string | null;
   /** Where the tracker board was published, and when it was last redrawn. */
   readonly channelId: string | null;
   readonly messageId: string | null;

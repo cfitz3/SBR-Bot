@@ -918,7 +918,17 @@ model Event {
   /// adds needs no migration.
   trackedMetrics      String[]    @default([])
   /// How often the tracker polls participants while the event is LIVE.
-  pollIntervalMinutes Int         @default(30)
+  ///
+  /// Sixty is the floor as well as the default: one poll is one Hypixel profile
+  /// fetch per participant, and the Developer API Policy caps this platform at
+  /// one request per player per hour. A shorter value was accepted by the panel
+  /// and then clamped by the tracker, which made the control a lie.
+  pollIntervalMinutes Int         @default(60)
+  /// What the winner gets, as free text — "5m coins", "a Hyperion", "bragging
+  /// rights". Informational only: it is shown on the board, the result card and
+  /// the panel, and nothing on this platform ever pays it out. Awarding is a
+  /// staff action through the existing manual-adjustment ledger.
+  prize               String?
   /// The mirrored Discord scheduled event, when one was created.
   discordEventId      String?
   reminderState       Json        @default("{}")

@@ -100,3 +100,122 @@ In `packages/jobs/src/event-tracking.test.ts`, a `trackEvents under concurrency`
   the next tick proceeds once the claim is released;
 - a thrown pass still releasing its claim, so a failure cannot lock an event out;
 - one claimed event not blocking the others in the same tick.
+
+---
+
+## Part B - The poll interval
+
+### B1. Three layers disagreed, and the operator was never told - **product decision**
+
+Found:
+
+| layer | bound |
+|---|---|
+| `CommunityServiceImpl` | 5 - 1440 minutes, rejected outside |
+| `PanelMutations.updateEvent` | integer, no bound at all |
+| `apps/web-panel/client/pages/events.ts` | 5 - 1440, mirroring the service |
+| `packages/jobs/src/event-tracking.ts` | **clamped to 60 at read time** |
+
+So an operator could set fifteen minutes in the panel, watch it validate, watch it save -
+and be polled hourly, silently, forever. The control did not do what it said.
+
+**The decision, flagged rather than guessed.** The task asked for a five-minute floor and a
+15 min / 30 min / 1 hour dropdown. Fifteen and thirty cannot work. The Hypixel Developer
+API Policy caps this platform at one request per player per hour
+(`docs/HYPIXEL_COMPLIANCE.md`), enforced by the `SET NX EX` claim in
+`RedisPlayerRateLimiter`, and an event's participants are players like any other. A
+sub-hourly interval does not poll more often; it polls the same amount and is refused the
+difference. Offering it would re-create the exact lie this part exists to remove.
+
+So the floor is **60 minutes**, and the panel's shortlist is **1 / 2 / 3 / 6 / 12 / 24
+hours**, with a custom value accepted anywhere in range. That is the honest version of the
+request: named choices, enforced at the domain layer, none of which is a fiction.
+
+One number now - `EVENT_POLL_MIN_MINUTES` in `@sbr/shared-types`, the only package the
+panel, the service, the mutations and the tracker can all reach. `EVENT_POLL_FLOOR_MINUTES`
+in `@sbr/jobs` re-exports it. The tracker still clamps at read time as well as rejecting at
+write time, because rows created before this floor existed are still in the database; a
+migration raises those to 60 so the stored number stops disagreeing with the one in effect.
+
+### B2. Nothing was configurable *from creation* - **fixed**
+
+`CommunityServiceImpl.createEvent` validated a start time and a capacity and nothing else.
+Neither it nor `PanelMutations.createEvent` accepted `pollIntervalMinutes`,
+`trackedMetrics`, `endsAt` or `prize`. Every contest was therefore created with defaults and
+corrected in a second step - and one that went LIVE before somebody remembered captured its
+baselines against a metric list nobody had chosen, which no later edit can undo, because a
+baseline is the one thing the tracker will not rewrite.
+
+`NewEvent` gains all four. Both layers validate them through the same code the edit path
+uses: `validatePollInterval` / `validateMetrics` / `validatePrize` in the service, and
+`readTrackerSettings` in the mutations. Two paths applying one rule was the shape of the
+original defect and is not repeated.
+
+### B3. Metrics were accepted as free text - **fixed**
+
+`updateEvent` deduplicated and length-capped `trackedMetrics` and then stored whatever
+strings arrived. The tracker filters unrecognised metrics at poll time
+(`event.trackedMetrics.filter(isEventMetric)`), so a typo was stored happily, displayed in
+the panel as a scored metric, and scored nothing. Both layers now check against the catalog
+and name what they did not recognise.
+
+### B4. Poll cadence vs. board redraw - **decision: decouple, documented here**
+
+They are already separate jobs on separate clocks. `event-board` sweeps on
+`BOARD_REFRESH_MS = 30 * 60_000`, carrying the comment *"Half an hour matches the tracker's
+default poll interval"* - which stopped being true when the tracker's floor became sixty
+minutes. The board was therefore redrawn roughly twice per data change, spending a Discord
+edit each time to write the same numbers.
+
+Decision: **keep the two intervals separate, and make the redraw conditional on the data
+having moved.** Merging them would tie a cheap local operation to an expensive remote one;
+tying the sweep to each event's own interval would rebuild the tracker's scheduling in a
+second place. Instead the board sweep keeps its fixed cadence and skips a LIVE redraw when
+no `EventScore` row has changed since `boardUpdatedAt` - so a quiet event costs one query
+per pass instead of an edit, and a busy one is never more than half an hour stale. Final
+result cards always publish, since `boardFinal` is what stops those repeating. See Part E
+for the implementation.
+
+---
+
+## Part D - Prize and duration
+
+### D1. `prize` was genuinely absent - **added**
+
+Confirmed missing from `model Event`, `EventPatch`, `NewEvent`, `EventEdit`, `EventDTO`,
+`PanelEvent` and every render path. Added as nullable free text capped at 200 characters,
+with migration `20260826120000_event_prize_and_poll_floor`.
+
+**Informational only, deliberately.** Nothing on this platform pays a prize out, and the
+schema comment says so, because the obvious next commit is the wrong one: awarding is a
+staff action through the existing manual-adjustment ledger, and an automatic payout path
+from a competition result is exactly the shape that should not be built without being asked
+for.
+
+Empty or whitespace-only input clears the field rather than storing a blank, at both the
+service and the mutation layer.
+
+### D2. Duration is settable and editable, before and during - **fixed**
+
+`endsAt` was in `EventPatch` and reachable from nothing: not `NewEvent`, not `EventEdit`,
+not the panel. It is now on all three, editable while SCHEDULED *and* while LIVE - an event
+running long is ordinary, and the alternative was completing it early to change one field.
+`null` clears it back to open-ended, which `nextEventStatus` reads as
+`DEFAULT_EVENT_DURATION_MS`.
+
+**Editing duration cannot reset a baseline, and the code says why.** A baseline is tied to
+when tracking started, not to when the event is scheduled to stop: `writeBaseline` is
+create-if-absent against `(account, event, source)`, and the score row's baseline column is
+written only by the insert. Moving `endsAt` touches one column on `Event` and nothing on
+`ProfileSnapshot` or `EventScore`. There is a comment at the assignment saying so
+explicitly, because "extend the event, re-baseline everyone" is a plausible-sounding thing
+for a future change to add.
+
+### D3. An event cannot go LIVE with an end time in the past - **already true, plus a guard at the front**
+
+`nextEventStatus` evaluates `ms >= endsAt` *before* `ms >= startsAt`, so an event whose end
+has passed is swept straight to COMPLETED and never enters LIVE at all. That is correct, and
+it is also a silent failure: the operator gets a contest that scored nobody and no
+explanation. `checkEndsAt` now refuses such a value at the point it is typed, on both create
+and edit, along with an end before the start.
+

@@ -479,6 +479,15 @@ export interface EventDTO {
   readonly type?: EventType;
   readonly endsAt?: string | null;
   readonly hostDiscordId?: string | null;
+  /**
+   * What the winner gets, as free text. Informational everywhere it appears —
+   * nothing on this platform pays it out, and awarding one is a staff action
+   * through the manual-adjustment ledger.
+   */
+  readonly prize?: string | null;
+  /** Metric keys this event scores. Empty for an event that is not a contest. */
+  readonly trackedMetrics?: readonly string[];
+  readonly pollIntervalMinutes?: number;
 }
 
 /** One member's response, for `/attendance` and the event roster. */
