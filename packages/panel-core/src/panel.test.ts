@@ -541,7 +541,7 @@ const EVENT = {
   startsAt: "2026-09-01T18:00:00.000Z", endsAt: null, capacity: 5,
   hostDiscordId: "111", going: 1, maybe: 0, declined: 0,
   trackedMetrics: [], pollIntervalMinutes: 30, tracksProgression: false,
-  channelId: null, messageId: null, boardUpdatedAt: null,
+  channelId: null, messageId: null, boardUpdatedAt: null, prize: null,
 } as const;
 
 /** A CommunityService whose attendance roster is two ids, one of them unknown. */

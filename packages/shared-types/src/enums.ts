@@ -274,6 +274,84 @@ export function isMilestoneMetric(value: unknown): value is MilestoneMetric {
   return typeof value === "string" && (MILESTONE_METRICS as readonly string[]).includes(value);
 }
 
+// ──────────────────────────── event competitions ────────────────────────────
+
+/**
+ * The metrics an event can be scored on.
+ *
+ * Exactly the snapshot list, because an event score is a *difference between
+ * two snapshots* — the tracker writes a baseline when the event goes LIVE and
+ * measures every later reading against it. Anything the snapshot does not carry
+ * has no baseline to subtract, so it cannot be a competition here however
+ * interesting it is elsewhere.
+ *
+ * That rule is what excludes `COMMUNITY_MILESTONE_METRICS`, deliberately and
+ * not by oversight:
+ *
+ * - `guildXp` is a fact about the guild, not about a member. Every participant
+ *   would post the same delta and the board would be a tie.
+ * - `guildTenureDays` ticks at one per day for everybody alive, so a "contest"
+ *   on it is decided entirely by the clock.
+ * - `eventsAttended` and `eventPodiums` are platform counters that move when an
+ *   event *ends*, which is after the window being scored has closed — they
+ *   measure participation in the competition rather than performance in it.
+ *
+ * If a guild ever wants those framed as a contest it is a leaderboard, which
+ * this platform already has, not an event.
+ */
+export const EVENT_METRICS = SNAPSHOT_MILESTONE_METRICS;
+export type EventMetric = SnapshotMilestoneMetric;
+
+/** Narrow an untrusted string — a panel body, a stored row — to a scorable metric. */
+export function isEventMetric(value: unknown): value is EventMetric {
+  return typeof value === "string" && (EVENT_METRICS as readonly string[]).includes(value);
+}
+
+/**
+ * How often the tracker may poll an event, in minutes.
+ *
+ * **The floor is one hour and it is not a preference.** Every poll is one
+ * Hypixel profile fetch per participant, and the Developer API Policy caps this
+ * platform at one request per player per hour (docs/HYPIXEL_COMPLIANCE.md §2),
+ * enforced by the per-player claim in `RedisPlayerRateLimiter`. A shorter
+ * interval does not poll more often; it polls the same amount and is refused
+ * the difference. Offering fifteen minutes would be offering a control that
+ * lies about what it does — the tracker clamped to sixty regardless, so an
+ * operator who set fifteen got sixty and was never told.
+ *
+ * The ceiling is a day, past which "tracked" and "not tracked" stop differing.
+ */
+export const EVENT_POLL_MIN_MINUTES = 60;
+export const EVENT_POLL_MAX_MINUTES = 1440;
+
+/**
+ * The intervals the panel offers by name. A custom value between the floor and
+ * the ceiling is still accepted — this is the shortlist, not the whitelist.
+ */
+export const EVENT_POLL_CHOICES = [60, 120, 180, 360, 720, 1440] as const;
+
+/** More columns than this and the board stops fitting in an embed. */
+export const EVENT_MAX_TRACKED_METRICS = 5;
+
+/**
+ * How a metric's value should be read to a human.
+ *
+ * The board renders one number per metric and the right rendering differs by
+ * family: 4.2m is the readable form of a networth and a nonsense form of a
+ * catacombs level. Derived from the metric name rather than stored per metric,
+ * so a metric added to the catalog above formats correctly without a second
+ * table having to be remembered.
+ */
+export type EventMetricFormat = "LEVEL" | "XP" | "COINS" | "POINTS" | "COUNT";
+
+export function eventMetricFormat(metric: EventMetric): EventMetricFormat {
+  if (metric === "networth") return "COINS";
+  if (metric === "senitherWeight") return "POINTS";
+  if (metric === "bestiaryMilestone") return "COUNT";
+  if (metric.startsWith("slayer")) return "XP";
+  return "LEVEL";
+}
+
 /**
  * How much of a deal an achievement is, in the guild's own judgement.
  *

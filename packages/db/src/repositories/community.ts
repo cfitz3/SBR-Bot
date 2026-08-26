@@ -50,6 +50,9 @@ type EventRow = {
   endsAt: Date | null;
   capacity: number | null;
   hostDiscordId: string | null;
+  prize: string | null;
+  trackedMetrics: string[];
+  pollIntervalMinutes: number;
 };
 
 function toEventDTO(r: EventRow, rsvpCount: number): EventDTO {
@@ -65,6 +68,9 @@ function toEventDTO(r: EventRow, rsvpCount: number): EventDTO {
     type: r.type as NonNullable<EventDTO["type"]>,
     endsAt: r.endsAt ? r.endsAt.toISOString() : null,
     hostDiscordId: r.hostDiscordId,
+    prize: r.prize,
+    trackedMetrics: r.trackedMetrics,
+    pollIntervalMinutes: r.pollIntervalMinutes,
   };
 }
 
@@ -218,6 +224,10 @@ export const communityRepository = {
         capacity: input.capacity ?? null,
         hostDiscordId: input.hostDiscordId,
         tracksProgression: input.tracksProgression ?? false,
+        ...(input.endsAt === undefined || input.endsAt === null ? {} : { endsAt: new Date(input.endsAt) }),
+        ...(input.trackedMetrics === undefined ? {} : { trackedMetrics: [...input.trackedMetrics] }),
+        ...(input.pollIntervalMinutes === undefined ? {} : { pollIntervalMinutes: input.pollIntervalMinutes }),
+        ...(input.prize === undefined ? {} : { prize: input.prize }),
       },
     });
     return toEventDTO(row, 0);
@@ -259,6 +269,7 @@ export const communityRepository = {
           ...(patch.pollIntervalMinutes === undefined ? {} : { pollIntervalMinutes: patch.pollIntervalMinutes }),
           ...(patch.tracksProgression === undefined ? {} : { tracksProgression: patch.tracksProgression }),
           ...(patch.trackedMetrics === undefined ? {} : { trackedMetrics: [...patch.trackedMetrics] }),
+          ...(patch.prize === undefined ? {} : { prize: patch.prize }),
         },
         include: { _count: { select: { rsvps: true } } },
       })

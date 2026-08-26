@@ -869,6 +869,18 @@ export interface NewEvent {
   readonly description?: string | null;
   readonly capacity?: number | null;
   readonly tracksProgression?: boolean;
+  /**
+   * The tracker's settings, at creation rather than only afterwards.
+   *
+   * These used to be edit-only, so every contest was created with the defaults
+   * and had to be corrected in a second step — and an event that went LIVE
+   * before somebody remembered captured its baselines against the wrong metric
+   * list, which cannot be fixed after the fact.
+   */
+  readonly endsAt?: string | null;
+  readonly trackedMetrics?: readonly string[];
+  readonly pollIntervalMinutes?: number;
+  readonly prize?: string | null;
 }
 
 /**
@@ -903,6 +915,16 @@ export interface EventEdit {
   readonly trackedMetrics?: readonly string[];
   readonly pollIntervalMinutes?: number;
   readonly tracksProgression?: boolean;
+  /**
+   * Editable while the event is scheduled *and* while it is LIVE — a contest
+   * that is running long is a normal thing, and the alternative is completing
+   * it early to change one field. `null` clears it back to open-ended.
+   *
+   * Moving it never touches a baseline: baselines are tied to when tracking
+   * started, not to when the event is scheduled to stop.
+   */
+  readonly endsAt?: string | null;
+  readonly prize?: string | null;
 }
 
 /**

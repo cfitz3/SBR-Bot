@@ -11,8 +11,12 @@ import {
   ACHIEVEMENT_TIERS,
   BridgeCapability,
   CONFIG_CHANNEL_SLOTS,
+  EVENT_MAX_TRACKED_METRICS,
+  EVENT_POLL_MAX_MINUTES,
+  EVENT_POLL_MIN_MINUTES,
   isAchievementTier,
   isConfigChannelSlot,
+  isEventMetric,
   isMilestoneMetric,
   isUpstreamUnavailable,
   MILESTONE_METRICS,
@@ -731,23 +735,81 @@ const DESCRIPTION_MAX = 2_000;
 const MAX_ATTENDEES = 500;
 const MAX_CAPACITY = 1_000;
 
+/** Long enough to name a prize and short enough to fit an embed field. */
+const EVENT_PRIZE_MAX = 200;
+
 /**
- * The metrics an event can be scored on, mirroring `EVENT_METRICS` in
- * `@sbr/jobs`.
+ * The tracker settings an event body may carry — `trackedMetrics`,
+ * `pollIntervalMinutes`, `endsAt`, `prize` — read once for both create and
+ * edit, since both paths must apply the same rules.
  *
- * Mirrored rather than imported for the same reason `EVENT_TYPES` is: the panel
- * does not depend on the worker package, and a metric the capture never writes
- * would leave a leaderboard permanently empty with nothing to point at. The
- * mirror is checked by the tracker's own tests, which use the real list.
+ * Absent keys are simply absent from the result, so the "only what was
+ * submitted" contract survives: a page that opens one section and saves it
+ * cannot blank a prize nobody looked at.
+ *
+ * Shape and range only. Whether an end time is *sensible* — after the start,
+ * not already past — is `CommunityService`'s call, because it is the layer that
+ * knows what the event's start currently is and its `detail` is what the panel
+ * shows the operator.
  */
-const EVENT_METRICS: readonly string[] = [
-  "skyblockLevel",
-  "networth",
-  "skillAverage",
-  "catacombsLevel",
-  "slayerXp",
-  "senitherWeight",
-];
+function readTrackerSettings(
+  body: Record<string, unknown>,
+): { settings: Record<string, unknown> } | { message: string } {
+  const settings: Record<string, unknown> = {};
+
+  if (body["trackedMetrics"] !== undefined) {
+    const raw = body["trackedMetrics"];
+    if (!Array.isArray(raw) || raw.some((metric) => typeof metric !== "string")) {
+      return { message: "trackedMetrics must be a list of metric names" };
+    }
+    if (raw.length > EVENT_MAX_TRACKED_METRICS) {
+      return { message: `an event can score at most ${EVENT_MAX_TRACKED_METRICS} metrics` };
+    }
+    const unknown = (raw as string[]).filter((metric) => !isEventMetric(metric));
+    if (unknown.length > 0) return { message: `unknown metric: ${unknown.join(", ")}` };
+    settings["trackedMetrics"] = raw as string[];
+  }
+
+  if (body["pollIntervalMinutes"] !== undefined) {
+    const raw = body["pollIntervalMinutes"];
+    if (typeof raw !== "number" || !Number.isInteger(raw)) {
+      return { message: "pollIntervalMinutes must be a number" };
+    }
+    // Bounded here as well as in the service, so the panel says why rather than
+    // relaying a generic rejection. The floor is the Hypixel per-player cap, not
+    // a preference — see EVENT_POLL_MIN_MINUTES.
+    if (raw < EVENT_POLL_MIN_MINUTES || raw > EVENT_POLL_MAX_MINUTES) {
+      return { message: `the tracker polls every ${EVENT_POLL_MIN_MINUTES} to ${EVENT_POLL_MAX_MINUTES} minutes` };
+    }
+    settings["pollIntervalMinutes"] = raw;
+  }
+
+  if (body["endsAt"] !== undefined) {
+    const raw = body["endsAt"];
+    if (raw === null || raw === "") {
+      settings["endsAt"] = null;
+    } else {
+      if (typeof raw !== "string" || Number.isNaN(Date.parse(raw))) {
+        return { message: "endsAt must be a date and time" };
+      }
+      settings["endsAt"] = new Date(raw).toISOString();
+    }
+  }
+
+  if (body["prize"] !== undefined) {
+    const raw = body["prize"];
+    if (raw === null) {
+      settings["prize"] = null;
+    } else {
+      if (typeof raw !== "string") return { message: "prize must be text" };
+      const prize = raw.trim();
+      if (prize.length > EVENT_PRIZE_MAX) return { message: `prize must be under ${EVENT_PRIZE_MAX} characters` };
+      settings["prize"] = prize.length === 0 ? null : prize;
+    }
+  }
+
+  return { settings };
+}
 
 /**
  * Roles assignable from the panel.
@@ -3046,6 +3108,14 @@ export class PanelMutations {
       }
       const description = rawDescription.length === 0 ? null : rawDescription;
 
+      // The tracker settings are accepted at creation rather than only on
+      // edit. Without them every contest was created with the defaults and had
+      // to be corrected in a second step — and one that went LIVE before that
+      // step captured its baselines against the wrong metric list, which no
+      // later edit can undo.
+      const tracker = readTrackerSettings(body);
+      if ("message" in tracker) return invalid(tracker.message);
+
       const result = await this.d.community.createEvent({
         guildId,
         title,
@@ -3054,8 +3124,9 @@ export class PanelMutations {
         hostDiscordId: actorDiscordId,
         description,
         capacity,
+        ...tracker.settings,
       });
-      return { result, change: { title, type, startsAt, capacity, description } };
+      return { result, change: { title, type, startsAt, capacity, description, ...tracker.settings } };
     });
   }
 
@@ -3116,21 +3187,9 @@ export class PanelMutations {
         edit["capacity"] = raw;
       }
 
-      if (body["trackedMetrics"] !== undefined) {
-        const raw = body["trackedMetrics"];
-        if (!Array.isArray(raw) || raw.some((metric) => typeof metric !== "string")) {
-          return invalid("trackedMetrics must be a list of metric names");
-        }
-        const unknown = (raw as string[]).filter((metric) => !EVENT_METRICS.includes(metric));
-        if (unknown.length > 0) return invalid(`unknown metric: ${unknown.join(", ")}`);
-        edit["trackedMetrics"] = raw as string[];
-      }
-
-      if (body["pollIntervalMinutes"] !== undefined) {
-        const raw = body["pollIntervalMinutes"];
-        if (typeof raw !== "number" || !Number.isInteger(raw)) return invalid("pollIntervalMinutes must be a number");
-        edit["pollIntervalMinutes"] = raw;
-      }
+      const tracker = readTrackerSettings(body);
+      if ("message" in tracker) return invalid(tracker.message);
+      Object.assign(edit, tracker.settings);
 
       if (body["tracksProgression"] !== undefined) {
         if (typeof body["tracksProgression"] !== "boolean") return invalid("tracksProgression must be true or false");

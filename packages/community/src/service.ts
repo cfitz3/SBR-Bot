@@ -7,6 +7,10 @@
  * ticket, and the one-way SUBMITTED→ACCEPTED/REJECTED application transition.
  */
 import {
+  EVENT_MAX_TRACKED_METRICS,
+  EVENT_POLL_MAX_MINUTES,
+  EVENT_POLL_MIN_MINUTES,
+  isEventMetric,
   err,
   ok,
   type ApplicationDTO,
@@ -61,21 +65,76 @@ import type {
 export type RsvpError = EventError;
 
 /**
- * How often the tracker may poll, in minutes.
+ * How often the tracker may poll, and what it may score.
  *
- * The floor is the Hypixel budget talking: every poll is one profile fetch per
- * participant, and a five-minute cadence on a forty-person event is already the
- * busiest thing the fleet does. The ceiling is a day, past which "tracked" and
- * "not tracked" stop being different.
+ * Imported rather than declared, because these were previously three separate
+ * numbers in three packages and two of them disagreed: this service accepted
+ * five minutes and the tracker clamped every event to sixty, so the panel
+ * validated a value it then silently ignored. `@sbr/shared-types` is the one
+ * place the panel can also reach.
  */
-const MIN_POLL_MINUTES = 5;
-const MAX_POLL_MINUTES = 1440;
+const MIN_POLL_MINUTES = EVENT_POLL_MIN_MINUTES;
+const MAX_POLL_MINUTES = EVENT_POLL_MAX_MINUTES;
+const MAX_TRACKED_METRICS = EVENT_MAX_TRACKED_METRICS;
 
-/** More columns than this and the board stops fitting in an embed. */
-const MAX_TRACKED_METRICS = 5;
+/** Long enough to name a prize and short enough to fit an embed field. */
+const MAX_PRIZE_LENGTH = 200;
 
 /** A post can be joined by at most this many people regardless of what was asked for. */
 const MAX_LFG_SLOTS = 20;
+
+/**
+ * The tracker settings shared by create and edit.
+ *
+ * One function rather than two copies, because the failure this whole pass was
+ * chasing is settings that were checked on one path and not the other: events
+ * were created with defaults and only validated when somebody later edited
+ * them, so a contest that went LIVE before its first edit captured baselines
+ * against a metric list nothing had ever looked at.
+ */
+function validatePollInterval(minutes: number): EventError | null {
+  if (!Number.isInteger(minutes) || minutes < MIN_POLL_MINUTES || minutes > MAX_POLL_MINUTES) {
+    return {
+      kind: "INVALID_TIME",
+      detail: `the tracker polls every ${MIN_POLL_MINUTES} to ${MAX_POLL_MINUTES} minutes.`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Deduplicated in order — the first metric is the one the board sorts by, and a
+ * list with a repeat would render the same column twice — and checked against
+ * the catalog rather than accepted as free text. An unrecognised metric used to
+ * be stored happily and then dropped by the tracker's own filter, so the panel
+ * showed a scored metric that was never scored.
+ */
+function validateMetrics(raw: readonly string[]): { metrics: string[] } | EventError {
+  const metrics = [...new Set(raw.map((m) => m.trim()).filter((m) => m.length > 0))];
+  if (metrics.length > MAX_TRACKED_METRICS) {
+    return { kind: "INVALID_TIME", detail: `an event can score at most ${MAX_TRACKED_METRICS} metrics.` };
+  }
+  const unknown = metrics.filter((m) => !isEventMetric(m));
+  if (unknown.length > 0) {
+    return { kind: "INVALID_TIME", detail: `there's nothing to measure called ${unknown.join(", ")}.` };
+  }
+  return { metrics };
+}
+
+/** `null` clears the prize; anything else is trimmed and length-capped. */
+function validatePrize(raw: string | null): { prize: string | null } | EventError {
+  if (raw === null) return { prize: null };
+  const prize = raw.trim();
+  if (prize.length === 0) return { prize: null };
+  if (prize.length > MAX_PRIZE_LENGTH) {
+    return { kind: "INVALID_TIME", detail: `a prize has to fit in ${MAX_PRIZE_LENGTH} characters.` };
+  }
+  return { prize };
+}
+
+function isEventError(value: unknown): value is EventError {
+  return typeof value === "object" && value !== null && "kind" in value;
+}
 
 export interface CommunityServiceDeps {
   readonly repo: CommunityRepository;
@@ -142,9 +201,62 @@ export class CommunityServiceImpl implements CommunityService {
       return err({ kind: "INVALID_TIME", detail: "capacity has to be at least 1." });
     }
 
-    const event = await this.repo.createEvent({ ...input, startsAt: startsAt.toISOString() });
+    // The tracker settings are validated here as well as on edit, so an event
+    // cannot be created with a poll storm or a metric nothing measures and then
+    // go LIVE before anyone opens it again.
+    let endsAt: Date | undefined;
+    if (input.endsAt !== undefined && input.endsAt !== null) {
+      const parsed = new Date(input.endsAt);
+      const bad = this.checkEndsAt(parsed, startsAt);
+      if (bad) return err(bad);
+      endsAt = parsed;
+    }
+    if (input.pollIntervalMinutes !== undefined) {
+      const bad = validatePollInterval(input.pollIntervalMinutes);
+      if (bad) return err(bad);
+    }
+    let metrics: readonly string[] | undefined;
+    if (input.trackedMetrics !== undefined) {
+      const checked = validateMetrics(input.trackedMetrics);
+      if (isEventError(checked)) return err(checked);
+      metrics = checked.metrics;
+    }
+    let prize: string | null | undefined;
+    if (input.prize !== undefined) {
+      const checked = validatePrize(input.prize);
+      if (isEventError(checked)) return err(checked);
+      prize = checked.prize;
+    }
+
+    const event = await this.repo.createEvent({
+      ...input,
+      startsAt: startsAt.toISOString(),
+      ...(endsAt === undefined ? {} : { endsAt: endsAt.toISOString() }),
+      ...(metrics === undefined ? {} : { trackedMetrics: metrics }),
+      ...(prize === undefined ? {} : { prize }),
+    });
     this.log.info("event created", { eventId: event.id, guildId: input.guildId, type: input.type });
     return ok(event);
+  }
+
+  /**
+   * Whether an end time is usable, or the reason it is not.
+   *
+   * Both rules matter and they catch different mistakes. An end before the
+   * start is a typo. An end already in the past is the one the task named: the
+   * transition sweep reads `endsAt` before `startsAt`, so such an event never
+   * goes LIVE at all — it is swept straight to COMPLETED, having scored
+   * nobody, and the operator is left with a contest that silently never ran.
+   */
+  private checkEndsAt(endsAt: Date, startsAt: Date): EventError | null {
+    if (Number.isNaN(endsAt.getTime())) return { kind: "INVALID_TIME", detail: "I couldn't read that end time." };
+    if (endsAt.getTime() <= startsAt.getTime()) {
+      return { kind: "INVALID_TIME", detail: "the event has to end after it starts." };
+    }
+    if (endsAt.getTime() <= this.now().getTime()) {
+      return { kind: "INVALID_TIME", detail: "that end time has already passed." };
+    }
+    return null;
   }
 
   async getEvent(eventId: string): Promise<Result<EventDTO | null>> {
@@ -210,25 +322,40 @@ export class CommunityServiceImpl implements CommunityService {
       Object.assign(patch, { capacity: input.capacity });
     }
 
-    if (input.pollIntervalMinutes !== undefined) {
-      const minutes = input.pollIntervalMinutes;
-      if (!Number.isInteger(minutes) || minutes < MIN_POLL_MINUTES || minutes > MAX_POLL_MINUTES) {
-        return err({
-          kind: "INVALID_TIME",
-          detail: `the tracker polls every ${MIN_POLL_MINUTES} to ${MAX_POLL_MINUTES} minutes.`,
-        });
+    if (input.endsAt !== undefined) {
+      if (input.endsAt === null) {
+        Object.assign(patch, { endsAt: null });
+      } else {
+        const endsAt = new Date(input.endsAt);
+        // Measured against whatever the event's start actually is — the patch's
+        // if this edit moves it, the stored one otherwise — so moving both in
+        // one submission is not rejected for disagreeing with the old value.
+        const start = patch.startsAt ?? new Date(event.startsAt);
+        const bad = this.checkEndsAt(endsAt, start);
+        if (bad) return err(bad);
+        // Deliberately no baseline handling here. A baseline is tied to when
+        // tracking started, not to when the event is scheduled to stop, so
+        // extending a LIVE event leaves every score exactly where it was.
+        Object.assign(patch, { endsAt });
       }
-      Object.assign(patch, { pollIntervalMinutes: minutes });
+    }
+
+    if (input.pollIntervalMinutes !== undefined) {
+      const bad = validatePollInterval(input.pollIntervalMinutes);
+      if (bad) return err(bad);
+      Object.assign(patch, { pollIntervalMinutes: input.pollIntervalMinutes });
     }
 
     if (input.trackedMetrics !== undefined) {
-      // Deduplicated in order: the first metric is the one the board sorts by,
-      // and a list with a repeat would otherwise render the same column twice.
-      const metrics = [...new Set(input.trackedMetrics.map((m) => m.trim()).filter((m) => m.length > 0))];
-      if (metrics.length > MAX_TRACKED_METRICS) {
-        return err({ kind: "INVALID_TIME", detail: `an event can score at most ${MAX_TRACKED_METRICS} metrics.` });
-      }
-      Object.assign(patch, { trackedMetrics: metrics });
+      const checked = validateMetrics(input.trackedMetrics);
+      if (isEventError(checked)) return err(checked);
+      Object.assign(patch, { trackedMetrics: checked.metrics });
+    }
+
+    if (input.prize !== undefined) {
+      const checked = validatePrize(input.prize);
+      if (isEventError(checked)) return err(checked);
+      Object.assign(patch, { prize: checked.prize });
     }
 
     if (input.tracksProgression !== undefined) Object.assign(patch, { tracksProgression: input.tracksProgression });

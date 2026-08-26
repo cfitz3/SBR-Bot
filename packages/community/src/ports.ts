@@ -80,6 +80,7 @@ export interface EventPatch {
   readonly trackedMetrics?: readonly string[];
   readonly pollIntervalMinutes?: number;
   readonly tracksProgression?: boolean;
+  readonly prize?: string | null;
 }
 
 /** A post edit. Absent means "leave it alone"; `null` on a nullable field clears it. */

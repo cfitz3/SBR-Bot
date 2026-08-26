@@ -142,6 +142,7 @@ export interface EventRow {
   readonly declined: number;
   readonly trackedMetrics: readonly string[];
   readonly pollIntervalMinutes: number;
+  readonly prize: string | null;
   readonly tracksProgression: boolean;
   readonly channelId: string | null;
   readonly messageId: string | null;
@@ -990,6 +991,7 @@ export const panelRepository = {
         hostDiscordId: true,
         trackedMetrics: true,
         pollIntervalMinutes: true,
+        prize: true,
         tracksProgression: true,
         channelId: true,
         messageId: true,
@@ -1012,6 +1014,7 @@ export const panelRepository = {
         hostDiscordId: e.hostDiscordId,
         trackedMetrics: e.trackedMetrics,
         pollIntervalMinutes: e.pollIntervalMinutes,
+        prize: e.prize,
         tracksProgression: e.tracksProgression,
         channelId: e.channelId,
         messageId: e.messageId,

@@ -22,6 +22,8 @@
  * fetching — the same function the bulk cadence uses — so there is one
  * profile-read path rather than two that drift, and one per-player claim.
  */
+import { EVENT_METRICS, EVENT_POLL_MIN_MINUTES, isEventMetric, type EventMetric } from "@sbr/shared-types";
+
 import {
   refreshProfiles,
   type ProfileReading,
@@ -33,27 +35,14 @@ import {
 /**
  * The floor under any event's configured poll interval.
  *
- * A guild may set a shorter one in the panel; it is clamped here rather than
- * rejected there, so a value stored before this floor existed cannot poll under
- * it. One hour is the per-player cap the policy sets, and an event's cohort is
- * made of players like any other read.
+ * Re-exported from `@sbr/shared-types` rather than declared here, because the
+ * panel validates the same number over HTTP and cannot import this package. It
+ * is still clamped at read time as well as rejected at write time: rows carrying
+ * a shorter interval predate the floor and must not poll under it.
  */
-export const EVENT_POLL_FLOOR_MINUTES = 60;
+export const EVENT_POLL_FLOOR_MINUTES = EVENT_POLL_MIN_MINUTES;
 
-export const EVENT_METRICS = [
-  "skyblockLevel",
-  "networth",
-  "skillAverage",
-  "catacombsLevel",
-  "slayerXp",
-  "senitherWeight",
-] as const;
-
-export type EventMetric = (typeof EVENT_METRICS)[number];
-
-export function isEventMetric(value: string): value is EventMetric {
-  return (EVENT_METRICS as readonly string[]).includes(value);
-}
+export { EVENT_METRICS, isEventMetric, type EventMetric };
 
 export interface TrackableEvent {
   readonly id: string;
@@ -187,7 +176,10 @@ export async function trackEvents(deps: EventTrackingDeps): Promise<number> {
             // A null reading is a profile that did not report the figure, not a
             // zero. Skipping it leaves the last good score standing rather than
             // dropping the member to the bottom of the board for one bad fetch.
-            if (value === null) continue;
+            // Undefined is the same fact arriving differently: the widened
+            // metrics are optional on `SnapshotMetrics` and simply absent when
+            // the capture could not fill them in.
+            if (value === null || value === undefined) continue;
             await deps.upsertScore({
               eventId: event.id,
               discordId: participant.discordId,
