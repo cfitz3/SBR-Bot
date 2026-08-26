@@ -36,6 +36,67 @@ export const roleSyncRepository = {
   },
 
   /**
+   * Fill in a member's Hypixel guild rank from the roster cache, if it is
+   * missing and the cache knows it.
+   *
+   * This exists because of a hole between two facts that arrive at different
+   * times. Linking makes `linked` true immediately, but `inGuild` is
+   * `guildRank !== null`, and `guildRank` is written only by `guild-roster-sync`
+   * — which reconciles the Hypixel roster against *linked* members, so it
+   * cannot have written a rank for somebody who was not linked until a moment
+   * ago. An IN_GUILD rule evaluated on the link's own reconcile therefore saw
+   * `false` and granted nothing, and by the time the rank landed half an hour
+   * later nothing marked the member dirty again.
+   *
+   * The roster cache is the same roster, already fetched, keyed by
+   * `(guildId, uuid)`. Reading it here turns the link into the moment both
+   * facts are true rather than only one.
+   *
+   * Deliberately narrow. It fills a null, never overwrites a rank — a rank that
+   * disagrees with the cache is `guild-roster-sync`'s to correct, and a cache up
+   * to six hours old has no business winning that argument. It leaves `status`
+   * alone for the same reason: resurrecting a member somebody marked departed is
+   * a much worse mistake than waiting half an hour for the roster pass.
+   *
+   * Returns whether anything was written, so the caller can say so in a log.
+   */
+  async adoptCachedGuildRank(guildId: string, discordId: string): Promise<boolean> {
+    const member = await prisma.guildMember.findFirst({
+      where: { guildId, discordUser: { discordId }, guildRank: null },
+      select: {
+        id: true,
+        discordUser: {
+          select: {
+            linkedAccounts: {
+              where: { status: "VERIFIED" },
+              select: { minecraftAccount: { select: { uuid: true } } },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+    if (member === null) return false;
+
+    const uuid = member.discordUser.linkedAccounts[0]?.minecraftAccount.uuid;
+    if (uuid === undefined) return false;
+
+    const cached = await prisma.guildMemberCache.findUnique({
+      where: { guildId_uuid: { guildId, uuid } },
+      select: { guildRank: true },
+    });
+    if (cached?.guildRank == null) return false;
+
+    // Guarded on `guildRank: null` again rather than by id alone, so two
+    // concurrent links cannot both decide they are the one writing it.
+    const written = await prisma.guildMember.updateMany({
+      where: { id: member.id, guildRank: null },
+      data: { guildRank: cached.guildRank },
+    });
+    return written.count > 0;
+  },
+
+  /**
    * Discord ids for a batch of Minecraft uuids, for callers that only learned
    * about a change in Hypixel terms.
    *
@@ -148,7 +209,13 @@ export function memberRoleDirtyMarker(sink: {
   return {
     async markMember(discordId) {
       const guildIds = await roleSyncRepository.guildIdsForMember(discordId);
-      for (const guildId of guildIds) await sink.mark(guildId, [discordId]);
+      for (const guildId of guildIds) {
+        // Before the mark, never after. The reconcile this mark triggers reads
+        // the member's facts once; a rank adopted afterwards would be a fact
+        // that arrived too late to be used, which is the whole bug.
+        await roleSyncRepository.adoptCachedGuildRank(guildId, discordId).catch(() => false);
+        await sink.mark(guildId, [discordId]);
+      }
     },
   };
 }

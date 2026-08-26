@@ -702,3 +702,101 @@ event to replay.
 award would nudge on every chat line in the server and spend the guild's whole role budget
 discovering that nobody crossed a level boundary. The daily re-derive is what makes `XP_LEVEL` rules
 correct; a level-up worth rewarding promptly is a milestone, and milestones already mark.
+
+---
+
+## Part E — The nudge fired, and granted nothing (reported from live use)
+
+The immediate-sync work above was tested against a real `/link` by a member who was already in the
+Hypixel guild, and no in-guild role arrived. The nudge was not at fault; it did exactly what it was
+built to do. The fault was that the fact it triggers a reconcile to read is not yet true at the
+moment it fires.
+
+### E1. `inGuild` cannot be true at link time — **root cause**
+
+`loadSnapshots` (`packages/db/src/repositories/role-sync.ts`) derives the fact an `IN_GUILD` rule
+evaluates as:
+
+```ts
+inGuild: member.status === "ACTIVE" && member.guildRank !== null,
+```
+
+`GuildMember.guildRank` has exactly three writers, all in `maintenanceJobRepository` — `applyJoined`,
+`applyLeft`, `applyRankChanges` — and all three are reached only from the `guild-roster-sync` job.
+That job reconciles Hypixel's roster against `listStoredRoster`, which skips anyone without a
+verified link (`if (!account) continue;`).
+
+So the roster pass cannot have written a rank for somebody who was not linked until a second ago.
+At the instant `/link` completes and `markMember` fires the nudge, `guildRank` is still `null`,
+`inGuild` is `false`, and an `IN_GUILD` rule grants nothing. A `LINKED` rule would have fired
+instantly — which is why the path looked correct in every test that used one.
+
+### E2. And the mark is then spent for nothing — **the reason the delay was a day, not half an hour**
+
+The nudge deliberately does not drain the dirty set, but the 15-minute `role-sync` sweep does. The
+worst case ran:
+
+| time | what happened | `inGuild` |
+|---|---|---|
+| `:10` | `/link`, member marked dirty, nudge reconciles | `false` |
+| `:11` | 15-minute sweep drains the mark, reconciles again | `false` |
+| `:39` | `guild-roster-sync` writes `guildRank` — **and marks nobody dirty** | `true`, unread |
+| next day | daily full sweep finally reconciles everyone | granted |
+
+`guild-scan` marks its own joined/left/rankChanged diff dirty; `guild-roster-sync` did not. And a
+player already in the Hypixel guild who merely links is none of joined, left or rank-changed from
+`guild-scan`'s point of view, so that path could not have covered it either.
+
+### E3. The owner account is not a factor — **checked and ruled out**
+
+`refuseRole` (`apps/admin-bot/src/role-preflight.ts`) decides purely from role facts —
+`BOT_LACKS_MANAGE_ROLES`, `UNKNOWN_ROLE`, `EVERYONE`, `MANAGED`, `DANGEROUS_PERMISSION`,
+`ABOVE_BOT`. There is no clause about the target member, and Discord's owner immunity covers
+kick/ban/timeout, not role assignment. Adding a role to the server owner is an ordinary grant.
+
+### E4. Fix — adopt the cached rank at link time
+
+`roleSyncRepository.adoptCachedGuildRank(guildId, discordId)` reads `GuildMemberCache`, which the
+roster pass already filled and which is keyed `(guildId, uuid)` — the same roster, already fetched,
+just not yet joined to this member because they had no link when it ran. `memberRoleDirtyMarker`
+calls it **before** `sink.mark`, never after: the reconcile the mark triggers reads the member's
+facts once, so a rank adopted afterwards is a fact that arrived too late to be used, which is the
+whole bug restated.
+
+Deliberately narrow, and the narrowness is the point:
+
+- It fills a `null` and never overwrites a rank. A stored rank that disagrees with the cache is
+  `guild-roster-sync`'s argument to settle; a cache up to six hours old has no business winning it.
+  Both the read and the write are guarded on `guildRank: null`, the write so two concurrent links
+  cannot both decide they are the one setting it.
+- It does not touch `status`. Resurrecting a member somebody recorded as departed is a far worse
+  mistake than waiting half an hour for the roster pass.
+- It does not redefine `inGuild`. Loosening that check to `linked` would qualify every linked
+  stranger for an in-guild role; the fix makes the existing fact true earlier, and that is all.
+
+### E5. Safety net — the roster pass now marks who it wrote about
+
+`RosterSyncResult` carried three counts. A caller handed three numbers cannot tell role sync whose
+facts moved, which is why step `:39` above marked nobody. It now also carries `touched`: the uuids
+this pass actually wrote about, deduplicated across joins, departures and rank changes, and empty
+whenever the departure guard tripped and nothing was applied. The `guild-roster-sync` job resolves
+them through `discordIdsForUuids` and marks them dirty, exactly as `guild-scan` already did.
+
+This is a second, independent path to the same grant: E4 covers the member who links after the
+roster already knew them, E5 covers the member the roster learns about after they linked. Both are
+best effort by design — the daily full sweep stays the floor under them.
+
+### E6. Verification
+
+`packages/db/src/repositories/role-sync.test.ts` is new. These are database reads with no Postgres
+on the build host, so — following the precedent in `schema-shape.test.ts` — the claims are asserted
+against the repository source: that the adoption happens before the mark and not after, that both
+guards on `guildRank: null` are still present, that the write touches no other column, and that
+`inGuild` still means a rank the roster wrote rather than merely a link.
+`packages/jobs/src/maintenance.test.ts` gains two cases: a normal diff names the joiner, the
+rank-changed member and both departures while leaving out the member nothing happened to, and a
+refused pass names nobody.
+
+**Still unverified against a live guild.** The Hypixel API key outage recorded in the earlier audit
+is still in force, so the end-to-end check — link a member the roster already knows and watch the
+role land within seconds — has not been run.

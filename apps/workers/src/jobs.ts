@@ -596,6 +596,15 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           ctx.log.warn("roster sync skipped", { guildId: guild.id, reason: result.skipped });
           continue;
         }
+        // This pass is the only writer of `GuildMember.guildRank`, and that
+        // rank is what an IN_GUILD auto-role rule reads. Without this mark the
+        // member's facts changed and nothing told role sync, so the grant sat
+        // until the daily full sweep. Best effort, exactly as in `guild-scan`:
+        // that sweep remains the floor under it.
+        if (result.touched.length > 0) {
+          const discordIds = await roleSyncRepository.discordIdsForUuids(result.touched);
+          if (discordIds.length > 0) await ctx.adapters.rolesDirty.mark(guild.id, discordIds);
+        }
         changed += result.joined + result.left + result.rankChanged;
       }
       return changed;

@@ -87,13 +87,23 @@ export interface RosterSyncResult {
   readonly joined: number;
   readonly left: number;
   readonly rankChanged: number;
+  /**
+   * The uuids this pass actually wrote something about.
+   *
+   * Membership and rank are auto-role triggers, and this is the only pass that
+   * writes `GuildMember.guildRank` — so a caller that only received counts had
+   * no way to tell role sync whose facts just changed, and the grant waited for
+   * the daily full sweep. The counts stay because callers log them; this is
+   * what the caller acts on. Empty whenever `skipped` is set.
+   */
+  readonly touched: readonly string[];
   /** Set when the departure guard tripped and nothing was applied. */
   readonly skipped?: "unreadable" | "mass-departure";
 }
 
 export async function syncRoster(guildId: string, deps: RosterSyncDeps): Promise<RosterSyncResult> {
   const remote = await deps.fetchRemoteRoster(guildId);
-  if (remote === null) return { joined: 0, left: 0, rankChanged: 0, skipped: "unreadable" };
+  if (remote === null) return { joined: 0, left: 0, rankChanged: 0, touched: [], skipped: "unreadable" };
 
   const stored = await deps.listStoredRoster(guildId);
   const diff = diffRoster(remote, stored);
@@ -101,14 +111,27 @@ export async function syncRoster(guildId: string, deps: RosterSyncDeps): Promise
   const activeCount = stored.filter((r) => r.active).length;
   const limit = deps.maxLeaveFraction ?? DEFAULT_MAX_LEAVE_FRACTION;
   if (activeCount > 0 && diff.left.length / activeCount > limit) {
-    return { joined: 0, left: 0, rankChanged: 0, skipped: "mass-departure" };
+    return { joined: 0, left: 0, rankChanged: 0, touched: [], skipped: "mass-departure" };
   }
 
   if (diff.joined.length > 0) await deps.applyJoined(guildId, diff.joined);
   if (diff.left.length > 0) await deps.applyLeft(guildId, diff.left);
   if (diff.rankChanged.length > 0) await deps.applyRankChanges(guildId, diff.rankChanged);
 
-  return { joined: diff.joined.length, left: diff.left.length, rankChanged: diff.rankChanged.length };
+  const touched = [
+    ...new Set([
+      ...diff.joined.map((m) => m.uuid),
+      ...diff.left.map((r) => r.uuid),
+      ...diff.rankChanged.map((c) => c.row.uuid),
+    ]),
+  ];
+
+  return {
+    joined: diff.joined.length,
+    left: diff.left.length,
+    rankChanged: diff.rankChanged.length,
+    touched,
+  };
 }
 
 // ────────────────────────── inactivity scan ──────────────────────────
