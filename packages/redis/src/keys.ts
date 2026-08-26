@@ -60,6 +60,19 @@ export function createKeyFactory(prefix: string) {
      * where the job handler can read it.
      */
     chanJobs: () => p(`chan:jobs`),
+    /**
+     * "This one member changed, look at them now" — anywhere → workers.
+     *
+     * One channel for the platform, for the same reason `chan:jobs` is: the
+     * subscriber is the worker fleet, and the guild travels in the payload.
+     *
+     * Fire-and-forget, and that is the point. This channel is an optimisation
+     * over waiting for the fifteen-minute sweep, never a substitute for it: the
+     * publisher has already added the member to `roles:dirty:<guildId>` before
+     * publishing, so a message dropped because the workers were restarting
+     * costs latency and nothing else.
+     */
+    chanRoleNudge: () => p(`chan:role-nudge`),
     analyticsBuffer: () => p(`buf:analytics`),
 
     // 3b. Liveness. One key per service instance, written on a timer and given a

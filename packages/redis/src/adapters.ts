@@ -1006,6 +1006,76 @@ export class RedisMemberBus {
   }
 }
 
+/** One member worth reconciling now, rather than at the next sweep. */
+export interface RoleNudgeMessage {
+  readonly guildId: string;
+  readonly discordId: string;
+  readonly at: string;
+}
+
+/**
+ * How many members one `mark` will nudge individually.
+ *
+ * Above this the mark is a bulk one and the sweep owns it. Sized so that the
+ * everyday causes — somebody linked, somebody's rank changed, somebody was
+ * banned, a small event completed — are all under it, and a roster-wide rescan
+ * is comfortably over.
+ */
+export const MAX_NUDGED_PER_MARK = 25;
+
+/**
+ * Validated rather than cast, like every other bus in this file: anything that
+ * can reach Redis can publish here, and the receiving end is the one that will
+ * spend a Discord role call because a message said to.
+ */
+export function parseRoleNudgeMessage(raw: string): RoleNudgeMessage | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    const { guildId, discordId, at } = record;
+    if (typeof guildId !== "string" || guildId.length === 0) return null;
+    if (typeof discordId !== "string" || discordId.length === 0) return null;
+    return { guildId, discordId, at: typeof at === "string" ? at : new Date().toISOString() };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The listening half of the nudge channel, for the worker fleet.
+ *
+ * Publishing lives on `RedisRoleDirtySet` because marking and nudging are one
+ * act and splitting them across two adapters would let a caller do half of it.
+ * Subscribing is separate because exactly one process does it, and it needs a
+ * connection of its own — a node-redis client in subscriber mode will not serve
+ * ordinary commands.
+ */
+export class RedisRoleNudgeBus {
+  constructor(private readonly ctx: RedisContext) {}
+
+  async subscribe(onNudge: (message: RoleNudgeMessage) => void): Promise<() => Promise<void>> {
+    const sub = this.ctx.client.duplicate();
+    sub.on("error", () => {
+      // node-redis reconnects on its own, and this channel is an optimisation.
+      // Taking the worker fleet down over a blip on it would cost far more than
+      // the fifteen-minute fallback it briefly falls back to.
+    });
+    await sub.connect();
+
+    const channel = this.ctx.keys.chanRoleNudge();
+    await sub.subscribe(channel, (raw: string) => {
+      const parsed = parseRoleNudgeMessage(raw);
+      if (parsed !== null) onNudge(parsed);
+    });
+
+    return async () => {
+      await sub.unsubscribe(channel).catch(() => undefined);
+      await sub.quit().catch(() => undefined);
+    };
+  }
+}
+
 /**
  * Marks members whose auto-roles may have gone out of date.
  *
@@ -1029,6 +1099,35 @@ export class RedisRoleDirtySet {
       await this.ctx.client.sAdd(this.ctx.keys.rolesDirty(guildId), ids);
     } catch {
       // Swallowed deliberately: see the class comment. The sweep is the floor.
+    }
+    await this.nudge(guildId, ids);
+  }
+
+  /**
+   * Ask the workers to look at these members now, having marked them.
+   *
+   * Ordered after the `sAdd` on purpose. The mark is what makes the reconcile
+   * eventually happen; the nudge only makes it happen sooner. Publishing first
+   * would open a window where a worker reconciles a member, finds nothing, and
+   * *then* the fact that changed gets marked — which the sweep would fix, but
+   * fifteen minutes later, which is the delay this whole path exists to remove.
+   *
+   * Only for small marks. A guild scan that touches two hundred members is a
+   * bulk reconcile, and bulk reconciles are what the sweep is good at: nudging
+   * each of them individually would flood a queue that would drop most of them
+   * anyway, and would spend the guild's Discord role budget racing a pass that
+   * is already scheduled to do the same work.
+   */
+  private async nudge(guildId: string, discordIds: readonly string[]): Promise<void> {
+    if (discordIds.length > MAX_NUDGED_PER_MARK) return;
+    for (const discordId of discordIds) {
+      try {
+        const message: RoleNudgeMessage = { guildId, discordId, at: new Date().toISOString() };
+        await this.ctx.client.publish(this.ctx.keys.chanRoleNudge(), JSON.stringify(message));
+      } catch {
+        // Same reasoning as the mark above, and more so: this is the optimistic
+        // half. A publish nobody heard costs the member a quarter of an hour.
+      }
     }
   }
 
@@ -1401,6 +1500,7 @@ export function createRedisAdapters(ctx: RedisContext, opts: RedisAdapterOptions
     jobTriggers: new RedisJobTriggerBus(ctx),
     memberBus: new RedisMemberBus(ctx),
     rolesDirty: new RedisRoleDirtySet(ctx),
+    roleNudges: new RedisRoleNudgeBus(ctx),
     roleRefusals: new RedisRoleRefusals(ctx, ROLE_REFUSAL_TTL_SECONDS),
     heartbeat: new RedisHeartbeat(ctx),
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),

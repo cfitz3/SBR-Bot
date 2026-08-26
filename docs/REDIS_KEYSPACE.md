@@ -75,7 +75,7 @@ oauth:state:Xk92...     "pending"   EX 300  (deleted on callback)
 Three distinct mechanisms:
 
 - **Job queues — `bull:{queueName}:*`:** owned/encoded by **BullMQ**; contains job data, delayed/repeatable schedules, and state. Do not hand-edit. TTL is queue-managed (completed/failed retention configured per queue).
-- **Pub/sub channels — `chan:{topic}:{scope}`:** fire-and-forget domain events for cross-instance fan-out. No TTL (transient messages, not stored). Topics: `chan:bridge:{guildId}` (work for the bridge bot's gateway — today, event reminders; subscribed in `apps/bridge-bot/src/composition.ts`), `chan:config:{guildId}` (config reload), `chan:mod:{guildId}` (moderation commands for the bridge to type), `chan:jobs` (manual job triggers, panel → workers), `chan:events` (global refresh signals).
+- **Pub/sub channels — `chan:{topic}:{scope}`:** fire-and-forget domain events for cross-instance fan-out. No TTL (transient messages, not stored). Topics: `chan:bridge:{guildId}` (work for the bridge bot's gateway — today, event reminders; subscribed in `apps/bridge-bot/src/composition.ts`), `chan:config:{guildId}` (config reload), `chan:mod:{guildId}` (moderation commands for the bridge to type), `chan:jobs` (manual job triggers, panel → workers), `chan:role-nudge` (one member's auto-roles are out of date, anywhere → workers), `chan:events` (global refresh signals).
 - **Analytics ingest buffer — `buf:analytics`:** a Redis **Stream** (append-only), drained by the `analytics-ingest` consumer group; trimmed by `MAXLEN` once consumed.
 
 - **Serialization:** BullMQ internal; pub/sub payloads small **JSON**; stream entries field-map JSON.
@@ -226,9 +226,11 @@ latency and never costs correctness. That is the whole reason this is allowed to
 be a fire-and-forget Redis set instead of an outbox table, and why every writer
 swallows its own failures rather than failing the user action that caused them.
 
-Drained with `SPOP`, not read with `SMEMBERS`: taking the ids out is what stops
-two workers acting on the same member, and a member whose pass fails is put back
-explicitly rather than left behind by accident.
+**The dirty set is also never drained by the immediate path.** A nudge on
+`chan:role-nudge` has the workers reconcile that one member at once, but the
+mark stays put and the fifteen-minute pass is what removes it. Anything the
+nudge loses is therefore latency, exactly as a lost mark would be — which is the
+only reason the nudge is allowed to be fire-and-forget too.
 
 ## 9. Deduplication Keys (`dedup:`)
 
@@ -341,3 +343,27 @@ keeps no queue library. The cost is that a publish is not a promise the job ran
 — the workers may be down — which is why the panel's success note says
 *requested* and the Health page's last-run column is what confirms it.
 
+## `chan:role-nudge` — the immediate role pass
+
+Published by `RedisRoleDirtySet.mark`, immediately **after** the `SADD` and
+never before it: a worker that heard the nudge first could reconcile the member,
+find nothing, and only then have the changed fact marked — correct, but a
+quarter of an hour late, which is the delay the channel exists to remove.
+Payload `{guildId, discordId, at}`, validated by `parseRoleNudgeMessage`.
+
+**Not per guild**, for the same reason `chan:jobs` is not: the subscriber is the
+worker fleet. A plain `SUBSCRIBE` on a duplicate connection.
+
+**Only for small marks.** A mark covering more than 25 members is a bulk
+reconcile — a roster rescan — and is not nudged at all. Nudging two hundred
+members individually would flood a queue that would drop most of them and would
+spend the guild's Discord role budget racing a pass already scheduled to do the
+same work.
+
+Receiving end: a per-guild token bucket in `packages/jobs/src/role-nudge.ts`,
+sized against Discord's per-guild role bucket (~10 modifications / 10s, up to
+two per member). See DISCORD_QOL.md §2.
+
+Drained with `SPOP`, not read with `SMEMBERS`: taking the ids out is what stops
+two workers acting on the same member, and a member whose pass fails is put back
+explicitly rather than left behind by accident.

@@ -79,6 +79,7 @@ export interface AdminApp {
    * process observes because it holds the intent; SBR Bot does the talking.
    */
   readonly memberBus: ReturnType<typeof createRedisAdapters>["memberBus"];
+  readonly rolesDirty: ReturnType<typeof createRedisAdapters>["rolesDirty"];
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
    * Late-bound live gateway state for the heartbeat, set once the transport
@@ -477,6 +478,7 @@ export async function createAdminApp(): Promise<AdminApp> {
     },
     lock: adapters.lock,
     memberBus: adapters.memberBus,
+    rolesDirty: adapters.rolesDirty,
     resolveGuild: guildRepository.resolveInternalId,
     setStatusSource(source) {
       liveStatus = source;

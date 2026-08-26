@@ -34,11 +34,21 @@ export {
 } from "./jobs.js";
 export {
   MAX_MEMBERS_PER_PASS,
+  syncOneMember,
   syncRoles,
+  type MemberSyncDeps,
   type RoleApplyOutcome,
   type RoleMemberSnapshot,
   type RoleSyncDeps,
 } from "./role-sync.js";
+export {
+  NUDGE_BURST,
+  NUDGE_MAX_PENDING,
+  NUDGE_REFILL_MS,
+  createRoleNudgeQueue,
+  type RoleNudgeQueue,
+  type RoleNudgeQueueDeps,
+} from "./role-nudge.js";
 export {
   blendEstimate,
   ingestEndedAuctions,

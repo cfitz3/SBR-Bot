@@ -29,7 +29,7 @@ Design for `apps/workers` — the process that owns everything slow, periodic, g
 | `event-tracking` | Repeatable (cron) | every 10 min (`8-59/10 * * * *`), per-event interval on top | `EventScore` upsert on `(eventId,uuid,metric)`; baselines written once | 1 retry; global lock, 10 min TTL | Live event leaderboards age; recorded scores are unaffected |
 | `event-board` | Repeatable (cron) | every 30 min (`13,43 * * * *`) | The board is one message, edited in place; `boardFinal` stops a finished card being rewritten | 1 retry; global lock, 5 min TTL | Live boards show older numbers than the database holds; nothing is duplicated |
 | `leaderboard-post` | Repeatable (cron) | weekly, Sun 18:23 (`23 18 * * 0`) | **Not idempotent by design** — a re-run posts a second digest; the cadence and the global lock are the guard | 0 retries; global lock, 5 min TTL | A guild misses one week's digest; nothing reads what it writes |
-| `role-sync` | Repeatable (cron) | every 15 min (`11-59/15 * * * *`) | Reconciles against current facts; only roles Discord confirmed are recorded, and only recorded grants are ever revoked | 1 retry; global lock, 5 min TTL | Auto-roles are applied late; nothing is granted or taken away wrongly |
+| `role-sync` | Repeatable (cron) | every 15 min (`11-59/15 * * * *`), plus an immediate single-member pass on `chan:role-nudge` | Reconciles against current facts; only roles Discord confirmed are recorded, and only recorded grants are ever revoked | 1 retry; global lock, 5 min TTL | Auto-roles are applied late; nothing is granted or taken away wrongly |
 | `ticket-sweep` | Repeatable (cron) | every 6 min (`5-59/6 * * * *`) | The warned flag is a Redis key with a 24 h TTL; a close is refused on an already-closed row | 2 retries; global lock, 5 min TTL | Quiet tickets are warned and auto-closed late; nothing is closed that should not be |
 | `analytics-ingest` | Continuous (stream consumer) | continuous | Dedup by event id; consumer-group offset | Reclaim pending; replay | Analytics ingestion backlog |
 | `analytics-rollup` | Repeatable (hourly/daily/weekly) | hourly / ~00:15 local / weekly | Rebuildable per `(guildId,metric,period)` | Backoff; recompute partition | Charts stale for a period |
@@ -177,12 +177,41 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
   deploy heal itself, a rule written today apply to members who qualified last
   year, and a role somebody removed by hand come back.
 - **The dirty set is promptness, not correctness.** Link, unlink, a rank change,
-  an achievement and a completed event all mark members dirty so the change lands
-  within a quarter of an hour. Losing those marks — a Redis flush, a crash
-  between the write and the mark — costs latency only: a **daily full sweep**
-  per guild marks everybody, and that sweep is the floor under the whole design.
-  It is claimed with `SET NX EX 86400` on `roles:sweep:<guildId>` so two workers
-  produce one sweep rather than two.
+  an achievement and a completed event all mark members dirty. Losing those
+  marks — a Redis flush, a crash between the write and the mark — costs latency
+  only: a **daily full sweep** per guild marks everybody, and that sweep is the
+  floor under the whole design. It is claimed with `SET NX EX 86400` on
+  `roles:sweep:<guildId>` so two workers produce one sweep rather than two.
+- **Two paths, one reconcile.** Marking a member also publishes a nudge on
+  `chan:role-nudge`, which this process subscribes to and answers by reconciling
+  that one member immediately — usually within a second of the link, join, rank
+  change or milestone that caused it. It runs `syncOneMember`, the same function
+  the sweep runs per member: same policy, same ledger, same effector, same
+  attribution. Two copies of that logic would be two ways for a role to be
+  granted and only one of them audited the way this page claims.
+
+  The immediate path **never touches the dirty set**. The mark stays where the
+  publisher put it, so anything the nudge loses — a message published while the
+  workers were restarting, a backlog that filled, a reconcile that failed — is
+  picked up by the next fifteen-minute pass. That is why the sweep is not going
+  anywhere and must not be turned into a pure event listener: it is the reason
+  revocation is safe (the grant ledger only has meaning if something eventually
+  reconciles every member), and it is the only thing that heals a dropped event.
+
+  The second pass is a no-op, not a duplicate. Once the roster mirror reflects
+  the applied role, the sweep's diff is empty and no Discord call is made at
+  all; while the mirror is still behind, it re-asserts the same role and records
+  no second grant, because the ledger already accounts for it.
+- **Nudges are paced per guild.** Discord's role bucket is roughly ten
+  modifications per ten seconds per guild and one member can cost two — an add
+  and a remove. A small token bucket in front of the immediate path (one member
+  at a time, one every 2.5s, `packages/jobs/src/role-nudge.ts`) keeps a burst of
+  twenty simultaneous links inside that, at the cost of spreading them over the
+  following minute. Past 50 waiting members per guild nudges are refused with a
+  `role nudge dropped` warning: at that size the immediate path has nothing to
+  offer over the sweep, and everyone refused is still marked dirty. A mark
+  covering more than 25 members at once — a roster-wide rescan — is not nudged
+  at all, for the same reason.
 - **A pass acts on at most 200 members per guild.** The remainder stays in the
   dirty set for the next pass, which bounds both Discord writes and how long one
   guild can hold the bulk lane.
@@ -199,6 +228,15 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
   paths, and the daily sweep is what makes `XP_LEVEL` rules land — up to a day
   late. Milestone rewards are the exception: they mark, because the milestone
   itself does.
+- **XP aggregation stays batched, deliberately.** See §2.10b. It is tempting to
+  make an award mark the member dirty so `XP_LEVEL` rules land at once, and it
+  is the wrong trade: XP is awarded per message, so that mark would fire on
+  every chat line in the server and every one of them would nudge. The per-guild
+  role bucket is about ten modifications per ten seconds, shared with moderation
+  and role menus, and a busy evening would spend all of it discovering that
+  nobody crossed a level boundary. The daily re-derive is what makes `XP_LEVEL`
+  correct; a level-up that matters enough to reward promptly is a milestone, and
+  milestones do mark and nudge.
 
 ### 2.7c `event-board`
 - **Trigger / frequency:** cron, every thirty minutes (`13,43 * * * *`), **timely** lane.

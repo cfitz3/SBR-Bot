@@ -124,12 +124,60 @@ members who qualified last year, and a role removed by hand come back.
   Losing it costs latency, never correctness: a full sweep per guild marks
   everyone once a day regardless. Every writer swallows its own failures rather
   than failing the user action that caused the mark.
+- **And from a nudge.** Marking a member also publishes on `chan:role-nudge`;
+  the workers answer it by reconciling that one member on the spot. Somebody who
+  links their account has their roles within seconds, not at the next pass.
 - **Two honesty rules carry the ledger.** A removal requires an **open**
   `RoleGrant` row for that member, role and rule — a role given by hand, by
   another bot, or by a since-deleted rule is left alone. And only roles Discord
   confirmed in `added` are recorded, because a row for a grant that never
   happened would authorise revoking a role we never gave.
 - A failed call claims nothing and re-queues the member.
+
+### Why both paths, and why neither one replaces the other
+
+The immediate path is an optimisation over the sweep. It is not a replacement,
+and the sweep must not be turned into a pure event listener with no periodic
+fallback — three things depend on it:
+
+- **Revocation is only safe because something reconciles everyone eventually.**
+  "Only remove what we granted" is a statement about the ledger, and the ledger
+  is only trued up by a pass that visits members nothing happened to.
+- **A dropped event heals.** Gateway events are lost during deploys; pub/sub
+  drops messages published while the workers are down. Both are latency, not
+  loss, precisely because the mark is written to Redis *before* the nudge is
+  published and nothing but the sweep consumes it.
+- **A rule written today is retroactive.** There is no event to replay for a
+  member who qualified last year.
+
+So the immediate path never drains the dirty set, never retries, and never
+surfaces an error to the member who triggered it. A reconcile that fails logs a
+warning and stops; the mark is still there and the next pass owns the retry.
+
+**It is paced, and that is not optional.** Discord's role bucket is roughly ten
+modifications per ten seconds *per guild*, one member can cost two calls (an add
+and a remove), and there is no batch role-add endpoint — it is one HTTP call per
+member per direction. A token bucket in front of the immediate path
+(`packages/jobs/src/role-nudge.ts`: one member at a time, one every 2.5s, 50
+waiting per guild, no nudges at all for a mark covering more than 25 members)
+keeps twenty simultaneous links inside that budget by spreading them over the
+following minute. Anything refused is still marked dirty.
+
+**Nothing writes a role from a gateway handler.** `guildMemberAdd` marks the
+member and returns; the write still goes through the effector, its preflight and
+the grant ledger. That preflight is what refuses Administrator, Manage Roles and
+Ban Members grants, and a listener that called `member.roles.add` directly would
+be a way around every one of those rules.
+
+**XP and leaderboards stay batched, on purpose.** XP is awarded per message, so
+marking a member dirty on each award would nudge on every chat line in the
+server and spend the guild's whole role budget discovering that nobody crossed a
+level boundary. The daily re-derive is what makes `XP_LEVEL` rules correct; a
+level-up worth rewarding promptly is a milestone, and milestones do mark.
+Leaderboards are read straight from Postgres on each request
+(`leaderboardSource`) with no cache in front of them, so they already reflect
+recent changes — there is nothing to invalidate, and adding a cache purely so it
+could be invalidated would introduce staleness where none exists today.
 
 Full worker behaviour: [`WORKERS.md` §2.7d](WORKERS.md). Ledger semantics:
 [`DOMAIN_MODEL.md` → RoleGrant](DOMAIN_MODEL.md). Keyspace:
