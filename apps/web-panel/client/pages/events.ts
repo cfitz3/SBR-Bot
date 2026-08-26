@@ -32,6 +32,17 @@ import type {
   EventsVM,
   PanelEvent,
 } from "@sbr/panel-core";
+import {
+  ACHIEVEMENT_CATEGORIES,
+  CATEGORY_OF_METRIC,
+  EVENT_MAX_TRACKED_METRICS,
+  EVENT_METRICS,
+  EVENT_POLL_CHOICES,
+  EVENT_POLL_MAX_MINUTES,
+  EVENT_POLL_MIN_MINUTES,
+  type AchievementCategory,
+  type EventMetric,
+} from "./enums.js";
 import { loadPage, postAction } from "../api.js";
 import {
   badge,
@@ -60,6 +71,14 @@ import {
 
 const t = scope("events");
 const c = scope("common");
+/**
+ * Borrowed for the metric picker's family headings.
+ *
+ * The families are the milestones page's families — same catalogue, same
+ * grouping — so naming them again under `events` would be two spellings of
+ * "Dungeons" that can disagree.
+ */
+const fam = scope("milestones");
 
 /**
  * The event types the schema knows, mirroring `EVENT_TYPES` in the mutations.
@@ -81,31 +100,37 @@ const typeOptions = (): readonly (readonly [string, string])[] =>
   TYPES.map((value) => [value, t("type")[value]] as const);
 
 /**
- * What the tracker can score, mirroring `EVENT_METRICS` in `@sbr/jobs` and the
- * copy of it the mutations validate against.
+ * What the tracker can score, grouped the way the milestones page groups the
+ * same catalogue.
  *
- * Offering a metric no capture writes would leave a leaderboard permanently
- * empty with nothing on the page to explain why, so this list is deliberately
- * the snapshot's own fields and not a wish list.
+ * The list itself is `EVENT_METRICS` from the enum mirror rather than a third
+ * copy of it: offering a metric no capture writes would leave a leaderboard
+ * permanently empty with nothing on the page to explain why, and a hand-kept
+ * list is exactly how that happens. The families are computed here so a metric
+ * added upstream appears under its own heading without this file being touched.
  */
-const METRICS = [
-  "skyblockLevel",
-  "networth",
-  "skillAverage",
-  "catacombsLevel",
-  "slayerXp",
-  "senitherWeight",
-] as const satisfies readonly (keyof PanelCopy["events"]["metric"])[];
+const METRIC_FAMILIES: readonly (readonly [AchievementCategory, readonly EventMetric[]])[] =
+  ACHIEVEMENT_CATEGORIES.map(
+    (category) =>
+      [category, EVENT_METRICS.filter((metric) => CATEGORY_OF_METRIC[metric] === category)] as const,
+  ).filter(([, metrics]) => metrics.length > 0);
 
-/** Statuses that still have a future. */
+/** Statuses that still have a future. Kept as one set for the editable check. */
 const UPCOMING = new Set(["SCHEDULED", "LIVE"]);
 
 const TITLE_MAX = 120;
 const DESCRIPTION_MAX = 2_000;
+const PRIZE_MAX = 200;
 
-/** The tracker's polling bounds, mirroring `CommunityServiceImpl`. */
-const POLL_MIN = 5;
-const POLL_MAX = 1_440;
+/**
+ * The tracker's polling bounds, mirroring the domain's own — see
+ * `EVENT_POLL_MIN_MINUTES`. The floor is Hypixel's one-read-per-player-per-hour
+ * cap rather than a preference, which is why the form offers a closed list of
+ * intervals instead of a free number: every value on it is one the tracker can
+ * actually honour.
+ */
+const POLL_MIN = EVENT_POLL_MIN_MINUTES;
+const POLL_MAX = EVENT_POLL_MAX_MINUTES;
 
 /** Which event is open. Survives a re-read, like the analytics window. */
 const state: { selected: string } = { selected: "" };
@@ -126,12 +151,16 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
   state.selected = data.selected;
   const rerender = (): void => void renderEvents(host, guildId);
 
-  const upcoming = data.events
-    .filter((event) => UPCOMING.has(event.status))
-    .slice()
-    .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+  // Three groups rather than one table, because the question you bring to this
+  // page is not the same for all three: a live event is something you watch, a
+  // scheduled one is something you edit, and a finished one is something you
+  // read. The old flat "upcoming" list mixed the first two.
+  const byStart = (a: PanelEvent, b: PanelEvent): number => Date.parse(a.startsAt) - Date.parse(b.startsAt);
+  const live = data.events.filter((event) => event.status === "LIVE").slice().sort(byStart);
+  const scheduled = data.events.filter((event) => event.status === "SCHEDULED").slice().sort(byStart);
+  const upcoming = [...live, ...scheduled];
   const past = data.events.filter((event) => !UPCOMING.has(event.status));
-  const next = upcoming[0] ?? null;
+  const next = scheduled[0] ?? live[0] ?? null;
   const open = data.events.find((event) => event.id === data.selected) ?? null;
 
   replace(
@@ -143,7 +172,8 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
       h(
         "div",
         { class: "tiles" },
-        statTile(t("tileUpcoming"), count(upcoming.length)),
+        statTile(t("tileUpcoming"), count(scheduled.length)),
+        statTile(t("tileLive"), count(live.length)),
         statTile(
           t("tileNext"),
           next ? countdown(next.startsAt) : c("dash"),
@@ -152,7 +182,8 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
         statTile(t("tileGoing"), next ? seats(next) : c("dash")),
       ),
       card(t("cardCreate"), createForm(guildId, rerender)),
-      card(t("cardUpcoming"), upcomingBody(guildId, upcoming, rerender)),
+      live.length === 0 ? null : card(t("cardLive"), upcomingBody(guildId, live, rerender)),
+      card(t("cardUpcoming"), upcomingBody(guildId, scheduled, rerender)),
       open ? card(t("cardManage").replace("{title}", open.title), manageBody(guildId, open, rerender)) : null,
       open ? card(t("cardScores").replace("{title}", open.title), scoresBody(open, data.standings, data.unlinked)) : null,
       open && data.attendance
@@ -167,6 +198,214 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
       card(t("cardPast"), pastBody(past, rerender)),
     ),
   );
+}
+
+// ─────────────────────── the tracker's settings ───────────────────────
+
+/**
+ * The four things that decide how an event is scored: what to measure, how
+ * often, what is at stake, and when it stops.
+ *
+ * One factory shared by the create form and the edit form, because they are the
+ * same decision made at two moments. Creating an event without them was the
+ * older shape and it had a real cost: an event that went LIVE before anyone
+ * corrected its metric list captured every baseline against the wrong metrics,
+ * and a baseline is written once.
+ *
+ * Validation answers as you type rather than on submit. Each group carries its
+ * own status line — the same `field-status` the self-saving fields use — so an
+ * end time in the past is a note under that box rather than a rejection of the
+ * whole form after the Save round trip.
+ */
+interface TrackerFields {
+  /** Rows to drop into a `fields` container, in order. */
+  readonly rows: readonly HTMLElement[];
+  /**
+   * The settings to send, or the first complaint. `startsAtIso` is the start
+   * the form currently holds — the end time is checked against what is on
+   * screen, not against what was stored.
+   */
+  read(startsAtIso: string | null): { ok: true; settings: Record<string, unknown> } | { ok: false; message: string };
+}
+
+/** A status line that says nothing until something is wrong with its group. */
+function complaint(): { readonly el: HTMLElement; set: (message: string | null) => void } {
+  const el = h("p", { class: "field-status" });
+  return {
+    el,
+    set: (message) => {
+      el.textContent = message ?? "";
+      el.className = message === null ? "field-status" : "field-status field-status-error";
+    },
+  };
+}
+
+function trackerFields(event: PanelEvent | null): TrackerFields {
+  const tracked = new Set<string>(event?.trackedMetrics ?? []);
+
+  // Checkboxes rather than a multi-select, and grouped by family rather than
+  // listed flat: eighteen metrics is too many to scan as one column, and the
+  // order they were ticked in matters — the first is what the Discord board
+  // sorts by, which a select box gives no way to show.
+  const metricBoxes = EVENT_METRICS.map((metric) => {
+    const box = h("input", {
+      class: "switch-input",
+      type: "checkbox",
+      ...(tracked.has(metric) ? { checked: true } : {}),
+      "aria-label": metricLabel(metric),
+    }) as HTMLInputElement;
+    return { metric, box };
+  });
+  const boxOf = new Map<string, HTMLInputElement>(metricBoxes.map(({ metric, box }) => [metric, box]));
+
+  const metricNote = complaint();
+  const checkedMetrics = (): readonly string[] =>
+    metricBoxes.filter(({ box }) => box.checked).map(({ metric }) => metric);
+  const syncMetrics = (): void => {
+    metricNote.set(
+      checkedMetrics().length > EVENT_MAX_TRACKED_METRICS
+        ? t("errMetrics").replace("{max}", count(EVENT_MAX_TRACKED_METRICS))
+        : null,
+    );
+  };
+  for (const { box } of metricBoxes) box.addEventListener("change", syncMetrics);
+
+  const metricRows = METRIC_FAMILIES.map(([family, metrics]) =>
+    h(
+      "div",
+      { class: "field-row metric-grid" },
+      h("span", { class: "field-label field-label-inline" }, familyLabel(family)),
+      ...metrics.map((metric) =>
+        h("label", { class: "switch-check" }, boxOf.get(metric) ?? null, h("span", {}, metricLabel(metric))),
+      ),
+    ),
+  );
+
+  // A closed list, not a number box. Every option is an interval the tracker
+  // can actually honour; the old free number let staff ask for five minutes and
+  // silently got sixty, which is a control that lies.
+  const current = event?.pollIntervalMinutes ?? EVENT_POLL_MIN_MINUTES;
+  const choices: readonly number[] = EVENT_POLL_CHOICES.some((minutes) => minutes === current)
+    ? EVENT_POLL_CHOICES
+    : // A row saved before the floor existed keeps its own value on screen, so
+      // opening the form does not quietly rewrite a setting nobody touched.
+      [...EVENT_POLL_CHOICES, current].sort((a, b) => a - b);
+  const poll = h(
+    "select",
+    { class: "control control-select", "aria-label": t("pollLabel") },
+    ...choices.map((minutes) =>
+      h("option", { value: String(minutes), ...(minutes === current ? { selected: true } : {}) }, pollLabel(minutes)),
+    ),
+  ) as HTMLSelectElement;
+
+  const prize = h("input", {
+    class: "control control-text",
+    type: "text",
+    value: event?.prize ?? "",
+    placeholder: t("prizePlaceholder"),
+    "aria-label": t("prizeLabel"),
+    maxlength: PRIZE_MAX,
+    autocomplete: "off",
+  }) as HTMLInputElement;
+
+  const endsAt = h("input", {
+    class: "control control-short",
+    type: "datetime-local",
+    ...(event?.endsAt ? { value: isoToLocalInput(event.endsAt) } : {}),
+    "aria-label": t("endsLabel"),
+  }) as HTMLInputElement;
+
+  const endsNote = complaint();
+  const readEnds = (startsAtIso: string | null): { readonly iso: string | null } | { readonly message: string } => {
+    if (endsAt.value.trim().length === 0) return { iso: null };
+    const iso = localInputToIso(endsAt.value);
+    if (iso === null) return { message: t("errEndsPast") };
+    if (startsAtIso !== null && Date.parse(iso) <= Date.parse(startsAtIso)) {
+      return { message: t("errEndsBeforeStart") };
+    }
+    // An end time already in the past would refuse to go LIVE at the domain
+    // layer, so it is refused here rather than accepted and then rejected.
+    if (Date.parse(iso) <= Date.now()) return { message: t("errEndsPast") };
+    return { iso };
+  };
+  endsAt.addEventListener("input", () => {
+    const answer = readEnds(null);
+    endsNote.set("message" in answer ? answer.message : null);
+  });
+
+  return {
+    rows: [
+      h("p", { class: "field-label" }, t("metricsLabel")),
+      ...metricRows,
+      h("p", { class: "field-hint" }, t("metricsHint").replace("{max}", count(EVENT_MAX_TRACKED_METRICS))),
+      metricNote.el,
+      h(
+        "div",
+        { class: "field-row" },
+        h("label", { class: "field-label field-label-inline" }, t("pollInline")),
+        poll,
+        h("label", { class: "field-label field-label-inline" }, t("endsInline")),
+        endsAt,
+      ),
+      h("p", { class: "field-hint" }, t("pollHint")),
+      endsNote.el,
+      h(
+        "div",
+        { class: "field-row" },
+        h("label", { class: "field-label field-label-inline" }, t("prizeInline")),
+        prize,
+      ),
+      h("p", { class: "field-hint" }, t("prizeHint")),
+    ],
+    read(startsAtIso) {
+      const metrics = checkedMetrics();
+      if (metrics.length > EVENT_MAX_TRACKED_METRICS) {
+        return { ok: false, message: t("errMetrics").replace("{max}", count(EVENT_MAX_TRACKED_METRICS)) };
+      }
+
+      const minutes = Number(poll.value);
+      if (!Number.isInteger(minutes) || minutes < POLL_MIN || minutes > POLL_MAX) {
+        return {
+          ok: false,
+          message: t("errPoll").replace("{min}", count(POLL_MIN)).replace("{max}", count(POLL_MAX)),
+        };
+      }
+
+      const prizeText = prize.value.trim();
+      if (prizeText.length > PRIZE_MAX) {
+        return { ok: false, message: t("errPrize").replace("{max}", count(PRIZE_MAX)) };
+      }
+
+      const ends = readEnds(startsAtIso);
+      if ("message" in ends) {
+        endsNote.set(ends.message);
+        return { ok: false, message: ends.message };
+      }
+      endsNote.set(null);
+
+      return {
+        ok: true,
+        settings: {
+          trackedMetrics: metrics,
+          pollIntervalMinutes: minutes,
+          prize: prizeText.length === 0 ? null : prizeText,
+          endsAt: ends.iso,
+        },
+      };
+    },
+  };
+}
+
+/** "Every hour", "6 hours", "Once a day" — whole hours, in the guild's words. */
+function pollLabel(minutes: number): string {
+  if (minutes === 60) return t("pollHour");
+  if (minutes === 1_440) return t("pollDay");
+  return t("pollHours").replace("{hours}", count(Math.round(minutes / 60)));
+}
+
+/** A metric family's words, borrowed from the milestones page's own table. */
+function familyLabel(family: string): string {
+  return (fam("category") as unknown as Readonly<Record<string, string>>)[family] ?? family;
 }
 
 // ─────────────────────────── scheduling ───────────────────────────
@@ -215,6 +454,8 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
     maxlength: DESCRIPTION_MAX,
   }) as unknown as HTMLTextAreaElement;
 
+  const tracker = trackerFields(null);
+
   const create = actionButton({
     label: t("create"),
     tone: "primary",
@@ -237,12 +478,16 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
         return { kind: "error", message: t("errCapacity") };
       }
 
+      const settings = tracker.read(iso);
+      if (!settings.ok) return { kind: "error", message: settings.message };
+
       return postAction(guildId, "event.create", {
         title: name,
         type: type.value,
         startsAt: iso,
         capacity: seats,
         description: description.value.trim(),
+        ...settings.settings,
       });
     },
     onDone: rerender,
@@ -261,6 +506,7 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
       capacity,
     ),
     h("div", { class: "field-row" }, description),
+    ...tracker.rows,
     h("div", { class: "field-row" }, create, status.el),
     h(
       "p",
@@ -327,6 +573,9 @@ function eventRow(guildId: string, event: PanelEvent, rerender: () => void): HTM
       event.hostDiscordId ? t("hostedBy") : t("noHost"),
       event.hostDiscordId ? h("code", {}, event.hostDiscordId) : null,
     ),
+    event.prize === null
+      ? null
+      : h("p", { class: "muted" }, `${t("prizeInline")}: ${event.prize}`),
     h("div", { class: "row-actions" }, toggle, cancel, status.el),
   );
 }
@@ -404,28 +653,7 @@ function manageBody(guildId: string, event: PanelEvent, rerender: () => void): H
   }) as unknown as HTMLTextAreaElement;
   description.value = event.description ?? "";
 
-  // Checkboxes rather than a multi-select: six options are few enough to show at
-  // once, and the order they were chosen in matters — the first tracked metric is
-  // the one the Discord board sorts by, which a select box gives no way to show.
-  const tracked = new Set<string>(event.trackedMetrics);
-  const metricBoxes = METRICS.map((metric) => {
-    const box = h("input", {
-      class: "switch-input",
-      type: "checkbox",
-      ...(tracked.has(metric) ? { checked: true } : {}),
-      "aria-label": metricLabel(metric),
-    }) as HTMLInputElement;
-    return { metric, box };
-  });
-
-  const pollInterval = h("input", {
-    class: "control control-short",
-    type: "number",
-    min: POLL_MIN,
-    max: POLL_MAX,
-    value: String(event.pollIntervalMinutes),
-    "aria-label": t("pollLabel"),
-  }) as HTMLInputElement;
+  const tracker = trackerFields(event);
 
   const progression = h("input", {
     class: "switch-input",
@@ -456,13 +684,8 @@ function manageBody(guildId: string, event: PanelEvent, rerender: () => void): H
         return { kind: "error", message: t("errCapacity") };
       }
 
-      const minutes = Number(pollInterval.value.trim());
-      if (!Number.isInteger(minutes) || minutes < POLL_MIN || minutes > POLL_MAX) {
-        return {
-          kind: "error",
-          message: t("errPoll").replace("{min}", count(POLL_MIN)).replace("{max}", count(POLL_MAX)),
-        };
-      }
+      const settings = tracker.read(iso);
+      if (!settings.ok) return { kind: "error", message: settings.message };
 
       return postAction(guildId, "event.update", {
         eventId: event.id,
@@ -470,9 +693,8 @@ function manageBody(guildId: string, event: PanelEvent, rerender: () => void): H
         startsAt: iso,
         capacity: seats,
         description: description.value.trim(),
-        trackedMetrics: metricBoxes.filter(({ box }) => box.checked).map(({ metric }) => metric),
-        pollIntervalMinutes: minutes,
         tracksProgression: progression.checked,
+        ...settings.settings,
       });
     },
     onDone: rerender,
@@ -512,20 +734,10 @@ function manageBody(guildId: string, event: PanelEvent, rerender: () => void): H
       capacity,
     ),
     h("div", { class: "field-row" }, description),
-    h("p", { class: "field-label" }, t("metricsLabel")),
-    h(
-      "div",
-      { class: "field-row metric-grid" },
-      ...metricBoxes.map(({ metric, box }) =>
-        h("label", { class: "switch-check" }, box, h("span", {}, metricLabel(metric))),
-      ),
-    ),
-    h("p", { class: "field-hint" }, t("metricsHint")),
+    ...tracker.rows,
     h(
       "div",
       { class: "field-row" },
-      h("label", { class: "field-label field-label-inline" }, t("pollInline")),
-      pollInterval,
       h("label", { class: "switch-check" }, progression, h("span", {}, t("progressionLabel"))),
     ),
     h("div", { class: "field-row" }, save, complete, status.el),
