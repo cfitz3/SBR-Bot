@@ -31,6 +31,8 @@ import {
   parseModAckMessage,
   parseModBusMessage,
   parseRelayLogEntry,
+  parseRoleNudgeMessage,
+  MAX_NUDGED_PER_MARK,
   RedisRelayLog,
   startHeartbeat,
   RUNNABLE_JOBS,
@@ -625,6 +627,73 @@ test("marking is deduped, skips blanks, and never fails its caller", async () =>
   redis.broken = true;
   await assert.doesNotReject(() => dirty.mark("g", ["c"]));
   assert.equal(await dirty.pending("g"), 0, "an unreadable count renders as zero, not as an error");
+});
+
+test("marking a member also asks for them to be looked at now", async () => {
+  // The two halves of the same act. The mark is what makes the reconcile
+  // eventually happen; the nudge is what makes it happen in seconds.
+  const { redis, ctx } = harness();
+
+  await new RedisRoleDirtySet(ctx).mark("g", ["a", "b"]);
+
+  const nudges = redis.published.filter((entry) => entry.channel === ctx.keys.chanRoleNudge());
+  assert.deepEqual(
+    nudges.map((entry) => parseRoleNudgeMessage(entry.message)?.discordId),
+    ["a", "b"],
+  );
+});
+
+test("the mark is written before the nudge is published", async () => {
+  // Order matters more than it looks. A worker that heard the nudge first could
+  // reconcile the member, find nothing, and only then have the changed fact
+  // marked — which the sweep would fix a quarter of an hour later, which is
+  // exactly the delay the nudge exists to remove.
+  const { redis, ctx } = harness();
+  const dirty = new RedisRoleDirtySet(ctx);
+  let pendingWhenPublished = -1;
+  const realPublish = redis.publish.bind(redis);
+  redis.publish = async (channel: string, message: string) => {
+    pendingWhenPublished = await dirty.pending("g");
+    return realPublish(channel, message);
+  };
+
+  await dirty.mark("g", ["a"]);
+
+  assert.equal(pendingWhenPublished, 1);
+});
+
+test("a roster-wide mark is left to the sweep rather than nudged member by member", async () => {
+  // A bulk reconcile is what the sweep is good at. Nudging two hundred members
+  // individually would flood a queue that would drop most of them anyway, and
+  // would spend the guild's Discord role budget racing a pass already scheduled
+  // to do the same work.
+  const { redis, ctx } = harness();
+  const everyone = Array.from({ length: MAX_NUDGED_PER_MARK + 1 }, (_, i) => `u${i}`);
+
+  await new RedisRoleDirtySet(ctx).mark("g", everyone);
+
+  assert.equal(await new RedisRoleDirtySet(ctx).pending("g"), everyone.length);
+  assert.deepEqual(redis.published.filter((entry) => entry.channel === ctx.keys.chanRoleNudge()), []);
+});
+
+test("a nudge that cannot be published costs latency, not the caller", async () => {
+  const { redis, ctx } = harness();
+  redis.broken = true;
+
+  await assert.doesNotReject(() => new RedisRoleDirtySet(ctx).mark("g", ["a"]));
+});
+
+test("a role nudge is validated rather than trusted", async () => {
+  // Anything that can reach Redis can publish here, and the receiving end is
+  // the one that will spend a Discord role call because a message said so.
+  assert.equal(parseRoleNudgeMessage("{"), null);
+  assert.equal(parseRoleNudgeMessage("null"), null);
+  assert.equal(parseRoleNudgeMessage(JSON.stringify({ guildId: "g" })), null);
+  assert.equal(parseRoleNudgeMessage(JSON.stringify({ guildId: "", discordId: "u" })), null);
+  assert.equal(parseRoleNudgeMessage(JSON.stringify({ guildId: "g", discordId: 7 })), null);
+
+  const parsed = parseRoleNudgeMessage(JSON.stringify({ guildId: "g", discordId: "u", at: "2026-08-26T00:00:00Z" }));
+  assert.deepEqual(parsed, { guildId: "g", discordId: "u", at: "2026-08-26T00:00:00Z" });
 });
 
 test("refusals are keyed by role, newest first, and clearable", async () => {

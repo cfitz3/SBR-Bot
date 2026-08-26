@@ -43,9 +43,28 @@ export interface RoleApplyOutcome {
   readonly refused: readonly { readonly roleId: string; readonly detail: string }[];
 }
 
-export interface RoleSyncDeps {
-  listGuilds(): Promise<readonly string[]>;
+/**
+ * Everything reconciling *one* member needs.
+ *
+ * Split out of `RoleSyncDeps` so the immediate path can reuse this pass rather
+ * than reimplement it. The sweep's own dependencies — listing guilds, claiming
+ * the daily sweep, draining the dirty set — are about deciding *who* to
+ * reconcile, and a caller that already knows who has no business supplying them.
+ */
+export interface MemberSyncDeps {
   loadPolicy(guildId: string): Promise<AutoRolePolicy>;
+  markDirty(guildId: string, discordIds: readonly string[]): Promise<void>;
+  loadSnapshots(guildId: string, discordIds: readonly string[]): Promise<readonly RoleMemberSnapshot[]>;
+  openGrants(guildId: string, discordId: string): Promise<readonly GrantRow[]>;
+  apply(guildId: string, discordId: string, add: readonly string[], remove: readonly string[]): Promise<RoleApplyOutcome>;
+  recordGrants(guildId: string, discordId: string, rows: readonly GrantRow[], reason: string): Promise<void>;
+  closeGrants(guildId: string, discordId: string, rows: readonly GrantRow[]): Promise<void>;
+  onRefusal(guildId: string, roleId: string, detail: string): void;
+  onError(scope: string, error: unknown): void;
+}
+
+export interface RoleSyncDeps extends MemberSyncDeps {
+  listGuilds(): Promise<readonly string[]>;
   /**
    * Whether this guild is due a full sweep, and claiming it if so. Returns true
    * at most once a day per guild; the claim is what stops two workers both
@@ -54,16 +73,8 @@ export interface RoleSyncDeps {
   claimFullSweep(guildId: string): Promise<boolean>;
   /** Every member we might have to act on — only read during a full sweep. */
   listMemberIds(guildId: string): Promise<readonly string[]>;
-  markDirty(guildId: string, discordIds: readonly string[]): Promise<void>;
   /** Take up to `limit` ids *out* of the dirty set. */
   drainDirty(guildId: string, limit: number): Promise<readonly string[]>;
-  loadSnapshots(guildId: string, discordIds: readonly string[]): Promise<readonly RoleMemberSnapshot[]>;
-  openGrants(guildId: string, discordId: string): Promise<readonly GrantRow[]>;
-  apply(guildId: string, discordId: string, add: readonly string[], remove: readonly string[]): Promise<RoleApplyOutcome>;
-  recordGrants(guildId: string, discordId: string, rows: readonly GrantRow[], reason: string): Promise<void>;
-  closeGrants(guildId: string, discordId: string, rows: readonly GrantRow[]): Promise<void>;
-  onRefusal(guildId: string, roleId: string, detail: string): void;
-  onError(scope: string, error: unknown): void;
 }
 
 /**
@@ -133,7 +144,7 @@ async function syncGuild(deps: RoleSyncDeps, guildId: string): Promise<number> {
 }
 
 async function syncMember(
-  deps: RoleSyncDeps,
+  deps: MemberSyncDeps,
   guildId: string,
   policy: AutoRolePolicy,
   snapshot: RoleMemberSnapshot,
@@ -181,4 +192,53 @@ async function syncMember(
     return false;
   }
   return result.added.length > 0 || result.removed.length > 0;
+}
+
+/**
+ * Reconcile one member, now.
+ *
+ * The other half of the model the file header describes. Reconciliation is
+ * still what happens — this asks the same question about the same member and
+ * applies the same diff through the same effector — the only difference is who
+ * asked and when. Somebody who has just linked their account should not wait a
+ * quarter of an hour to be told the platform noticed.
+ *
+ * Deliberately does **not** touch the dirty set. The caller marks the member
+ * dirty as usual and then nudges; if this pass fails, or never runs because the
+ * worker was restarting, the mark is still sitting there for the sweep to find.
+ * A path that consumed the mark to go faster would be trading the one property
+ * that makes the whole arrangement safe for fifteen minutes of latency.
+ *
+ * Running twice is harmless and is the expected case: the sweep will reach this
+ * member again within the quarter hour, ask the same question, find the ledger
+ * and Discord already agree, and make no call at all.
+ */
+export async function syncOneMember(
+  deps: MemberSyncDeps,
+  guildId: string,
+  discordId: string,
+): Promise<boolean> {
+  try {
+    const policy = await deps.loadPolicy(guildId);
+    // Same refusal as the sweep's, for the same reason: a guild with the
+    // feature off has not asked us to act on it promptly either.
+    if (!policy.enabled || policy.rules.length === 0) return false;
+
+    const snapshots = await deps.loadSnapshots(guildId, [discordId]);
+    const snapshot = snapshots.at(0);
+    // Not a member of this guild as far as the mirror is concerned. Nothing to
+    // reconcile against, and inventing facts for them would be worse than
+    // waiting for the roster to catch up.
+    if (snapshot === undefined) return false;
+
+    return await syncMember(deps, guildId, policy, snapshot);
+  } catch (error) {
+    // Never rethrown. The caller is on somebody's request path — a link, a
+    // join, a punishment — and a role that could not be applied is not a
+    // failure of the thing they actually asked for. The mark they left behind
+    // is what gets this retried, so retrying here would only be a second
+    // failure sooner.
+    deps.onError(`member ${discordId}`, error);
+    return false;
+  }
 }

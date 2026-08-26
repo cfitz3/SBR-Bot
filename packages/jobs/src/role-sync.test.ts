@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AutoRolePolicy, AutoRoleRule, GrantRow } from "@sbr/roles";
-import { MAX_MEMBERS_PER_PASS, syncRoles, type RoleApplyOutcome, type RoleMemberSnapshot, type RoleSyncDeps } from "./role-sync.js";
+import {
+  MAX_MEMBERS_PER_PASS,
+  syncOneMember,
+  syncRoles,
+  type RoleApplyOutcome,
+  type RoleMemberSnapshot,
+  type RoleSyncDeps,
+} from "./role-sync.js";
 
 const GUILD = "g1";
 
@@ -56,9 +63,27 @@ function harness(over: {
   roster?: readonly string[];
   sweepDue?: boolean;
   grants?: readonly GrantRow[];
+  /**
+   * Make the grant ledger remember what was recorded, instead of answering with
+   * a fixed list. Needed by anything that reconciles the same member twice: a
+   * ledger frozen at empty would have the second pass rediscover the first
+   * pass's work as outstanding, which is the bug these tests exist to rule out.
+   */
+  ledgered?: boolean;
+  /**
+   * Let the roster mirror catch up with what the effector did, instead of
+   * answering every pass with the roles the member held at the start.
+   *
+   * The mirror is refreshed by its own job, so in production it lags the
+   * effector by anything up to that job's interval. Both states are worth
+   * testing and they are not the same test.
+   */
+  mirrored?: boolean;
   outcome?: (add: readonly string[], remove: readonly string[]) => RoleApplyOutcome;
 } = {}): Harness {
   const members = over.members ?? [member({ linked: true })];
+  /** Roles the mirror believes each member holds, once `mirrored` is on. */
+  const held = new Map<string, readonly string[]>();
   const h: Harness = {
     applied: [],
     recorded: [],
@@ -80,11 +105,37 @@ function harness(over: {
         for (const id of ids) if (!h.dirty.includes(id)) h.dirty.push(id);
       },
       drainDirty: async (_g, limit) => h.dirty.splice(0, limit),
-      loadSnapshots: async (_g, ids) => members.filter((m) => ids.includes(m.facts.discordId)),
-      openGrants: async () => over.grants ?? [],
+      loadSnapshots: async (_g, ids) =>
+        members
+          .filter((m) => ids.includes(m.facts.discordId))
+          .map((m) => {
+            const seen = held.get(m.facts.discordId);
+            return seen === undefined ? m : { ...m, heldRoleIds: [...seen] };
+          }),
+      openGrants: async (_g, discordId) => {
+        if (over.ledgered !== true) return over.grants ?? [];
+        const rows = [...(over.grants ?? [])];
+        for (const entry of h.recorded) if (entry.discordId === discordId) rows.push(...entry.rows);
+        const closed = h.closed.filter((entry) => entry.discordId === discordId).flatMap((entry) => entry.rows);
+        return rows.filter((row) => !closed.some((gone) => gone.roleId === row.roleId));
+      },
       apply: async (_g, discordId, add, remove) => {
         h.applied.push({ discordId, add, remove });
-        return over.outcome?.(add, remove) ?? { ok: true, memberPresent: true, added: add, removed: remove, refused: [] };
+        const result = over.outcome?.(add, remove) ?? {
+          ok: true,
+          memberPresent: true,
+          added: add,
+          removed: remove,
+          refused: [],
+        };
+        if (over.mirrored === true) {
+          const start = members.find((m) => m.facts.discordId === discordId)?.heldRoleIds ?? [];
+          const next = new Set(held.get(discordId) ?? start);
+          for (const roleId of result.added) next.add(roleId);
+          for (const roleId of result.removed) next.delete(roleId);
+          held.set(discordId, [...next]);
+        }
+        return result;
       },
       recordGrants: async (_g, discordId, rows) => {
         h.recorded.push({ discordId, rows });
@@ -283,4 +334,109 @@ test("an unlistable guild set fails the pass quietly rather than throwing", asyn
 
   assert.equal(await syncRoles(h.deps), 0);
   assert.deepEqual(h.errors, ["guild list"]);
+});
+
+// ─────────────────── the immediate path, and its relationship to the sweep ───
+
+test("a member reconciled on the spot gets their role without waiting for a pass", async () => {
+  // The whole point: nobody drained a dirty set, no sweep ran, and the effector
+  // was still called for this member before the call returned.
+  const h = harness();
+
+  assert.equal(await syncOneMember(h.deps, GUILD, "u1"), true);
+  assert.deepEqual(h.applied, [{ discordId: "u1", add: ["role-linked"], remove: [] }]);
+});
+
+test("reconciling on the spot leaves the dirty mark alone", async () => {
+  // The caller marks and then nudges. If this consumed the mark, a failure
+  // anywhere after it — a crash, a refusal, an effector timeout — would leave
+  // the member with nothing to catch them until the daily sweep.
+  const h = harness();
+  h.dirty.push("u1");
+
+  await syncOneMember(h.deps, GUILD, "u1");
+
+  assert.deepEqual(h.dirty, ["u1"]);
+});
+
+test("the sweep arriving after an immediate pass makes no second Discord call", async () => {
+  // Idempotency, stated the way it actually matters: not "the second call is
+  // harmless" but "the second call does not happen". This is the steady state —
+  // the immediate pass applied the role and the roster mirror has caught up —
+  // and it is what stops every nudge costing the guild two rate-limit budgets.
+  const h = harness({ ledgered: true, mirrored: true });
+  h.dirty.push("u1");
+
+  await syncOneMember(h.deps, GUILD, "u1");
+  assert.equal(h.applied.length, 1);
+
+  // The mark is still there, so the sweep picks the same member up.
+  assert.equal(await syncRoles(h.deps), 0);
+  assert.equal(h.applied.length, 1);
+  assert.equal(h.recorded.length, 1);
+  assert.deepEqual(h.closed, []);
+});
+
+test("a sweep behind a stale mirror re-asserts the same role and revokes nothing", async () => {
+  // The other half of the same story. The roster mirror is refreshed by its own
+  // job, so a sweep can arrive still believing the member holds nothing — in
+  // which case it asks for exactly what the immediate pass already applied. A
+  // no-op PATCH is the cost; what must never happen is the ledger reading it as
+  // a *second* grant, or the diff deciding the role is unaccounted for and
+  // taking it away.
+  const h = harness({ ledgered: true });
+  h.dirty.push("u1");
+
+  await syncOneMember(h.deps, GUILD, "u1");
+  await syncRoles(h.deps);
+
+  assert.deepEqual(h.applied, [
+    { discordId: "u1", add: ["role-linked"], remove: [] },
+    { discordId: "u1", add: ["role-linked"], remove: [] },
+  ]);
+  assert.deepEqual(h.closed, []);
+  // One grant row, not two, and the ledger is what stops the second: the role
+  // is in the diff's `add` because Discord appears not to have it, but not in
+  // its `grant`, because we already know we gave it. So the duplicate is
+  // refused here rather than left to the unique index underneath.
+  assert.deepEqual(
+    h.recorded.map((entry) => entry.rows),
+    [[{ ruleKey: "linked", roleId: "role-linked" }]],
+  );
+});
+
+test("an immediate pass on a guild with auto-roles off does nothing", async () => {
+  const h = harness({ policy: { enabled: false, rules: [rule()] } });
+
+  assert.equal(await syncOneMember(h.deps, GUILD, "u1"), false);
+  assert.deepEqual(h.applied, []);
+});
+
+test("an immediate pass on somebody the roster has never heard of does nothing", async () => {
+  // A join the mirror has not caught up with yet. Inventing facts for them
+  // would be worse than the fifteen minutes they are about to wait.
+  const h = harness();
+
+  assert.equal(await syncOneMember(h.deps, GUILD, "stranger"), false);
+  assert.deepEqual(h.applied, []);
+});
+
+test("an immediate pass that throws is reported, not raised", async () => {
+  // The caller is finishing somebody's link. A role that could not be applied
+  // is not a failure of the link, and the mark is what gets it retried — so
+  // there is nothing here worth surfacing to the member or retrying in place.
+  const h = harness();
+  h.deps.apply = async () => {
+    throw new Error("discord said no");
+  };
+
+  assert.equal(await syncOneMember(h.deps, GUILD, "u1"), false);
+  assert.deepEqual(h.errors, ["member u1"]);
+});
+
+test("an immediate pass that Discord rejects puts the member back for the sweep", async () => {
+  const h = harness({ outcome: () => ({ ok: false, memberPresent: true, added: [], removed: [], refused: [] }) });
+
+  assert.equal(await syncOneMember(h.deps, GUILD, "u1"), false);
+  assert.deepEqual(h.dirty, ["u1"]);
 });

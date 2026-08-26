@@ -19,6 +19,21 @@ export interface MemberObserverDeps {
   /** Discord guild id → this platform's guild id, or null if unmapped. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
   publish(message: MemberBusMessage): Promise<void>;
+  /**
+   * Mark an arriving member's auto-roles as out of date.
+   *
+   * Separate from the bus message on purpose. The bus carries a fact for
+   * whoever wants to greet them; this is the one consumer that has to act
+   * before the next sweep, because a member who joins and is given nothing for
+   * fifteen minutes reads as a broken server rather than a slow one.
+   *
+   * Marking, not applying. The mark is what the sweep drains and what the
+   * immediate path is nudged by; the effector in this process is still the only
+   * thing that touches a role, and it is still reached through the same
+   * preflight. A gateway handler that wrote a role directly would be exactly
+   * the shortcut around the refusal rules that the effector exists to prevent.
+   */
+  markRolesDirty(guildId: string, discordIds: readonly string[]): Promise<void>;
   readonly logger: Logger;
 }
 
@@ -48,6 +63,12 @@ export function attachMemberObserver(client: Client, deps: MemberObserverDeps): 
     // An unmapped server is not an error. The bot is in servers this platform
     // has never been told about, and they are not owed a greeting.
     if (guildId === null) return;
+
+    // Only on the way in. A member who has left has no roles to reconcile, and
+    // their grants are closed by the sweep's own "not present" branch.
+    if (kind === "member-join") {
+      await deps.markRolesDirty(guildId, [member.id]).catch(() => undefined);
+    }
 
     await deps.publish({
       kind,

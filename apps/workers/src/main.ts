@@ -10,7 +10,7 @@ import { Queue, Worker, type Job } from "bullmq";
 import { installLifecycle } from "@sbr/observability";
 import { createWorkerContext } from "./composition.js";
 import { redisConnection } from "./connection.js";
-import { buildJobDefinitions } from "./jobs.js";
+import { buildJobDefinitions, buildRoleNudgeQueue } from "./jobs.js";
 import { LANE, SCHEDULE, reconcileSchedule } from "./schedule.js";
 
 const QUEUE = "sbr-worker";
@@ -73,6 +73,26 @@ async function main(): Promise<void> {
       });
   });
 
+  /**
+   * "This one member changed" — the immediate half of role sync.
+   *
+   * Not a job and not queued. A BullMQ job would be the wrong shape twice over:
+   * the unit of work is one member rather than one guild, and the whole point is
+   * that it happens now rather than behind whatever the bulk lane is chewing on.
+   * The queue in front of it is what keeps a burst of links inside the guild's
+   * Discord role budget.
+   *
+   * The publisher has already marked the member dirty, so everything this path
+   * drops — a message published while this process was restarting, a backlog
+   * that filled, a reconcile that failed — is still picked up by the
+   * fifteen-minute sweep. That is the property that makes it safe to be
+   * fire-and-forget, and it is why the sweep is not going anywhere.
+   */
+  const nudges = buildRoleNudgeQueue(ctx);
+  const stopNudges = await ctx.adapters.roleNudges.subscribe((message) => {
+    nudges.nudge(message.guildId, message.discordId);
+  });
+
   ctx.log.info("workers scheduler started", { queue: QUEUE, jobs: [...defs.keys()] });
 
   installLifecycle({
@@ -84,6 +104,10 @@ async function main(): Promise<void> {
     timeoutMs: 30_000,
     async shutdown() {
       await stopTriggers();
+      await stopNudges();
+      // Stops taking new members and forgets the backlog rather than holding
+      // shutdown open for it. Every one of them is still in the dirty set.
+      nudges.stop();
       await worker.close();
       await queue.close();
       await ctx.shutdown();

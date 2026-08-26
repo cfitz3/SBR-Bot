@@ -100,6 +100,7 @@ export async function startAdminGateway(
   attachMemberObserver(client, {
     resolveGuild: (id) => app.resolveGuild(id),
     publish: (message) => app.memberBus.publish(message),
+    markRolesDirty: (guildId, ids) => app.rolesDirty.mark(guildId, ids),
     logger: app.log,
   });
 

@@ -596,3 +596,109 @@ a staff note about a member belongs on the case, not in whatever aggregates the 
 **The case table now carries an enforcement badge** beside the state badge. They answer different
 questions — what the case is now, and whether it ever actually happened — and a row that said `BAN`
 and nothing else is the exact shape this audit began with.
+
+# Third pass — closing the link-to-role delay
+
+The complaint: somebody links their Hypixel account and waits up to fifteen minutes for the roles
+that linking is supposed to earn them. Confirmed, and it was not a bug — `packages/roles` resolves
+what a member should hold, but the only thing that ever *applied* a resolution was the sweep in
+`packages/jobs`, so the delay was the design.
+
+## Part A — An immediate pass, alongside the sweep and not instead of it
+
+**The trigger is the mark, not the caller.** Every place that ought to nudge already marks the
+member dirty — identity link and unlink, `guild-scan` rank changes, milestone rewards, community
+writes, moderation. So `RedisRoleDirtySet.mark` publishes on the new `chan:role-nudge` after its
+`SADD`, and the workers answer it. That covers every one of those paths with no change to a single
+domain package, and there is no second list of "places that should nudge" to fall out of date with
+the list of places that mark.
+
+**Ordering is load-bearing.** The mark is written *before* the publish. A worker that heard the
+nudge first could reconcile the member, find nothing, and only then have the changed fact recorded
+— correct, and fifteen minutes late, which is the delay the channel exists to remove. There is a
+test that monkey-patches `publish` to assert the mark is already visible.
+
+**The immediate path runs the sweep's own code.** `syncOneMember` calls `syncMember`, unchanged:
+same policy load, same `diffGrants`, same effector, same ledger write, same attribution. Two copies
+of that logic would have been two ways for a role to be granted, only one of them audited the way
+`WORKERS.md` claims.
+
+**It never touches the dirty set.** The mark stays where the publisher put it and the fifteen-minute
+pass is what removes it. That is what makes a dropped nudge — published while the workers were
+restarting, refused by a full queue, or failed against Discord — cost latency and nothing else.
+
+`guildMemberAdd` marks and returns. It does not write a role. A gateway handler calling
+`member.roles.add` would be a way around the effector's preflight, which is the thing that refuses
+Administrator, Manage Roles and Ban Members grants.
+
+## Part B — Idempotency, and why the second pass is a no-op rather than a duplicate
+
+Two tests cover the two honest cases. Once the roster mirror reflects the applied role, the sweep's
+diff is empty and it makes no Discord call at all. While the mirror is still behind, it re-asserts
+the same role and revokes nothing.
+
+**Finding, and it is not where the plan assumed.** The re-assert does not create a second grant row,
+but the partial unique index is not what stops it — `diffGrants` puts the role in `add` and *not* in
+`grant` when the open ledger already accounts for it, so `recordGrants` is never called with it. The
+index's `skipDuplicates` is a second line, not the first. The test asserts one recorded grant and
+says so, because a future reader looking only at the DB constraint would draw the wrong conclusion
+about where the guarantee lives.
+
+Failures are not retried in place. A reconcile that fails logs and stops; the mark is still there
+and the sweep owns the retry. Nothing is surfaced to the member who triggered it.
+
+## Part A, continued — pacing, and a bug the burst test found
+
+Discord's per-guild role bucket is roughly ten modifications per ten seconds, one member can cost
+two calls (an add and a remove), and there is no batch role-add endpoint. `packages/jobs/src/role-nudge.ts`
+is a per-guild token bucket in front of the immediate path.
+
+**The first tuning was wrong, and the test caught it rather than the review.** With a burst of 3 and
+a 2s refill, the first ten-second window carries the burst *plus* a full window of refills — eight
+members, about sixteen calls against a bucket of ten. The assertion "no more than four members per
+ten-second window" failed at seven and the number was real, not the assertion being strict. Retuned
+to a burst of 1 and a 2.5s refill: at most four members and eight calls in any window, at the cost
+of spreading twenty simultaneous links across the following minute. A larger burst quietly exceeds
+the limit the bucket was added to respect.
+
+Past 50 waiting members per guild, nudges are refused with a `role nudge dropped` warning — at that
+size the immediate path has nothing to offer over the sweep, and everyone refused is still marked
+dirty. A mark covering more than 25 members at once is a roster-wide rescan and is not nudged at
+all, for the same reason.
+
+`InMemoryRateGate` in `packages/hypixel` was considered as a basis and rejected: it is
+header-driven (`observe(headers, status)`), reacting to what an API told it, not a bucket that
+paces ahead of a limit nobody reports back.
+
+## Part C — The premise does not hold, so nothing was built
+
+The task asked to identify the leaderboard cache layer and invalidate it on a contributing event.
+**There is no cache layer.** `LeaderboardService.page()` and `positions()` call
+`LeaderboardSource.values()`, implemented by `leaderboardSource` at
+`packages/db/src/repositories/leaderboards.ts:248`, which queries Postgres directly on every read.
+`grep -rn "cache" packages/leaderboards/src` returns nothing, and `packages/redis/src/keys.ts` has
+no leaderboard key.
+
+So the acceptance criterion — *leaderboard reads reflect recent changes promptly without synchronous
+recomputation in any gateway handler* — is already met, on both halves. Building a cache purely so
+that it could be invalidated would have introduced staleness where there is none today, and a new
+class of bug (a missed invalidation) in exchange for nothing. Flagged here rather than worked
+around, and written into `DISCORD_QOL.md` so the next person who looks for the cache finds the
+answer instead of the absence.
+
+If leaderboard reads ever become a measured cost, the shape to add is a Redis key per category
+invalidated by the same mark-and-move-on rule used here — but that is a performance change with a
+measurement behind it, not this task.
+
+## Part D — Written down, including the reasons not to "fix" it
+
+`WORKERS.md` §2.7d and the job catalogue, `DISCORD_QOL.md` §2, and `REDIS_KEYSPACE.md` (the topic
+list and a section for `chan:role-nudge`) now describe both paths. Each says explicitly why the
+sweep must keep running: revocation is only safe because something eventually reconciles members
+nothing happened to; a dropped gateway event heals; a rule written today is retroactive and has no
+event to replay.
+
+**Why XP stays batched, stated where a contributor will hit it.** Marking a member dirty on each XP
+award would nudge on every chat line in the server and spend the guild's whole role budget
+discovering that nobody crossed a level boundary. The daily re-derive is what makes `XP_LEVEL` rules
+correct; a level-up worth rewarding promptly is a milestone, and milestones already mark.

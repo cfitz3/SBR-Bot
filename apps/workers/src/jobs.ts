@@ -47,6 +47,8 @@ import {
   defineResourcesRefreshJob,
   defineRoleSyncJob,
   defineRosterSyncJob,
+  createRoleNudgeQueue,
+  syncOneMember,
   defineTicketSweepJob,
   defineXpAggregateJob,
   backfillMilestones,
@@ -72,6 +74,8 @@ import {
   publishEventBoards,
   transitionEvents,
   type JobDefinition,
+  type MemberSyncDeps,
+  type RoleNudgeQueue,
   type DiscordMemberRow,
   type MilestoneDefinition,
 } from "@sbr/jobs";
@@ -122,6 +126,85 @@ const MILESTONE_BATCH = 200;
 function dayString(offsetDays: number): string {
   const at = new Date(Date.now() + offsetDays * 24 * 60 * 60_000);
   return at.toISOString().slice(0, 10);
+}
+
+/**
+ * Everything needed to reconcile one member's roles, bound to the live adapters.
+ *
+ * Shared, deliberately, by the fifteen-minute sweep and by the immediate path
+ * behind the nudge channel. They are the same reconcile — same policy, same
+ * ledger, same effector, same attribution — differing only in who decided a
+ * member was worth looking at. Two copies of this wiring would be two ways for
+ * a role to be granted and only one of them audited the way the docs claim.
+ */
+function roleMemberSyncDeps(ctx: WorkerContext): MemberSyncDeps {
+  const { client, keys } = ctx.redis;
+  const effector = createWorkerRoleEffector({
+    baseUrl: ctx.config.internalApi.baseUrl,
+    token: ctx.config.internalApi.token,
+    logger: ctx.log,
+  });
+  return {
+    async loadPolicy(guildId) {
+      return parseAutoRoles(await guildConfigRepository.getSetting(guildId, AUTO_ROLES_SETTING_KEY));
+    },
+    async markDirty(guildId, discordIds) {
+      if (discordIds.length === 0) return;
+      // The raw set write, not `adapters.rolesDirty.mark`. This is the sweep
+      // putting back a member whose pass failed, and the marker publishes a
+      // nudge — which would have the immediate path retry a Discord call that
+      // just failed, as fast as the queue would let it.
+      await client.sAdd(keys.rolesDirty(guildId), [...discordIds]);
+    },
+    loadSnapshots: (guildId, ids) => roleSyncRepository.loadSnapshots(guildId, ids),
+    openGrants: (guildId, discordId) => roleGrantRepository.openGrants(guildId, discordId),
+    apply: (guildId, discordId, add, remove) =>
+      effector.apply(guildId, discordId, add, remove, "Automatic role rule"),
+    recordGrants: (guildId, discordId, rows, reason) =>
+      roleGrantRepository.recordGrants(guildId, discordId, rows, reason),
+    closeGrants: (guildId, discordId, rows) => roleGrantRepository.closeGrants(guildId, discordId, rows),
+    onRefusal(guildId, roleId, detail) {
+      // Warn, not error: a refusal is a configuration problem the guild's
+      // staff fix in the panel, and the Health card is where they see it.
+      ctx.log.warn("auto-role refused", { guildId, roleId, detail });
+      // Fire and forget into the diagnostic hash. Staff do not read the
+      // worker's logs, and a refusal nobody with the power to fix it can
+      // see is the same as no refusal at all.
+      void ctx.adapters.roleRefusals.record(guildId, roleId, detail).catch(() => undefined);
+    },
+    onError(scope, error) {
+      ctx.log.warn("role sync failed", { scope, error: String(error) });
+    },
+  };
+}
+
+/**
+ * The paced immediate path: one member, now, rather than at the next sweep.
+ *
+ * Lives in the worker process rather than in whichever bot noticed the change,
+ * for three reasons that all point the same way. This process already holds the
+ * policy, the roster mirror, the grant ledger and the effector client, so no
+ * other app grows a second copy of the role machinery. There is one queue, so
+ * the guild's Discord role budget is paced in one place instead of by three
+ * publishers who cannot see each other. And the failure story is the one that
+ * was already true: if this process is down, the marks pile up in Redis and the
+ * sweep drains them when it comes back.
+ */
+export function buildRoleNudgeQueue(ctx: WorkerContext): RoleNudgeQueue {
+  const deps = roleMemberSyncDeps(ctx);
+  return createRoleNudgeQueue({
+    async sync(guildId, discordId) {
+      const changed = await syncOneMember(deps, guildId, discordId);
+      if (changed) ctx.log.info("roles applied on nudge", { guildId, discordId });
+      return changed;
+    },
+    onDropped(guildId, discordId, why) {
+      // Visible on purpose, and not an error: the member is still marked dirty
+      // and the sweep will reach them. This is the line that tells an operator
+      // reading the watchtower why somebody waited the full quarter of an hour.
+      ctx.log.warn("role nudge dropped", { guildId, discordId, why });
+    },
+  });
 }
 
 export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefinition<number>> {
@@ -802,19 +885,12 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
    * member whose pass fails is put back explicitly rather than left behind.
    */
   const roleSync: JobDefinition<number> = {
-    ...defineRoleSyncJob(async () => {
-      const effector = createWorkerRoleEffector({
-        baseUrl: ctx.config.internalApi.baseUrl,
-        token: ctx.config.internalApi.token,
-        logger: ctx.log,
-      });
-      return syncRoles({
+    ...defineRoleSyncJob(async () =>
+      syncRoles({
+        ...roleMemberSyncDeps(ctx),
         async listGuilds() {
           const guilds = await guildRepository.listActive();
           return guilds.map((g) => g.id);
-        },
-        async loadPolicy(guildId) {
-          return parseAutoRoles(await guildConfigRepository.getSetting(guildId, AUTO_ROLES_SETTING_KEY));
         },
         async claimFullSweep(guildId) {
           // NX makes the claim the same operation as the check, so two workers
@@ -826,36 +902,13 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
           return claimed !== null;
         },
         listMemberIds: (guildId) => roleSyncRepository.listMemberIds(guildId),
-        async markDirty(guildId, discordIds) {
-          if (discordIds.length === 0) return;
-          await client.sAdd(keys.rolesDirty(guildId), [...discordIds]);
-        },
         async drainDirty(guildId, limit) {
           // `sPopCount`, not `sPop`: the uncounted form returns a single member,
           // which would reconcile one member per pass and look like a hang.
           return await client.sPopCount(keys.rolesDirty(guildId), limit);
         },
-        loadSnapshots: (guildId, ids) => roleSyncRepository.loadSnapshots(guildId, ids),
-        openGrants: (guildId, discordId) => roleGrantRepository.openGrants(guildId, discordId),
-        apply: (guildId, discordId, add, remove) =>
-          effector.apply(guildId, discordId, add, remove, "Automatic role rule"),
-        recordGrants: (guildId, discordId, rows, reason) =>
-          roleGrantRepository.recordGrants(guildId, discordId, rows, reason),
-        closeGrants: (guildId, discordId, rows) => roleGrantRepository.closeGrants(guildId, discordId, rows),
-        onRefusal(guildId, roleId, detail) {
-          // Warn, not error: a refusal is a configuration problem the guild's
-          // staff fix in the panel, and the Health card is where they see it.
-          ctx.log.warn("auto-role refused", { guildId, roleId, detail });
-          // Fire and forget into the diagnostic hash. Staff do not read the
-          // worker's logs, and a refusal nobody with the power to fix it can
-          // see is the same as no refusal at all.
-          void ctx.adapters.roleRefusals.record(guildId, roleId, detail).catch(() => undefined);
-        },
-        onError(scope, error) {
-          ctx.log.warn("role sync failed", { scope, error: String(error) });
-        },
-      });
-    }),
+      }),
+    ),
     lockKey: keys.lockJob("role-sync"),
   };
 
