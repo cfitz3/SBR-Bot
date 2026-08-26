@@ -338,6 +338,101 @@ test("clearing the metric list is an edit like any other", async () => {
   assert.deepEqual(r.eventPatches[0]?.patch.trackedMetrics, []);
 });
 
+// ── the prize, and the finish line ──
+
+test("a prize is stored trimmed, and an empty one is stored as nothing at all", async () => {
+  const r = repo();
+  await svcOf(r).updateEvent({ eventId: "e1", actorDiscordId: "111", prize: "  500k coins  " });
+  assert.equal(r.eventPatches[0]?.patch.prize, "500k coins");
+
+  const cleared = repo();
+  await svcOf(cleared).updateEvent({ eventId: "e1", actorDiscordId: "111", prize: "   " });
+  assert.equal(cleared.eventPatches[0]?.patch.prize, null);
+});
+
+test("a prize longer than the card can show is refused rather than truncated", async () => {
+  const r = await svcOf(repo()).updateEvent({
+    eventId: "e1", actorDiscordId: "111", prize: "x".repeat(201),
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "INVALID_TIME");
+});
+
+test("an event cannot be set to end before it starts", async () => {
+  const r = await svcOf(repo()).updateEvent({
+    eventId: "e1", actorDiscordId: "111", endsAt: "2026-08-31T18:00:00.000Z",
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "INVALID_TIME");
+});
+
+test("an end time already in the past is refused, because such an event never goes live", async () => {
+  // The transition sweep reads endsAt before startsAt, so this would be swept
+  // straight to COMPLETED having scored nobody — a contest that silently never
+  // ran, which is the failure this rule exists to prevent.
+  const r = await svcOf(repo({ async getEvent() { return anEvent({ startsAt: "2026-07-01T00:00:00.000Z", status: "LIVE" }); } }))
+    .updateEvent({ eventId: "e1", actorDiscordId: "111", endsAt: "2026-07-02T00:00:00.000Z" });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "INVALID_TIME");
+});
+
+test("moving the start and the end in one edit is judged against the new start", async () => {
+  const r = repo();
+  const result = await svcOf(r).updateEvent({
+    eventId: "e1", actorDiscordId: "111",
+    startsAt: "2026-09-10T18:00:00.000Z",
+    endsAt: "2026-09-11T18:00:00.000Z",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(r.eventPatches[0]?.patch.endsAt?.toISOString(), "2026-09-11T18:00:00.000Z");
+});
+
+test("extending a live event moves the finish line and nothing else", async () => {
+  // The invariant the task named: a baseline is tied to when tracking started,
+  // not to when the event is scheduled to stop. If this patch ever grew a
+  // second key, somebody's starting line moved with the deadline.
+  const r = repo({ async getEvent() { return anEvent({ status: "LIVE", startsAt: "2026-07-01T00:00:00.000Z" }); } });
+  const result = await svcOf(r).updateEvent({
+    eventId: "e1", actorDiscordId: "111", endsAt: "2026-09-01T00:00:00.000Z",
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(Object.keys(r.eventPatches[0]?.patch ?? {}), ["endsAt"]);
+});
+
+test("clearing the end time is an edit like any other", async () => {
+  const r = repo();
+  await svcOf(r).updateEvent({ eventId: "e1", actorDiscordId: "111", endsAt: null });
+  assert.equal(r.eventPatches[0]?.patch.endsAt, null);
+});
+
+test("an event is created with the tracker settings it was given", async () => {
+  const r = await svcOf(repo()).createEvent({
+    guildId: "g1", title: "Slayer race", startsAt: "2026-09-01T18:00:00.000Z",
+    type: "SLAYER", hostDiscordId: "111",
+    trackedMetrics: ["slayerEnderman"], pollIntervalMinutes: 120, prize: "bragging rights",
+    endsAt: "2026-09-02T18:00:00.000Z",
+  });
+  assert.equal(r.ok, true);
+});
+
+test("an event cannot be created with a poll interval the tracker would ignore", async () => {
+  const r = await svcOf(repo()).createEvent({
+    guildId: "g1", title: "Slayer race", startsAt: "2026-09-01T18:00:00.000Z",
+    type: "SLAYER", hostDiscordId: "111", pollIntervalMinutes: 5,
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "INVALID_TIME");
+});
+
+test("an event cannot be created scoring a metric nothing captures", async () => {
+  const r = await svcOf(repo()).createEvent({
+    guildId: "g1", title: "Vibes", startsAt: "2026-09-01T18:00:00.000Z",
+    type: "CUSTOM", hostDiscordId: "111", trackedMetrics: ["guildXp"],
+  });
+  assert.equal(r.ok, false);
+  if (!r.ok) assert.equal(r.error.kind, "INVALID_TIME");
+});
+
 test("completing an event stamps the end time", async () => {
   const r = repo();
   const result = await svcOf(r).completeEvent("e1", "111");
