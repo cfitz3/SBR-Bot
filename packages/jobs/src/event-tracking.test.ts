@@ -51,6 +51,10 @@ function harness(options: {
   readings?: Readonly<Record<string, SnapshotMetrics | null>>;
   failEvents?: readonly string[];
   failEventList?: boolean;
+  /** Participants whose score write throws, to test per-participant isolation. */
+  failScoresFor?: readonly string[];
+  /** Supply a claim so overlapping passes can be simulated. */
+  claims?: Set<string>;
 }) {
   const scores: EventScoreWrite[] = [];
   const baselines: SnapshotWrite[] = [];
@@ -88,11 +92,24 @@ function harness(options: {
       else finals[at] = snapshot;
     },
     async upsertScore(write) {
+      if ((options.failScoresFor ?? []).includes(write.uuid)) throw new Error("score row rejected");
       scores.push(write);
     },
     onError(scope) {
       errors.push(scope);
     },
+    ...(options.claims === undefined
+      ? {}
+      : {
+          async claimPoll(eventId: string) {
+            const held = options.claims as Set<string>;
+            if (held.has(eventId)) return null;
+            held.add(eventId);
+            return async () => {
+              held.delete(eventId);
+            };
+          },
+        }),
     now: () => NOW,
   };
 
@@ -251,6 +268,132 @@ describe("trackEvents", () => {
 
     assert.equal(await trackEvents(h.deps), 0);
     assert.deepEqual(h.errors, ["event list"]);
+  });
+});
+
+describe("trackEvents under concurrency", () => {
+  it("scores three live events in one pass, each against its own roster", async () => {
+    // The fleet runs one tracker for the whole platform, so several guilds'
+    // events share a tick. Nothing about one may leak into another.
+    const h = harness({
+      events: [
+        { id: "e1", guildId: "g1", trackedMetrics: ["catacombsLevel"], pollIntervalMinutes: 60 },
+        { id: "e2", guildId: "g2", trackedMetrics: ["networth"], pollIntervalMinutes: 60 },
+        { id: "e3", guildId: "g3", trackedMetrics: ["skillAverage"], pollIntervalMinutes: 60 },
+      ],
+      participants: {
+        e1: [participant()],
+        e2: [participant({ discordId: "222", minecraftAccountId: "acct-2", uuid: "uuid-2" })],
+        e3: [participant({ discordId: "333", minecraftAccountId: "acct-3", uuid: "uuid-3" })],
+      },
+    });
+
+    assert.equal(await trackEvents(h.deps), 3);
+    assert.deepEqual(
+      h.scores.map((s) => `${s.eventId}:${s.uuid}:${s.metric}`),
+      ["e1:uuid-1:catacombsLevel", "e2:uuid-2:networth", "e3:uuid-3:skillAverage"],
+    );
+    assert.deepEqual(h.errors, []);
+  });
+
+  it("a participant whose score write throws costs only that participant", async () => {
+    // The failure that used to end the roster: `capture` was guarded and the
+    // writes after it were not, so one rejected row took everybody queued
+    // behind it out of the pass as well.
+    const h = harness({
+      participants: {
+        e1: [
+          participant(),
+          participant({ discordId: "222", minecraftAccountId: "acct-2", uuid: "uuid-2" }),
+          participant({ discordId: "333", minecraftAccountId: "acct-3", uuid: "uuid-3" }),
+        ],
+      },
+      failScoresFor: ["uuid-1"],
+    });
+
+    assert.equal(await trackEvents(h.deps), 2);
+    assert.deepEqual(
+      h.scores.map((s) => s.uuid),
+      ["uuid-2", "uuid-3"],
+      "the two behind the failure were still scored",
+    );
+    assert.deepEqual(h.errors, ["event e1 account uuid-1"], "and the failure was reported, not swallowed");
+  });
+
+  it("a participant who unlinks mid-event simply stops appearing", async () => {
+    // Unlinking removes the RSVP's account, so `listParticipants` stops
+    // returning them. The rows already written are theirs and stay.
+    const stale = new Date(NOW.getTime() - 3 * 60 * 60_000).toISOString();
+    const roster = [
+      participant({ lastCapturedAt: stale }),
+      participant({ discordId: "222", minecraftAccountId: "acct-2", uuid: "uuid-2", lastCapturedAt: stale }),
+    ];
+    let pass = 0;
+    const h = harness({ participants: { e1: roster } });
+    const deps: EventTrackingDeps = {
+      ...h.deps,
+      async listParticipants() {
+        pass += 1;
+        return pass === 1 ? roster : roster.slice(0, 1);
+      },
+    };
+
+    assert.equal(await trackEvents(deps), 2);
+    assert.equal(await trackEvents(deps), 1);
+    assert.deepEqual(
+      h.scores.map((s) => s.uuid),
+      ["uuid-1", "uuid-2", "uuid-1"],
+    );
+    assert.equal(h.baselines.length, 2, "the departed member keeps the baseline they earned");
+    assert.deepEqual(h.errors, []);
+  });
+
+  it("an overlapping tick finds the event claimed and leaves it alone", async () => {
+    const stale = new Date(NOW.getTime() - 3 * 60 * 60_000).toISOString();
+    const claims = new Set<string>();
+    const h = harness({
+      participants: { e1: [participant({ lastCapturedAt: stale })] },
+      claims,
+    });
+
+    // Hold the claim the way a slow previous pass would, then tick.
+    claims.add("e1");
+    assert.equal(await trackEvents(h.deps), 0);
+    assert.deepEqual(h.captured, [], "no Hypixel budget spent on a roster somebody else is already scoring");
+
+    // The slow pass finishes and releases; the next tick proceeds.
+    claims.delete("e1");
+    assert.equal(await trackEvents(h.deps), 1);
+  });
+
+  it("releases the claim even when the event fails, so the next tick is not locked out", async () => {
+    const claims = new Set<string>();
+    const h = harness({ failEvents: ["e1"], claims });
+
+    assert.equal(await trackEvents(h.deps), 0);
+    assert.deepEqual(h.errors, ["event e1"]);
+    assert.equal(claims.size, 0, "a thrown pass still frees the event");
+  });
+
+  it("claims each event separately, so one long event does not block the others", async () => {
+    const claims = new Set<string>(["e1"]);
+    const h = harness({
+      events: [
+        { id: "e1", guildId: "g1", trackedMetrics: ["catacombsLevel"], pollIntervalMinutes: 60 },
+        { id: "e2", guildId: "g2", trackedMetrics: ["catacombsLevel"], pollIntervalMinutes: 60 },
+      ],
+      participants: {
+        e1: [participant()],
+        e2: [participant({ discordId: "222", minecraftAccountId: "acct-2", uuid: "uuid-2" })],
+      },
+      claims,
+    });
+
+    assert.equal(await trackEvents(h.deps), 1);
+    assert.deepEqual(
+      h.scores.map((s) => s.eventId),
+      ["e2"],
+    );
   });
 });
 

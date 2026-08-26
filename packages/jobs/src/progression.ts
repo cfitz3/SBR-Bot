@@ -104,6 +104,18 @@ export interface ProfileRefreshDeps {
   write(reading: ProfileReading): Promise<void>;
   /** Called after each write so `milestone-detect` can run per member. */
   onReading?: (reading: ProfileReading) => Promise<void>;
+  /**
+   * Called when `write` or `onReading` throws for one account, instead of
+   * letting the throw leave the loop.
+   *
+   * Opt-in, because the two callers want different things from a failed write.
+   * `profile-refresh` wants the throw: a database that will not take a snapshot
+   * is a run-level problem and the retry belongs to the job runner. Event
+   * tracking wants isolation: one participant whose score row failed must not
+   * cost the rest of that event's roster their poll, and the next tick will
+   * pick them back up. Whoever supplies this takes responsibility for logging.
+   */
+  onAccountError?: (account: TrackedAccount, error: unknown) => void;
   now?: () => Date;
   /** Cap per run, so one tick can't consume the whole rate budget. */
   batchSize?: number;
@@ -153,8 +165,16 @@ export async function refreshProfiles(deps: ProfileRefreshDeps): Promise<number>
       capturedAt: now.toISOString(),
       ...captured.metrics,
     };
-    await deps.write(reading);
-    if (deps.onReading) await deps.onReading(reading);
+    try {
+      await deps.write(reading);
+      if (deps.onReading) await deps.onReading(reading);
+    } catch (error) {
+      // Without a handler this rethrows, which is `profile-refresh`'s
+      // behaviour and stays it.
+      if (deps.onAccountError === undefined) throw error;
+      deps.onAccountError(account, error);
+      continue;
+    }
     written += 1;
   }
   return written;

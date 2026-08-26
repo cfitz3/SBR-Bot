@@ -109,6 +109,17 @@ export function createKeyFactory(prefix: string) {
     // 8. Worker locks
     lockJob: (name: string, scope?: string) => p(`lock:job:${name}${scope ? `:${scope}` : ""}`),
     /**
+     * Held for one event's poll pass, so two overlapping ticks do not score the
+     * same roster at once.
+     *
+     * Narrower than `lockJob("event-tracking")` on purpose: that lock is global
+     * to the job and expires in ten minutes, and a pass over several live
+     * events with dozens of participants each can run longer than that. The TTL
+     * here is the event's own poll interval, and the claim is released when the
+     * pass ends, so the interval is only ever the ceiling on a dead worker.
+     */
+    eventPoll: (eventId: string) => p(`lock:event-poll:${eventId}`),
+    /**
      * Members whose auto-roles may be out of date, drained by `role-sync`.
      *
      * A set, so marking somebody five times between passes is one unit of work.
