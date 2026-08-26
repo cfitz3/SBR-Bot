@@ -1469,3 +1469,23 @@ a.guild-switch:hover {
 .roster-list li {
   overflow-wrap: anywhere;
 }
+
+/*
+ * The board preview.
+ *
+ * Rendered from the same embed the bridge posts, so the values keep the
+ * renderer's own line breaks — a standings table collapsed onto one line would
+ * not be a preview of anything. Everything else here is the card's own type and
+ * the divider already used between rows; nothing new is introduced.
+ */
+.preview-value {
+  margin: var(--space-1) 0 0;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.preview-field {
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-divider);
+}

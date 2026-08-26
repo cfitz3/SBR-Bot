@@ -10,6 +10,7 @@
     { "path": "../../packages/analytics" },
     { "path": "../../brand" },
     { "path": "../../packages/commands-admin" },
+    { "path": "../../packages/commands-bridge" },
     { "path": "../../packages/community" },
     { "path": "../../packages/config" },
     { "path": "../../packages/db" },

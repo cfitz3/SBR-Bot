@@ -14,6 +14,7 @@
     "@sbr/analytics": "*",
     "@sbr/brand": "*",
     "@sbr/commands-admin": "*",
+    "@sbr/commands-bridge": "*",
     "@sbr/community": "*",
     "@sbr/config": "*",
     "@sbr/db": "*",
