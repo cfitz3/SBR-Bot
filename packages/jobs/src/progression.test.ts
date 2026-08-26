@@ -39,6 +39,63 @@ function account(over: Partial<TrackedAccount> = {}): TrackedAccount {
   return { minecraftAccountId: "a1", uuid: "u1", profileId: "p1", lastCapturedAt: null, ...over };
 }
 
+test("a failed write ends the run when nobody asked for isolation", async () => {
+  // `profile-refresh`'s contract: a database that will not take a snapshot is a
+  // run-level problem, and the retry belongs to the job runner rather than to a
+  // loop that quietly carries on writing nothing.
+  await assert.rejects(
+    refreshProfiles({
+      listTracked: async () => [account({ minecraftAccountId: "a" }), account({ minecraftAccountId: "b" })],
+      capture: async () => ({ profileId: "p1", metrics: metrics({ networth: 1 }) }),
+      write: async () => {
+        throw new Error("snapshot rejected");
+      },
+      now: () => NOW,
+    }),
+    /snapshot rejected/,
+  );
+});
+
+test("with onAccountError, a failed write costs one account and the rest are still written", async () => {
+  const seen: string[] = [];
+  const failed: string[] = [];
+  const written = await refreshProfiles({
+    listTracked: async () => [
+      account({ minecraftAccountId: "a" }),
+      account({ minecraftAccountId: "b" }),
+      account({ minecraftAccountId: "c" }),
+    ],
+    capture: async () => ({ profileId: "p1", metrics: metrics({ networth: 1 }) }),
+    write: async (reading) => {
+      if (reading.minecraftAccountId === "a") throw new Error("score row rejected");
+      seen.push(reading.minecraftAccountId);
+    },
+    onAccountError: (a, error) => failed.push(`${a.minecraftAccountId}:${String(error)}`),
+    now: () => NOW,
+  });
+
+  assert.equal(written, 2, "the failed account is not counted as written");
+  assert.deepEqual(seen, ["b", "c"]);
+  assert.deepEqual(failed, ["a:Error: score row rejected"]);
+});
+
+test("onAccountError catches a failing onReading too, not only the write", async () => {
+  const failed: string[] = [];
+  const written = await refreshProfiles({
+    listTracked: async () => [account({ minecraftAccountId: "a" }), account({ minecraftAccountId: "b" })],
+    capture: async () => ({ profileId: "p1", metrics: metrics({ networth: 1 }) }),
+    write: async () => {},
+    onReading: async (reading) => {
+      if (reading.minecraftAccountId === "a") throw new Error("scoring failed");
+    },
+    onAccountError: (a) => failed.push(a.minecraftAccountId),
+    now: () => NOW,
+  });
+
+  assert.equal(written, 1);
+  assert.deepEqual(failed, ["a"]);
+});
+
 test("accounts captured recently are skipped, so a tick doesn't burn the rate budget", async () => {
   const captured: string[] = [];
   const written = await refreshProfiles({

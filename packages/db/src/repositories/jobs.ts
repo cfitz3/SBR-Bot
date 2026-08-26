@@ -186,13 +186,19 @@ export const eventJobRepository = {
    * first poll after an event goes LIVE decides where a member started, and
    * anything that moved it afterwards would erase everyone's progress. `delta`
    * is stored so the board can order in the database.
+   *
+   * Create first and catch the duplicate, rather than reading and then
+   * branching: two overlapping poll passes — a slow one still finishing when
+   * the next tick fires — would both read absent, both insert, and one would
+   * take a P2002 out of the middle of the roster, costing everybody after it
+   * their pass. Losing the insert race is not an error here; it means somebody
+   * else wrote the same baseline, and the update below is what this pass owes
+   * the row either way. The re-read is safe under the same race because the
+   * baseline is immutable once written, so both writers compute one delta.
    */
   async upsertScore(write: EventScoreWrite): Promise<void> {
-    const existing = await prisma.eventScore.findUnique({
-      where: { eventId_uuid_metric: { eventId: write.eventId, uuid: write.uuid, metric: write.metric } },
-      select: { baseline: true },
-    });
-    if (existing === null) {
+    const where = { eventId_uuid_metric: { eventId: write.eventId, uuid: write.uuid, metric: write.metric } };
+    try {
       await prisma.eventScore.create({
         data: {
           eventId: write.eventId,
@@ -205,9 +211,16 @@ export const eventJobRepository = {
         },
       });
       return;
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     }
+
+    const existing = await prisma.eventScore.findUnique({ where, select: { baseline: true } });
+    // Gone between the failed insert and this read: the event was deleted out
+    // from under the poll. Nothing to record.
+    if (existing === null) return;
     await prisma.eventScore.update({
-      where: { eventId_uuid_metric: { eventId: write.eventId, uuid: write.uuid, metric: write.metric } },
+      where,
       data: { discordId: write.discordId, current: write.value, delta: write.value - existing.baseline },
     });
   },

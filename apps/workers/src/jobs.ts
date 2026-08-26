@@ -304,6 +304,15 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
         writeBaseline: (row) => snapshotJobRepository.writeBaseline(row),
         writeFinal: (row) => snapshotJobRepository.writeFinal(row),
         upsertScore: (write) => eventJobRepository.upsertScore(write),
+        async claimPoll(eventId, ttlSeconds) {
+          // The job runner's own lock, reused at event granularity — same
+          // SET NX and same owner-checked release, so a pass can never free a
+          // claim that a later pass took over after its TTL ran out.
+          const key = keys.eventPoll(eventId);
+          const token = await ctx.adapters.lock.acquire(key, ttlSeconds * 1_000);
+          if (token === null) return null;
+          return () => ctx.adapters.lock.release(key, token);
+        },
         onError(scope, error) {
           ctx.log.warn("event tracking failed", { scope, error: String(error) });
         },

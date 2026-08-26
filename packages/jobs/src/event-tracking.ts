@@ -107,6 +107,23 @@ export interface EventTrackingDeps {
   upsertScore(write: EventScoreWrite): Promise<void>;
   /** Reported rather than thrown: one bad event must not end the pass. */
   onError(scope: string, error: unknown): void;
+  /**
+   * Take exclusive hold of one event's poll, returning a release or `null` when
+   * somebody else already holds it.
+   *
+   * The job's own lock is not enough on its own. It is global to the job and
+   * carries a ten-minute TTL, and a pass over several live events with dozens
+   * of participants each can outlive that — at which point the next tick starts
+   * while the previous one is still working, and two passes score the same
+   * roster at once. This narrows the mutual exclusion to the event, which is
+   * the unit that actually conflicts, and the TTL is sized to the event's own
+   * interval so a worker that dies mid-pass frees the event rather than
+   * stranding it.
+   *
+   * Optional: a caller with no Redis (tests, a single-process embedding) polls
+   * unclaimed, which is the behaviour this job had before the claim existed.
+   */
+  claimPoll?(eventId: string, ttlSeconds: number): Promise<(() => Promise<void>) | null>;
   now?: () => Date;
 }
 
@@ -132,6 +149,12 @@ export async function trackEvents(deps: EventTrackingDeps): Promise<number> {
   for (const event of events) {
     const metrics = event.trackedMetrics.filter(isEventMetric);
     if (metrics.length === 0) continue;
+
+    const intervalMinutes = Math.max(EVENT_POLL_FLOOR_MINUTES, event.pollIntervalMinutes);
+    // Claimed before the participant read, so a duplicate pass costs one Redis
+    // round trip rather than a database query and a fan-out of writes.
+    const release = deps.claimPoll ? await deps.claimPoll(event.id, intervalMinutes * 60) : async () => {};
+    if (release === null) continue;
 
     try {
       const participants = await deps.listParticipants(event.id);
@@ -178,11 +201,17 @@ export async function trackEvents(deps: EventTrackingDeps): Promise<number> {
         // Everyone who RSVP'd is in scope. The cohort is bounded by the event's
         // own guest list, so there is no batch to spread across runs.
         batchSize: participants.length,
-        minIntervalMs: Math.max(EVENT_POLL_FLOOR_MINUTES, event.pollIntervalMinutes) * 60_000,
+        minIntervalMs: intervalMinutes * 60_000,
+        // One participant's score rows failing must not cost the rest of the
+        // roster their pass. The next tick picks them back up; the baseline is
+        // write-once, so nothing is lost by having missed a turn.
+        onAccountError: (account, error) => deps.onError(`event ${event.id} account ${account.uuid}`, error),
         ...(deps.now === undefined ? {} : { now: deps.now }),
       });
     } catch (error) {
       deps.onError(`event ${event.id}`, error);
+    } finally {
+      await release().catch((error) => deps.onError(`event ${event.id} release`, error));
     }
   }
 
