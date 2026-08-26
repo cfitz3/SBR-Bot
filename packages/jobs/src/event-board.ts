@@ -19,9 +19,18 @@ export interface BoardableEvent {
 }
 
 /**
- * How stale a live board may get. Half an hour matches the tracker's default
- * poll interval: editing more often than the numbers change is rate limit spent
- * on redrawing the same table.
+ * How stale a live board may get -- the ceiling, not the cadence.
+ *
+ * The board sweep and the metric poll are deliberately *not* one clock. Polling
+ * is bounded by the Hypixel per-player budget and cannot go below an hour;
+ * redrawing is a local render and one Discord edit, and tying it to the slower
+ * of the two would mean a board that lags the data it is drawn from. So the
+ * sweep keeps its own half-hourly pass, and `listBoardDue` filters it down to
+ * the events whose scores have actually moved since their board was last drawn.
+ *
+ * The half hour is therefore how long a *changed* standing may wait to appear,
+ * not how often a board is rewritten. A quiet event costs one query per pass
+ * and no edit at all.
  */
 export const BOARD_REFRESH_MS = 30 * 60_000;
 

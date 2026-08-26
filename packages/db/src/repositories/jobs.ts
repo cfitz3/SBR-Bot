@@ -58,6 +58,8 @@ export interface EventBoardRow {
   readonly trackedMetrics: readonly string[];
   /** GOING RSVPs — who the event is actually about. */
   readonly participantCount: number;
+  /** Free text, shown on the board. Informational: nothing pays it out. */
+  readonly prize: string | null;
 }
 
 export interface EventStanding {
@@ -215,10 +217,19 @@ export const eventJobRepository = {
       if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     }
 
-    const existing = await prisma.eventScore.findUnique({ where, select: { baseline: true } });
+    const existing = await prisma.eventScore.findUnique({
+      where,
+      select: { baseline: true, current: true, discordId: true },
+    });
     // Gone between the failed insert and this read: the event was deleted out
     // from under the poll. Nothing to record.
     if (existing === null) return;
+    // A reading identical to the stored one is not a write. `updatedAt` is
+    // `@updatedAt`, so writing it anyway would stamp the row on every pass and
+    // make "have this event's standings moved since the board was drawn?"
+    // permanently true -- which is the question the board sweep now asks before
+    // spending a Discord edit.
+    if (existing.current === write.value && existing.discordId === write.discordId) return;
     await prisma.eventScore.update({
       where,
       data: { discordId: write.discordId, current: write.value, delta: write.value - existing.baseline },
@@ -247,9 +258,34 @@ export const eventJobRepository = {
       },
       orderBy: { startsAt: "asc" },
       take: limit,
-      select: { id: true, guildId: true },
+      select: { id: true, guildId: true, status: true, boardUpdatedAt: true },
     });
-    return rows;
+
+    // A live board that has never been drawn is always due; one that has been
+    // is due only if a score moved since. The sweep runs on a fixed half-hourly
+    // clock and the tracker polls hourly at the fastest, so without this every
+    // data change costs two edits, the second redrawing the same table.
+    const needsCheck = rows.filter((r) => r.status === "LIVE" && r.boardUpdatedAt !== null);
+    const moved = new Map<string, Date | null>();
+    if (needsCheck.length > 0) {
+      const groups = await prisma.eventScore.groupBy({
+        by: ["eventId"],
+        where: { eventId: { in: needsCheck.map((r) => r.id) } },
+        _max: { updatedAt: true },
+      });
+      for (const g of groups) moved.set(g.eventId, g._max.updatedAt);
+    }
+
+    return rows
+      .filter((r) => {
+        if (r.status !== "LIVE" || r.boardUpdatedAt === null) return true;
+        const last = moved.get(r.id);
+        // No scores at all is not staleness: the board already says the first
+        // poll sets everyone's baseline, and redrawing that sentence hourly is
+        // the exact spend this filter exists to stop.
+        return last != null && last > r.boardUpdatedAt;
+      })
+      .map((r) => ({ id: r.id, guildId: r.guildId }));
   },
 
   /** Everything the board renders, in one read. */
@@ -266,6 +302,7 @@ export const eventJobRepository = {
         channelId: true,
         messageId: true,
         trackedMetrics: true,
+        prize: true,
         _count: { select: { rsvps: { where: { state: "GOING" } } } },
       },
     });
@@ -281,7 +318,34 @@ export const eventJobRepository = {
       messageId: row.messageId,
       trackedMetrics: row.trackedMetrics,
       participantCount: row._count.rsvps,
+      prize: row.prize,
     };
+  },
+
+  /**
+   * Who said they were coming and cannot be scored, because nothing links them
+   * to a Minecraft account.
+   *
+   * The complement of `listParticipants`, deliberately computed the same way:
+   * a VERIFIED link is what makes somebody trackable, so a pending or revoked
+   * one counts as unlinked here exactly as it does there. Two queries rather
+   * than a NOT-EXISTS, because the RSVP list is the guest list for one event
+   * and is small.
+   */
+  async unlinkedParticipants(eventId: string): Promise<readonly { readonly discordId: string }[]> {
+    const rsvps = await prisma.eventRSVP.findMany({
+      where: { eventId, state: "GOING" },
+      select: { discordId: true },
+    });
+    if (rsvps.length === 0) return [];
+
+    const ids = rsvps.map((r) => r.discordId);
+    const linked = await prisma.linkedAccount.findMany({
+      where: { status: "VERIFIED", discordUser: { discordId: { in: ids } } },
+      select: { discordUser: { select: { discordId: true } } },
+    });
+    const known = new Set(linked.map((l) => l.discordUser.discordId));
+    return ids.filter((id) => !known.has(id)).map((discordId) => ({ discordId }));
   },
 
   /**

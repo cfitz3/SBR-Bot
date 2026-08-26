@@ -515,6 +515,22 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
             .catch(() => null);
           return edited !== null;
         },
+        async findBoard(channelId, eventId) {
+          const channel = await discord.channels.fetch(channelId).catch(() => null);
+          if (!channel || !channel.isTextBased() || !("messages" in channel)) return null;
+          const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+          if (recent === null) return null;
+          // The board stamps `id <eventId>` in its footer, which is what makes
+          // one identifiable at all. Restricted to this bot's own messages so a
+          // member quoting the id in a footer-shaped line cannot hand us a
+          // message we would then try to edit.
+          const found = recent.find(
+            (m) =>
+              m.author.id === discord.user?.id &&
+              m.embeds.some((e) => (e.footer?.text ?? "").includes(`id ${eventId}`)),
+          );
+          return found?.id ?? null;
+        },
       },
       log: app.log,
     }),

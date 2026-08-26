@@ -17,7 +17,7 @@ import type {
   TicketDTO,
 } from "@sbr/shared-types";
 import { copy } from "@sbr/brand";
-import { padInlineRow } from "@sbr/shared-types";
+import { eventMetricFormat, FLATTEN_SEPARATOR, isEventMetric, padInlineRow } from "@sbr/shared-types";
 
 /**
  * Discord renders `<t:unix:R>` as a live relative timestamp in the viewer's own
@@ -99,16 +99,39 @@ export interface EventBoardStandingView {
   readonly delta: number;
 }
 
+/** One tracked metric and the table under it. */
+export interface EventBoardMetricView {
+  readonly metric: string;
+  readonly standings: readonly EventBoardStandingView[];
+}
+
 export interface EventBoardView {
   readonly eventId: string;
   readonly title: string;
   readonly status: "SCHEDULED" | "LIVE" | "COMPLETED" | "CANCELLED";
   readonly startsAt: string;
   readonly endsAt?: string | null;
-  /** The metric the standings are ordered by, or null when nothing is tracked. */
-  readonly metric: string | null;
+  /**
+   * Every metric the event scores, each with its own table.
+   *
+   * A list rather than one primary metric: an organiser who picked three
+   * metrics ran a three-part contest, and a board that showed only the first
+   * one was quietly hiding two thirds of the result. Empty when the event
+   * tracks nothing, which is a legitimate state -- a social meetup has a board
+   * for the countdown and the turnout, not for a leaderboard.
+   */
+  readonly metrics: readonly EventBoardMetricView[];
   readonly participantCount: number;
-  readonly standings: readonly EventBoardStandingView[];
+  /**
+   * People who said they were coming and have no linked Minecraft account.
+   *
+   * Named on the board rather than dropped, matching what the panel does with
+   * the same fact: somebody absent from the standings because nothing can read
+   * their stats should find that out here, while there is still time to link.
+   */
+  readonly unlinked?: readonly { readonly discordId: string }[];
+  /** Free text, informational. Nothing on this platform pays it out. */
+  readonly prize?: string | null;
   /** When this render was made, for the "last updated" stamp. */
   readonly updatedAt: string;
 }
@@ -143,6 +166,47 @@ export function formatDelta(value: number): string {
   return `${sign}${trim(abs)}`;
 }
 
+/**
+ * The same gain, formatted the way its family is actually read.
+ *
+ * `formatDelta`'s abbreviation is right for the numbers it was written for --
+ * slayer XP and networth arrive in the millions, and a column of eleven digits
+ * is unreadable. It is wrong for everything else the widened catalog allows:
+ * "+12.5k" is a correct rendering of a networth delta and a nonsensical one of
+ * a skill average, and a bestiary milestone counts brackets crossed, which
+ * cannot be fractional at all. So the family decides, and the family comes from
+ * `eventMetricFormat` in shared-types -- the same function the panel reads, so
+ * a board and its preview cannot disagree about what a number looks like.
+ */
+export function formatMetricDelta(metric: string, value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  const format = isEventMetric(metric) ? eventMetricFormat(metric) : "XP";
+  const sign = value < 0 ? "-" : "+";
+  const abs = Math.abs(value);
+
+  // XP and coins are the large families, and the only ones worth abbreviating.
+  if (format === "XP" || format === "COINS") return formatDelta(value);
+  // Brackets crossed. Rounded rather than trimmed: half a milestone is not a
+  // thing that happened.
+  if (format === "COUNT") return `${sign}${Math.round(abs)}`;
+  // Levels and weight: small, fractional, and read literally. Grouped above a
+  // thousand so a four-figure weight gain is still scannable.
+  return `${sign}${group(trim(abs))}`;
+}
+
+/** Thousands separators on the integer part only, leaving any decimals alone. */
+function group(text: string): string {
+  const dot = text.indexOf(".");
+  const whole = dot === -1 ? text : text.slice(0, dot);
+  const rest = dot === -1 ? "" : text.slice(dot);
+  let out = "";
+  for (let i = 0; i < whole.length; i += 1) {
+    if (i > 0 && (whole.length - i) % 3 === 0) out += ",";
+    out += whole[i];
+  }
+  return out + rest;
+}
+
 function trim(value: number): string {
   return value.toFixed(2).replace(/\.?0+$/, "");
 }
@@ -173,11 +237,41 @@ export function renderEventBoardEmbed(view: EventBoardView): EmbedView {
     { name: "Participants", value: `${view.participantCount}`, inline: true },
   ];
 
-  if (view.metric !== null) {
-    const shown = Math.min(view.standings.length, BOARD_STANDINGS);
+  // Time remaining, but only while there is any: a finished event already says
+  // when it ended on the line above, and repeating it as "ends in -3 hours" is
+  // the kind of detail that makes a card look unmaintained.
+  if (!final && view.endsAt != null) {
+    fields.push({ name: "Ends", value: timestampTag(view.endsAt, "R"), inline: true });
+  }
+
+  if (view.prize != null && view.prize.trim() !== "") {
+    fields.push({ name: "Prize", value: view.prize.trim(), inline: false });
+  }
+
+  // What is being scored, named on the board itself. Without it a viewer has to
+  // ask staff -- or guess from the numbers -- what the contest is measuring.
+  if (view.metrics.length > 0) {
     fields.push({
-      name: shown === 0 ? `Standings · ${metricLabel(view.metric)}` : `Top ${shown} · ${metricLabel(view.metric)}`,
-      value: standingsBlock(view.standings),
+      name: "Scoring",
+      value: view.metrics.map((m) => metricLabel(m.metric)).join(FLATTEN_SEPARATOR),
+      inline: false,
+    });
+  }
+
+  for (const entry of view.metrics) {
+    const shown = Math.min(entry.standings.length, BOARD_STANDINGS);
+    fields.push({
+      name: shown === 0 ? `Standings · ${metricLabel(entry.metric)}` : `Top ${shown} · ${metricLabel(entry.metric)}`,
+      value: standingsBlock(entry.metric, entry.standings),
+      inline: false,
+    });
+  }
+
+  const unlinked = view.unlinked ?? [];
+  if (unlinked.length > 0) {
+    fields.push({
+      name: `Not scored — no linked account (${unlinked.length})`,
+      value: mentionList(unlinked),
       inline: false,
     });
   }
@@ -193,15 +287,26 @@ export function renderEventBoardEmbed(view: EventBoardView): EmbedView {
 /** How many rows the board shows. Ten fits a field without scrolling past it. */
 export const BOARD_STANDINGS = 10;
 
-function standingsBlock(standings: readonly EventBoardStandingView[]): string {
+/**
+ * The rank column. Medals for the podium, because that is the shape a reader
+ * scans for; numerals below it, because eleven medals is no ranking at all.
+ */
+const RANKS: readonly string[] = ["🥇", "🥈", "🥉"];
+
+function standingsBlock(metric: string, standings: readonly EventBoardStandingView[]): string {
   if (standings.length === 0) {
     // Not an error: the first poll of a live event has captured baselines and
     // nothing else, so everyone is legitimately on zero.
     return "No scores yet — the first poll sets everyone's baseline.";
   }
+  // Everyone on zero is a different fact from nobody being ranked, and saying so
+  // beats printing a column of "+0" that reads as a broken tracker.
+  if (standings.every((s) => s.delta === 0)) {
+    return `Nobody has gained any ${metricLabel(metric)} yet.`;
+  }
   return standings
     .slice(0, BOARD_STANDINGS)
-    .map((s, i) => `**${i + 1}.** <@${s.discordId}> — ${formatDelta(s.delta)}`)
+    .map((s, i) => `${RANKS[i] ?? `**${i + 1}.**`} <@${s.discordId}> — ${formatMetricDelta(metric, s.delta)}`)
     .join("\n");
 }
 

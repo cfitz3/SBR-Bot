@@ -139,6 +139,23 @@ export const DEFAULT_EMBEDS = {
     catacombsLevel: "catacombs level",
     slayerXp: "slayer XP",
     senitherWeight: "weight",
+    // Per-class dungeon levels. Written as the game writes them — "healer
+    // level", not "class healer" — because that is what somebody would say out
+    // loud, and this table exists for the places a metric lands mid-sentence.
+    classHealer: "healer level",
+    classMage: "mage level",
+    classBerserk: "berserk level",
+    classArcher: "archer level",
+    classTank: "tank level",
+    // Per-boss slayer XP. The boss's own name rather than the mob's, since that
+    // is how the slayer menu labels them and how people ask for carries.
+    slayerZombie: "Revenant XP",
+    slayerSpider: "Tarantula XP",
+    slayerWolf: "Sven XP",
+    slayerEnderman: "Voidgloom XP",
+    slayerBlaze: "Inferno XP",
+    slayerVampire: "Riftstalker XP",
+    bestiaryMilestone: "bestiary milestone",
   },
 
   /**
