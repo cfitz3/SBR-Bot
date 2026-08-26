@@ -241,6 +241,30 @@ test("a placing names the event and the metric in words", () => {
   assert.ok(!value.includes("skill:mining"));
 });
 
+test("a placing in one of the widened event metrics is named, not camelCased", () => {
+  // The catalog an event may score grew from six metrics to eighteen, and this
+  // card renders the podium of whatever was scored. Before the board's own
+  // vocabulary was consulted here, the twelve new ones arrived as
+  // "SlayerEnderman" — technically a label, and not one anybody says.
+  const view = renderProfileCardEmbed(
+    "Alpha",
+    input({
+      podium: {
+        ...PODIUM,
+        recent: [
+          { eventTitle: "Voidgloom grind", metric: "slayerEnderman", place: 1, delta: 500_000, at: null },
+          { eventTitle: "Class push", metric: "classHealer", place: 2, delta: 3, at: null },
+        ],
+      },
+    }),
+  );
+  const value = field(view, "Events")?.value ?? "";
+  assert.match(value, /Voidgloom XP/);
+  assert.match(value, /Healer level/);
+  assert.ok(!value.includes("slayerEnderman"));
+  assert.ok(!value.includes("classHealer"));
+});
+
 test("leaderboard positions are one field, absent when there are none", () => {
   assert.ok(!names(renderProfileCardEmbed("Alpha", input({ positions: [] }))).includes("Leaderboards"));
   const view = renderProfileCardEmbed("Alpha", input({ positions: POSITIONS }));

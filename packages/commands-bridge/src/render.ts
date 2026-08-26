@@ -695,6 +695,12 @@ function metricLabel(metric: string): string {
   };
   const direct = known[metric];
   if (direct !== undefined) return direct;
+  // Then the sentence-cased vocabulary the event board draws from, capitalised
+  // for this position. Without it the widened event catalog reached a podium
+  // line as "SlayerEnderman" — the camelCase fallback below is right for a key
+  // nobody has named, and wrong for the fifteen that now have names.
+  const phrase = (copy.embed.metricPhrase as Readonly<Record<string, string>>)[metric];
+  if (phrase !== undefined) return phrase.charAt(0).toUpperCase() + phrase.slice(1);
   // `skill:mining` → `Mining`.
   const parts = metric.split(":");
   const tail = parts[parts.length - 1] ?? metric;
