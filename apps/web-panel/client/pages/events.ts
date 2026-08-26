@@ -24,6 +24,7 @@
  * the announcement or the reminders on demand. The reminders belong to the
  * scheduler, and a button racing it would post twice.
  */
+import type { EmbedView } from "@sbr/shared-types";
 import type {
   EventAttendance,
   EventAttendee,
@@ -186,6 +187,7 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
       card(t("cardUpcoming"), upcomingBody(guildId, scheduled, rerender)),
       open ? card(t("cardManage").replace("{title}", open.title), manageBody(guildId, open, rerender)) : null,
       open ? card(t("cardScores").replace("{title}", open.title), scoresBody(open, data.standings, data.unlinked)) : null,
+      open ? card(t("cardPreview"), previewBody(guildId, open.id)) : null,
       open && data.attendance
         ? card(t("cardRoster").replace("{title}", open.title), rosterBody(data.attendance))
         : null,
@@ -818,6 +820,55 @@ function scoresBody(
     ),
     warning,
   );
+}
+
+// ─────────────────────── what Discord will see ───────────────────────
+
+/**
+ * The board, drawn by the bridge's own renderer.
+ *
+ * Fetched rather than reproduced. The browser half has no bundler, so a
+ * mirrored renderer would be a second implementation kept honest by a drift
+ * test — which is the right trade for the welcome message, whose renderer is
+ * twenty lines, and the wrong one for an embed assembled from brand copy the
+ * browser never receives. The server has both, so it renders and this displays.
+ *
+ * Loaded after the page rather than with it: the preview is the last thing
+ * anybody reads on this page and the first thing worth deferring, and a
+ * scoreboard that appeared a beat before it costs nobody anything.
+ */
+function previewBody(guildId: string, eventId: string): HTMLElement {
+  const host = h("div", {}, spinner("events"));
+
+  void loadPage<{ readonly embed: EmbedView | null }>(
+    `/api/guilds/${encodeURIComponent(guildId)}/event-board?event=${encodeURIComponent(eventId)}`,
+  ).then((result) => {
+    if (result.kind !== "ok") return replace(host, h("p", { class: "muted" }, t("previewFailed")));
+    const embed = result.data.embed;
+    if (embed === null) return replace(host, h("p", { class: "muted" }, t("previewFailed")));
+
+    replace(
+      host,
+      h(
+        "div",
+        {},
+        h("p", { class: "field-hint" }, t("previewHint")),
+        embed.title === undefined ? null : h("strong", {}, embed.title),
+        embed.description === undefined ? null : h("p", { class: "preview-value" }, embed.description),
+        ...(embed.fields ?? []).map((field) =>
+          h(
+            "div",
+            { class: "preview-field" },
+            h("p", { class: "field-label" }, field.name),
+            h("p", { class: "preview-value" }, field.value),
+          ),
+        ),
+        embed.footer === undefined ? null : h("p", { class: "muted" }, embed.footer),
+      ),
+    );
+  });
+
+  return host;
 }
 
 // ─────────────────────────── the roster ───────────────────────────

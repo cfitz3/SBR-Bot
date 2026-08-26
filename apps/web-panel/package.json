@@ -15,6 +15,7 @@
     "@sbr/brand": "*",
     "@sbr/client-ingest": "*",
     "@sbr/commands-admin": "*",
+    "@sbr/commands-bridge": "*",
     "@sbr/community": "*",
     "@sbr/config": "*",
     "@sbr/db": "*",

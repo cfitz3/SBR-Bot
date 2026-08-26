@@ -11,6 +11,7 @@
     { "path": "../../brand" },
     { "path": "../../packages/client-ingest" },
     { "path": "../../packages/commands-admin" },
+    { "path": "../../packages/commands-bridge" },
     { "path": "../../packages/community" },
     { "path": "../../packages/config" },
     { "path": "../../packages/db" },

@@ -29,6 +29,7 @@ import {
 } from "@sbr/panel-core";
 import type { PanelApp } from "./composition.js";
 import { renderShellHtml, renderThemeCss } from "./chrome.js";
+import { boardPreview } from "./event-board-preview.js";
 import { canManageGuild } from "./permissions.js";
 import { ASSET_ROOT, resolveAsset } from "./static.js";
 
@@ -466,6 +467,15 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
           return sendPage(
             res,
             await app.panel.loadEvents(session, guildId, url.searchParams.get("event") ?? ""),
+          );
+        // The board as the bridge would draw it. Same authorized read as the
+        // page itself, re-shaped — so the preview cannot show standings the
+        // viewer is not allowed to see, and cannot disagree with the ones
+        // beside it either.
+        case "event-board":
+          return sendPage(
+            res,
+            boardPreview(await app.panel.loadEvents(session, guildId, url.searchParams.get("event") ?? "")),
           );
         case "members":
           return sendPage(
