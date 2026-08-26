@@ -107,6 +107,51 @@ export const CATEGORY_OF_METRIC: Readonly<Record<string, AchievementCategory>> =
   guildXp: "COMMUNITY",
 };
 
+/**
+ * What an event can score (`EVENT_METRICS`).
+ *
+ * The snapshot metrics and only those: an event score is the difference between
+ * two readings of the same figure, and the four community counters cannot
+ * produce one worth competing over. See the doc comment on `EVENT_METRICS` in
+ * `@sbr/shared-types` for the per-metric reasoning.
+ */
+export const EVENT_METRICS = [
+  "skyblockLevel",
+  "networth",
+  "skillAverage",
+  "catacombsLevel",
+  "slayerXp",
+  "senitherWeight",
+  "classHealer",
+  "classMage",
+  "classBerserk",
+  "classArcher",
+  "classTank",
+  "slayerZombie",
+  "slayerSpider",
+  "slayerWolf",
+  "slayerEnderman",
+  "slayerBlaze",
+  "slayerVampire",
+  "bestiaryMilestone",
+] as const;
+export type EventMetric = (typeof EVENT_METRICS)[number];
+
+/**
+ * The tracker's polling bounds and its named choices (`EVENT_POLL_*`).
+ *
+ * The floor is an hour because the Hypixel Developer API Policy allows this
+ * platform one request per player per hour, and a participant is a player. A
+ * shorter interval would not poll more often -- it would be refused the
+ * difference and quietly clamped, which is what the panel used to do.
+ */
+export const EVENT_POLL_MIN_MINUTES = 60;
+export const EVENT_POLL_MAX_MINUTES = 1_440;
+export const EVENT_POLL_CHOICES = [60, 120, 180, 360, 720, 1_440] as const;
+
+/** How many metrics one event may score at once (`EVENT_MAX_TRACKED_METRICS`). */
+export const EVENT_MAX_TRACKED_METRICS = 5;
+
 /** What kind of thing a milestone recognises. */
 export const MilestoneType = {
   SKYBLOCK_LEVEL: "SKYBLOCK_LEVEL",
