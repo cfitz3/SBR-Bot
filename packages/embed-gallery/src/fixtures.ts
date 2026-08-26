@@ -822,15 +822,30 @@ export const EVENT_BOARD: EventBoardView = {
   title: EVENT.title,
   status: "LIVE",
   startsAt: iso(-90 * 60_000),
-  endsAt: null,
-  metric: "catacombsLevel",
+  endsAt: iso(3 * 60 * 60_000),
+  prize: "500k coins and the winner's pick of next week's event",
   participantCount: 27,
-  standings: [
-    { discordId: "200000000000000001", delta: 4.82 },
-    { discordId: "200000000000000002", delta: 3.11 },
-    { discordId: "200000000000000003", delta: 2.4 },
-    { discordId: "200000000000000004", delta: 0.75 },
+  // Two metrics, because one was the shape that hid the other: the gallery is
+  // where a renderer's multi-column case is meant to be visible.
+  metrics: [
+    {
+      metric: "catacombsLevel",
+      standings: [
+        { discordId: "200000000000000001", delta: 4.82 },
+        { discordId: "200000000000000002", delta: 3.11 },
+        { discordId: "200000000000000003", delta: 2.4 },
+        { discordId: "200000000000000004", delta: 0.75 },
+      ],
+    },
+    {
+      metric: "slayerEnderman",
+      standings: [
+        { discordId: "200000000000000002", delta: 1_842_000 },
+        { discordId: "200000000000000001", delta: 960_500 },
+      ],
+    },
   ],
+  unlinked: [{ discordId: "200000000000000009" }],
   updatedAt: iso(-4 * 60_000),
 };
 
