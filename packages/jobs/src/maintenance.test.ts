@@ -113,7 +113,48 @@ test("a normal diff is applied and counted", async () => {
     maxLeaveFraction: 0.9,
   });
 
-  assert.deepEqual(result, { joined: 1, left: 3, rankChanged: 0 });
+  assert.deepEqual(result, { joined: 1, left: 3, rankChanged: 0, touched: ["eeee", "bbbb", "cccc", "dddd"] });
+});
+
+test("the result names everyone it wrote about, so the caller can mark them dirty", async () => {
+  // The counts alone were the bug: this pass is the only writer of the guild
+  // rank an IN_GUILD auto-role rule reads, and a caller handed three numbers
+  // cannot tell role sync whose facts moved.
+  const result = await syncRoster("g1", {
+    fetchRemoteRoster: async () => [remote({ uuid: "aaaa" }), remote({ uuid: "bbbb", rank: "Officer" }), remote({ uuid: "eeee" })],
+    listStoredRoster: async () => [
+      stored({ minecraftAccountId: "m-a", uuid: "aaaa" }),
+      stored({ minecraftAccountId: "m-b", uuid: "bbbb" }),
+      stored({ minecraftAccountId: "m-c", uuid: "cccc" }),
+      stored({ minecraftAccountId: "m-d", uuid: "dddd" }),
+    ],
+    applyJoined: async () => {},
+    applyLeft: async () => {},
+    applyRankChanges: async () => {},
+    maxLeaveFraction: 0.9,
+  });
+
+  // A joiner, a rank change and two departures — and nobody unchanged.
+  assert.deepEqual([...result.touched].sort(), ["bbbb", "cccc", "dddd", "eeee"]);
+  assert.ok(!result.touched.includes("aaaa"));
+});
+
+test("a refused pass names nobody, because it wrote nothing", async () => {
+  const result = await syncRoster("g1", {
+    fetchRemoteRoster: async () => [remote({ uuid: "aaaa" })],
+    listStoredRoster: async () => [
+      stored({ uuid: "aaaa" }),
+      stored({ uuid: "bbbb" }),
+      stored({ uuid: "cccc" }),
+      stored({ uuid: "dddd" }),
+    ],
+    applyJoined: async () => {},
+    applyLeft: async () => {},
+    applyRankChanges: async () => {},
+  });
+
+  assert.equal(result.skipped, "mass-departure");
+  assert.deepEqual(result.touched, []);
 });
 
 function activity(over: Partial<ActivityRow> = {}): ActivityRow {
