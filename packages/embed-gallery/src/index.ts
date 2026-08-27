@@ -58,7 +58,7 @@ import {
   renderStatsEmbed,
   renderTicketEmbed,
   renderTicketListEmbed,
-  renderUserInfoEmbed,
+  renderWhoisEmbed,
 } from "@sbr/commands-bridge";
 import type {
   DungeonsDTO,
@@ -78,6 +78,14 @@ export interface GalleryCard {
   /** The renderer's own function name, so coverage is measured, not asserted. */
   readonly renderer: string;
   readonly view: EmbedView;
+  /**
+   * House-style rules this card breaks on purpose, by id.
+   *
+   * Per card, never per run: a waiver is a statement about one card, and one
+   * switched off run-wide stops the check catching every other card that
+   * breaks it by accident.
+   */
+  readonly ignore?: readonly string[];
 }
 
 const IGN = "Aria";
@@ -90,6 +98,11 @@ function card<A extends readonly unknown[]>(
   ...args: A
 ): GalleryCard {
   return { name, about, renderer: render.name, view: render(...args) };
+}
+
+/** A card that breaks a named rule for a reason, with the reason next to it. */
+function except(base: GalleryCard, ...rules: readonly string[]): GalleryCard {
+  return { ...base, ignore: rules };
 }
 
 /**
@@ -286,12 +299,52 @@ export const GALLERY: readonly GalleryCard[] = [
 
   // ── Guild ─────────────────────────────────────────────────────────────────
   card("roster", "`/online` — the in-game roster by rank.", renderRosterEmbed, f.ROSTER, f.NOW),
-  card("userinfo", "`/userinfo` — a member with more roles than fit.", renderUserInfoEmbed, f.DISCORD_USER),
-  card(
-    "userinfo-outsider",
-    "An account Discord knows and this server does not.",
-    renderUserInfoEmbed,
-    f.DISCORD_USER_OUTSIDER,
+  // The raw snowflake is what this card was asked for: an account that has left
+  // the server renders its mention as nothing, and the id is then the only
+  // handle a reader can carry anywhere else. Waived here and nowhere else.
+  except(
+    card(
+      "whois",
+      "`/whois` on yourself — the Discord half, the link, standing and your record.",
+      renderWhoisEmbed,
+      f.DISCORD_USER,
+      { link: f.LINKED, standing: f.STANDING, record: f.MEMBER_RECORD },
+      f.NOW_DATE,
+    ),
+    "raw-id",
+  ),
+  except(
+    card(
+      "whois-public",
+      "`/whois public:true` — the Discord half only, which is what anyone could click to see.",
+      renderWhoisEmbed,
+      f.DISCORD_USER,
+      { link: f.LINKED },
+      f.NOW_DATE,
+    ),
+    "raw-id",
+  ),
+  except(
+    card(
+      "whois-unlinked",
+      "A member who has never linked, and has earned no XP yet. Neither reads as a zero.",
+      renderWhoisEmbed,
+      f.DISCORD_USER,
+      { link: null, standing: null },
+      f.NOW_DATE,
+    ),
+    "raw-id",
+  ),
+  except(
+    card(
+      "whois-outsider",
+      "An account Discord knows and this server does not.",
+      renderWhoisEmbed,
+      f.DISCORD_USER_OUTSIDER,
+      { link: null },
+      f.NOW_DATE,
+    ),
+    "raw-id",
   ),
   card("serverinfo", "`/serverinfo` — the server at a glance.", renderServerInfoEmbed, f.DISCORD_GUILD),
   card("standing", "`/xp` — a member's guild XP and where it came from.", renderStandingEmbed, IGN, f.STANDING),

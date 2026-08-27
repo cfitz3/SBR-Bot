@@ -547,9 +547,8 @@ side — configuration, limits and failure modes.
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/userinfo` | Discord account details for a member | Public | `member?` (default you) | Embed: account age, joined, roles | Member not in this server | Discord (gateway cache) |
+| `/whois` | Who a member is here: Discord account, roles, link and standing | Public | `member?` (default you), `public?` (default off) | Ephemeral card; `public:true` posts the Discord half in the channel. Title links the full-size avatar and the url is in the text fallback | Discord has no account with that id; no gateway on this deployment | Discord (gateway cache), `LinkedIdentity`, XP standing, `MemberRecord` (caller only) |
 | `/serverinfo` | This Discord server at a glance | Public | — | Embed: members, channels, roles, created | — | Discord (gateway cache) |
-| `/avatar` | Someone's Discord avatar, full size | Public | `member?` (default you) | Embed with the image | Member not in this server | Discord (gateway cache) |
 | `/levelalerts` | Turn your own level-up announcements on or off | Member | `state?` (`on`/`off`; blank shows where you stand) | Ephemeral confirmation | — | `GuildSetting` `levels.optOut` |
 | `/remind` | Have the bot remind you later | Member | `when` (`30m`, `2h30m`, `1w2d`), `about` | Ephemeral confirmation with a live `<t:…:R>` timestamp | Unparseable duration; under a minute or over a year; already 10 pending; over 280 characters | DB (`Reminder`) |
 | `/reminders` | Your pending reminders | Member | `cancel?` (id) | Ephemeral list, or confirmation of a cancellation | Unknown id; not yours | DB (`Reminder`) |

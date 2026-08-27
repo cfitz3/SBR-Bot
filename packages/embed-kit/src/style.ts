@@ -373,12 +373,23 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
   return out.filter((issue) => !ignore.has(issue.rule));
 }
 
-/** `checkEmbed` over a set of named cards, flattened for a CLI or a test. */
+/**
+ * `checkEmbed` over a set of named cards, flattened for a CLI or a test.
+ *
+ * A card may waive a rule for itself. The escape hatch is per card rather than
+ * per run because that is the granularity the exceptions actually have: one card
+ * prints a raw id because the id is what it was asked for, and a run-wide
+ * `ignore` would switch the rule off for every other card at the same time —
+ * which is how a check stops catching the thing it was written for.
+ */
 export function checkEmbeds(
-  cards: readonly { readonly name: string; readonly view: EmbedView }[],
+  cards: readonly { readonly name: string; readonly view: EmbedView; readonly ignore?: readonly string[] }[],
   options: CheckOptions = {},
 ): readonly (StyleIssue & { readonly card: string })[] {
   return cards.flatMap((card) =>
-    checkEmbed(card.view, options).map((issue) => ({ ...issue, card: card.name })),
+    checkEmbed(card.view, { ignore: [...(options.ignore ?? []), ...(card.ignore ?? [])] }).map((issue) => ({
+      ...issue,
+      card: card.name,
+    })),
   );
 }

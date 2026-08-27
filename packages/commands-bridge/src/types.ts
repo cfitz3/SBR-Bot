@@ -135,9 +135,9 @@ export interface HandlerDeps {
    */
   readonly podiums?: MemberPodiumSource;
   /**
-   * What the server itself looks like, for `/userinfo`, `/serverinfo` and
-   * `/avatar`. Optional because only a surface with a gateway connection can
-   * answer it — in guild chat those commands say so rather than guessing.
+   * What the server itself looks like, for `/whois` and `/serverinfo`.
+   * Optional because only a surface with a gateway connection can answer it —
+   * in guild chat both commands say so rather than guessing.
    */
   readonly discord?: DiscordDirectory;
   /**
