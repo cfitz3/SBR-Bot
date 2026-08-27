@@ -12,7 +12,6 @@ import type {
   ModerationActionDTO,
   SafetyError,
   SafetyStatusDTO,
-  TicketDTO,
   WordlistRuleDTO,
 } from "@sbr/shared-types";
 import { padInlineRow } from "@sbr/shared-types";
@@ -354,76 +353,3 @@ export function renderAdmit(result: AdmitResult): string {
   return `Sent \`/guild accept ${result.ign}\`.${recorded}${left}`;
 }
 
-// ───────────────────────────── Tickets (/tickets) ─────────────────────────────
-
-/**
- * The open queue.
- *
- * Number first and in the name position, because "#12" is what staff say to
- * each other and what they will type back into `/tickets view`. Claimed rows
- * name their owner: the question this list actually answers is "which of these
- * is nobody looking at".
- */
-export function renderTicketListEmbed(tickets: readonly TicketDTO[]): EmbedView {
-  if (tickets.length === 0) {
-    return { title: "Open tickets", description: "Nothing open.", color: "NEUTRAL" };
-  }
-  return {
-    title: `Open tickets (${tickets.length})`,
-    fields: tickets.slice(0, 10).map((t) => ({
-      name: `#${String(t.number)} — ${t.categoryName ?? "uncategorised"}`,
-      value: [
-        `<@${t.openerDiscordId}>`,
-        t.claimedByDiscordId === null ? "unclaimed" : `claimed by <@${t.claimedByDiscordId}>`,
-        t.channelId === null ? "no channel" : `<#${t.channelId}>`,
-        relativeTs(t.createdAt),
-      ].join(" • "),
-      inline: false,
-    })),
-    footer: "Open one with /tickets action:view id:<number>.",
-    color: "INFO",
-  };
-}
-
-/**
- * One ticket.
- *
- * "Answered" is shown rather than a response-time figure: the number matters in
- * aggregate on the panel, but a staffer reading a single ticket wants to know
- * whether anybody has replied yet, and an em dash says that more plainly than
- * "0 ms" ever could.
- */
-export function renderTicketEmbed(ticket: TicketDTO): EmbedView {
-  return {
-    title: `Ticket #${String(ticket.number)} — ${ticket.categoryName ?? "uncategorised"}`,
-    ...(ticket.topic === null ? {} : { description: ticket.topic }),
-    fields: padInlineRow([
-      { name: "Opened by", value: `<@${ticket.openerDiscordId}>`, inline: true },
-      { name: "Status", value: ticket.status.toLowerCase(), inline: true },
-      { name: "Opened", value: relativeTs(ticket.createdAt), inline: true },
-      {
-        name: "Claimed by",
-        value: ticket.claimedByDiscordId === null ? "—" : `<@${ticket.claimedByDiscordId}>`,
-        inline: true,
-      },
-      {
-        name: "Answered",
-        value: ticket.firstStaffReplyAt === null ? "—" : relativeTs(ticket.firstStaffReplyAt),
-        inline: true,
-      },
-      {
-        name: "Channel",
-        value: ticket.channelId === null ? "—" : `<#${ticket.channelId}>`,
-        inline: true,
-      },
-      ...(ticket.closedAt === null
-        ? []
-        : [{ name: "Closed", value: relativeTs(ticket.closedAt), inline: true }]),
-      ...(ticket.closeReason === null
-        ? []
-        : [{ name: "Close reason", value: ticket.closeReason, inline: false }]),
-    ]),
-    footer: `id ${ticket.id}`,
-    color: ticket.status === "CLOSED" ? "NEUTRAL" : "INFO",
-  };
-}

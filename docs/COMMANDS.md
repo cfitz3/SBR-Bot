@@ -225,7 +225,7 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/bridge-suspend` | Pause chat relay (both directions) | Officer | `reason?`, `duration?` | Confirmation + status broadcast | Already suspended | DB (`GuildConfig`) + Cache + pub/sub event |
 | `/bridge-unsuspend` | Resume chat relay | Officer | *(none)* | Confirmation + status broadcast | Not suspended | DB + Cache + pub/sub |
-| `/tickets` | Work the support queue: list, view, close or export one | Moderator | `action*`, `id?` (autocomplete), `reason?` | Queue embed, one ticket's card, or the transcript as a file | Ticket belongs to another server; bridge bot unreachable | DB (reads) + bridge loopback API (close, transcript) |
+| `/tickets` | Work the support queue: the queue, then close or export one | Moderator | `id?` (autocomplete), `reason?` — Close and Transcript are buttons on the card | Queue embed, one ticket's card, or the transcript as a file | Ticket belongs to another server; bridge bot unreachable | DB (reads) + bridge loopback API (close, transcript) |
 | `/join-queue` | Live in-game join requests and how long is left to answer them | Moderator | *(none)* | Queue embed, remaining window per row | *(empty queue reads as such)* | DB (`Screening`) |
 | `/join-accept` | Admit somebody who asked to join in-game | Moderator | `ign*` | Confirmation naming the route: accepted, or invited because the window had closed | Not a Minecraft name; bridge not in-game | DB (`Screening`) + pub/sub `GAME_COMMAND` |
 | `/join-deny` | Refuse an in-game join request | Moderator | `ign*` | Confirmation | As above | DB + pub/sub |
@@ -243,7 +243,7 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/infractions` | View a member's infraction/mod history | Staff | `member`, `page?` | Paginated embed of cases | No history; member unknown | DB (`Infraction`+`ModerationAction`) |
-| `/member-note` | Attach a private staff note | Staff | `member`, `note` | Confirmation | Member unknown | DB (`ModerationAction` type `NOTE`) |
+| `/note` | Attach a private staff note | Staff | `target`, `note` | Confirmation | Member unknown | DB (`ModerationAction` type `NOTE`) |
 
 ---
 
@@ -265,8 +265,8 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 | `/set-role` | Map a platform role → Discord role, or set a member's role | Admin | `type` (mapping/member), `role`, `target` | Confirmation | Role not found; would elevate above actor | DB (`GuildConfig`/`GuildMember`) + Cache (perms) |
 | `/set-channel` | Assign a functional channel (bridge/log/staff/etc.) | Admin | `purpose`, `channel` | Confirmation | Channel not in guild; bad type | DB (`GuildConfig`) + Cache |
 | `/feature-toggle` | Enable/disable a platform feature per guild | Admin | `feature`, `state` | Confirmation + effective flags | Unknown feature | DB (`GuildConfig.features`) + Cache |
-| `/rolemenu` | Post a self-service role menu, or list the ones this server has | Officer | `action` (list/post), `id?` (autocomplete), `channel?` | `list`: the menus and their options. `post`: confirmation that SBR Bot put it up | Unknown menu; bridge bot unreachable (the menu still exists — `list` works either way) | `GuildSetting` `roles.menus` + bridge internal API |
-| `/sticky` | Keep a message at the bottom of a channel | Officer | `action` (list/set/clear), `message?`, `channel?` (defaults to here) | `list`: channel → first line. `set`/`clear`: confirmation, and whether it was applied now or will be next time somebody talks | Over 1,000 characters; already 15 stickies; channel has no sticky to clear | `GuildSetting` `discord.sticky` + bridge internal API |
+| `/rolemenu` | Post a self-service role menu, or list the ones this server has | Officer | `id?` (autocomplete), `channel?` — posting is a button on the card | Bare: the menus and their options, pickable. Post: confirmation that SBR Bot put it up, naming the channel | Unknown menu; bridge bot unreachable (the menu still exists — `list` works either way) | `GuildSetting` `roles.menus` + bridge internal API |
+| `/sticky` | Keep a message at the bottom of a channel | Officer | `message?`, `channel?` — Clear is a button, offered only where there is one to clear | Bare: every sticky in the server. Set/clear: confirmation, and whether it was applied now or will be next time somebody talks | Over 1,000 characters; already 15 stickies; channel has no sticky to clear | `GuildSetting` `discord.sticky` + bridge internal API |
 
 ---
 

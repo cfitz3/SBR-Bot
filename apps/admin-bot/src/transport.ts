@@ -16,6 +16,7 @@ import {
 import { buildAdminRegistry } from "@sbr/commands-admin";
 import { ComponentRouter, interactionArgs, respond, toSlashCommands } from "@sbr/discord-kit";
 import { attachMemberObserver } from "./member-observer.js";
+import { attachUtilityComponents } from "./utility-components.js";
 import type { AdminApp } from "./composition.js";
 
 /**
@@ -96,6 +97,10 @@ export async function startAdminGateway(
     onError: (namespace, error) => app.log.error("component handler threw", { namespace, error: String(error) }),
   });
 
+  // The staff utilities put their verbs on cards; every click re-enters the
+  // dispatcher, so the role floor and the destructive gate stay on one path.
+  attachUtilityComponents(components, app);
+
   // Joins and leaves go straight onto the bus; nothing is rendered here.
   attachMemberObserver(client, {
     resolveGuild: (id) => app.resolveGuild(id),
@@ -111,7 +116,8 @@ export async function startAdminGateway(
       void handle(i).catch((e: unknown) => app.log.error("interaction failed", { error: String(e) }));
     } else if (i.isAutocomplete()) {
       void complete(i).catch((e: unknown) => app.log.error("autocomplete failed", { error: String(e) }));
-    } else if (i.isButton()) {
+    } else if (i.isButton() || i.isStringSelectMenu()) {
+      // Pickers route exactly as buttons do: the choice is in the customId.
       void components.handle(i).catch((e: unknown) => app.log.error("component failed", { error: String(e) }));
     }
   });

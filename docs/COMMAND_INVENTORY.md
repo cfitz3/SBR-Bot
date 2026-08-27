@@ -254,7 +254,7 @@ destructive command requiring `confirm:true`.
 | `/ban` ✱ | OFFICER | `target*` `reason?` `duration?` `confirm?` | Ban, optionally temporary | Confirmation + expiry |
 | `/kick` ✱ | MOD | `target*` `reason?` `confirm?` | Remove from the server. **Audit is written before the Discord effect**, so a kick that succeeds in Discord is never missing from the log | Confirmation |
 | `/purge` ✱ | MOD | `count*` (1–100) `user?` `channel?` `confirm?` | Bulk-delete recent messages | Ephemeral count of messages **actually** deleted (Discord silently skips >14d), and a `NOTE` action recording it |
-| `/member-note` | MOD | `target*` `note*` | Private staff note | Ephemeral confirmation |
+| `/note` | MOD | `target*` `note*` | Private staff note | Ephemeral card |
 | `/infractions` | MOD | `target*` | A member's history | Paged embeds |
 | `/audit` | MOD | `actor?` `target?` `type?` (9 choices) `days?` (1–365) `in_force?` | Search the moderation log, newest 100 (says so when there are more) | Paged embeds |
 
@@ -293,7 +293,7 @@ destructive command requiring `confirm:true`.
 | `/application-review` | OFFICER | `id?` | Omit to list the queue, pass an id to open one | List embed, or the applicant's answers |
 | `/accept-member` | OFFICER | `id*` `reason?` | Accept and add to the roster; also promotes to `MEMBER` | Confirmation, and an explicit report when the roster row is missing |
 | `/deny-member` | OFFICER | `id*` `reason?` | Reject | Confirmation |
-| `/tickets` | MODERATOR | `action*` `id?` (autocomplete) `reason?` | `list`/`view` read the database; `close`/`transcript` go over loopback to the bridge bot, which holds the gateway | Queue embed, ticket card, or a `.md` transcript attachment |
+| `/tickets` | MODERATOR | `id?` (autocomplete) `reason?` | The queue and one ticket read the database; Close and Transcript are buttons that go over loopback to the bridge bot, which holds the gateway | Queue embed, ticket card, or a `.md` transcript attachment |
 | `/join-queue` | MODERATOR | — | Live in-game join requests; expires stale rows on read | List embed, remaining window first, then verdict and risk |
 | `/join-accept` | MODERATOR | `ign*` (autocomplete) | Accept inside the window, invite past it, then mark the row | Confirmation naming the route taken |
 | `/join-deny` | MODERATOR | `ign*` (autocomplete) | Type `/guild deny` in-game and mark the screening DENIED | Confirmation |
