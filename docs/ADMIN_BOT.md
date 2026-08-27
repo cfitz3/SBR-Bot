@@ -80,7 +80,8 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 |---------|------|--------------|
 | `/lockdown` | Admin | Channel/server scope; reason; auto-expiry; **confirmation**. |
 | `/antiraid-on` / `-off` | Admin | Sensitivity + duration; announces to staff. |
-| `/audit` | Officer | Query the immutable log. |
+| `/audit` | Officer | Search the log by actor, target, type, or date range; overview first, cases on click (§7d). |
+| `/case` | Officer | One case by id — the same card the mod log posted. |
 | `/attendance` | Officer | Mark/report attendance. |
 | `/create-event` | Officer | Schedule event; announce via bridge bot. |
 
@@ -167,7 +168,7 @@ Auditability is the bot's backbone — **if it changed state, it's in the log.**
 - **Immutability:** the audit trail is **append-only**. No command edits or deletes prior records; corrections are *new* entries that reference the original (e.g. an unban references the ban). Retention per policy; exportable for review.
 - **Tamper-evidence:** records carry a monotonic sequence + correlation id; deletions aren't offered through any command. (Optional hardening: hash-chain each entry to the previous for verifiable integrity.)
 - **Attribution is non-negotiable:** actions are always tied to the invoking human via their session/identity — the bot never performs an unattributed action, and service/automated actions (auto-infractions, anti-raid auto-mutes) are logged as `source=SYSTEM` with the triggering rule id.
-- **Surfacing:** queryable via `/audit` (Officer+) and the panel's Moderation/Audit view, filterable by actor/target/type/date, paginated, exportable to CSV.
+- **Surfacing:** queryable via `/audit` (Officer+) and the panel's Moderation/Audit view, filterable by actor/target/type/date range, paginated, exportable to CSV. `/audit` leads with an overview and offers the matching cases as a menu, so a case id is never a prerequisite for reading one — see §7d.
 
 ### 5.1 Warning escalation
 
@@ -328,6 +329,56 @@ be asked for — it is in `apps/admin-bot/src/transport.ts`) and the **View Audi
 Log** permission. Without the permission bans are still adopted, with an unknown
 actor, and kicks are not detected at all — there is nothing to distinguish them
 from a departure.
+---
+
+## 7d. Reading the log: `/audit` and `/case`
+
+An audit trail nobody can search is a compliance artefact, not a tool. `/audit`
+was a hundred rows paged ten at a time with the record built into the field
+*names*, and the only way to reach one case was to scroll until it went past —
+which stops working at exactly the point the log gets long enough to be worth
+having. `/case` took an id, and staff mostly do not have one.
+
+**The shape is now overview first, detail on click.**
+
+- **Page one is the answer.** How many actions matched, how many are still being
+  enforced, the breakdown by type, the busiest three staff, and the range the
+  numbers are about. Every figure is explicitly scoped to the matched window,
+  because a total that quietly means "the first hundred" is worse than no total.
+- **The listing is page two onward**, five to a page, each entry one field whose
+  *name* is a label — the case id — with the record in the value. Field names
+  are labels; data in a field name is rendered in bold by Discord and gives the
+  reader's eye nothing to anchor on.
+- **A menu of the matching cases rides under both.** Picking one opens its card.
+  The value is the case id and nothing else lives in the control, so the menu
+  still routes after a restart like every other persistent component here.
+
+**Searching without an id.** `actor`, `target` and `type` were already there;
+`days` answers "recently". `from` and `to` answer "that weekend in March", which
+is the question staff actually arrive with. Both ends are optional and both are
+read as whole days — `to:2026-03-14` includes everything that happened on the
+14th, because any other reading is a silent surprise. A date the parser cannot
+read is *named* in the reply and the filter is dropped: an unapplied filter that
+says nothing produces a result set that looks like an answer.
+
+Where the bounds meet, in `auditWhere` in `packages/db`: three separate options
+can constrain one column, Prisma takes one object per column, and the tighter
+lower bound wins — somebody asking for both "the last 7 days" and "since the
+1st" is narrowing, not widening.
+
+**Authorisation has one home.** The case menu does not read the case out of the
+service. It synthesises the arguments `/case` would have received and dispatches
+`case` through the ordinary path, so the actor's role check, the guild's policy
+floor and the handler are the same ones a typed command goes through. A second
+data path is a permission check nobody remembered to write.
+
+**The case card is the mod-log card.** `/case` and the `modlog` channel render
+through the same `modLogEmbed`, so a case pulled up months later reads
+identically to the card posted when it happened — including whether enforcement
+actually took. It now carries the action's own `createdAt` as the card's
+timestamp rather than none at all, which is the difference between a case with a
+date on it and one without.
+
 ---
 
 ## 8. Summary

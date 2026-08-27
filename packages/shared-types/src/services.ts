@@ -685,6 +685,17 @@ export interface AuditQuery {
   /** Look back this many days; omitted means no lower bound. */
   readonly sinceDays?: number | null;
   /**
+   * An explicit range, ISO-8601, either end optional.
+   *
+   * `sinceDays` answers "recently"; this answers "that weekend in March",
+   * which is the question staff actually arrive with when they are looking for
+   * a case whose id nobody wrote down. Both may be given: the narrower lower
+   * bound wins, because a caller asking for two lower bounds means the tighter
+   * one.
+   */
+  readonly since?: string | null;
+  readonly until?: string | null;
+  /**
    * Only punishments still being enforced. Applied in the query rather than
    * over the results, so "the newest 100 still in force" is a hundred live
    * rows and not whatever survives filtering a hundred mixed ones.
