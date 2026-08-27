@@ -252,6 +252,7 @@ The bot is the only process holding a Discord gateway cache, so it exposes that 
 | `POST /internal/g/{guildId}/enforce` | KICK / BAN / UNBAN / TIMEOUT / UNTIMEOUT, through `DiscordGuildEffects` |
 | `POST /internal/g/{guildId}/scheduled-event` | Creates a Discord scheduled event, returns its id |
 | `POST /internal/g/{guildId}/roles` | `{userId, add[], remove[], reason}` — grants and revokes, after a preflight |
+| `POST /internal/g/{guildId}/announce` | `{channelId, embed}` — renders an `EmbedView` into that channel |
 
 `{guildId}` is the **platform** guild id; the bot resolves it to the Discord snowflake itself, so the panel never has to hold both.
 
@@ -270,6 +271,8 @@ The write is **idempotent and honest**. A role the member already holds is not a
 | `INTERNAL_API_URL` | web-panel | Base URL of the above, e.g. `http://127.0.0.1:8791`. |
 
 **Manual step that cannot be done from code:** member listing requires the **Server Members** privileged intent, enabled by hand in the Discord developer portal for the admin-bot application (the code requests `GatewayIntentBits.GuildMembers`, but the portal switch is what makes Discord honour it). Without it the bot fails to log in — this is a deploy-time gate, not a silent degradation.
+
+**`announce` exists because the panel has no mouth.** The panel process holds no gateway connection, so a `ModerationServiceImpl` built there had no way to post a mod-log card and was constructed without a sink — which is why staff moderation done from the panel, the route most of it goes through, reached no channel at all. The fix keeps the ownership split intact: the panel decides *what* to say and *where*, the admin bot performs the privileged write. The channel is fetched **through the guild** rather than off the client, so holding the loopback token for one server cannot post into another. Mentions are stripped (`allowedMentions: {parse: []}`) — a card describing a punishment should not also ping the person it names.
 
 **Degradation is deliberate.** A panel whose bot is down, unreachable, or token-mismatched is *degraded, not broken*: each picker falls back to the raw-snowflake text field it replaced, with a Save button and the same validation as before. Directory failures are never cached, so a picker recovers on its own as soon as the bot returns.
 
