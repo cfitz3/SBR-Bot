@@ -29,6 +29,7 @@ import {
   type GuildConfigService,
   type GuildRosterDTO,
   type GuildRosterSource,
+  type PlaytimeSource,
   type DungeonsDTO,
   type NetworthDTO,
   type PermGroupDTO,
@@ -527,6 +528,7 @@ function makeDispatcher(over: {
   community?: CommunityService;
   perms?: PermService;
   roster?: GuildRosterSource;
+  playtime?: PlaytimeSource;
   usage?: UsageSink;
   lfgBoard?: LfgBoard;
   xp?: XpService;
@@ -546,6 +548,7 @@ function makeDispatcher(over: {
       community: over.community ?? community(),
       perms: over.perms ?? perms(),
       ...(over.roster ? { roster: over.roster } : {}),
+      ...(over.playtime ? { playtime: over.playtime } : {}),
       config: guildConfig,
       analytics,
       ...(over.lfgBoard ? { lfgBoard: over.lfgBoard } : {}),
@@ -1715,8 +1718,37 @@ test("online lists the roster grouped by rank", async () => {
   assert.equal(r.ephemeral, false);
   assert.equal(r.embed?.title, "SBR — online now");
   assert.match(r.embed?.description ?? "", /3.*120/);
-  assert.deepEqual(r.embed?.fields?.map((f) => f.name), ["Guild Master — 1", "Member — 2"]);
+  // The rank is the label and the members are the reading. The per-rank count
+  // used to be part of the field *name*, where Discord bolds it into the label
+  // and it repeats the sum the headline already carries.
+  assert.deepEqual(r.embed?.fields?.map((f) => f.name), ["Guild Master", "Member"]);
   assert.equal(r.embed?.fields?.[1]?.value, "Aria, Bex");
+});
+
+test("online reads how long each member has been on, when the tracker knows", async () => {
+  const now = Date.now();
+  const r = await makeDispatcher({
+    roster: { async online() { return roster; } },
+    playtime: {
+      async playing() {
+        return [
+          { ign: "Aria", startedAt: new Date(now - 42 * 60_000).toISOString(), estimated: false },
+          // Adopted from a roster read rather than watched from the join, so
+          // the elapsed figure is a floor and the card has to say so.
+          { ign: "Notch", startedAt: new Date(now - 95 * 60_000).toISOString(), estimated: true },
+        ];
+      },
+    },
+  }).dispatch("online", ctx());
+  assert.match(r.embed?.fields?.[1]?.value ?? "", /^Aria \(4[12]m\), Bex$/);
+  assert.match(r.embed?.fields?.[0]?.value ?? "", /^Notch \(1h 3[45]m\+\)$/);
+  assert.match(r.embed?.description ?? "", /Notch longest/);
+});
+
+test("online without a tracker names members and claims nothing about time", async () => {
+  const r = await makeDispatcher({ roster: { async online() { return roster; } } }).dispatch("online", ctx());
+  assert.equal(r.embed?.fields?.[0]?.value, "Notch");
+  assert.doesNotMatch(r.embed?.description ?? "", /longest/);
 });
 
 test("online says the bridge is down rather than showing an empty guild", async () => {

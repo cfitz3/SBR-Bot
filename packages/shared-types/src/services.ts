@@ -865,6 +865,34 @@ export interface GuildRosterSource {
   online(): Promise<GuildRosterDTO | null>;
 }
 
+
+/**
+ * One member the bridge currently believes is playing.
+ *
+ * `estimated` is the difference between a start time and a lower bound. A
+ * session opened by a login notice knows when it began; one adopted from a
+ * roster read after a bridge restart knows only that the member was already
+ * there, and the card says "42m+" rather than asserting a start it never saw.
+ */
+export interface LivePlaytimeDTO {
+  readonly ign: string;
+  readonly startedAt: string;
+  readonly estimated: boolean;
+}
+
+/**
+ * Live playtime, measured from Hypixel's own join/leave notices.
+ *
+ * Separate from `GuildRosterSource` because the two answer different questions
+ * from different evidence: the roster is one `/g online` at read time, playtime
+ * is an accumulation the bridge has been keeping all evening. Merging them
+ * would make `/online` unable to render at all when either half is missing,
+ * and the roster is the half that matters.
+ */
+export interface PlaytimeSource {
+  playing(): Promise<readonly LivePlaytimeDTO[]>;
+}
+
 /** Community events + membership (packages/community). */
 export interface CommunityService {
   listUpcomingEvents(guildId: string): Promise<Result<readonly EventDTO[]>>;

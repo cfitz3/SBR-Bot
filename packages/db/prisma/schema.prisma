@@ -360,6 +360,7 @@ model Guild {
   goals            ProgressionGoal[]
   xpSources        XpSourceConfig[]
   activityDaily    ActivityDaily[]
+  playSessions     PlaySession[]
   screenings       GuildJoinScreening[]
   subscriptions    NotificationSubscription[]
   milestoneDefs    MilestoneDefinition[]
@@ -755,7 +756,7 @@ model Infraction {
 }
 
 model ModerationAction {
-  id                       String        @id @default(cuid())
+  id                       String            @id @default(cuid())
   guildId                  String
   infractionId             String?
   actorDiscordId           String
@@ -764,21 +765,21 @@ model ModerationAction {
   type                     ModActionType
   reason                   String
   // Cross-surface mute records both surfaces it swept (COMMANDS.md /mute).
-  surfaces                 String[]      @default([])
+  surfaces                 String[]          @default([])
   durationSeconds          Int?
   expiresAt                DateTime?
-  active                   Boolean       @default(true)
+  active                   Boolean           @default(true)
   // Which surface the action was issued on. INGAME rows come from parsing
   // Hypixel's own guild-chat notices, so they carry no actor snowflake and are
   // best-effort by nature — the panel labels them rather than mixing them in.
-  sourceContext            SourceContext @default(DISCORD)
+  sourceContext            SourceContext     @default(DISCORD)
   /// Whether the punishment actually landed. Written after both surfaces have
   /// answered, never at insert time.
   enforcement              EnforcementStatus @default(PENDING)
   /// Why it did not land, when it did not: the specific reason staff need in
   /// order to finish the job by hand.
   enforcementDetail        String?
-  createdAt                DateTime      @default(now())
+  createdAt                DateTime          @default(now())
   /// When the case was last edited by a person, or null while it is as issued.
   /// Deliberately not `@updatedAt`: the service stamping an enforcement verdict
   /// is it finishing its own work, not somebody editing the case, and a column
@@ -1282,7 +1283,8 @@ model ActivityDaily {
   discordMessages   Int      @default(0)
   guildChatMessages Int      @default(0)
   commandsUsed      Int      @default(0)
-  /// `/g online` hits. The playtime proxy — presence is sampled, never measured.
+  /// `/g online` hits. Superseded by PlaySession, which measures rather than
+  /// samples. Kept because every historical XP award was computed from it.
   presenceSamples   Int      @default(0)
   updatedAt         DateTime @updatedAt
 
@@ -1290,6 +1292,29 @@ model ActivityDaily {
 
   @@unique([guildId, discordId, day])
   @@index([guildId, day])
+}
+
+/// One bounded stretch of a member being present in guild chat, as the bridge
+/// account saw it. Written once, when the session closes; a reconnect inside
+/// the grace window does not close one, so a lobby hop is not forty rows.
+///
+/// Keyed on `ign`: the bridge sees Minecraft names and nothing else, and a
+/// member who never linked a Discord account still plays. The link is made at
+/// read time, where a missing one is visible rather than silently dropped.
+model PlaySession {
+  id        String   @id @default(cuid())
+  guildId   String
+  ign       String
+  startedAt DateTime
+  endedAt   DateTime
+  seconds   Int
+  createdAt DateTime @default(now())
+
+  guild Guild @relation(fields: [guildId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, ign, endedAt])
+  @@index([guildId, ign, startedAt])
+  @@index([guildId, startedAt])
 }
 
 model NotificationSubscription {
@@ -1322,17 +1347,17 @@ model NotificationSubscription {
 /// the only reading. `/progress` and `/goal` are the two that genuinely wanted a
 /// series; they read user-saved `ProfileSnapshot` rows instead.
 model ProfileCurrent {
-  id                 String   @id @default(cuid())
+  id                 String    @id @default(cuid())
   minecraftAccountId String
   profileId          String
-  capturedAt         DateTime @default(now())
+  capturedAt         DateTime  @default(now())
   networth           BigInt?
   skillAverage       Float?
   catacombsLevel     Float?
   slayerXp           BigInt?
   senitherWeight     Float?
   skyblockLevel      Float?
-  metrics            Json     @default("{}")
+  metrics            Json      @default("{}")
   /// The reading this row displaced, as a whole `SnapshotMetrics` object rather
   /// than a parallel set of columns. Nothing queries inside it — detection reads
   /// it whole and compares — so columns would buy nothing and cost a schema
@@ -1340,11 +1365,11 @@ model ProfileCurrent {
   ///
   /// Empty on the first capture, which reads as "nothing to compare against yet"
   /// and is exactly right: a member seen once has not crossed anything.
-  previousMetrics    Json     @default("{}")
+  previousMetrics    Json      @default("{}")
   /// When the displaced reading was taken. Null on a first capture.
   previousCapturedAt DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
 

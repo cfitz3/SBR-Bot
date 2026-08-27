@@ -32,7 +32,7 @@ import {
   toEmbed,
   toSlashCommands,
 } from "@sbr/discord-kit";
-import type { GuildRosterDTO, GuildRosterSource } from "@sbr/shared-types";
+import type { GuildRosterDTO, GuildRosterSource, PlaytimeSource } from "@sbr/shared-types";
 import { startLevelAnnouncer } from "./levels.js";
 import { startGoalWatcher } from "./goals.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
@@ -44,8 +44,9 @@ import { deliverEventReminder } from "./events.js";
 import { EventBoardGateway } from "./event-board.js";
 import { LeaderboardDigest } from "./leaderboard-digest.js";
 import type { BridgeApp } from "./composition.js";
-import { isRosterEnd, parseGuildOnline } from "./roster.js";
-import { acceptCommand, denyCommand, parseJoinEvent, type GuildJoinEvent } from "./join.js";
+import { isRosterEnd, parseGuildOnline, rosterMembers } from "./roster.js";
+import { acceptCommand, denyCommand, parseJoinEvent, parsePresenceEvent, type GuildJoinEvent } from "./join.js";
+import { PlaytimeTracker, type PlaytimeEffect } from "@sbr/playtime";
 import { CommandQueue, type CommandOptions } from "./command-queue.js";
 import { CommandEcho } from "./command-echo.js";
 import { isPunitiveNotice, parseModNotice, type ModNotice } from "./mod-notice.js";
@@ -262,6 +263,8 @@ export interface BridgeHandles {
   components: ComponentRouter;
   /** Live `/g online` roster, for `/online`. Answers null while the bridge is down. */
   roster: GuildRosterSource;
+  /** How long each of those members has been playing, as this process has seen it. */
+  playtime: PlaytimeSource;
   /**
    * Live connection state for the heartbeat the Health page reads.
    *
@@ -317,6 +320,16 @@ const ROSTER_TIMEOUT_MS = 4_000;
  * window shares one answer.
  */
 const ROSTER_CACHE_MS = 20_000;
+
+/**
+ * How often to close sessions whose reconnect grace has run out.
+ *
+ * Costs nothing — it is a walk over the members currently online — and the
+ * interval only bounds how late a finished session reaches the database, never
+ * how long it is recorded as: the tracker credits the session to the moment the
+ * member left, not to the sweep that noticed.
+ */
+const PLAYTIME_SWEEP_MS = 30_000;
 
 /**
  * Pacing for moderation commands arriving on the bus. The same per-account
@@ -1057,6 +1070,10 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       return null;
     }
     rosterCached = { roster, at: Date.now() };
+    // The roster is better evidence than any notice we may have missed: it
+    // adopts members who were already playing when the bridge started, and
+    // closes sessions whose leave line never arrived.
+    void persistSessions(playtime.reconcile(rosterMembers(roster), new Date()));
     return roster;
   }
 
@@ -1083,6 +1100,57 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       } finally {
         rosterInflight = null;
       }
+    },
+  };
+
+
+  // ── Playtime ──────────────────────────────────────────────────────────────
+  //
+  // `Guild > Steve joined.` and `Guild > Steve left.` are the only evidence
+  // there is that anybody played at all, and until now the bridge read them
+  // only in order to throw them away. The tracker turns them into sessions;
+  // everything about how (the reconnect grace, the minimum length, when a
+  // session is credited) lives in `@sbr/playtime` and is tested without a
+  // socket.
+  const playtime = new PlaytimeTracker();
+
+  /**
+   * Close whatever the grace period has run out on.
+   *
+   * A timer rather than a check on the next notice: the last member of the
+   * evening produces no further chat, and their session would otherwise sit
+   * open until the process restarted and then be lost entirely.
+   */
+  const playtimeSweep = setInterval(() => {
+    void persistSessions(playtime.sweep(new Date()));
+  }, PLAYTIME_SWEEP_MS);
+  playtimeSweep.unref();
+
+  async function persistSessions(effects: readonly PlaytimeEffect[]): Promise<void> {
+    if (!app.playSessions || effects.length === 0) return;
+    // Resolved per batch rather than held: the Guild row is often seeded after
+    // the bot is already running, and a null captured at boot would drop every
+    // session for the lifetime of the process.
+    const guildId = await resolveInternalGuild();
+    if (!guildId) return;
+    for (const effect of effects) {
+      if (effect.kind !== "ENDED") continue;
+      try {
+        await app.playSessions.record(guildId, effect.session);
+      } catch (error) {
+        // One unwritable session must not stop the rest, and must not take the
+        // chat handler down: the tracker has already forgotten it either way.
+        app.log.warn("play session not recorded", {
+          ign: effect.session.ign,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  const playtimeSource: PlaytimeSource = {
+    async playing() {
+      return playtime.live().map((s) => ({ ...s, estimated: playtime.isEstimated(s.ign) }));
     },
   };
 
@@ -1134,6 +1202,15 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // Roster capture takes every line, guild chat or not: the `/g online`
       // reply is a server message block, not chat, so it never parses as chat.
       captureRosterLine(str);
+
+      // A login is not a membership change, so this is read before the join
+      // parse refuses it — the two share one pattern precisely so they cannot
+      // disagree about what the line said.
+      const presence = parsePresenceEvent(str);
+      if (presence) {
+        playtime.observe(presence.ign, presence.kind, new Date());
+        return;
+      }
 
       // Join notices are server messages too, so this must come before the
       // guild-chat parse rather than inside it.
@@ -1614,6 +1691,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     },
     components,
     roster: rosterSource,
+    playtime: playtimeSource,
     status() {
       const ping = discord.ws.ping;
       const stats = gameCommands.stats();

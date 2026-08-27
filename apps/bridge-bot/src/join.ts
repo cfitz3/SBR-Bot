@@ -142,6 +142,23 @@ export function parseJoinEvent(line: string): GuildJoinEvent | null {
   return null;
 }
 
+
+/**
+ * Read one chat line as a presence notice, or null when it is not one.
+ *
+ * The same regex `parseJoinEvent` uses to *refuse* these lines, read the other
+ * way round. `Guild > Steve joined.` was noise there because a login is not a
+ * membership change; here it is the entire signal playtime is measured from.
+ * Sharing the pattern is deliberate — two copies would drift, and the day they
+ * did, one of the two readings would be silently wrong.
+ */
+export function parsePresenceEvent(line: string): { readonly ign: string; readonly kind: "ONLINE" | "OFFLINE" } | null {
+  const text = clean(line);
+  const match = PRESENCE.exec(text);
+  if (!match) return null;
+  return { ign: match[1]!, kind: /left[.!]?$/i.test(text) ? "OFFLINE" : "ONLINE" };
+}
+
 /** The command that admits an applicant. */
 export function acceptCommand(ign: string): string {
   return `/guild accept ${ign}`;

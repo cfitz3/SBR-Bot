@@ -27,7 +27,8 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 | F11 | **Anti-spam / flood control** | Per-user + global rate limiting, dedup, mute-aware relay. |
 | F11b | **Automod** | One panel-configured policy enforced on Discord *and* guild chat (§6C). |
 | F12 | **Bridge health & degradation** | Detects in-game disconnects, reconnects with backoff, and switches to a documented degraded mode. |
-| F13 | **Live guild roster** | `/online` reads `/g online` through the in-game session and reports who's on, grouped by guild rank. |
+| F13 | **Live guild roster** | `/online` reads `/g online` through the in-game session and reports who's on, grouped by guild rank, with how long each member has been on. |
+| F13b | **Playtime tracking** | Sessions opened on a bridge-observed join and closed on the leave, debounced so a lobby hop is one session, persisted as `PlaySession` rows. |
 | F14 | **Join screening & auto-accept** | Every `/g join` request is screened against the scammer list, the applicant's stats and this guild's own history, recorded, reported to staff, and — if the guild opts in — accepted automatically. |
 | F15 | **Greeting** | Welcome, farewell and guild-join messages, rendered from a guild-configured template and spoken by this bot because a member is addressed by the bot they interact with (§6D). |
 | F16 | **Member conveniences** | `/userinfo`, `/serverinfo`, `/avatar`, `/remind` + `/reminders`, `/tag`, `/levelalerts`, plus level-up announcements, autoresponders and sticky messages (§6D). |

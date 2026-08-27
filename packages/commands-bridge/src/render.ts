@@ -4,7 +4,10 @@
  */
 import { copy } from "@sbr/brand";
 import { describeAge, padInlineRow, staleness, tierRank } from "@sbr/shared-types";
+import { card, field } from "@sbr/embed-kit";
+import { describePlaytime } from "@sbr/playtime";
 import type {
+  LivePlaytimeDTO,
   AccessoryReportDTO,
   DataEnvelope,
   AccessorySuggestionDTO,
@@ -1390,49 +1393,84 @@ export function renderAuctionsEmbed(
 }
 
 /**
- * `/online` — who is in the guild right now, grouped by rank.
+ * `/online` — who is in the guild right now, and how long they have been there.
  *
- * Ranks keep the order Hypixel printed them in (highest first) rather than
- * being sorted here: that ordering is guild-specific and the roster is the only
- * place the bot ever learns it.
+ * The card answers two questions with one read. "Who is on" is the roster
+ * Hypixel just printed; "how long have they been on" is the bridge's own
+ * accumulated view of the evening, and it is the half that turns a list of
+ * names into something worth looking at — a guild where six people arrived in
+ * the last ten minutes is a different room from one where six have been going
+ * for four hours.
  *
- * The counts in the description come from Hypixel's own summary lines, so they
- * stay right even when the name list below them is clipped — an embed field
- * caps at 1024 characters and a large guild will exceed it.
+ * Durations are only ever printed for members the tracker knows. A name with
+ * nothing after it means the bridge did not see them arrive, not that they just
+ * got here; that is why the absent case is blank rather than "0m".
  */
-export function renderRosterEmbed(roster: GuildRosterDTO, now: number = Date.now()): EmbedView {
+export function renderRosterEmbed(
+  roster: GuildRosterDTO,
+  playing: readonly LivePlaytimeDTO[] = [],
+  now: number = Date.now(),
+): EmbedView {
   const listed = roster.ranks.reduce((n, r) => n + r.members.length, 0);
   const online = roster.online ?? listed;
+  const at = new Date(now);
+  const sessions = new Map(playing.map((p) => [p.ign.toLowerCase(), p]));
 
   const headline =
     roster.total === null ? `**${online}** online` : `**${online}** of ${formatNumber(roster.total)} members online`;
 
   if (listed === 0) {
-    return {
+    return card({
+      tone: "NEUTRAL",
       title: rosterTitle(roster),
-      description: online === 0 ? C.nobodyOnline : headline,
-      color: "NEUTRAL",
-      footer: `as of ${describeAge(roster.fetchedAt, now)}`,
-    };
+      headline: online === 0 ? C.nobodyOnline : headline,
+      timestamp: roster.fetchedAt,
+    });
   }
 
-  return {
+  return card({
+    tone: "SUCCESS",
     title: rosterTitle(roster),
-    description: headline,
+    headline: `${headline}${longestRun(playing, at)}`,
     // Ranks with nobody online are dropped rather than rendered as a rank with
     // an empty list: Discord rejects an embed field with an empty value and
     // fails the *whole* message, so one quiet rank would take `/online` down
     // for the entire guild. The rank still exists; nothing is claimed about it.
     fields: roster.ranks
       .filter((rank) => rank.members.length > 0)
-      .map((rank) => ({
-        name: `${rank.rank} — ${rank.members.length}`,
-        value: truncateField(rank.members.join(", ")),
-        inline: false,
-      })),
-    color: "SUCCESS",
-    footer: `as of ${describeAge(roster.fetchedAt, now)}`,
-  };
+      .map((rank) =>
+        // The rank is the heading and the members are the reading. The count
+        // used to live in the field name, where Discord bolds it and it reads
+        // as part of the label — and where the same number is already the sum
+        // in the headline.
+        field(rank.rank, truncateField(rank.members.map((ign) => withPlaytime(ign, sessions, at)).join(", "))),
+      ),
+    timestamp: roster.fetchedAt,
+  });
+}
+
+/** `Aria (42m)` when we know, `Aria` when we do not. */
+function withPlaytime(ign: string, sessions: ReadonlyMap<string, LivePlaytimeDTO>, at: Date): string {
+  const session = sessions.get(ign.toLowerCase());
+  return session ? `${ign} (${describePlaytime(session.startedAt, at, session.estimated)})` : ign;
+}
+
+/**
+ * The longest run of the evening, appended to the headline.
+ *
+ * One number rather than a second field: it is the one thing a reader takes
+ * from the durations at a glance, and a rank list already carries the rest.
+ * Silent when nothing is being tracked, which is every deployment without a
+ * bridge and the first minutes after a restart.
+ */
+function longestRun(playing: readonly LivePlaytimeDTO[], at: Date): string {
+  let best: LivePlaytimeDTO | null = null;
+  for (const session of playing) {
+    if (!best || session.startedAt < best.startedAt) best = session;
+  }
+  if (!best) return "";
+  const run = describePlaytime(best.startedAt, at, best.estimated);
+  return run === "just now" ? "" : ` — ${best.ign} longest, ${run}`;
 }
 
 function rosterTitle(roster: GuildRosterDTO): string {

@@ -39,6 +39,7 @@ import type {
   LFGPostDTO,
   LowestBinDTO,
   MemberRecordDTO,
+  LivePlaytimeDTO,
   ModerationActionDTO,
   NetworthDTO,
   PendingMilestoneDTO,
@@ -501,6 +502,19 @@ export const ROSTER: GuildRosterDTO = {
     { rank: "Trial", members: [] },
   ],
 };
+
+/**
+ * Live sessions behind that roster. Deliberately partial: two members the
+ * tracker never saw arrive, one adopted from a roster read after a restart, and
+ * one who logged in seconds ago — the four states the card has to render.
+ */
+export const PLAYING: readonly LivePlaytimeDTO[] = [
+  { ign: "Aria", startedAt: new Date(NOW - 4 * 3600_000 - 12 * 60_000).toISOString(), estimated: false },
+  { ign: "Bramble", startedAt: new Date(NOW - 42 * 60_000).toISOString(), estimated: false },
+  { ign: "Cinder", startedAt: new Date(NOW - 95 * 60_000).toISOString(), estimated: true },
+  { ign: "Elm", startedAt: new Date(NOW - 20_000).toISOString(), estimated: false },
+  { ign: "Fern", startedAt: new Date(NOW - 61 * 60_000).toISOString(), estimated: false },
+];
 
 export const STANDING: XpStandingDTO = {
   discordId: "100000000000000001",

@@ -193,7 +193,7 @@ staff configuration (`PLATFORM_EXPANSION_PLAN.md` §4).
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/help` | List commands / show help for one | Public | `command?` | Embed: command catalog or detail | Unknown command | Static + DB (feature flags to hide disabled cmds) |
-| `/online` | Who's in the guild right now, by rank | Public | — | Embed: rank sections + online/total counts | Bridge offline (temporary); no in-game bridge configured (permanent) — reported separately | In-game `/g online` via the bridge session (20s shared cache) |
+| `/online` | Who's in the guild right now, by rank, and how long they've been on | Public | — | Embed: rank sections + online/total counts + per-member elapsed time | Bridge offline (temporary); no in-game bridge configured (permanent) — reported separately | In-game `/g online` via the bridge session (20s shared cache) + the in-memory playtime tracker |
 
 `/online` reads the **live** roster from the Mineflayer session rather than the
 Hypixel API: the guild endpoint lists members but carries no presence, and
@@ -202,6 +202,16 @@ the answer is `/g online`, which any player can type without spending the bridge
 account's command budget. Every invocation inside the cache window shares one
 answer, because a spammed command gets the bridge account silenced and that
 takes the whole relay down, not just this command.
+
+**Each name carries how long that member has been on** — `Aria (42m)`, and the
+headline names the longest current run. The figure comes from the bridge's own
+join/leave observations, not from a sample count, so it is a measurement rather
+than an estimate. Two cases are marked rather than hidden: a member the tracker
+adopted from a roster read instead of watching join gets a `+` suffix
+(`1h 35m+`), because the elapsed time is a floor and not the whole session; a
+member the tracker has never seen gets no time at all rather than `0m`, which
+would read as a claim. A restart empties the tracker, so every name is bare
+until the next roster read adopts them.
 
 ---
 
