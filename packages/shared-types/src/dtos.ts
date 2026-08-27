@@ -1169,6 +1169,38 @@ export interface ComponentHealthDTO {
   readonly detail?: string;
 }
 
+/**
+ * The member-facing view of `HealthReportDTO` — what `/health` is allowed to say.
+ *
+ * A separate shape rather than a filter applied at render time, because the
+ * filtering is the security property. `ComponentHealthDTO.detail` carries
+ * whatever a probe threw: a connection string, a hostname, a Prisma error naming
+ * our schema. None of that should be one slash command away from any member of
+ * the guild, and a renderer that merely *chose* not to print it would be one
+ * refactor away from printing it.
+ *
+ * So the curation happens once, in `curateStatus`, and what comes out has no
+ * field for a detail to live in.
+ */
+export interface PlatformStatusDTO {
+  readonly overall: "ok" | "degraded" | "down";
+  readonly checkedAt: string;
+  /** The named rows, in a fixed order — the same rows every time, up or down. */
+  readonly lines: readonly StatusLineDTO[];
+  /**
+   * Components that are not member-facing and are not healthy, counted rather
+   * than named. A member does not need to know we run Postgres; they do need to
+   * know something behind the curtain is why their command was slow.
+   */
+  readonly otherUnhealthy: number;
+}
+
+export interface StatusLineDTO {
+  /** Already in the member's terms — "Guild chat", not "bridge".  */
+  readonly label: string;
+  readonly status: "ok" | "degraded" | "down";
+}
+
 /** One compiled chat-filter rule (`/wordlist-add`, `/wordlist-remove`). */
 export interface WordlistRuleDTO {
   readonly id: string;

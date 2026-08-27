@@ -55,6 +55,7 @@ import type {
   ProgressMetric,
   ProgressSeriesDTO,
   SavedSnapshotDTO,
+  PlatformStatusDTO,
   PriceDTO,
   ProfileSummaryDTO,
   SafetyStatusDTO,
@@ -1684,6 +1685,18 @@ export interface HealthCheck {
 export interface HealthAggregator {
   register(check: HealthCheck): void;
   run(): Promise<HealthReportDTO>;
+}
+
+/**
+ * What `/health` asks. Deliberately not `HealthAggregator`.
+ *
+ * The member-facing bot holds this port and not the registry, so the worst a
+ * bug in a member command can do is print a curated status card. Handing the
+ * aggregator to the same handler deps that fun commands read from would make
+ * "does /8ball leak our database hostname" a question worth asking.
+ */
+export interface PlatformStatusSource {
+  status(): Promise<PlatformStatusDTO>;
 }
 
 /**

@@ -109,6 +109,8 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
   },
   events: { description: "Upcoming guild events" },
   guildquote: { description: "A quote from the guild's collection" },
+  /** Every user-facing error points here, so this description has to read as the answer. */
+  health: { description: "Whether the bot, guild chat and Hypixel are answering" },
   help: { description: "List member commands" },
   joinrun: {
     description: "Take a slot in an open run",

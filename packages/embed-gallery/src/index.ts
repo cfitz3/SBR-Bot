@@ -47,6 +47,7 @@ import {
   renderProfileEmbed,
   renderProfileListEmbed,
   renderGoalAchievedEmbed,
+  renderHealthEmbed,
   renderGoalsEmbed,
   renderProgressEmbed,
   renderRosterEmbed,
@@ -293,6 +294,14 @@ export const GALLERY: readonly GalleryCard[] = [
     renderUserInfoEmbed,
     f.DISCORD_USER_OUTSIDER,
   ),
+  card("health", "`/health` — everything answering.", renderHealthEmbed, f.STATUS_OK),
+  card(
+    "health-degraded",
+    "One named row slow, and one component the card is only allowed to count.",
+    renderHealthEmbed,
+    f.STATUS_DEGRADED,
+  ),
+  card("health-down", "The relay is gone; the bot answering is not.", renderHealthEmbed, f.STATUS_DOWN),
   card("serverinfo", "`/serverinfo` — the server at a glance.", renderServerInfoEmbed, f.DISCORD_GUILD),
   card("standing", "`/xp` — a member's guild XP and where it came from.", renderStandingEmbed, IGN, f.STANDING),
   card(

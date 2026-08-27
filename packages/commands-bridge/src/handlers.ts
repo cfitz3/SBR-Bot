@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 import { communitySpecs } from "./handlers-community.js";
 import { permSpecs } from "./handlers-perms.js";
+import { healthSpecs } from "./handlers-health.js";
 import { infoSpecs } from "./handlers-info.js";
 import { levelAlertSpecs } from "./handlers-levels.js";
 import { goalSpecs } from "./handlers-goals.js";
@@ -1055,6 +1056,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       autocomplete: itemAutocomplete,
     },
     ...communitySpecs(),
+    ...healthSpecs(),
     ...infoSpecs(),
     ...levelAlertSpecs(),
     ...goalSpecs(),

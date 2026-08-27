@@ -356,6 +356,10 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // Fun (§19). They read nothing about anybody and write nothing anybody is
     // accountable for, so they widen the surface by exactly one joke each.
     "8ball", "coinflip", "cringe", "guildquote", "rank", "roll", "rps",
+    // The one diagnostic. Reachable here precisely because guild chat is where
+    // a member stands when the relay is the thing that is broken, and it needs
+    // no link: it reports on the platform, not on the caller.
+    "health",
     // Lookups (§17).
     "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
     "networth", "perm", "price", "profile", "skills", "slayer", "slayers", "standing", "stats",

@@ -43,6 +43,7 @@ import type {
   NetworthDTO,
   PendingMilestoneDTO,
   PermGroupDTO,
+  PlatformStatusDTO,
   PriceDTO,
   ProfileSummaryDTO,
   ProgressSeriesDTO,
@@ -1089,4 +1090,45 @@ export const LEVEL_UP_JUMP: PendingLevelUpDTO = {
   fromLevel: 12,
   toLevel: 15,
   totalXp: 31_250,
+};
+
+/**
+ * `/health` in its three states.
+ *
+ * The degraded one is the interesting card and the reason all three are here:
+ * it is the shape where a component nobody named is the thing that is wrong,
+ * and the count is all a member gets. If that ever renders as "all clear", the
+ * gallery is where it should be caught.
+ */
+export const STATUS_OK: PlatformStatusDTO = {
+  overall: "ok",
+  checkedAt: new Date(NOW - 4_000).toISOString(),
+  lines: [
+    { label: "Guild chat", status: "ok" },
+    { label: "Bot", status: "ok" },
+    { label: "Hypixel API", status: "ok" },
+  ],
+  otherUnhealthy: 0,
+};
+
+export const STATUS_DEGRADED: PlatformStatusDTO = {
+  overall: "degraded",
+  checkedAt: new Date(NOW - 9_000).toISOString(),
+  lines: [
+    { label: "Guild chat", status: "ok" },
+    { label: "Bot", status: "ok" },
+    { label: "Hypixel API", status: "degraded" },
+  ],
+  otherUnhealthy: 1,
+};
+
+export const STATUS_DOWN: PlatformStatusDTO = {
+  overall: "down",
+  checkedAt: new Date(NOW - 31_000).toISOString(),
+  lines: [
+    { label: "Guild chat", status: "down" },
+    { label: "Bot", status: "ok" },
+    { label: "Hypixel API", status: "ok" },
+  ],
+  otherUnhealthy: 0,
 };
