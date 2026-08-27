@@ -771,6 +771,26 @@ export const SAFETY_ON: SafetyStatusDTO = {
 
 export const SAFETY_OFF: SafetyStatusDTO = { lockdown: null, antiRaid: null };
 
+/**
+ * Feature switches as three states worth seeing: everything at its default,
+ * one deliberately off, and a row carrying a key this build no longer knows.
+ * The third matters most — it is the residue of the old free-text flag box, and
+ * the card has to say so rather than render it as a switch that does something.
+ */
+export const FEATURES_DEFAULT: Record<string, boolean> = {};
+
+export const FEATURES_MIXED: Record<string, boolean> = {
+  welcome: true,
+  level_announcements: false,
+  autoresponder: false,
+};
+
+export const FEATURES_STALE: Record<string, boolean> = {
+  welcome: false,
+  events: true,
+  beta_ui: true,
+};
+
 export const APPLICATION: ApplicationDTO = {
   id: "app-1",
   guildId: "g1",

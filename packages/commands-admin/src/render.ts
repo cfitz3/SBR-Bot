@@ -3,6 +3,7 @@
  * phrasing for each way a Discord effect can refuse.
  */
 import type {
+  ActionRowView,
   ApplicationDTO,
   EmbedFieldView,
   EmbedView,
@@ -15,7 +16,8 @@ import type {
   TicketDTO,
   WordlistRuleDTO,
 } from "@sbr/shared-types";
-import { padInlineRow } from "@sbr/shared-types";
+import { isKnownFeature, padInlineRow, resolveFeatures, unrecognizedFeatures } from "@sbr/shared-types";
+import { card, facts, field, switchMark } from "@sbr/embed-kit";
 import { describeState, punishmentState } from "@sbr/moderation";
 import {
   formatRemaining,
@@ -426,4 +428,101 @@ export function renderTicketEmbed(ticket: TicketDTO): EmbedView {
     footer: `id ${ticket.id}`,
     color: ticket.status === "CLOSED" ? "NEUTRAL" : "INFO",
   };
+}
+
+/** The namespace the feature menu's `customId` lives under. */
+export const FEATURE_SELECT_NAMESPACE = "feature";
+
+/**
+ * The features card: every flag the platform honours, and its state.
+ *
+ * The command it replaced took `feature:<string>` and `enabled:<bool>` and
+ * reported success either way, which meant the only way to find out what could
+ * be toggled was to read the source, and the only way to find out whether your
+ * spelling was right was to watch the feature keep running. The card answers
+ * both questions before anything is typed.
+ *
+ * One field, not one per feature: six switches are six short facts read
+ * together, and six fields of one line each is the shape a reader has to scan
+ * twice. Each description rides on the same line as its switch, because a menu
+ * you must open to learn what its options do is a menu that gets guessed at.
+ */
+export function renderFeaturesEmbed(
+  stored: Readonly<Record<string, boolean>>,
+  options: { readonly notice?: string; readonly now?: Date } = {},
+): EmbedView {
+  const features = resolveFeatures(stored);
+  const on = features.filter((f) => f.enabled).length;
+  const stray = unrecognizedFeatures(stored);
+
+  return card({
+    tone: "INFO",
+    title: "Features",
+    headline: [
+      options.notice?.trim(),
+      `${on} of ${features.length} on. Pick one below to flip it.`,
+    ]
+      .filter((line): line is string => !!line)
+      .join("\n"),
+    fields: [
+      field(
+        "Switches",
+        features.map((f) => `${switchMark(f.enabled)} **${f.label}** — ${f.description}`).join("\n"),
+      ),
+      // Surfaced rather than swept up: these are keys somebody typed, or keys a
+      // removed feature left behind, and both are worth seeing once. Nothing
+      // reads them, so saying so is the entire content of the field.
+      stray.length > 0
+        ? field(
+            "Not recognised",
+            facts([
+              { label: "Stored", value: stray.map((k) => "`" + k + "`").join(", ") },
+              { label: "Effect", value: "None — nothing on this build reads these." },
+            ]),
+          )
+        : null,
+    ],
+    timestamp: (options.now ?? new Date()).toISOString(),
+  });
+}
+
+/**
+ * The menu that flips one flag.
+ *
+ * The option value carries the key *and* the state it moves to, so the handler
+ * never re-reads the config to work out what a click meant. Two staff clicking
+ * at once then each get the result they were looking at, instead of the second
+ * one silently undoing the first by flipping a value that had already moved.
+ */
+export function renderFeatureSelectRow(stored: Readonly<Record<string, boolean>>): readonly ActionRowView[] {
+  return [
+    {
+      buttons: [],
+      select: {
+        customId: FEATURE_SELECT_NAMESPACE,
+        placeholder: "Turn a feature on or off",
+        options: resolveFeatures(stored).map((f) => ({
+          label: `${f.label} — ${f.enabled ? "on" : "off"}`.slice(0, 100),
+          value: `${f.key}:${f.enabled ? "off" : "on"}`,
+          description: (f.enabled ? `Turn off. ${f.description}` : `Turn on. ${f.description}`).slice(0, 100),
+        })),
+      },
+    },
+  ];
+}
+
+/**
+ * Read one menu value back.
+ *
+ * Null when it is not a key this build honours. A component value is
+ * client-supplied, and an old message clicked after a deploy that retired a
+ * flag is the ordinary way that happens — not the adversarial way.
+ */
+export function parseFeatureChoice(value: string): { readonly key: string; readonly enabled: boolean } | null {
+  const at = value.lastIndexOf(":");
+  if (at <= 0) return null;
+  const key = value.slice(0, at);
+  const state = value.slice(at + 1);
+  if (state !== "on" && state !== "off") return null;
+  return isKnownFeature(key) ? { key, enabled: state === "on" } : null;
 }

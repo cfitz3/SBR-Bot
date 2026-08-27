@@ -40,6 +40,7 @@ import { createAutoresponder } from "./autoresponder.js";
 import { createStickyKeeper } from "./sticky.js";
 import { startReminderSweeper } from "./reminders.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
+import type { ConfigChannelSlot } from "@sbr/shared-types";
 import { deliverEventReminder } from "./events.js";
 import { EventBoardGateway } from "./event-board.js";
 import { LeaderboardDigest } from "./leaderboard-digest.js";
@@ -551,6 +552,25 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       log: app.log,
     }),
   );
+  /**
+   * A channel binding, but only while the guild has the feature switched on.
+   *
+   * The announcers below all take `getChannel`, and all of them already treat a
+   * null answer as "not configured — hold the rows and try again later". That is
+   * the right behaviour for a switched-off feature too: turning it back on
+   * replays what was missed rather than leaving a silent gap, exactly as binding
+   * a channel late does. Nothing is discarded on the guild's behalf.
+   *
+   * Both reads are served by the same cached config row, so this costs nothing
+   * per pass beyond the check itself.
+   */
+  const enabledChannel =
+    (slot: ConfigChannelSlot, feature: string) =>
+    async (guildId: string): Promise<string | null> =>
+      (await app.handlerDeps.config.isFeatureEnabled(guildId, feature))
+        ? app.handlerDeps.config.getChannel(guildId, slot)
+        : null;
+
   // The weekly digest. Same shape as the board above and posted into a
   // different slot — `leaderboard`, which a guild binds to opt in at all.
   //
@@ -563,7 +583,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     app.setLeaderboardDigest(
       new LeaderboardDigest({
         leaderboards: digestSource,
-        getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "leaderboard"),
+        getChannel: enabledChannel("leaderboard", "leaderboard_digest"),
         discord: {
           async post(channelId, embed) {
             const channel = await discord.channels.fetch(channelId).catch(() => null);
@@ -604,7 +624,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // torn down with the transport.
   const announcer = startMilestoneAnnouncer({
     milestones: app.milestones,
-    getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "milestones"),
+    getChannel: enabledChannel("milestones", "milestone_announcements"),
     async post(channelId, embed, mentionDiscordId) {
       const channel = await discord.channels.fetch(channelId).catch(() => null);
       if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
@@ -628,7 +648,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     goals: app.goals,
     currentValue: (uuid, metric) => app.goalValue(uuid, metric),
     ignFor: (discordId) => app.ignForDiscordId(discordId),
-    getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "milestones"),
+    getChannel: enabledChannel("milestones", "goal_announcements"),
     async post(channelId, embed, mentionDiscordId) {
       const channel = await discord.channels.fetch(channelId).catch(() => null);
       if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
@@ -647,7 +667,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // guild setting, read once per pass rather than once per row.
   const levelAnnouncer = startLevelAnnouncer({
     levels: app.levelUps,
-    getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "levels"),
+    getChannel: enabledChannel("levels", "level_announcements"),
     mutedIds: (guildId) => readLevelOptOuts(app.handlerDeps.config, guildId),
     async post(channelId, embed, mentionDiscordId) {
       const channel = await discord.channels.fetch(channelId).catch(() => null);
@@ -718,7 +738,13 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // Started here for the same reason as the announcer: it needs a live client.
   const greeterDeps: GreeterDeps = {
     readSetting: (guildId, key) => app.handlerDeps.config.getSetting(guildId, key),
-    getChannel: (guildId, slot) => app.handlerDeps.config.getChannel(guildId, slot),
+    // Both greeting paths — the Discord join and the in-game one — read their
+    // channel through here, so one switch covers what is one feature to the
+    // person turning it off.
+    getChannel: async (guildId, slot) =>
+      (await app.handlerDeps.config.isFeatureEnabled(guildId, "welcome"))
+        ? app.handlerDeps.config.getChannel(guildId, slot)
+        : null,
     lookupProfile: (guildId, discordId) => app.welcomeProfile(guildId, discordId),
     async post(request) {
       const channel = await discord.channels.fetch(request.channelId).catch(() => null);
@@ -1322,6 +1348,11 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       const inTicket = await tickets.capture(capturedFrom(msg));
       const guildId = await resolveInternalGuild();
       if (!guildId) return;
+      // Checked after the capture, not before it: transcripts are the record and
+      // are not what this switch is about. The check is a cached config read,
+      // and it sits ahead of the pattern match so a guild with the feature off
+      // pays nothing for tags it is not using.
+      if (!(await app.handlerDeps.config.isFeatureEnabled(guildId, "autoresponder"))) return;
       const answer = await autoresponder.respond(
         guildId,
         msg.channelId,

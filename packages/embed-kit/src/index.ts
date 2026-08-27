@@ -23,6 +23,7 @@ export {
   player,
   progressBar,
   progressLine,
+  switchMark,
   type CardSpec,
   type Fact,
 } from "./card.js";

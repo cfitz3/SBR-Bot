@@ -10,6 +10,8 @@
 import type { Logger } from "@sbr/observability";
 import {
   err,
+  featureDefault,
+  isKnownFeature,
   ok,
   type ConfigChannelSlot,
   type GuildConfigService,
@@ -83,10 +85,22 @@ export class GuildConfigServiceImpl implements GuildConfigService {
     }
   }
 
+  /**
+   * Whether a guild has this feature on.
+   *
+   * An absent flag means the guild has never touched it, which is not the same
+   * as having turned it off — so the answer is the catalogue default rather
+   * than `false`. The old reading made every flag opt-in and, since nothing
+   * read them, made every one of them permanently off.
+   *
+   * A key nothing honours is off. That is not a policy so much as an
+   * observation: `featureDefault` has no entry for it, and neither does any
+   * caller.
+   */
   async isFeatureEnabled(guildId: string, feature: string): Promise<boolean> {
     const config = await this.get(guildId);
-    if (!config.ok || config.value === null) return false;
-    return config.value.features[feature] === true;
+    if (!config.ok || config.value === null) return featureDefault(feature);
+    return config.value.features[feature] ?? featureDefault(feature);
   }
 
   async getChannel(guildId: string, slot: ConfigChannelSlot): Promise<string | null> {
@@ -119,7 +133,19 @@ export class GuildConfigServiceImpl implements GuildConfigService {
     return this.write(guildId, () => this.repo.setSetting(guildId, key, value));
   }
 
+  /**
+   * Flip one flag, leaving the others alone.
+   *
+   * A key outside the catalogue is refused rather than stored. Both write
+   * surfaces used to accept any string, so a typo became a row that looked
+   * like a setting and behaved like nothing at all — and the operator's next
+   * question was why the feature they just turned off was still running.
+   *
+   * Refusing does not clear keys already in the column; those stay visible in
+   * the toggle menu and on the panel so they can be recognised and dealt with.
+   */
   async setFeature(guildId: string, feature: string, enabled: boolean): Promise<Result<void>> {
+    if (!isKnownFeature(feature)) return err(new Error(`unknown feature: ${feature}`));
     return this.write(guildId, () => this.repo.setFeature(guildId, feature, enabled));
   }
 

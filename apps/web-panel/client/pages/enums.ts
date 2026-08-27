@@ -210,3 +210,40 @@ export const TagScope = {
   ANY: "ANY",
 } as const;
 export type TagScope = (typeof TagScope)[keyof typeof TagScope];
+
+/**
+ * The platform's feature switches, mirrored from `FEATURE_CATALOGUE`.
+ *
+ * The Settings page renders one toggle per entry, labelled and explained, and
+ * nothing else — a flag it does not list is a flag no reader honours, and
+ * `setFeature` now refuses one. Order is the catalogue's, so the card and the
+ * page put the same switch in the same place.
+ */
+export const FEATURES = [
+  { key: "welcome", label: "Welcome messages", description: "Greet members when they join the Discord server." },
+  {
+    key: "level_announcements",
+    label: "Level-up announcements",
+    description: "Post in the levels channel when a member gains a level.",
+  },
+  {
+    key: "milestone_announcements",
+    label: "Milestone announcements",
+    description: "Post in the milestones channel when a member passes a tracked milestone.",
+  },
+  {
+    key: "goal_announcements",
+    label: "Goal announcements",
+    description: "Post when a member reaches a goal they set for themselves.",
+  },
+  {
+    key: "leaderboard_digest",
+    label: "Weekly leaderboard digest",
+    description: "Post the weekly standings to the digest channel.",
+  },
+  {
+    key: "autoresponder",
+    label: "Autoresponders",
+    description: "Answer messages that match a configured tag pattern.",
+  },
+] as const;
