@@ -30,11 +30,8 @@ export interface SpecimenResult {
 
 /** Fields of a Discord embed that `EmbedView` has no home for. */
 const UNSUPPORTED: readonly { readonly key: string; readonly why: string }[] = [
-  { key: "author", why: "author line (name/icon above the title)" },
-  { key: "image", why: "full-width image" },
   { key: "video", why: "video" },
   { key: "provider", why: "provider" },
-  { key: "timestamp", why: "timestamp (we put staleness in the footer instead — stalenessFooter)" },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -128,6 +125,28 @@ function readEmbed(raw: Record<string, unknown>, index: number, notes: SpecimenN
     if (thumbUrl !== undefined) view.thumbnailUrl = thumbUrl;
   }
 
+  // Author, image and timestamp used to be reported as dropped. They are three
+  // of the four things every specimen the operator liked had and our cards did
+  // not, which is why they are carried now rather than named as a limitation.
+  const author = raw["author"];
+  if (isRecord(author)) {
+    const name = str(author["name"]);
+    if (name !== undefined) {
+      const iconUrl = str(author["icon_url"]);
+      const authorUrl = str(author["url"]);
+      view.author = { name, ...(iconUrl ? { iconUrl } : {}), ...(authorUrl ? { url: authorUrl } : {}) };
+    }
+  }
+
+  const image = raw["image"];
+  if (isRecord(image)) {
+    const imageUrl = str(image["url"]);
+    if (imageUrl !== undefined) view.imageUrl = imageUrl;
+  }
+
+  const timestamp = str(raw["timestamp"]);
+  if (timestamp !== undefined) view.timestamp = timestamp;
+
   const color = raw["color"];
   if (typeof color === "number" && Number.isFinite(color)) {
     const match = nearestColor(color);
@@ -188,5 +207,14 @@ export function toDiscordJson(view: EmbedView): Record<string, unknown> {
   }
   if (view.footer !== undefined) out["footer"] = { text: view.footer };
   if (view.thumbnailUrl !== undefined) out["thumbnail"] = { url: view.thumbnailUrl };
+  if (view.author !== undefined) {
+    out["author"] = {
+      name: view.author.name,
+      ...(view.author.iconUrl ? { icon_url: view.author.iconUrl } : {}),
+      ...(view.author.url ? { url: view.author.url } : {}),
+    };
+  }
+  if (view.imageUrl !== undefined) out["image"] = { url: view.imageUrl };
+  if (view.timestamp !== undefined) out["timestamp"] = view.timestamp;
   return out;
 }
