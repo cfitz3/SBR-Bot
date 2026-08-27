@@ -189,15 +189,20 @@ export class DiscordGuildEffects implements GuildEffects {
   }
 
   /**
-   * Lock by denying SendMessages to @everyone. A channel that already denies it
-   * is left alone and not counted, so lifting a lockdown can't hand out send
-   * rights the server never granted in the first place.
+   * Lock by denying SendMessages to @everyone, and answer with the channels
+   * that actually changed.
+   *
+   * A channel that already denies it is left alone and left out of the answer,
+   * which is what lets a lift reopen exactly what this lockdown closed. The
+   * version that returned a count could not: "lift" meant "unlock everything
+   * locked", and a channel the server had kept shut for months came open
+   * alongside the raid.
    */
   async setLocked(
     guildId: string,
     channelId: string | null,
     locked: boolean,
-  ): Promise<Result<number, GuildEffectError>> {
+  ): Promise<Result<readonly string[], GuildEffectError>> {
     const guild = await this.guild(guildId);
     if (!guild.ok) return err(guild.error);
 
@@ -216,7 +221,7 @@ export class DiscordGuildEffects implements GuildEffects {
         }
       }
 
-      let changed = 0;
+      const changed: string[] = [];
       for (const channel of targets) {
         if (channel.type !== ChannelType.GuildText) continue;
         const current = channel.permissionOverwrites.cache.get(everyone.id);
@@ -225,7 +230,7 @@ export class DiscordGuildEffects implements GuildEffects {
 
         try {
           await channel.permissionOverwrites.edit(everyone, { SendMessages: locked ? false : null });
-          changed += 1;
+          changed.push(channel.id);
         } catch (error) {
           // One un-editable channel must not abort the sweep: locking 19 of 20
           // channels is far better than locking none.

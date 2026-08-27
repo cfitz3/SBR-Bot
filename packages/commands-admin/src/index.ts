@@ -5,7 +5,11 @@ export { AdminDispatcher, type AdminDispatcherDeps } from "./dispatcher.js";
 export { buildAdminRegistry } from "./handlers.js";
 export { parseDurationSeconds, renderModError } from "./util.js";
 export {
+  LOCKDOWN_NAMESPACE,
+  LOCKDOWN_REASON_MAX,
+  lockdownId,
   paginate,
+  parseLockdownId,
   relativeTs,
   renderApplicationEmbed,
   renderApplicationListEmbed,
@@ -14,10 +18,14 @@ export {
   renderEnforcement,
   renderFilterTestEmbed,
   renderInfractionPages,
+  renderLockdownControls,
+  renderLockdownEmbed,
   renderSafetyError,
   renderSafetyStatusEmbed,
   renderWordlistEmbed,
+  trimLockdownReason,
 } from "./render.js";
+export type { LockdownAction, LockdownArgs, LockdownPrompt } from "./render.js";
 export type {
   AdminAutocompleteContext,
   AdminAutocompleteHandler,

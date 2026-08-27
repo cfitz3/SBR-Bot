@@ -19,6 +19,7 @@ import {
   renderAuditPages,
   renderFilterTestEmbed,
   renderInfractionPages,
+  renderLockdownEmbed,
   renderSafetyStatusEmbed,
   renderWordlistEmbed,
 } from "@sbr/commands-admin";
@@ -370,6 +371,9 @@ export const GALLERY: readonly GalleryCard[] = [
   card("filter-test-clear", "The same command on text that trips none.", renderFilterTestEmbed, f.FILTER_TEST_CLEAR),
   card("safety-on", "`/safety` with a lockdown and anti-raid both live.", renderSafetyStatusEmbed, f.SAFETY_ON),
   card("safety-off", "Nothing in force — the ordinary state.", renderSafetyStatusEmbed, f.SAFETY_OFF),
+  card("lockdown-prompt", "`/lockdown` with nothing in force: what will shut, and the two ways to shut it.", renderLockdownEmbed, f.SAFETY_OFF, { channelId: "300000000000000001", reason: "Raid in progress", duration: "1h" }),
+  card("lockdown-channel", "One channel locked. The card carries the way out as well as the way wider.", renderLockdownEmbed, f.SAFETY_ON, { channelId: "300000000000000001", reason: "Raid in progress", duration: "1h" }),
+  card("lockdown-server", "A server lock that folded an earlier channel lock into itself.", renderLockdownEmbed, f.SAFETY_SERVER, { channelId: null, reason: "Raid in progress", duration: "1h" }),
   card("application", "One application under review.", renderApplicationEmbed, f.APPLICATION),
   card(
     "application-list",

@@ -14,6 +14,7 @@ import {
   ok,
   type AntiRaidInput,
   type AntiRaidStateDTO,
+  type GuildEffectError,
   type GuildEffects,
   type LockdownInput,
   type LockdownStateDTO,
@@ -57,13 +58,32 @@ export class SafetyServiceImpl implements SafetyService {
 
     const now = this.now();
     const current = await this.store.getLockdown(input.guildId);
-    if (current && !isElapsed(current.expiresAt, now)) {
-      return err({ kind: "ALREADY_ACTIVE", until: current.expiresAt });
+    const live = current && !isElapsed(current.expiresAt, now) ? current : null;
+
+    // A guild holds one lockdown record, so a second lock has to either replace
+    // the first or be refused. Replacing is right in exactly one direction:
+    // going wider. A channel lock while the server is shut adds nothing, and a
+    // second channel lock would silently drop the first channel's record while
+    // leaving the channel itself locked — an orphan nothing would ever reopen.
+    const escalating = live !== null && live.scope === "CHANNEL" && input.scope === "SERVER";
+    if (live && !escalating) {
+      return err({
+        kind: "ALREADY_ACTIVE",
+        until: live.expiresAt,
+        scope: live.scope,
+        channelId: live.channelId,
+      });
     }
 
     const channelId = input.scope === "SERVER" ? null : (input.channelId ?? null);
     const applied = await this.effects.setLocked(input.guildId, channelId, true);
     if (!applied.ok) return err({ kind: "DISCORD_FAILED", detail: describe(applied.error) });
+
+    // The absorbed lock's channels come along: the server-wide sweep skipped
+    // them (they were already shut), so without this they would stay shut after
+    // the lift that was supposed to reopen everything.
+    const inherited = escalating ? (live.lockedChannelIds ?? []) : [];
+    const lockedChannelIds = [...new Set([...applied.value, ...inherited])];
 
     const duration = input.durationSeconds ?? null;
     const state: LockdownStateDTO = {
@@ -74,12 +94,15 @@ export class SafetyServiceImpl implements SafetyService {
       actorDiscordId: input.actorDiscordId,
       startedAt: now.toISOString(),
       expiresAt: duration && duration > 0 ? new Date(now.getTime() + duration * 1000).toISOString() : null,
+      lockedChannelIds,
+      absorbedChannelId: escalating ? live.channelId : null,
     };
     await this.store.putLockdown(state, RECORD_TTL_SECONDS);
-    this.log.warn("lockdown engaged", {
+    this.log.warn(escalating ? "lockdown escalated to the server" : "lockdown engaged", {
       guildId: state.guildId,
       scope: state.scope,
-      channels: applied.value,
+      channels: lockedChannelIds.length,
+      absorbed: state.absorbedChannelId,
       actor: state.actorDiscordId,
       expiresAt: state.expiresAt,
     });
@@ -89,11 +112,39 @@ export class SafetyServiceImpl implements SafetyService {
   async liftLockdown(guildId: string): Promise<Result<LockdownStateDTO | null>> {
     const state = await this.store.getLockdown(guildId);
     if (!state) return ok(null);
-    const applied = await this.effects.setLocked(guildId, state.channelId, false);
+    const applied = await this.unlock(state);
     if (!applied.ok) return err(new Error(describe(applied.error)));
     await this.store.clearLockdown(guildId);
-    this.log.info("lockdown lifted", { guildId, scope: state.scope });
+    this.log.info("lockdown lifted", { guildId, scope: state.scope, channels: applied.value.length });
     return ok(state);
+  }
+
+  /**
+   * Reopen exactly what a lockdown closed.
+   *
+   * `lockedChannelIds` is the list this build records; `null` is a record from
+   * one that did not, and the old scope-shaped unlock is the only thing that can
+   * be said about it honestly. An empty list means the lock changed nothing —
+   * every channel was already shut — so the lift changes nothing either, which
+   * is the whole point of tracking it.
+   */
+  private async unlock(state: LockdownStateDTO): Promise<Result<readonly string[], GuildEffectError>> {
+    // `??` rather than `=== null`: the store is a JSON blob, so a record
+    // written before this field existed deserialises as `undefined`.
+    const recorded = state.lockedChannelIds ?? null;
+    if (recorded === null) return this.effects.setLocked(state.guildId, state.channelId, false);
+    const opened: string[] = [];
+    for (const channelId of recorded) {
+      const applied = await this.effects.setLocked(state.guildId, channelId, false);
+      // A channel deleted since the lock is not a reason to leave the rest shut.
+      if (!applied.ok) {
+        if (applied.error.kind !== "NOT_FOUND") return applied;
+        this.log.warn("lockdown lift skipped a missing channel", { guildId: state.guildId, channelId });
+        continue;
+      }
+      opened.push(...applied.value);
+    }
+    return ok(opened);
   }
 
   async enableAntiRaid(input: AntiRaidInput): Promise<Result<AntiRaidStateDTO, SafetyError>> {
@@ -152,7 +203,7 @@ export class SafetyServiceImpl implements SafetyService {
     let reopened = 0;
     for (const state of await this.store.listLockdowns()) {
       if (!isElapsed(state.expiresAt, now)) continue;
-      const applied = await this.effects.setLocked(state.guildId, state.channelId, false);
+      const applied = await this.unlock(state);
       if (!applied.ok) {
         // Leave the record in place: an unlock we could not perform must be
         // retried next tick, not forgotten with the channels still locked.

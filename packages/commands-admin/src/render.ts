@@ -3,12 +3,15 @@
  * phrasing for each way a Discord effect can refuse.
  */
 import type {
+  ActionRowView,
   ApplicationDTO,
+  ButtonView,
   EmbedFieldView,
   EmbedView,
   FilterTestDTO,
   GuildEffectError,
   InfractionDTO,
+  LockdownStateDTO,
   ModerationActionDTO,
   SafetyError,
   SafetyStatusDTO,
@@ -16,6 +19,7 @@ import type {
   WordlistRuleDTO,
 } from "@sbr/shared-types";
 import { padInlineRow } from "@sbr/shared-types";
+import { card, facts, field } from "@sbr/embed-kit";
 import { describeState, punishmentState } from "@sbr/moderation";
 import {
   formatRemaining,
@@ -426,4 +430,169 @@ export function renderTicketEmbed(ticket: TicketDTO): EmbedView {
     footer: `id ${ticket.id}`,
     color: ticket.status === "CLOSED" ? "NEUTRAL" : "INFO",
   };
+}
+
+// ─────────────────── Lockdown (ADMIN_BOT.md §6) ───────────────────
+
+/**
+ * `/lockdown` is one command with a card, not two commands and a `confirm:true`.
+ *
+ * `confirm:true` is typed on the same line as the mistake, by the same person,
+ * in the same second — it confirms nothing. A card that names what is about to
+ * shut, and a button that says so, is a second look with the facts in it. And
+ * one command means a staffer under pressure never has to remember which of two
+ * names ends a lockdown: whatever is in force, `/lockdown` shows the way out.
+ */
+export const LOCKDOWN_NAMESPACE = "lockdown";
+
+/**
+ * How much of a reason survives into the button.
+ *
+ * The reason has to reach the confirm click, and a button carries its state in
+ * a customId Discord caps at 100 characters. The widest id this builds is
+ * `lockdown:channel:<19-digit id>:<duration>:` at ~40, so 60 always fits. The
+ * card shows the reason already trimmed to this, so what the reader approves is
+ * exactly what gets recorded — a silent truncation after the click would not be.
+ */
+export const LOCKDOWN_REASON_MAX = 60;
+
+export interface LockdownPrompt {
+  /** Where the command was typed — the channel the "here" button locks. */
+  readonly channelId: string | null;
+  readonly reason: string;
+  /** As typed (`30m`), not parsed: the button carries the same token onward. */
+  readonly duration: string | null;
+  /** Set when a click found the world had changed under it. */
+  readonly notice?: string;
+  readonly now?: Date;
+}
+
+export function trimLockdownReason(raw: string | null): string {
+  const reason = (raw ?? "").trim();
+  return reason.length > LOCKDOWN_REASON_MAX ? `${reason.slice(0, LOCKDOWN_REASON_MAX - 1).trimEnd()}…` : reason;
+}
+
+/** `lockdown:<action>:<channel|->:<duration|->:<reason>` — all the click needs. */
+export function lockdownId(action: LockdownAction, prompt: LockdownArgs): string {
+  return [LOCKDOWN_NAMESPACE, action, prompt.channelId ?? "-", prompt.duration ?? "-", prompt.reason].join(":");
+}
+
+export type LockdownAction = "channel" | "server" | "lift";
+
+export interface LockdownArgs {
+  readonly channelId: string | null;
+  readonly duration: string | null;
+  readonly reason: string;
+}
+
+const LOCKDOWN_ACTIONS: readonly string[] = ["channel", "server", "lift"];
+
+/**
+ * Parse a lockdown button back into arguments.
+ *
+ * The reason is the remainder rather than one more segment, because a reason
+ * may contain a colon and losing half of it at the click is exactly the kind of
+ * silent edit this command must not make.
+ */
+export function parseLockdownId(
+  segments: readonly string[],
+): ({ readonly action: LockdownAction } & LockdownArgs) | null {
+  const [action, channelId, duration, ...rest] = segments;
+  if (action === undefined || !LOCKDOWN_ACTIONS.includes(action)) return null;
+  const dash = (raw: string | undefined): string | null => (raw === undefined || raw === "-" ? null : raw);
+  return {
+    action: action as LockdownAction,
+    channelId: dash(channelId),
+    duration: dash(duration),
+    reason: rest.join(":"),
+  };
+}
+
+function lockScope(lock: LockdownStateDTO): string {
+  return lock.scope === "SERVER" ? "the whole server" : lock.channelId ? `<#${lock.channelId}>` : "one channel";
+}
+
+function startedAt(lock: LockdownStateDTO | null): Date | null {
+  if (!lock) return null;
+  const at = Date.parse(lock.startedAt);
+  return Number.isFinite(at) ? new Date(at) : null;
+}
+
+/**
+ * The card `/lockdown` answers with — either "here is what will shut" or "here
+ * is what is already shut and how to end it".
+ *
+ * Public, not ephemeral: the buttons are gated by role, so the only thing an
+ * onlooker gains is knowing the server is locked, which they were about to find
+ * out by trying to type. In exchange, confirming updates this same message into
+ * the record of what happened, so the warning and the announcement are one
+ * message rather than two that can disagree.
+ */
+export function renderLockdownEmbed(status: SafetyStatusDTO, prompt: LockdownPrompt): EmbedView {
+  const lock = status.lockdown;
+  const target = prompt.channelId ? `<#${prompt.channelId}>` : "this channel";
+  const headline = lock
+    ? `${lockScope(lock)} is locked.`
+    : `Nothing is locked. Choose what to shut — ${target}, or the whole server.`;
+
+  const detail = lock
+    ? facts([
+        { label: "Locked", value: lockScope(lock) },
+        { label: "By", value: `<@${lock.actorDiscordId}>` },
+        { label: "Reason", value: lock.reason },
+        { label: "Lifts", value: lock.expiresAt ? relativeTs(lock.expiresAt) : "only when a staffer ends it" },
+        ...(lock.absorbedChannelId
+          ? [{ label: "Absorbed", value: `<#${lock.absorbedChannelId}>` }]
+          : []),
+      ])
+    : facts([
+        { label: "Reason", value: prompt.reason === "" ? "none given" : prompt.reason },
+        { label: "Duration", value: prompt.duration ?? "none — it stays until lifted" },
+        { label: "Effect", value: "@everyone loses Send Messages. Channels already shut stay shut." },
+      ]);
+
+  return card({
+    tone: lock ? "DANGER" : "WARNING",
+    title: "Lockdown",
+    headline: prompt.notice ? `${prompt.notice}\n\n${headline}` : headline,
+    fields: [field(lock ? "In force" : "About to happen", detail)],
+    // A lock is dated from when it started; a fresh prompt from now. An
+    // unparseable stored date falls back rather than throwing: a card without an
+    // age still tells staff the server is shut, and a thrown render tells them
+    // nothing at all.
+    timestamp: (startedAt(lock) ?? prompt.now ?? new Date()).toISOString(),
+  });
+}
+
+/**
+ * The buttons under the card.
+ *
+ * With a channel lock in force this always offers *both* ways forward: end it,
+ * or widen it to the server. A staffer who types `/lockdown` in the wrong
+ * channel during a raid is not asking a question about that channel — they are
+ * trying to stop something, and the answer they need is on the card in front of
+ * them rather than in a second command they have to remember the name of.
+ */
+export function renderLockdownControls(
+  status: SafetyStatusDTO,
+  prompt: LockdownArgs,
+): readonly ActionRowView[] {
+  const lock = status.lockdown;
+  const buttons: ButtonView[] = [];
+
+  if (lock) {
+    buttons.push({ label: "Lift the lockdown", style: "SUCCESS", customId: lockdownId("lift", prompt) });
+    if (lock.scope === "CHANNEL") {
+      buttons.push({
+        label: "Lock the whole server",
+        style: "DANGER",
+        customId: lockdownId("server", prompt),
+      });
+    }
+  } else {
+    buttons.push({ label: "Lock this channel", style: "DANGER", customId: lockdownId("channel", prompt) });
+    buttons.push({ label: "Lock the whole server", style: "DANGER", customId: lockdownId("server", prompt) });
+  }
+
+  return [{ buttons }];
 }

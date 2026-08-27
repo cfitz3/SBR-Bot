@@ -24,17 +24,27 @@ function store(): SafetyStateStore & { locks: Map<string, LockdownStateDTO>; rai
   };
 }
 
-function effects(over: Partial<GuildEffects> = {}): GuildEffects & { locked: boolean[] } {
+function effects(
+  over: Partial<GuildEffects> = {},
+): GuildEffects & { locked: boolean[]; calls: { channelId: string | null; on: boolean }[] } {
   const locked: boolean[] = [];
+  const calls: { channelId: string | null; on: boolean }[] = [];
   return {
     locked,
+    calls,
     async kick() { return ok(undefined); },
     async ban() { return ok(undefined); },
     async unban() { return ok(undefined); },
     async timeout() { return ok(undefined); },
     async untimeout() { return ok(undefined); },
     async purge() { return ok(0); },
-    async setLocked(_g, _c, on) { locked.push(on); return ok(1); },
+    // A server-wide lock shuts two of the three text channels: `chat` and
+    // `help` were open, `archive` was already shut and is not in the result.
+    async setLocked(_g, c, on) {
+      locked.push(on);
+      calls.push({ channelId: c, on });
+      return ok(c === null ? ["chat", "help"] : [c]);
+    },
     ...over,
   };
 }
@@ -99,7 +109,7 @@ test("lifting a lockdown unlocks Discord and clears the record", async () => {
   await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "SERVER", reason: "raid" });
   const lifted = await svc.liftLockdown("g");
   assert.equal(lifted.ok && lifted.value?.reason, "raid");
-  assert.deepEqual(e.locked, [true, false]);
+  assert.deepEqual(e.locked, [true, false, false]);
   assert.equal(s.locks.size, 0);
 });
 
@@ -128,7 +138,7 @@ test("the expiry sweep actually reopens the channels", async () => {
   await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "SERVER", reason: "raid", durationSeconds: 60 });
   clock = new Date(T0.getTime() + 120_000);
   assert.equal(await svc.sweepExpired(), 1);
-  assert.deepEqual(e.locked, [true, false]);
+  assert.deepEqual(e.locked, [true, false, false]);
   assert.equal(s.locks.size, 0);
 });
 
@@ -136,9 +146,9 @@ test("an unlock the sweep couldn't perform is retried rather than forgotten", as
   const s = store();
   let allow = false;
   const e = effects({
-    async setLocked(_g, _c, on) {
+    async setLocked(_g, c, on) {
       if (!on && !allow) return err({ kind: "FAILED" as const, detail: "network" });
-      return ok(1);
+      return ok(c === null ? ["c1", "c2"] : [c]);
     },
   });
   let clock = T0;
@@ -179,4 +189,81 @@ test("an elapsed anti-raid posture can be re-enabled without an off first", asyn
   clock = new Date(T0.getTime() + 120_000);
   const again = await svc.enableAntiRaid({ guildId: "g", actorDiscordId: "u", sensitivity: "HIGH" });
   assert.equal(again.ok, true);
+});
+
+test("lifting reopens exactly what the lock shut, and nothing else", async () => {
+  // The bug: lifting called `setLocked(guild, null, false)`, which walked every
+  // text channel and granted Send Messages back. Channels the server had
+  // deliberately kept shut — archives, staff rooms, a channel some officer
+  // locked last month — came open as a side effect of a raid ending. The port
+  // now reports which channels it actually changed, and the lift undoes those.
+  const e = effects();
+  const { svc } = make({ effects: e });
+  await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "SERVER", reason: "raid" });
+  await svc.liftLockdown("g");
+  assert.deepEqual(
+    e.calls.filter((c) => !c.on).map((c) => c.channelId),
+    ["chat", "help"],
+    "`archive` was already shut before the lockdown and stays shut after it",
+  );
+});
+
+test("a server lock swallows a channel lock rather than being refused", async () => {
+  // A raid that starts in one channel and spreads is the ordinary case. The old
+  // code answered the escalation with ALREADY_ACTIVE, so the way to widen a
+  // lockdown was to lift it first — briefly reopening the channel the raid was
+  // in.
+  const s = store();
+  const e = effects();
+  const { svc } = make({ store: s, effects: e });
+  await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "CHANNEL", channelId: "chat", reason: "raid" });
+  const wider = await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "SERVER", reason: "spreading" });
+  assert.equal(wider.ok, true);
+  if (!wider.ok) return;
+  assert.equal(wider.value.scope, "SERVER");
+  assert.equal(wider.value.absorbedChannelId, "chat", "the card can say where the earlier lock went");
+  assert.equal(s.locks.size, 1, "one posture, not two records fighting over the same guild");
+  assert.deepEqual([...(wider.value.lockedChannelIds ?? [])].sort(), ["chat", "help"]);
+});
+
+test("the fold leaves no channel orphaned when the wider lock lifts", async () => {
+  // Inheriting the absorbed lock's channels is the whole point: without it the
+  // channel locked first is unlocked by nobody, because the record naming it
+  // was replaced.
+  const e = effects();
+  const { svc } = make({ effects: e });
+  await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "CHANNEL", channelId: "quiet", reason: "raid" });
+  await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "SERVER", reason: "spreading" });
+  await svc.liftLockdown("g");
+  assert.deepEqual(
+    e.calls.filter((c) => !c.on).map((c) => c.channelId).sort(),
+    ["chat", "help", "quiet"],
+  );
+});
+
+test("a channel lock does not swallow the server lock already in force", async () => {
+  // Escalation is one-way. Narrowing has to be a lift and a re-lock, so that
+  // "lock this channel" can never quietly reopen the rest of the server.
+  const { svc } = make();
+  await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "SERVER", reason: "raid" });
+  const narrower = await svc.lockdown({
+    guildId: "g", actorDiscordId: "u", scope: "CHANNEL", channelId: "chat", reason: "still",
+  });
+  assert.equal(narrower.ok, false);
+  if (narrower.ok) return;
+  assert.equal(narrower.error.kind, "ALREADY_ACTIVE");
+});
+
+test("a legacy record with no channel list still lifts, the old way", async () => {
+  // Rows written before the port reported ids have `lockedChannelIds: null`.
+  // Refusing to lift them, or lifting nothing, would strand a live lockdown on
+  // the deploy that fixed lockdowns.
+  const s = store();
+  const e = effects();
+  const { svc } = make({ store: s, effects: e });
+  await svc.lockdown({ guildId: "g", actorDiscordId: "u", scope: "CHANNEL", channelId: "chat", reason: "raid" });
+  const stored = s.locks.get("g");
+  if (stored) s.locks.set("g", { ...stored, lockedChannelIds: null });
+  await svc.liftLockdown("g");
+  assert.deepEqual(e.calls.filter((c) => !c.on).map((c) => c.channelId), ["chat"]);
 });
