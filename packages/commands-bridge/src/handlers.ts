@@ -837,6 +837,11 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       capability: "RUN_COMMAND",
       cooldownMs: 15_000,
       inGame: true,
+      // Retired: every number it printed is on a card that says more about it —
+      // skills on /skills, slayer on /slayers, catacombs on /dungeons, the
+      // headline figures on /profile. A summary of four better commands is a
+      // fifth thing to learn, not a shortcut.
+      enabled: false,
       handler: stats,
     },
     {
@@ -861,14 +866,18 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       handler: slayer,
     },
     {
-      // Kept for one release after the rename. Same handler, same options — the
-      // dispatcher adds the "now /slayers" notice from `deprecatedBy`.
+      // The release it was kept for has passed. It has been answering with the
+      // "now /slayers" notice since the rename, which is long enough for the
+      // habit to have moved; leaving it registered forever makes the deprecation
+      // permanent instead of temporary. The spec stays so the in-game alias
+      // table and the tests that cover the notice keep something to point at.
       name: "slayer",
       description: "Deprecated — use /slayers",
       options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
       capability: "RUN_COMMAND",
       cooldownMs: 15_000,
       inGame: true,
+      enabled: false,
       handler: slayer,
       deprecatedBy: "slayers",
     },

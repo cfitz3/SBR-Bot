@@ -52,6 +52,10 @@ export function tagSpecs(): CommandSpec[] {
         },
       ],
       cooldownMs: 5_000,
+      // Retired: canned replies are a staff tool wearing a member command. The
+      // tags themselves stay — the ticket flow posts them, and the panel edits
+      // them — but nobody was invoking this by hand.
+      enabled: false,
       handler: tag,
       async autocomplete(focused, ctx, deps) {
         if (deps.tags === undefined) return [];

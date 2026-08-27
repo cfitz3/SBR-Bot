@@ -18,7 +18,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 > ### Retired commands
 >
-> Nine commands are flagged `enabled: false` and are **absent from Discord's
+> Thirteen commands are flagged `enabled: false` and are **absent from Discord's
 > command list**, from `/help`, and from guild chat. They are not deleted: the
 > handlers stay compiled and under test, and turning one back on is a one-line
 > change. Sections 4 and 6 below still describe them, because what they did is
@@ -36,6 +36,14 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 >   channel slot. Parties get formed in guild chat; the board went stale faster
 >   than anyone closed a post. `/perm` stays: the party lists it keeps are
 >   useful on their own, and `LFGPost` / `LFGActivity` rows are untouched.
+> - **Covered elsewhere** — `/stats`, `/slayer`, `/guildquote`, `/tag`. Every
+>   number `/stats` printed is on a card that says more about it (§3), so it was
+>   a fifth thing to learn rather than a shortcut. `/slayer` has been answering
+>   with a "now `/slayers`" notice since the rename, which was meant to last one
+>   release; leaving it registered makes a temporary deprecation permanent.
+>   `/guildquote` returns one of a static handful of lines nobody has added to.
+>   `/tag` is a staff tool wearing a member command — the tags themselves stay,
+>   posted by the ticket flow and edited from the panel.
 >
 > The flag is honoured in three places — `toSlashCommands` (so the command
 > leaves Discord's registry), the dispatcher (so a stale client is refused with

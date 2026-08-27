@@ -346,6 +346,10 @@ export function funSpecs(): readonly CommandSpec[] {
       description: "A quote from the guild's collection",
       cooldownMs: 15_000,
       inGame: true,
+      // Retired: the collection is a static list nobody has added to, so the
+      // command is a slash entry that returns one of the same few lines
+      // forever. It cost a registry slot and taught members nothing.
+      enabled: false,
       handler: guildquote,
     },
     {
