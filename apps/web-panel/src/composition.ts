@@ -19,6 +19,7 @@ import {
   moderationRepository,
   panelRepository,
   rankResolver,
+  staffGuildFinder,
   rolePolicyReader,
   wordlistRepository,
   activitySink,
@@ -40,7 +41,7 @@ import {
   RELAY_SYNC_SETTING_KEY,
   WordlistServiceImpl,
 } from "@sbr/moderation";
-import { PanelMutations, PanelService, type ConfigAuditSink } from "@sbr/panel-core";
+import { PANEL_ACCESS_FLOOR, PanelMutations, PanelService, type ConfigAuditSink, type PanelSession } from "@sbr/panel-core";
 import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
 import { createRedisAdapters, getRedis, RUNNABLE_JOBS, startHeartbeat } from "@sbr/redis";
@@ -76,7 +77,15 @@ export interface PanelApp {
    * service and the guild resolver, and because it is an authorization decision
    * that deserves to sit next to the others rather than inline in a route.
    */
-  canReadIngestDebug(discordId: string, manageableGuildIds: readonly string[]): Promise<boolean>;
+  canReadIngestDebug(session: PanelSession): Promise<boolean>;
+  /**
+   * Gate one's second route: the platform guilds where this account is staff.
+   *
+   * On the app rather than in the server for the same reason as the guard above
+   * — it needs a repository, and a login route reaching into Prisma directly
+   * would be the first place the panel stopped going through its ports.
+   */
+  staffGuildIds(discordId: string): Promise<readonly string[]>;
   shutdown(): Promise<void>;
 }
 
@@ -434,15 +443,21 @@ export async function createPanelApp(): Promise<PanelApp> {
   });
 
   /**
-   * ADMIN in any guild the viewer can manage. Reading another member's raw
+   * ADMIN in any guild the viewer can address. Reading another member's raw
    * client events is a staff action, so it takes the capability that gates the
    * other staff surfaces rather than a bare signed-in session.
+   *
+   * The ids in a session are internal `Guild.id`s. This used to run each one
+   * through `resolveInternalId`, which looks up a *Discord snowflake* — so
+   * every id resolved to null, the loop fell through, and the endpoint was shut
+   * to everybody including the admins it was written for. It failed closed,
+   * which is why nothing was ever compromised and also why nothing was ever
+   * reported: a debug route that answers 403 looks like a debug route nobody
+   * uses.
    */
-  async function canReadIngestDebug(discordId: string, manageableGuildIds: readonly string[]): Promise<boolean> {
-    for (const discordGuildId of manageableGuildIds.slice(0, 25)) {
-      const internalId = await guildRepository.resolveInternalId(discordGuildId).catch(() => null);
-      if (internalId === null) continue;
-      if (await identity.hasCapability(internalId, discordId, "ADMIN").catch(() => false)) return true;
+  async function canReadIngestDebug(session: PanelSession): Promise<boolean> {
+    for (const guildId of session.manageableGuildIds.slice(0, 25)) {
+      if (await identity.hasCapability(guildId, session.discordId, "ADMIN").catch(() => false)) return true;
     }
     return false;
   }
@@ -461,6 +476,7 @@ export async function createPanelApp(): Promise<PanelApp> {
     ingest,
     resolveGuild: guildRepository.resolveInternalId,
     canReadIngestDebug,
+    staffGuildIds: (discordId) => staffGuildFinder.staffGuildIds(discordId, PANEL_ACCESS_FLOOR),
     async shutdown() {
       ingest.shutdown();
       stopHeartbeat();

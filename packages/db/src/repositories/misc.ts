@@ -12,6 +12,7 @@ import {
   resolveMemberRole,
   type RolePolicy,
 } from "@sbr/guild-config";
+import { rankOfRole } from "@sbr/shared-types";
 import type { BridgeCapability, MemberRole } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
@@ -56,6 +57,40 @@ export const rankResolver = {
       parseRoleBindings(config?.roleMappings),
       parseRolePolicy(policyRaw?.value),
     );
+  },
+};
+
+/**
+ * The reverse of `rankResolver.getRole`: every guild where this account holds
+ * `minRole` or better.
+ *
+ * The panel needs it at login, to decide which guilds a session may address.
+ * No query answers it directly, because a member's role is *derived* — the
+ * stored role, their Discord roles and their in-game rank combined against a
+ * per-guild policy — so the honest implementation finds the guilds they are a
+ * member of and resolves each one properly. A stored-role filter in SQL would
+ * be faster and wrong in both directions: it would miss a moderator whose rank
+ * comes from a Discord role, and admit one whose `roleOverride` demoted them.
+ *
+ * The membership list is the bound. Someone in a hundred platform guilds costs
+ * a hundred small reads at login and nowhere else, and no real deployment is
+ * near that; `take` is a backstop against a pathological row set rather than a
+ * paging scheme.
+ */
+export const staffGuildFinder = {
+  async staffGuildIds(discordId: string, minRole: MemberRole): Promise<readonly string[]> {
+    const memberships = await prisma.guildMember.findMany({
+      where: { discordUser: { discordId }, guild: { status: "ACTIVE" } },
+      select: { guildId: true },
+      take: 200,
+    });
+
+    const out: string[] = [];
+    for (const { guildId } of memberships) {
+      const role = await rankResolver.getRole(guildId, discordId);
+      if (role !== null && rankOfRole(role) >= rankOfRole(minRole)) out.push(guildId);
+    }
+    return out;
   },
 };
 

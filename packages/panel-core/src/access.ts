@@ -1,16 +1,47 @@
 /**
  * Two-gate access control (WEB_PANEL.md §2). A guild-scoped request is allowed
- * only when BOTH hold: the guild is in the user's manageable set (Discord
- * MANAGE_GUILD ∩ platform Guild record), AND the user's platform role meets the
- * page's required tier. Enforced server-side; UI gating is cosmetic.
+ * only when BOTH hold: the guild is in the session's addressable set, AND the
+ * user's platform role meets the page's or the mutation's required tier.
+ * Enforced server-side; UI gating is cosmetic.
+ *
+ * Gate one used to be Discord MANAGE_GUILD alone, which made the tier table
+ * below decorative: every tier under ADMIN described people who could not sign
+ * in. It is now MANAGE_GUILD *or* a platform staff role at
+ * `PANEL_ACCESS_FLOOR`, so the ladder the platform maintains is the ladder the
+ * panel runs on and gate two does the work it was written to do.
+ *
+ * The two gates are not redundant. Gate one answers "may this session address
+ * this guild at all", cheaply and from the session, and it is what stops a
+ * guild id swapped in a URL from reaching a service call. Gate two answers "may
+ * this person do this particular thing", freshly, against the current role —
+ * which matters because gate one's answer is up to six hours old.
  */
 import { rankOf } from "@sbr/moderation";
 import type { MemberRole } from "@sbr/shared-types";
 
 export interface PanelSession {
   readonly discordId: string;
-  /** Guilds the user can manage AND that the platform knows about. */
+  /**
+   * Gate one: the platform guilds this session may address at all.
+   *
+   * Historically "guilds Discord says you manage", which is where the name
+   * comes from; it is now the union of those and the guilds where the platform
+   * records this account at `PANEL_ACCESS_FLOOR` or above. Kept under the old
+   * name so sessions already in Redis stay valid across the deploy rather than
+   * signing every member of staff out at once.
+   *
+   * Internal `Guild.id` values, not Discord snowflakes.
+   */
   readonly manageableGuildIds: readonly string[];
+  /**
+   * Of those, the ones Discord itself says the user manages.
+   *
+   * Separate because a handful of decisions are about Discord authority rather
+   * than platform rank, and folding them together would silently hand those to
+   * anyone the platform had made a Moderator. Absent on sessions minted before
+   * the split, where the two sets were the same thing — see `managesInDiscord`.
+   */
+  readonly discordManagedGuildIds?: readonly string[];
   /**
    * Double-submit CSRF token, minted at login and mirrored into a readable
    * cookie the client echoes back in a header.
@@ -96,12 +127,11 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // The one page that asks for nothing above being a member: it shows standings
   // that are already public to the guild on Discord, and holds no action at all.
   //
-  // Note what this tier does *not* do today. Gate one still requires the guild
-  // to be in the session's manageable set, which is built from Discord's
-  // MANAGE_GUILD — so in practice this page is reachable by the same people the
-  // rest of the panel is. Lowering the tier is still right: it states what the
-  // page needs, so that when a member-scoped session exists this page is
-  // already correct rather than quietly Admin-only. Flagged, not assumed.
+  // Gate one is what it does not reach past. `PANEL_ACCESS_FLOOR` is MODERATOR,
+  // so no session that could open this page belongs to a plain member today.
+  // The tier stays MEMBER because it states what the page needs: if a
+  // member-scoped session is ever minted, this page is already correct instead
+  // of quietly staff-only.
   leaderboard: "MEMBER",
   directory: "MODERATOR",
   // The weights and caps every member's standing is derived from, plus the one
@@ -110,6 +140,30 @@ export const PAGE_TIERS: Readonly<Record<PanelPage, MemberRole>> = {
   // is XP created out of nothing.
   xp: "ADMIN",
 };
+
+/**
+ * The platform role that gets an account through gate one.
+ *
+ * MODERATOR, because that is the lowest tier any staff page asks for, and gate
+ * two refuses anything above it per page and per mutation. Deliberately not
+ * MEMBER: `leaderboard` sits at MEMBER to state what the page needs, but the
+ * panel as a whole is a staff surface, and admitting every member would make
+ * one session-minting decision into a product change nobody asked for.
+ */
+export const PANEL_ACCESS_FLOOR: MemberRole = "MODERATOR";
+
+/**
+ * Whether Discord — not the platform's own ladder — says this session manages
+ * this guild.
+ *
+ * A session minted before the two sets were told apart has no
+ * `discordManagedGuildIds`, and for those the sets really were identical: gate
+ * one admitted MANAGE_GUILD holders and nobody else. Reading the old field is
+ * therefore accurate rather than a lenient fallback.
+ */
+export function managesInDiscord(session: PanelSession, guildId: string): boolean {
+  return (session.discordManagedGuildIds ?? session.manageableGuildIds).includes(guildId);
+}
 
 export type DenyReason = "NOT_AUTHENTICATED" | "NOT_MANAGEABLE" | "INSUFFICIENT_ROLE";
 

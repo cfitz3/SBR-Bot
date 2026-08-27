@@ -4,7 +4,7 @@ Design for `apps/web-panel` — the Discord-OAuth control suite that configures 
 
 **Core principles**
 - **Discord OAuth is the only login.** No local passwords.
-- **You only see guilds you can manage** (Discord `MANAGE_GUILD`) *and* where our platform has a `Guild` record.
+- **You only see guilds you can manage** — either Discord `MANAGE_GUILD` over a server the platform has a `Guild` record for, or moderator rank or above on that guild here. See `docs/PANEL_SECURITY.md` for the whole model.
 - **Depth of configuration follows the bot.** If a bot isn't present / lacks permissions in a guild, the panel shows what it can and gates the rest behind a clear "bot not installed / missing permission" state — it never lets you configure something the bot can't enforce.
 - **The panel commands, it doesn't bypass.** Writes go through the same domain services the bots use; changes propagate via Redis cache invalidation + pub/sub so bots pick them up without redeploy.
 
@@ -125,7 +125,7 @@ Almost every config field used to be a Discord snowflake the operator copied out
 5. Sessions are short-lived with sliding renewal; refresh tokens rotate. `/logout` revokes the session and clears the cookie.
 
 ### Guild visibility
-- **Manageable set** = guilds where the user's Discord permissions include `MANAGE_GUILD` **∩** guilds that have a `Guild` row in our DB.
+- **Manageable set** = the union of two routes: guilds where the user's Discord permissions include `MANAGE_GUILD` **∩** guilds with a `Guild` row in our DB, plus guilds where their *derived* platform role reaches `PANEL_ACCESS_FLOOR` (`MODERATOR`). The Discord-authority half is kept separately as `discordManagedGuildIds`, so a decision that genuinely turns on Discord's authority asks `managesInDiscord()` rather than the wider set.
 - The guild list is cached in the session (short TTL) and re-validated on entering guild-scoped pages, so a revoked Discord permission can't linger.
 - **Bot presence** is resolved per guild: `INSTALLED` (bot in server + healthy), `MISSING_PERMISSIONS` (present but lacking required Discord perms), `NOT_INSTALLED` (offer invite link). This drives what each page enables.
 
@@ -375,10 +375,9 @@ page without controls, not for no page.
   Categories derived at read time say so instead.
 - **Access: MEMBER** — the only page at that tier, because it holds nothing
   above what the guild already reads in Discord. **This does not currently widen
-  reach**: gate one still requires the guild to be in the session's manageable
-  set, which is built from Discord `MANAGE_GUILD`, so in practice the same
-  people reach it as reach everything else. The tier is declared honestly so the
-  page is already correct the day a member-scoped session exists.
+  reach**: gate one admits nobody below `PANEL_ACCESS_FLOOR` (`MODERATOR`), so
+  in practice the same people reach it as reach everything else. The tier is
+  declared honestly so the page is already correct the day the floor moves.
 
 **The weekly digest.** The `leaderboard` channel slot is consumed by a
 `leaderboard-post` worker job (Sundays, 18:23 local to the worker), which offers
@@ -552,7 +551,7 @@ Stickies (`/sticky`) have **no panel surface**; they are managed from Discord.
 ## 6. Summary of Access-Control Rules
 
 1. **Login only via Discord OAuth**; sessions in Redis, tokens encrypted, sliding expiry + refresh rotation.
-2. **Guild visibility = Discord `MANAGE_GUILD` ∩ platform `Guild` record**, re-validated on entry.
+2. **Guild visibility = (Discord `MANAGE_GUILD` ∩ platform `Guild` record) ∪ (platform role ≥ `MODERATOR`)**, resolved at login and re-checked on entry. Full write-up in `docs/PANEL_SECURITY.md`.
 3. **Every guild-scoped action authorized server-side** against `GuildMember.role`; UI gating is cosmetic only.
 4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (events/bridge/unlink) < Admin/Owner (settings — config, mapping, flags, screening, XP — plus health/milestones/ticket config/chat filter + escalation). Officer gates mutations only; no whole page turns on it since Recruitment went away (§3.7). Note the split: working a ticket is Staff, but *configuring which tickets exist* is Admin, because a type names roles and channels. The filter sits at the same tier for the same kind of reason: a rule blocks or shadow-mutes at relay time and a ladder rung mutes or bans off a count, both with nobody in the loop.
 5. **Rank hierarchy** enforced on actions targeting people.
