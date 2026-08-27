@@ -3,25 +3,37 @@ import test from "node:test";
 import type { TicketCategoryInput } from "@sbr/shared-types";
 import {
   CATEGORY_LIMITS,
+  PERMANENT_CATEGORY_KEYS,
   SEED_CATEGORIES,
   categoryById,
   categoryByKey,
   findCategory,
+  isPermanentCategory,
   openableCategories,
   orderCategories,
   validateCategory,
 } from "./categories.js";
 import { category } from "./fixtures.test.js";
 
-test("the five former enum values are seeded, in a stable order", () => {
+test("the five former enum values are seeded, in a stable order, then BUG", () => {
   assert.deepEqual(
     SEED_CATEGORIES.map((c) => c.key),
-    ["SUPPORT", "REPORT", "APPEAL", "APPLICATION", "OTHER"],
+    ["SUPPORT", "REPORT", "APPEAL", "APPLICATION", "OTHER", "BUG"],
   );
   assert.deepEqual(
     SEED_CATEGORIES.map((c) => c.position),
-    [0, 1, 2, 3, 4],
+    [0, 1, 2, 3, 4, 5],
   );
+});
+
+test("BUG is the only category a guild may not take away", () => {
+  // Narrow on purpose. Everything else about it — name, emoji, staff roles,
+  // questions, position — is still the guild's; only the two operations that
+  // would break the button under every platform error are off the table.
+  assert.deepEqual(PERMANENT_CATEGORY_KEYS, ["BUG"]);
+  for (const c of SEED_CATEGORIES) {
+    assert.equal(isPermanentCategory(c.key), c.key === "BUG", c.key);
+  }
 });
 
 test("ordering is by position, then by name", () => {

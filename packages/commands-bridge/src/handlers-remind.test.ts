@@ -9,6 +9,7 @@ import {
   reminderSpecs,
 } from "./handlers-remind.js";
 import type { CommandContext, HandlerDeps } from "./types.js";
+import { copy } from "@sbr/brand";
 
 const GUILD = "guild-1";
 const CALLER = "111";
@@ -109,7 +110,7 @@ test("a surface with no channel is told so rather than having the reminder dropp
   const reply = await run("remind", recordArgs({ when: "2h", about: "x" }), s, { channelId: undefined });
 
   assert.deepEqual(s.created, []);
-  assert.match(reply.text, /need a channel/);
+  assert.equal(reply.text, copy.error.surface.needsChannel);
 });
 
 test("too soon, too far out, and unparseable are each refused with their own reason", async () => {
@@ -120,7 +121,7 @@ test("too soon, too far out, and unparseable are each refused with their own rea
 
   assert.match(soon.text, /shortest/);
   assert.match(far.text, /longest/);
-  assert.match(junk.text, /didn't understand/);
+  assert.equal(junk.text, copy.error.badDuration);
   assert.deepEqual(s.created, []);
 });
 

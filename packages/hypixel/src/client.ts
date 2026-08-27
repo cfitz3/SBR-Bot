@@ -197,6 +197,22 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * What the last upstream call did, for `/health` and the panel's Health page.
+ *
+ * Three reasons rather than an error string, because this is read by a card a
+ * member can see: "rate limited" is a fact about us, "API disabled" is a fact
+ * about our key, "unreachable" is a fact about Hypixel, and each of the three
+ * is a different sentence to whoever is reading. An arbitrary message would be
+ * a fourth thing to sanitise on the way out.
+ */
+export interface HypixelObservation {
+  /** ISO timestamp of the attempt — an old observation is not current news. */
+  readonly at: string;
+  readonly ok: boolean;
+  readonly reason?: "RATE_LIMITED" | "API_DISABLED" | "UNREACHABLE";
+}
+
 export class HypixelClient implements HypixelSocialLookup {
   private readonly apiKey: string | undefined;
   private readonly http: HttpFetcher;
@@ -214,6 +230,19 @@ export class HypixelClient implements HypixelSocialLookup {
    * making every cache miss pay a network round trip for a lock.
    */
   private readonly inflight = new Map<string, Promise<HypixelResult<unknown>>>();
+  /**
+   * The outcome of the last request that actually left the process.
+   *
+   * Recorded so `/health` can answer "is Hypixel answering us" without asking
+   * Hypixel. The alternative — a probe request per health check — spends the
+   * guild's shared rate budget to produce a diagnostic, and does it on the one
+   * command members are told to run when things are already going wrong.
+   *
+   * Cache hits deliberately do not touch it. A hit is evidence about our cache,
+   * not about upstream, and letting it read as "ok" would paper over an outage
+   * for exactly as long as the TTLs held.
+   */
+  private upstream: HypixelObservation | null = null;
 
   constructor(opts: HypixelClientOptions) {
     this.apiKey = opts.apiKey;
@@ -243,6 +272,15 @@ export class HypixelClient implements HypixelSocialLookup {
     });
     this.inflight.set(req.key, pending as Promise<HypixelResult<unknown>>);
     return pending;
+  }
+
+  /** The last upstream outcome, or null if nothing has left the process yet. */
+  lastUpstream(): HypixelObservation | null {
+    return this.upstream;
+  }
+
+  private observe(ok: boolean, reason?: HypixelObservation["reason"]): void {
+    this.upstream = { at: new Date().toISOString(), ok, ...(reason ? { reason } : {}) };
   }
 
   private async fetch<T>(
@@ -298,6 +336,9 @@ export class HypixelClient implements HypixelSocialLookup {
           await this.sleep(backoffMs(attempt));
           continue;
         }
+        // Only once the retries are spent: a single blip that the next attempt
+        // recovers from is not something to put on a status card.
+        this.observe(false, "UNREACHABLE");
         return (
           stale() ??
           this.unavailable(req, error instanceof Error ? error.message : "network error")
@@ -305,6 +346,12 @@ export class HypixelClient implements HypixelSocialLookup {
       }
 
       this.rateGate.observe(res.headers, res.status);
+      // Anything with a status line means Hypixel is reachable; whether the
+      // answer was one we wanted is decided per status below.
+      this.observe(
+        res.status < 400,
+        res.status < 400 ? undefined : res.status === 429 ? "RATE_LIMITED" : "UNREACHABLE",
+      );
 
       if (res.status === 200) {
         const dto = req.normalize(res.json);
@@ -327,6 +374,7 @@ export class HypixelClient implements HypixelSocialLookup {
 
       // Auth/permission problems are permanent: retrying just burns budget.
       if (res.status === 403 || res.status === 401) {
+        this.observe(false, "API_DISABLED");
         return hypixelFailure("API_DISABLED", { message: "invalid or missing API key" });
       }
       return stale() ?? this.unavailable(req, `status ${res.status}`);

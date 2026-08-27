@@ -25,6 +25,7 @@ import type {
   MemberRecordSource,
   OptionType,
   PermService,
+  PlatformStatusSource,
   PlayerLookup,
   PricingService,
   ProgressionService,
@@ -164,6 +165,16 @@ export interface HandlerDeps {
    * and a deployment without Redis should lose `!cringe`, not `/me`.
    */
   readonly tallies?: TallyStore;
+  /**
+   * Platform status for `/health`, already curated for a member's eyes.
+   *
+   * Not the health aggregator: this port cannot be asked what a probe threw, so
+   * a member command holding it cannot print a hostname or a credential error
+   * however badly it is written. Optional like the rest — a deployment with no
+   * probes wired says `/health` is not set up rather than reporting an outage
+   * that is not happening.
+   */
+  readonly status?: PlatformStatusSource;
   /**
    * Where randomness comes from, for the fun commands. Injected so their tests
    * can assert on an outcome instead of on a distribution; production leaves it

@@ -4,6 +4,7 @@ import { noArgs, recordArgs } from "@sbr/shared-types";
 import type { CommandArgs, DiscordDirectory, DiscordUserInfo } from "@sbr/shared-types";
 import { infoSpecs } from "./handlers-info.js";
 import type { CommandContext, HandlerDeps } from "./types.js";
+import { copy } from "@sbr/brand";
 
 const GUILD = "guild-1";
 const CALLER = "111";
@@ -71,7 +72,7 @@ test("with no Discord surface wired, each command says so instead of answering",
     const reply = await run(name, noArgs);
     assert.equal(reply.ephemeral, true, name);
     assert.equal(reply.embed, undefined, name);
-    assert.match(reply.text, /only works from Discord/, name);
+    assert.equal(reply.text, copy.error.surface.discordOnly, name);
   }
 });
 

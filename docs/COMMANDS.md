@@ -192,8 +192,27 @@ staff configuration (`PLATFORM_EXPANSION_PLAN.md` §4).
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
+| `/health` | Whether the bot, guild chat and Hypixel are answering | Public | — | Embed: three fixed rows + a count of anything else unhealthy | None — an unwired deployment says so | The member bot's own `HealthRegistry`, curated by `curateStatus` |
 | `/help` | List commands / show help for one | Public | `command?` | Embed: command catalog or detail | Unknown command | Static + DB (feature flags to hide disabled cmds) |
 | `/online` | Who's in the guild right now, by rank | Public | — | Embed: rank sections + online/total counts | Bridge offline (temporary); no in-game bridge configured (permanent) — reported separately | In-game `/g online` via the bridge session (20s shared cache) |
+
+`/health` is where every user-facing error now points, which is what fixes both
+its shape and its permissions. Three named rows — guild chat, the bot, the
+Hypixel API — appear whether they are up or down, because a card listing only
+what is broken reads as "nothing else is checked". Everything else the registry
+probes is **counted, never named**: `PlatformStatusDTO` has no field for a
+component name or for what a probe threw, so a Postgres connection error naming
+our host cannot reach a member however the card is later edited. The count still
+rolls up, so `/health` cannot report all clear during a database outage. Public
+and ungated on purpose: a capability check would hide the diagnostic behind the
+permission whose absence a member might be trying to diagnose.
+
+The Hypixel row costs no API requests. The client records the outcome of its
+last real call and the probe reads that, because a probe request per health
+check would spend the guild's shared budget to produce a diagnostic — most of it
+exactly when members are running `/health` because something is already wrong.
+The honest cost: that row is as old as the last command anybody ran, and a
+failure older than five minutes stops counting.
 
 `/online` reads the **live** roster from the Mineflayer session rather than the
 Hypixel API: the guild endpoint lists members but carries no presence, and
@@ -339,6 +358,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 | `!perm` | `/perm` | Run cmd (linked) | DB + member cache |
 | `!standing` | `/standing` | Run cmd (linked) | DB (`XpBalance`, `XpEvent`) |
 | `!help` | `/help` (condensed) | Public | Static |
+| `!health` | `/health` | Public | Registry (no Hypixel request) |
 | `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank`, `!cringe` | §20 | Public | None (Redis counter for `!cringe`) |
 
 `!standing` is `"linked"` although it writes nothing. XP is attributed to a

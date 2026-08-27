@@ -42,8 +42,10 @@ handler → usage capture. Never throws.
 - **Cooldown** is per `surface:command:user` in Redis, from the spec's
   `cooldownMs`. Denial reads *"Slow down — try that again in Ns."*
 - **A throwing handler** returns the upstream-unavailable message when the cause
-  is an unreachable data source, otherwise *"Something went wrong fetching that
-  — try again shortly."*
+  is an unreachable data source, otherwise the generic failure — *"That didn't
+  complete. Run `/health` to see whether the platform is up."* — with a button
+  opening the permanent bug-report ticket category. Both replies are built by
+  `failureReply` in `@sbr/embed-kit`, shared with the admin dispatcher.
 - **Autocomplete deliberately skips both gates** (Discord's 3s budget, and one
   request per keystroke would burn the cooldown before the command ran).
 

@@ -24,7 +24,7 @@ import type {
   TicketWorkingHoursDTO,
   ViewColor,
 } from "@sbr/shared-types";
-import { defaultSettings, orderCategories } from "@sbr/tickets";
+import { defaultSettings, isPermanentCategory, orderCategories } from "@sbr/tickets";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../client.js";
 
@@ -307,9 +307,21 @@ export const ticketConfigRepository = {
     return orderCategories(rows.map(toCategoryDTO));
   },
 
-  /** Create or update by `(guildId, key)`. `key` identifies; everything else is editable. */
+  /**
+   * Create or update by `(guildId, key)`. `key` identifies; everything else is editable.
+   *
+   * Except `enabled` on a permanent category. `BUG` is what the button under
+   * every platform error opens, so switching it off would break that button for
+   * every member, silently, at the moment something else is already broken.
+   * Forced here rather than refused, because an admin editing the bug
+   * category's name should not have their save rejected over a checkbox they
+   * were not thinking about — and rather than in each caller, because the panel
+   * and the admin bot both write through this.
+   */
   async upsertCategory(guildId: string, input: TicketCategoryInput): Promise<TicketCategoryDTO> {
-    const data = categoryData(input);
+    const data = isPermanentCategory(input.key)
+      ? { ...categoryData(input), enabled: true }
+      : categoryData(input);
     const row = await prisma.ticketCategory.upsert({
       where: { guildId_key: { guildId, key: input.key } },
       create: { guildId, key: input.key, ...data },
@@ -325,6 +337,10 @@ export const ticketConfigRepository = {
    * somebody tidied up the menu would be the worse failure.
    */
   async removeCategory(guildId: string, key: string): Promise<boolean> {
+    // The backstop, not the message. The panel refuses this before it gets here
+    // and says why; this exists so a second caller added later cannot delete the
+    // category the platform's error button depends on by simply not knowing.
+    if (isPermanentCategory(key)) return false;
     const { count } = await prisma.ticketCategory.deleteMany({ where: { guildId, key } });
     return count > 0;
   },

@@ -21,6 +21,8 @@
     "@sbr/commands-admin": "*",
     "@sbr/commands-bridge": "*",
     "@sbr/discord-kit": "*",
-    "@sbr/shared-types": "*"
+    "@sbr/embed-kit": "*",
+    "@sbr/shared-types": "*",
+    "@sbr/tickets": "*"
   }
 }

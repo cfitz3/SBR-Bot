@@ -14,6 +14,9 @@ import { toActionRow, toEmbed, type ComponentRouter } from "@sbr/discord-kit";
 import type { ActionRowView, EmbedView } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { ROLE_MENU_NAMESPACE, type RoleMenuGateway, type RoleMenuMessagePort } from "./role-menus.js";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 type SendableChannel = Extract<TextBasedChannel, { send: unknown; messages: unknown }>;
 
@@ -97,7 +100,7 @@ export function registerRoleMenuComponents(router: ComponentRouter, deps: RoleMe
 
     const held = heldRoles(interaction);
     if (held === null) {
-      await ephemeral(interaction, "I couldn't read your roles just now — try again in a moment.");
+      await ephemeral(interaction, E.generic.loadFailed);
       return;
     }
 

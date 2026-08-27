@@ -13,6 +13,9 @@
  */
 import type { CommandHandler, CommandReply, CommandSpec } from "./types.js";
 import type { GuildConfigService } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** The guild setting holding the Discord ids that have opted out. */
 export const LEVEL_OPT_OUT_KEY = "levels.optOut";
@@ -61,7 +64,7 @@ const levelalerts: CommandHandler = async (ctx, deps): Promise<CommandReply> => 
   else current.add(ctx.userId);
 
   const saved = await deps.config.setSetting(ctx.guildId, LEVEL_OPT_OUT_KEY, [...current]);
-  if (!saved.ok) return { ephemeral: true, text: "I couldn't save that just now — try again shortly." };
+  if (!saved.ok) return { ephemeral: true, text: E.generic.saveFailed };
 
   return {
     ephemeral: true,

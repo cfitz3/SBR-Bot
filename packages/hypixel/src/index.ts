@@ -6,8 +6,10 @@ export {
   HypixelClient,
   HypixelUnavailableError,
   type HypixelClientOptions,
+  type HypixelObservation,
   type PlayerReadOptions,
 } from "./client.js";
+export { hypixelCheck, OBSERVATION_TTL_MS } from "./health.js";
 export { InMemoryHypixelCache, InMemoryRateGate } from "./memory.js";
 export { fetchHttp } from "./http.js";
 export { decodeItemBytes, type DecodedItem } from "./nbt.js";

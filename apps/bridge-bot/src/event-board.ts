@@ -16,6 +16,9 @@ import { BOARD_STANDINGS, renderEventBoardEmbed, type EventBoardView } from "@sb
 import { isEventMetric } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type { EmbedView } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** The event row the board renders, as this side describes it. */
 export interface EventBoardRow {
@@ -165,7 +168,7 @@ export class EventBoardGateway {
       // Un-record first, exactly as a panel does: a stored id pointing at
       // nothing sends every future pass down the edit path to fail the same way.
       await this.d.events.bindBoardMessage(eventId, channelId, null, false).catch(() => undefined);
-      return { ok: false, problem: "NOT_POSTED", detail: "I couldn't post in the events channel — check my permissions there" };
+      return { ok: false, problem: "NOT_POSTED", detail: E.discord.cannotPost };
     }
     await this.d.events.bindBoardMessage(eventId, channelId, messageId, final);
     return { ok: true, channelId, messageId, edited: false, final };

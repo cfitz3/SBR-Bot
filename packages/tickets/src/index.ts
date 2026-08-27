@@ -8,10 +8,12 @@
  */
 export {
   CATEGORY_LIMITS,
+  PERMANENT_CATEGORY_KEYS,
   SEED_CATEGORIES,
   categoryById,
   categoryByKey,
   findCategory,
+  isPermanentCategory,
   openableCategories,
   orderCategories,
   validateCategory,

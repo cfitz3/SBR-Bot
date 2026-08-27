@@ -36,9 +36,10 @@ import {
   xpRepository,
   activitySink,
   podiumRepository,
+  pingDb,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
-import { fetchHttp, HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
+import { fetchHttp, HypixelClient, hypixelCheck, type SkyblockProfileDTO } from "@sbr/hypixel";
 import { SkykingsClient } from "@sbr/skykings";
 import { ScreeningService } from "@sbr/screening";
 import { CommunityServiceImpl, memberPodiumSource } from "@sbr/community";
@@ -82,11 +83,12 @@ import {
   type UsageSink,
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
-import { createLogger, type Logger } from "@sbr/observability";
+import { createLogger, curateStatus, HealthRegistry, pingCheck, type Logger } from "@sbr/observability";
 import {
   closeRedis,
   createRedisAdapters,
   getRedis,
+  pingRedis,
   startHeartbeat,
   type EventReminderMessage,
   type ModAckMessage,
@@ -577,6 +579,51 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
   };
 
+  // The two sockets this process holds, read through the same late-bound source
+  // the heartbeat uses. Declared here rather than beside the heartbeat because
+  // `/health` needs it too, and one view of the transport is the point — a
+  // second accessor would be a second thing to keep true.
+  let liveStatus: (() => BridgeStatusDetails) | null = null;
+  const flag = (key: string): boolean => liveStatus?.()[key] === true;
+
+  /**
+   * The member bot's own registry.
+   *
+   * Until now only the admin bot and the workers registered probes, because
+   * only they had a Health page to feed. `/health` gives this process the same
+   * obligation from the other end: a member asking "is it me or is it you" is
+   * asking about the two sockets *this* process holds, and no other process can
+   * answer that.
+   *
+   * Postgres and Redis are registered even though the card never names them.
+   * `curateStatus` counts them, and that count is what stops `/health` saying
+   * all clear during a database outage — the one failure the card exists to
+   * prevent being wrong about.
+   */
+  const health = new HealthRegistry();
+  health.register({
+    name: "discord",
+    // The gateway's own round-trip, which discord.js reports as -1 until the
+    // first heartbeat lands. Reported as unknown rather than as zero latency.
+    async check() {
+      const ping = liveStatus?.()["gatewayPingMs"];
+      const latencyMs = typeof ping === "number" && ping >= 0 ? ping : null;
+      return { status: flag("discordReady") ? "ok" : "down", latencyMs };
+    },
+  });
+  health.register({
+    name: "bridge",
+    // Spawned, not merely configured. A Mineflayer session mid-reconnect relays
+    // nothing, and a card that called that "up" would send a member to staff to
+    // report a bridge we already know is down.
+    async check() {
+      return { status: flag("mcSpawned") ? "ok" : "down", latencyMs: null };
+    },
+  });
+  health.register(hypixelCheck(hypixel));
+  health.register(pingCheck("postgres", pingDb));
+  health.register(pingCheck("redis", pingRedis));
+
   const handlerDeps: HandlerDeps = {
     identity,
     progression,
@@ -594,6 +641,10 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     podiums,
     screen,
     tallies: adapters.tallies,
+    // Curated on the way out, not on the way to the card. The handler is handed
+    // a shape with no field for a probe's detail, so no future edit to the
+    // renderer can put a hostname or a Prisma error in front of a member.
+    status: { status: async () => curateStatus(await health.run()) },
     discord,
     reminders: reminderRepository,
     tags: ticketConfigRepository,
@@ -889,7 +940,6 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     eventReminderSink(message);
   });
 
-  let liveStatus: (() => BridgeStatusDetails) | null = null;
   const stopHeartbeat = startHeartbeat(adapters.heartbeat, () => ({
     service: "bridge-bot",
     instance: INSTANCE_ID,

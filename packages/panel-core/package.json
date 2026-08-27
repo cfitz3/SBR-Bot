@@ -24,6 +24,7 @@
     "@sbr/roles": "*",
     "@sbr/screening": "*",
     "@sbr/shared-types": "*",
+    "@sbr/tickets": "*",
     "@sbr/xp": "*"
   }
 }
