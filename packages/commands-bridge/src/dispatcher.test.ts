@@ -74,9 +74,13 @@ function identity(over: Partial<IdentityService> = {}): IdentityService {
   };
 }
 
+// A real instant, because the cards put it in the embed's native timestamp now
+// and Discord — like `Date.parse` — will not render a placeholder.
+const FETCHED_AT = "2026-08-06T11:00:00.000Z";
+
 /** Wrap a payload in a LIVE envelope — the shape every progression read returns. */
 function live<T>(data: T) {
-  return ok<DataEnvelope<T>>({ data, freshness: "LIVE", source: "LIVE", fetchedAt: "t" });
+  return ok<DataEnvelope<T>>({ data, freshness: "LIVE", source: "LIVE", fetchedAt: FETCHED_AT });
 }
 
 const summary: ProfileSummaryDTO = {
@@ -190,7 +194,7 @@ function progression(over: Partial<ProgressionService> = {}): ProgressionService
         },
         freshness: "LIVE",
         source: "LIVE",
-        fetchedAt: "t",
+        fetchedAt: FETCHED_AT,
       };
       return ok(env);
     },
@@ -618,7 +622,7 @@ test("networth marks stale data as cached", async () => {
         data: { total: 1_000_000_000, exact: true, missing: [], breakdown: {}, topItems: {} },
         freshness: "STALE",
         source: "CACHE",
-        fetchedAt: "t",
+        fetchedAt: FETCHED_AT,
       });
     },
   });
@@ -650,10 +654,13 @@ test("an unreachable upstream degrades with its own message, not the generic one
   assert.notEqual(r.text, copy.error.generic.unknown);
 });
 
-test("networth carries an embed with the staleness footer", async () => {
+test("networth carries an embed whose age is a timestamp, not a sentence", async () => {
+  // The age used to be written into the footer, where it was correct only at
+  // the instant of sending. Discord owns it now and re-renders it on every read.
   const r = await makeDispatcher().dispatch("networth", ctx());
   assert.ok(r.embed, "expected an embed");
-  assert.match(r.embed?.footer ?? "", /as of/);
+  assert.ok(Number.isFinite(Date.parse(r.embed?.timestamp ?? "")));
+  assert.doesNotMatch(r.embed?.footer ?? "", /as of|ago/);
 });
 
 test("networth breaks the total down by category, largest share first", async () => {
@@ -686,7 +693,10 @@ test("a cached-during-outage reading says so in the footer", async () => {
     },
   });
   const r = await makeDispatcher({ progression: stale }).dispatch("networth", ctx());
-  assert.match(r.embed?.footer ?? "", /cached data — as of 1h ago/);
+  // The caveat survives, because "we could not refresh this" does not decay.
+  // The 90 minutes it has been true for goes in the timestamp.
+  assert.match(r.embed?.footer ?? "", /cached — refresh failed/);
+  assert.ok(Number.isFinite(Date.parse(r.embed?.timestamp ?? "")));
 });
 
 test("hidden sections are named in the footer rather than folded into the total", async () => {

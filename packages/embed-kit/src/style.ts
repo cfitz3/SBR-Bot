@@ -66,6 +66,10 @@ export interface EmbedStyle {
   readonly separator: string;
   /** What an unknown value prints as. Never "N/A", never a silent zero. */
   readonly unknown: string;
+  /** Below this a grid of fields was a sentence in disguise. */
+  readonly minFields: number;
+  /** Above this the reader is scanning, not reading. */
+  readonly maxFields: number;
 }
 
 export type StyleSeverity = "error" | "warning";
@@ -97,8 +101,33 @@ const PLACEHOLDERS = new Set(["n/a", "na", "null", "undefined", "tbd", "???", "-
 
 const SEPARATORS = [" | ", " -- ", " – "];
 
+/**
+ * Time-relative phrasing, which is only ever correct at the instant it is sent.
+ *
+ * A footer is baked into the message; the card stays on screen and gets scrolled
+ * back to. "as of 4m ago" on a card someone opens tomorrow is not stale styling,
+ * it is a false statement, and it was ours rather than Discord's. The native
+ * `timestamp` field re-renders on every read, so it is the only correct place
+ * for an age.
+ */
+const TIME_RELATIVE = /\b(?:ago|as of|just now|moments? ago|last updated|updated \d)\b/i;
+
+/**
+ * A field name carrying its own data.
+ *
+ * Two digits or more, because a real label can hold one — `F7`, `Top 5`, `Tier 4`
+ * are labels and stay labels for every member. `Combat 60`, `Level 100` and
+ * `1,240 MP` are the card describing this particular reading in the place that
+ * is supposed to be the same on every card, which is what makes a column
+ * unscannable.
+ */
+const DATA_IN_NAME = /\d{2,}/;
+
 function textLength(view: EmbedView): number {
   let n = (view.title?.length ?? 0) + (view.description?.length ?? 0) + (view.footer?.length ?? 0);
+  // The author name counts against Discord's 6000 too. It was not counted here
+  // before only because the view model had nowhere to put one.
+  n += view.author?.name.length ?? 0;
   for (const f of view.fields ?? []) n += f.name.length + f.value.length;
   return n;
 }
@@ -210,6 +239,14 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
     }
     checkText(field.name, `field[${i}].name`, out);
     checkText(field.value, `field[${i}].value`, out);
+    if (DATA_IN_NAME.test(field.name) || field.name.includes(theme.embed.glyphs.marker)) {
+      out.push({
+        rule: "field.name-data",
+        severity: "warning",
+        where: `field[${i}].name`,
+        detail: `"${field.name}" puts the reading in the label — a field name is a stable heading, the data belongs in its value.`,
+      });
+    }
   });
 
   // ── Style ──────────────────────────────────────────────────────────────────
@@ -230,10 +267,18 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
       detail: "every card states a tone; NEUTRAL is a choice, absence is an oversight.",
     });
   }
-  for (const url of [view.url, view.thumbnailUrl]) {
+  for (const url of [view.url, view.thumbnailUrl, view.imageUrl, view.author?.iconUrl, view.author?.url]) {
     if (url !== undefined && !url.startsWith("https://")) {
       out.push({ rule: "url.scheme", severity: "error", where: "url", detail: `"${url}" is not https.` });
     }
+  }
+  if (view.timestamp !== undefined && !Number.isFinite(Date.parse(view.timestamp))) {
+    out.push({
+      rule: "timestamp.invalid",
+      severity: "error",
+      where: "timestamp",
+      detail: `"${view.timestamp}" is not a date Discord can parse — it wants ISO-8601.`,
+    });
   }
 
   if (view.title !== undefined) {
@@ -286,10 +331,34 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
       detail: `${fields.length} fields reads as a wall — past ${EMBED_STYLE.fields}, paginate().`,
     });
   }
+  // The readability budget, distinct from `field.count` above: that one is where
+  // a card stops being readable at all, this one is where it stops being a good
+  // card. A card with no fields is a sentence and is exempt — plenty of replies
+  // are one line and should stay one line.
+  if (fields.length > 0 && (fields.length < EMBED_STYLE.minFields || fields.length > EMBED_STYLE.maxFields)) {
+    out.push({
+      rule: "field.budget",
+      severity: "warning",
+      where: "fields",
+      detail:
+        fields.length < EMBED_STYLE.minFields
+          ? `${fields.length} fields — under ${EMBED_STYLE.minFields} this reads better as a sentence in the description, or consolidated with facts().`
+          : `${fields.length} fields — past ${EMBED_STYLE.maxFields} consolidate related ones into a multi-line field with facts(), or paginate().`,
+    });
+  }
   checkInlineRuns(fields, out);
 
   if (view.footer !== undefined) {
     checkText(view.footer, "footer", out);
+    if (TIME_RELATIVE.test(view.footer)) {
+      out.push({
+        rule: "footer.time-relative",
+        severity: "warning",
+        where: "footer",
+        detail:
+          "a footer is baked at send time and this card will be read later — put the age in `timestamp`, which Discord re-renders.",
+      });
+    }
     if (view.footer.length > EMBED_STYLE.footer) {
       out.push({
         rule: "footer.length",

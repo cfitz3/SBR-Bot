@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../shared-types" },
+    { "path": "../embed-kit" },
     { "path": "../discord-kit" },
     { "path": "../commands-bridge" },
     { "path": "../commands-admin" },

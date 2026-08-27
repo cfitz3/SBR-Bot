@@ -15,19 +15,52 @@ import type { DataEnvelope } from "./common.js";
 export type ViewColor = "NEUTRAL" | "INFO" | "SUCCESS" | "WARNING" | "DANGER";
 
 export interface EmbedFieldView {
+  /**
+   * A stable label. Never the data itself: a name that reads `Combat 60 ✦`
+   * changes shape as the numbers move, so nothing can be scanned down a column
+   * and a card's structure is different for every member. The label goes here,
+   * the variable part goes in `value`.
+   */
   readonly name: string;
   readonly value: string;
   readonly inline?: boolean;
 }
 
+/**
+ * Who the card is about.
+ *
+ * Player identity belongs here and in `thumbnailUrl`, not in the title — a card
+ * titled `Aria's skills` spends its most prominent line on a name Discord will
+ * render again in the author row anyway, and leaves nowhere for the card's
+ * actual subject to go.
+ */
+export interface EmbedAuthorView {
+  readonly name: string;
+  /** Small round icon beside the name — a player head, usually. */
+  readonly iconUrl?: string;
+  readonly url?: string;
+}
+
 export interface EmbedView {
   readonly title?: string;
+  /** The headline number or insight. Never buried in a field. */
   readonly description?: string;
   readonly fields?: readonly EmbedFieldView[];
-  /** Usually the staleness note — see `stalenessFooter`. */
+  /**
+   * A genuinely static caption, and only that.
+   *
+   * Anything time-relative belongs in `timestamp`, which Discord renders and
+   * keeps correct on its own. A footer reading "as of 13d ago" was written once
+   * and is wrong from the second it was sent — see `staleness`.
+   */
   readonly footer?: string;
   readonly color?: ViewColor;
+  readonly author?: EmbedAuthorView;
   readonly thumbnailUrl?: string;
+  /** Full-width image below the fields — a graph, or the link-help GIF. */
+  readonly imageUrl?: string;
+  /** ISO-8601. Discord renders it in the reader's own locale and tense. */
+  readonly timestamp?: string;
   readonly url?: string;
 }
 
@@ -103,6 +136,9 @@ export const FLATTEN_SEPARATOR = " · ";
  */
 export function flattenEmbed(embed: EmbedView, maxLength = 256, separator = FLATTEN_SEPARATOR): string {
   const parts: string[] = [];
+  // The author row carries the identity that used to sit in the title, so a flat
+  // line that skipped it would no longer say who it was about.
+  if (embed.author) parts.push(embed.author.name);
   if (embed.title) parts.push(embed.title);
   if (embed.description) parts.push(embed.description);
   for (const field of embed.fields ?? []) parts.push(`${field.name} ${field.value}`);
@@ -156,12 +192,30 @@ export function describeAge(fetchedAt: string, now: number = Date.now()): string
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** The two card fields an envelope's freshness decides. */
+export interface StalenessView {
+  /** ISO-8601 — Discord renders the age, and re-renders it as it grows. */
+  readonly timestamp: string;
+  /** Present only when there is a caveat; the age alone is not one. */
+  readonly footer?: string;
+}
+
 /**
- * The documented "as of Xm ago" note. STALE data says so explicitly — serving
- * old numbers silently is worse than serving them with a caveat.
+ * How old a reading is, split into the part Discord should own and the part we
+ * should say.
+ *
+ * This used to be one string — `"as of 4m ago"` in the footer — and it was wrong
+ * within minutes of being sent, because a footer is baked at send time while the
+ * card stays on screen. Anyone scrolling back through `/skills` was reading an
+ * "as of" that had drifted by however long they had been away. The age is now a
+ * native `timestamp`, which Discord recomputes on every render.
+ *
+ * What survives as a footer is the part that *is* static: STALE means we served
+ * numbers we could not refresh, and that claim does not decay. `LIVE` says
+ * nothing at all, because the timestamp already did.
  */
-export function stalenessFooter<T>(envelope: DataEnvelope<T>, now: number = Date.now()): string {
-  const age = describeAge(envelope.fetchedAt, now);
-  if (envelope.freshness === "STALE") return `⚠ cached data — as of ${age}`;
-  return envelope.source === "LIVE" ? `as of ${age}` : `cached — as of ${age}`;
+export function staleness<T>(envelope: DataEnvelope<T>): StalenessView {
+  if (envelope.freshness === "STALE") return { timestamp: envelope.fetchedAt, footer: "⚠ cached — refresh failed" };
+  if (envelope.source === "CACHE") return { timestamp: envelope.fetchedAt, footer: "served from cache" };
+  return { timestamp: envelope.fetchedAt };
 }

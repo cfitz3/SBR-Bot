@@ -4,6 +4,12 @@
  * Both bots share it: spec → registration payload, interaction → CommandArgs,
  * view model → embeds/buttons. Keeping it in one package is what lets the
  * command packages stay transport-agnostic.
+ *
+ * The card builder and the style checker are re-exported from `@sbr/embed-kit`
+ * rather than defined here. They are pure view-model code, and the command
+ * packages need them without needing discord.js — but every existing caller
+ * imports them from this package, and a working import is not worth breaking to
+ * make a point about layering.
  */
 export { interactionArgs } from "./args.js";
 export {
@@ -20,6 +26,29 @@ export {
   type ComponentHandler,
   type ComponentRouterDeps,
 } from "./components.js";
+export {
+  capMarker,
+  card,
+  checkEmbed,
+  checkEmbeds,
+  EMBED_LIMITS,
+  EMBED_STYLE,
+  facts,
+  field,
+  inlineFacts,
+  isCapped,
+  marker,
+  player,
+  progressBar,
+  progressLine,
+  VIEW_COLORS,
+  type CardSpec,
+  type CheckOptions,
+  type EmbedStyle,
+  type Fact,
+  type StyleIssue,
+  type StyleSeverity,
+} from "@sbr/embed-kit";
 export { toEmbed, toActionRow, replyOptions, type ReplyView, type DiscordReplyOptions } from "./render.js";
 export { respond } from "./respond.js";
 export {
@@ -29,14 +58,3 @@ export {
   type SpecimenNote,
   type SpecimenResult,
 } from "./specimen.js";
-export {
-  checkEmbed,
-  checkEmbeds,
-  EMBED_LIMITS,
-  EMBED_STYLE,
-  VIEW_COLORS,
-  type CheckOptions,
-  type EmbedStyle,
-  type StyleIssue,
-  type StyleSeverity,
-} from "./style.js";
