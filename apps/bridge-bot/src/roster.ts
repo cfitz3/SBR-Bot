@@ -12,7 +12,7 @@
  * Notch ●
  *
  * -- Officer --
- * Steve ●, [MVP+] Alex ●
+ * Steve ●  [MVP+] Alex ●
  *
  * Total Members: 125
  * Online Members: 12
@@ -42,7 +42,16 @@ const GUILD_NAME = /^Guild Name:\s*(.+)$/i;
 const DIVIDER = /^-{5,}$/;
 
 /** A Minecraft username, once rank tags and presence dots are stripped. */
-const USERNAME = /^([A-Za-z0-9_]{1,16})\b/;
+const USERNAME = /[A-Za-z0-9_]{1,16}/g;
+
+/**
+ * A line that is somebody talking rather than a list of members.
+ *
+ * Member lines are names and decoration and nothing else. Guild chat that lands
+ * inside a rank section carries a colon or an angle bracket, and without this
+ * guard the widened name scan below would read a sentence as a dozen members.
+ */
+const NOT_A_MEMBER_LINE = /[:<>]/;
 
 /**
  * True for the line that closes the block. The transport stops collecting here
@@ -54,21 +63,27 @@ export function isRosterEnd(line: string): boolean {
 }
 
 /**
- * Pull the usernames out of one member line. Members are comma-separated and
- * may carry a Hypixel rank tag and a presence dot, neither of which is part of
- * the name: `[MVP+] Steve ●, Alex ●`.
+ * Pull the usernames out of one member line.
+ *
+ * Hypixel does not separate members with commas. The line is
+ * `[MVP+] Steve ●  Alex ●  Bex ●` — names, rank tags and presence dots,
+ * separated by whitespace. Splitting on `,` and taking the first name out of
+ * each chunk therefore returned exactly one member per rank, however many were
+ * online, while the headline count came from Hypixel's own `Online Members:`
+ * line and was right. `/online` has been quietly reporting a guild of four for
+ * as long as it has existed.
+ *
+ * So: strip the decoration, then take every name-shaped token that remains.
+ * Commas are still handled because they cost nothing and the format has moved
+ * before.
  */
 function parseMemberLine(line: string): string[] {
-  const names: string[] = [];
-  for (const chunk of line.split(",")) {
-    const cleaned = chunk
-      .replace(/\[[^\]]*\]/g, "") // rank tags
-      .replace(/[●⏺•·*]/g, "") // presence dots, in whichever glyph is current
-      .trim();
-    const match = USERNAME.exec(cleaned);
-    if (match) names.push(match[1]!);
-  }
-  return names;
+  if (NOT_A_MEMBER_LINE.test(line)) return [];
+  const cleaned = line
+    .replace(/\[[^\]]*\]/g, "") // rank tags
+    .replace(/[●⏺•·*]/g, "") // presence dots, in whichever glyph is current
+    .replace(/,/g, " ");
+  return cleaned.match(USERNAME) ?? [];
 }
 
 /**

@@ -684,7 +684,11 @@ const online: CommandHandler = async (_ctx, deps) => {
       text: "The in-game bridge is offline right now, so I can't read the guild roster — try again shortly.",
     };
   }
-  const embed = renderRosterEmbed(roster);
+  // Playtime is asked for separately and its absence is not an error: the
+  // tracker is empty for the first minutes after a bridge restart, and a roster
+  // without durations is still the answer to the question that was typed.
+  const playing = deps.playtime ? await deps.playtime.playing() : [];
+  const embed = renderRosterEmbed(roster, playing);
   // `text` stays populated as the documented fallback — Discord shows the embed
   // and ignores it, but the in-game and panel surfaces render from it.
   return { ephemeral: false, text: flattenEmbed(embed), embed };

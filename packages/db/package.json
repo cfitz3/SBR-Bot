@@ -37,6 +37,7 @@
     "@sbr/tickets": "*",
     "@sbr/xp": "*",
     "@sbr/roles": "*",
+    "@sbr/playtime": "*",
     "@sbr/shared-types": "*",
     "dotenv": "^17.4.2",
     "pg": "^8.22.0"

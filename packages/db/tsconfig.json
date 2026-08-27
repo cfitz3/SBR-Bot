@@ -6,6 +6,6 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../shared-types" },
+  "references": [{ "path": "../shared-types" }, { "path": "../playtime" },
     { "path": "../roles" }, { "path": "../community" }, { "path": "../env" }, { "path": "../guild-config" }, { "path": "../jobs" }, { "path": "../leaderboards" }, { "path": "../perms" }, { "path": "../screening" }, { "path": "../tickets" }, { "path": "../xp" }]
 }

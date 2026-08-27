@@ -12,10 +12,10 @@ const BLOCK = [
   "§aNotch §r§a●",
   "",
   "§6-- Officer --",
-  "§a[MVP+] Steve §r§a●§r, §aAlex §r§a●",
+  "§a[MVP+] Steve §r§a●§r §aAlex §r§a●",
   "",
   "§b-- Member --",
-  "§aAria §a●§r, §aBex §a●§r, §aCyd §a●",
+  "§aAria §a●§r §aBex §a●§r §aCyd §a●",
   "",
   "§bTotal Members: §a125",
   "§bOnline Members: §a6",
@@ -37,7 +37,7 @@ test("reads ranks, members and counts out of a /g online block", () => {
 });
 
 test("strips Hypixel rank tags rather than reading them as names", () => {
-  const roster = parseGuildOnline(["-- Member --", "[MVP++] Steve ●, [VIP] Alex ●"], AT);
+  const roster = parseGuildOnline(["-- Member --", "[MVP++] Steve ●  [VIP] Alex ●"], AT);
   assert.deepEqual(rosterMembers(roster!), ["Steve", "Alex"]);
 });
 
@@ -78,4 +78,31 @@ test("recognises the closing line so collection can stop early", () => {
   assert.equal(isRosterEnd("§bOnline Members: §a6"), true);
   assert.equal(isRosterEnd("§bTotal Members: §a125"), false);
   assert.equal(isRosterEnd("Guild > Steve: online members: 6"), false);
+});
+
+test("every member on a rank line is read, not just the first", () => {
+  // The bug: Hypixel separates members with whitespace, and the parser split on
+  // commas and took one name per chunk. `/online` reported a guild of four
+  // while its own headline count — read from Hypixel's line — said forty.
+  const roster = parseGuildOnline(
+    ["-- Member --", "§aAria §a● §aBex §a● §aCyd §a● §aDot §a●", "Online Members: 4"],
+    AT,
+  );
+  assert.deepEqual(rosterMembers(roster!), ["Aria", "Bex", "Cyd", "Dot"]);
+  assert.equal(roster!.online, 4, "and the count and the list finally agree");
+});
+
+test("a comma-separated line still parses, in case the format moves back", () => {
+  const roster = parseGuildOnline(["-- Member --", "Aria ●, Bex ●, Cyd ●"], AT);
+  assert.deepEqual(rosterMembers(roster!), ["Aria", "Bex", "Cyd"]);
+});
+
+test("chat inside a rank section is not read as a roomful of members", () => {
+  // Widening the name scan without this guard turns one sentence into a dozen
+  // members, which is a worse failure than the one being fixed.
+  const roster = parseGuildOnline(
+    ["-- Member --", "Aria ●", "Guild > Bex: anyone want to do f7 right now", "Online Members: 1"],
+    AT,
+  );
+  assert.deepEqual(rosterMembers(roster!), ["Aria"]);
 });

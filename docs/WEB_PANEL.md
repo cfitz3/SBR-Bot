@@ -205,14 +205,14 @@ Six fixed cards, plus one chart per rollup series that actually has events in th
 | --- | --- | --- |
 | **Messages** | `ActivityDaily`, summed | Discord lines and guild-chat lines, **never their sum**, each with a per-day rate. |
 | **Engagement** | `ActivityDaily` | How many people said anything, and how much the average one said. |
-| **Playtime** | `ActivityDaily.presenceSamples`, `GuildGexpDaily` | Two estimates, labelled as such — see below. |
+| **Playtime** | `PlaySession`, `GuildGexpDaily` | Measured in-game hours; the Discord half is still an estimate — see below. |
 | **Guild experience** | `GuildGexpDaily`, summed per day | The GEXP trend, drawn through the same `lineChart` the rollups use. |
 | **Top members** | `ActivityDaily` ⋈ `GuildGexpDaily` | One table spanning both surfaces, so somebody who only plays and somebody who only talks both rank. |
 | **Top commands** | `CommandUsage` | Usage, success rate and latency per command. |
 
 The fixed cards read the daily counters directly, so they populate on a guild that has never had a rollup run. The rollup charts are additive: `bridge.relay`, `mod.action` and `filter.hit` are emitted from `BridgeService.processInbound`, `ModerationServiceImpl.applyAction`, `AutomodRunner.run` and the relay's wordlist filter, through synchronous `void`-returning metrics ports — telemetry can never delay a chat message or fail a punishment.
 
-**Playtime is an estimate and says so.** Neither surface measures time. The Discord figure is `presenceSamples × 360 minutes` (the `guild-scan` cadence, `PRESENCE_SAMPLE_INTERVAL_MINUTES`); the in-game figure counts days with any GEXP earned. **Nothing currently calls `XpService.recordPresence`**, so the sample count is zero and the card reads "Not sampled" rather than rendering a plausible-looking nothing — wiring the guild scan to call it is what turns that constant into a real number.
+**In-game playtime is measured; the Discord half is still an estimate, and the card keeps them apart.** In-game hours are the sum of closed `PlaySession` rows — real elapsed time between a bridge-observed join and the matching leave, debounced so a reconnect is one session rather than two. That replaces the old `presenceSamples × 360 minutes` proxy, which multiplied a sample count by a cadence and produced a number with no relationship to any member's actual evening. Discord presence is still unsampled: **nothing calls `XpService.recordPresence`**, so that half reads "Not sampled" rather than rendering a plausible-looking nothing.
 
 **Unknown is never zero.** A member with no verified link has no uuid, so their GEXP and active-day counts are `null` and render as an em dash. Printing `0` would claim they earned none, which is a different and unfounded statement.
 

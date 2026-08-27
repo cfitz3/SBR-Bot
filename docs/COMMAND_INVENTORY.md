@@ -130,7 +130,7 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 | Command | Options | CD | Purpose | Output |
 |---|---|---|---|---|
 | `/help` | — | 3s | Static catalog, grouped Account / Stats / Optimize / Market / Guild / Events / Groups / Help | Ephemeral 8-line list |
-| `/online` | — | 30s | Guild roster read live from the Mineflayer session (the Hypixel guild endpoint carries no presence) | Roster embed by rank. **Two failures kept distinct**: no bridge configured here (permanent) vs bridge offline right now (retryable) |
+| `/online` | — | 30s | Guild roster read live from the Mineflayer session (the Hypixel guild endpoint carries no presence), with each member's current session length | Roster embed by rank, each name followed by elapsed time (`+` = adopted from a roster read, so a floor). **Two failures kept distinct**: no bridge configured here (permanent) vs bridge offline right now (retryable) |
 | `/standing` | `member?` (user) | 10s | Guild XP, level, rank and the per-source breakdown behind it | Standing embed; text `{name}: level N ({xp} xp)`. **Public for yourself, ephemeral for anyone else** |
 
 | `/leaderboard` | `category?` (choice of 8), `page?`, `days?` | 15s | Guild rankings over wealth, tenure, skill average, catacombs, slayer, Discord activity, guild chat and XP | Ranked embed with the caller's own row appended; text = top five on one line |
@@ -154,7 +154,9 @@ into a channel on request invites exactly the comparison nobody asked for.
 `/online` is Discord-only by design — in-game the answer is `/g online`, which
 costs the bridge account nothing. The 30s cooldown and the transport's shared
 cache exist because a spammed `/g online` gets the bridge account silenced,
-which takes the whole relay down.
+which takes the whole relay down. Playtime is read from the in-memory tracker,
+which costs nothing per invocation — the card's cost is still one cached roster
+read.
 
 ### 2.6 Events & RSVP
 
