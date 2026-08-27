@@ -25,6 +25,13 @@
  */
 import type { EmbedView, ModerationActionDTO, ViewColor } from "@sbr/shared-types";
 import { AUTOMOD_ACTOR } from "./automod-runner.js";
+
+/**
+ * The stand-in actor for a punishment taken in Discord's own interface whose
+ * audit-log entry named no executor. Beside the renderer rather than in the
+ * service, so nothing has to import the service to know it.
+ */
+export const DISCORD_ACTOR = "discord";
 import { EXPIRY_ACTOR } from "./expiry.js";
 import { describeState, punishmentState } from "./expiry.js";
 
@@ -66,6 +73,9 @@ function colorFor(action: ModerationActionDTO): ViewColor {
 function actorName(actorDiscordId: string): string {
   if (actorDiscordId === AUTOMOD_ACTOR) return "Automod";
   if (actorDiscordId === EXPIRY_ACTOR) return "Expired (automatic)";
+  // Discord's audit log named nobody — which happens, and is worth saying
+  // rather than rendering as a mention of a user id that is not one.
+  if (actorDiscordId === DISCORD_ACTOR) return "Taken in Discord (actor unknown)";
   return `<@${actorDiscordId}>`;
 }
 

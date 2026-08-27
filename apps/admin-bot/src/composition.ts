@@ -27,6 +27,7 @@ import {
   RELAY_SYNC_SETTING_KEY,
   SafetyServiceImpl,
   WordlistServiceImpl,
+  type DiscordActionInput,
   type DiscordEnforcer,
   type ModLogSink,
   type StaffAlertSink,
@@ -81,6 +82,14 @@ export interface AdminApp {
   readonly memberBus: ReturnType<typeof createRedisAdapters>["memberBus"];
   readonly rolesDirty: ReturnType<typeof createRedisAdapters>["rolesDirty"];
   resolveGuild(discordGuildId: string): Promise<string | null>;
+  /**
+   * Adopt a punishment somebody carried out in Discord's own interface.
+   *
+   * On the app rather than reached through the dispatcher because its caller is
+   * a gateway listener, not a command: nobody typed anything, and there is no
+   * interaction to reply to.
+   */
+  recordDiscordAction(input: DiscordActionInput): Promise<void>;
   /**
    * Late-bound live gateway state for the heartbeat, set once the transport
    * exists. Unset simply means "up, not connected yet", which is what the
@@ -480,6 +489,16 @@ export async function createAdminApp(): Promise<AdminApp> {
     memberBus: adapters.memberBus,
     rolesDirty: adapters.rolesDirty,
     resolveGuild: guildRepository.resolveInternalId,
+    async recordDiscordAction(input) {
+      const recorded = await moderation.recordDiscordAction(input);
+      if (!recorded.ok) {
+        log.error("could not adopt a Discord moderation action", {
+          guildId: input.guildId,
+          type: input.type,
+          target: input.targetDiscordId,
+        });
+      }
+    },
     setStatusSource(source) {
       liveStatus = source;
     },

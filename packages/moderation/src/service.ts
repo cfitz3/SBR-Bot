@@ -81,6 +81,27 @@ export interface ExternalActionInput {
   readonly durationSeconds: number | null;
 }
 
+/**
+ * A punishment somebody carried out in Discord's own UI, arriving after the
+ * fact.
+ *
+ * Distinct from `ExternalActionInput` because the surface of origin decides
+ * almost everything downstream: an in-game kick needs its Discord half doing
+ * and is recorded `INGAME`, while this one needs its *guild-chat* half doing
+ * and is recorded `DISCORD`. Folding them together would have meant one method
+ * with a flag deciding which half to skip, and the two sets of guard rails have
+ * nothing in common.
+ */
+export interface DiscordActionInput {
+  readonly guildId: string;
+  /** Only the three a right-click in Discord can produce. */
+  readonly type: "BAN" | "UNBAN" | "KICK";
+  readonly targetDiscordId: string;
+  /** The staffer from Discord's audit log, or `DISCORD_ACTOR` when it named none. */
+  readonly actorDiscordId: string;
+  readonly reason: string;
+}
+
 export interface ModerationServiceDeps {
   readonly repo: ModerationRepository;
   readonly ranks: RankResolver;
@@ -496,6 +517,63 @@ export class ModerationServiceImpl implements ModerationService {
   }
 
   /**
+   * Adopt a punishment carried out in Discord's own interface.
+   *
+   * Staff do not stop using the right-click menu because a platform exists, and
+   * every time they used it the platform learned nothing: no case, no mod-log
+   * card, no guild-chat kick, and an audit page that quietly disagreed with the
+   * ban list. The half of the guild that lives in Minecraft never heard about
+   * it at all — which is the same one-surface gap the in-game mirror was built
+   * to close, pointing the other way.
+   *
+   * Only bans, unbans and kicks arrive here. A Discord timeout is deliberately
+   * not adopted: it is Discord's to expire, the platform has no way to be told
+   * when it does, and a MUTE row the sweep believes it owns would start
+   * un-muting people the platform never muted.
+   *
+   * The Discord leg is recorded as already done, because it is — the event that
+   * triggered this *is* the enforcement. What still needs doing is the guild
+   * chat leg, and it goes through the ordinary `relayToGame`, so a guild with
+   * relay sync off gets a case and a card and no kick, exactly as it would from
+   * a ban typed into the panel.
+   *
+   * Callers are responsible for not passing the platform's own enforcement back
+   * in. The observer that feeds this drops any audit-log entry executed by the
+   * bot itself, which is the only reliable way to tell a hand-placed ban from
+   * the one we placed thirty milliseconds ago on a staffer's behalf.
+   */
+  async recordDiscordAction(input: DiscordActionInput): Promise<Result<ModerationActionDTO>> {
+    const written = await this.repo.createAction({
+      guildId: input.guildId,
+      infractionId: null,
+      type: input.type,
+      actorDiscordId: input.actorDiscordId,
+      targetDiscordId: input.targetDiscordId,
+      targetMinecraftUuid: null,
+      reason: input.reason,
+      // Nothing to read a duration from. Discord's ban list has no expiry and
+      // the audit log carries none, so an adopted ban is indefinite — which is
+      // what it actually is, rather than a guess the sweep would act on.
+      durationSeconds: null,
+      expiresAt: null,
+      surfaces: surfacesFor(input.type),
+      active: isActiveState(input.type),
+      sourceContext: "DISCORD",
+    });
+
+    const settled = await this.enforce(written, { discordAlreadyApplied: true });
+    this.log.info("adopted a moderation action taken in Discord", {
+      guildId: input.guildId,
+      actionId: settled.id,
+      type: input.type,
+      actor: input.actorDiscordId,
+      target: input.targetDiscordId,
+      enforcement: settled.enforcement,
+    });
+    return ok(settled);
+  }
+
+  /**
    * The Discord half of an in-game punishment, and its verdict.
    *
    * Every refusal below is stamped on the row and said out loud to staff. A
@@ -701,7 +779,10 @@ export class ModerationServiceImpl implements ModerationService {
    * lie. What it returns instead is an action carrying its own enforcement
    * status, which the caller shows to the staffer who typed the command.
    */
-  private async enforce(action: ModerationActionDTO): Promise<ModerationActionDTO> {
+  private async enforce(
+    action: ModerationActionDTO,
+    options: { readonly discordAlreadyApplied?: boolean } = {},
+  ): Promise<ModerationActionDTO> {
     await this.mirror(action);
 
     // Before either surface is touched, because it is a hint and not a step: a
@@ -713,7 +794,16 @@ export class ModerationServiceImpl implements ModerationService {
         .catch(() => undefined);
     }
 
-    const discord = await this.enforceDiscord(action);
+    // A ban placed by hand in Discord arrives here already carried out on that
+    // surface. Asking Discord to do it again would mostly be harmless — the API
+    // treats a redundant ban as a success — but it would also be a privileged
+    // write issued on no evidence, and the one case where it is not harmless is
+    // a KICK: the member has already gone, so the retry answers "unknown
+    // member", which is only read as success because we choose to read it that
+    // way. Better to say plainly that this leg is done.
+    const discord = options.discordAlreadyApplied === true
+      ? ({ ok: true } as EnforcementOutcome)
+      : await this.enforceDiscord(action);
     const game = await this.relayToGame(action);
 
     const failures: string[] = [];
