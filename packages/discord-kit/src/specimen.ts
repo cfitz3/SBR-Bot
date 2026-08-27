@@ -14,7 +14,7 @@
  * both need someone to see it first. Dropping it quietly decides by accident.
  */
 import type { EmbedFieldView, EmbedView, ViewColor } from "@sbr/shared-types";
-import { VIEW_COLORS } from "./style.js";
+import { VIEW_COLORS } from "@sbr/embed-kit";
 
 export interface SpecimenNote {
   /** Which embed in the payload, 0-based. */

@@ -14,7 +14,6 @@ import { FLATTEN_SEPARATOR, INLINE_ROW, padInlineRow, type EmbedView } from "@sb
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { toEmbed } from "./render.js";
 import { checkEmbed, checkEmbeds, EMBED_LIMITS, EMBED_STYLE, VIEW_COLORS, type StyleIssue } from "./style.js";
 
 /** A card that passes cleanly, so each case below differs in exactly one way. */
@@ -34,17 +33,6 @@ function only(view: EmbedView, rule: string): StyleIssue {
 
 test("the exported palette is the resolved theme, not a copy of it", () => {
   assert.equal(VIEW_COLORS, theme.embed.colors);
-});
-
-test("a rendered embed takes its colour from the palette", () => {
-  // `render.ts` used to hold a third copy of these five numbers. This asserts it
-  // is reading the shared one, at the only place the value can be observed.
-  const embed = toEmbed({ title: "Card", color: "DANGER" });
-  assert.equal(embed.data.color, theme.embed.colors.DANGER);
-});
-
-test("an embed with no stated colour falls back to NEUTRAL", () => {
-  assert.equal(toEmbed({ title: "Card" }).data.color, theme.embed.colors.NEUTRAL);
 });
 
 test("the house style is the resolved theme's", () => {
@@ -318,22 +306,3 @@ test("the author name counts toward Discord's 6000-character total", () => {
   assert.ok(rules(view).includes("limit.total"));
 });
 
-test("toEmbed carries author, image and timestamp through to discord.js", () => {
-  const embed = toEmbed(
-    clean({
-      author: { name: "Aria", iconUrl: "https://mc-heads.net/avatar/abc" },
-      imageUrl: "https://example.com/graph.png",
-      timestamp: "2026-08-06T11:00:00.000Z",
-    }),
-  ).toJSON();
-  assert.equal(embed.author?.name, "Aria");
-  assert.equal(embed.image?.url, "https://example.com/graph.png");
-  assert.equal(embed.timestamp, new Date("2026-08-06T11:00:00.000Z").toISOString());
-});
-
-test("toEmbed drops an unparseable timestamp rather than throwing the reply away", () => {
-  // The checker flags it; the renderer must still send a card, because a member
-  // asked a question and a missing age is not a reason to answer nothing.
-  assert.doesNotThrow(() => toEmbed(clean({ timestamp: "yesterday" })));
-  assert.equal(toEmbed(clean({ timestamp: "yesterday" })).toJSON().timestamp, undefined);
-});

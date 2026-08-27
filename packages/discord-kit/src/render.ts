@@ -21,7 +21,7 @@ import {
 
 // The palette lives in one place — `brand/theme.ts`, re-exported by `style.ts`.
 // This module used to keep its own private copy of the same five numbers.
-import { VIEW_COLORS } from "./style.js";
+import { VIEW_COLORS } from "@sbr/embed-kit";
 
 /**
  * Discord's component limits, enforced here rather than trusted to call sites.
