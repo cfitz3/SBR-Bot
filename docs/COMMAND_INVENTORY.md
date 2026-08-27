@@ -55,7 +55,8 @@ confirmation → handler.
   the dispatcher gate is the fast path, not the only one.
 - **`destructive: true`** requires `confirm:true` in the same invocation, else
   *"⚠️ /{name} is destructive. Re-run with confirm:true to proceed."* Four
-  commands carry it: `ban`, `kick`, `purge`, `lockdown`.
+  commands carry it: `ban`, `kick`, `purge`. `/lockdown` gave it up for a card
+  and a button — see ADMIN_BOT.md §6a.
 - **A throwing handler** returns the upstream message, or *"That action failed
   unexpectedly — nothing was changed."* — kept apart on purpose, because
   "nothing was changed" is a claim.
@@ -240,7 +241,7 @@ identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 
 ---
 
-## 4. Admin bot — staff commands (26)
+## 4. Admin bot — staff commands (25)
 
 Role tiers are `MODERATOR` < `OFFICER` < `ADMIN` < `OWNER`. ✱ marks a
 destructive command requiring `confirm:true`.
@@ -262,8 +263,7 @@ destructive command requiring `confirm:true`.
 
 | Command | Role | Options | Purpose | Output |
 |---|---|---|---|---|
-| `/lockdown` ✱ | OFFICER | `scope?` (channel/server) `channel?` `reason?` `duration?` `confirm?` | Lock a channel or the whole server, optionally auto-lifting | Confirmation + scope and expiry |
-| `/lockdown-lift` | OFFICER | — | End a lockdown early | Confirmation |
+| `/lockdown` | OFFICER | `channel?` `reason?` `duration?` | Lock a channel or the whole server, widen a channel lock, or lift whatever is in force | Card of the posture + the buttons that change it |
 | `/antiraid-on` | OFFICER | `sensitivity?` (LOW/MEDIUM/HIGH) `duration?` | Raise join gating and message-rate limits | Confirmation + active settings |
 | `/antiraid-off` | OFFICER | — | Back to normal limits | Confirmation |
 | `/safety-status` | MOD | — | Current posture | Embed: active lockdown and anti-raid state |
@@ -322,9 +322,9 @@ make in the tightening pass — either the code moves or the spec does.
 | admin `/ticket` | §14 | Tickets are member-side only; there is no staff open-on-behalf, assign or close-other command |
 | admin `/attendance` (mark/report) | §13 | Only the member-side read-only `/attendance` exists — nothing marks attendance |
 
-### 5.2 Implemented but not specified (7)
+### 5.2 Implemented but not specified (6)
 
-`/lockdown-lift`, `/safety-status`, `/wordlist` (list), `/help` on the bridge
+`/safety-status`, `/wordlist` (list), `/help` on the bridge
 bot as a static catalog, `/joinrun` and `/leaverun` as separate commands rather
 than buttons only, and the RSVP/run **button routes**.
 

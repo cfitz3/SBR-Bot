@@ -512,16 +512,13 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
     },
   },
   lockdown: {
-    description: "Lock a channel or the whole server",
+    description: "Lock a channel or the whole server, or lift a lockdown",
     option: {
-      scope: "channel (default) or server",
       channel: "Channel to lock (defaults to here)",
       reason: "Why",
       duration: "Auto-lift after e.g. 30m",
-      confirm: "Confirm this destructive action",
     },
   },
-  "lockdown-lift": { description: "End an active lockdown early" },
   "member-note": {
     description: "Attach a private staff note to a member",
     option: {
