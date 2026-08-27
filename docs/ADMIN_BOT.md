@@ -45,8 +45,8 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/ban` | Officer | Confirmation; optional duration + message-delete window; optional guild expel. |
 | `/purge` | Staff | Bounded (≤100 msgs, ≤14d); logs count + scope, not content, by default. |
 | `/infractions` | Staff | Read-only history view. |
-| `/member-note` | Staff | Private staff note (audited). |
-| `/tickets` | Moderator | The support queue from the admin server. `list` and `view` read the shared tables directly; `view` accepts `#12`, `12` or an id, and **refuses an id belonging to another server**. `close` and `transcript` call the bridge bot, because closing disposes of a channel this bot cannot see — a bridge that is down is reported in words, never as a silent no-op. See `TICKETS.md`. |
+| `/note` | Staff | Private staff note (audited). Never enforced, and the card says so. |
+| `/tickets` | Moderator | The support queue from the admin server. Bare, it shows the open queue and offers the tickets as a picker; `id` opens one directly and accepts `#12`, `12` or an id, and **refuses an id belonging to another server**. Close and Transcript are buttons on the card and call the bridge bot, because closing disposes of a channel this bot cannot see — a bridge that is down is reported in words, never as a silent no-op. See `TICKETS.md`. |
 | `/join-queue` | Moderator | Live in-game requests, each showing how much of the five-minute window is left. Stale rows are retired to `EXPIRED` on read, so the queue never lists a button that cannot work. |
 | `/join-accept` | Moderator | Accepts inside the window, **invites** past it, and says which it did — an invite still needs the applicant to accept. Sends first, marks the row second; refuses names that are not `[A-Za-z0-9_]{1,16}`. |
 | `/join-deny` | Moderator | Sends the guild command through the bridge, then marks the row — never the other way round. |
@@ -65,7 +65,7 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/set-recruitment` | Admin | Open/close + thresholds. |
 | `/wordlist-add` / `-remove` | Officer | Regex validated; recompiles filter. |
 | `/filter-test` | Staff | Dry-run, no state change. |
-| `/rolemenu` | Officer | `list` reads the document here and works with the bridge down; `post` asks SBR Bot to put the menu up. A menu can only offer roles the preflight would grant. |
+| `/rolemenu` | Officer | Bare, it lists the menus from the document here and works with the bridge down; the card carries a button that asks SBR Bot to put the menu up, naming the channel it will land in. A menu can only offer roles the preflight would grant. |
 | `/sticky` | Officer | Saves here, applied by SBR Bot. An unreachable bridge means "not yet", not a failed command — the configuration is stored either way. |
 
 ### Onboarding

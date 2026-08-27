@@ -386,7 +386,6 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
   tickets: {
     description: "Look at the ticket queue, and close or export one",
     option: {
-      action: "What to do",
       id: "Ticket number or id",
       reason: "Why it is being closed",
     },
@@ -419,7 +418,6 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
   rolemenu: {
     description: "Post a self-service role menu, or list the ones this server has",
     option: {
-      action: "What to do",
       id: "Which menu",
       channel: "Where to post it (defaults to here)",
     },
@@ -427,7 +425,6 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
   sticky: {
     description: "Keep a message at the bottom of a channel",
     option: {
-      action: "What to do",
       message: "What it should say",
       channel: "Which channel (defaults to here)",
     },
@@ -522,7 +519,7 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
     },
   },
   "lockdown-lift": { description: "End an active lockdown early" },
-  "member-note": {
+  note: {
     description: "Attach a private staff note to a member",
     option: {
       target: "Member",

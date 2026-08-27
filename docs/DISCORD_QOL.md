@@ -247,8 +247,8 @@ itself is an effector call, so a menu can never offer a role the preflight would
 refuse. Staff post one with:
 
 ```
-/rolemenu action:post id:<menu> channel:<#where>      (Officer)
-/rolemenu action:list                                  (Officer)
+/rolemenu                                             (Officer)  the menus, pickable
+/rolemenu id:<menu> [channel:<#where>]                 (Officer)  one menu, with a Post button
 ```
 
 `list` reads the document directly and therefore works with the bridge bot down;
@@ -331,9 +331,9 @@ a pin is one click away and the bottom of the channel is where people are
 already looking.
 
 ```
-/sticky action:list                                   (Officer)
-/sticky action:set message:<text> [channel:<#c>]      (Officer)
-/sticky action:clear [channel:<#c>]                   (Officer)
+/sticky                                               (Officer)  every sticky, pickable
+/sticky message:<text> [channel:<#c>]                 (Officer)  set one
+/sticky channel:<#c>                                  (Officer)  one channel, with a Clear button
 ```
 
 Stored in `GuildSetting["discord.sticky"]` — up to **15 channels**, **1,000
@@ -387,7 +387,7 @@ There is no panel surface for stickies yet; they are managed through `/sticky`.
 | Auto-roles are correct but late | Expected for `XP_LEVEL` (daily sweep); otherwise check `role-sync` on Health |
 | Dry run refuses instead of showing counts | No roster to compare against — do not save on the assumption it would change nothing |
 | Welcome message never appears | No `welcome` channel bound, or `join.enabled` is false; a failed DM never suppresses the channel post |
-| `/rolemenu post` or `/sticky set` says the bridge is unreachable | The document saved; the message in the channel did not. Retry once the bridge bot is up |
+| Posting a role menu or setting a sticky says the bridge is unreachable | The document saved; the message in the channel did not. Retry once the bridge bot is up |
 | Level-ups stop appearing for one member | They ran `/levelalerts off` |
 | A reminder never arrived | Channel deleted, or more than 24 hours past due |
 

@@ -19,7 +19,12 @@ import {
   renderAuditPages,
   renderFilterTestEmbed,
   renderInfractionPages,
+  renderNoteEmbed,
+  renderRoleMenuEmbed,
   renderSafetyStatusEmbed,
+  renderStaffTicketEmbed,
+  renderStickyEmbed,
+  renderTicketQueueEmbed,
   renderWordlistEmbed,
 } from "@sbr/commands-admin";
 import {
@@ -370,6 +375,51 @@ export const GALLERY: readonly GalleryCard[] = [
   card("filter-test-clear", "The same command on text that trips none.", renderFilterTestEmbed, f.FILTER_TEST_CLEAR),
   card("safety-on", "`/safety` with a lockdown and anti-raid both live.", renderSafetyStatusEmbed, f.SAFETY_ON),
   card("safety-off", "Nothing in force — the ordinary state.", renderSafetyStatusEmbed, f.SAFETY_OFF),
+  card("note", "`/note` — a private staff note, recorded and never enforced.", renderNoteEmbed, f.NOTE),
+  card("note-unlinked", "The same note against a member with no Discord account.", renderNoteEmbed, f.NOTE_UNLINKED),
+  card("sticky-all", "`/sticky` — every sticky in the server, one of them paused.", renderStickyEmbed, f.STICKIES, {
+    channelId: null,
+    now: new Date(f.NOW),
+  }),
+  card("sticky-one", "One channel's sticky, reached by picking it.", renderStickyEmbed, f.STICKIES, {
+    channelId: "300000000000000001",
+    now: new Date(f.NOW),
+  }),
+  card("sticky-paused", "A sticky that is configured but switched off.", renderStickyEmbed, f.STICKIES, {
+    channelId: "300000000000000003",
+    now: new Date(f.NOW),
+  }),
+  card("sticky-none", "No stickies anywhere — the ordinary state.", renderStickyEmbed, [], {
+    channelId: null,
+    now: new Date(f.NOW),
+  }),
+  card("rolemenu-all", "`/rolemenu` — the menus this server has, one never posted.", renderRoleMenuEmbed, f.ROLE_MENUS, {
+    menuId: null,
+    channelId: null,
+    now: new Date(f.NOW),
+  }),
+  card("rolemenu-one", "One menu, with the channel the button would post it to.", renderRoleMenuEmbed, f.ROLE_MENUS, {
+    menuId: "colours",
+    channelId: "300000000000000010",
+    now: new Date(f.NOW),
+  }),
+  card("rolemenu-none", "Nothing built yet — the panel is where menus come from.", renderRoleMenuEmbed, [], {
+    menuId: null,
+    channelId: null,
+    now: new Date(f.NOW),
+  }),
+  card("ticket-queue", "`/tickets` — the queue, with one nobody has claimed.", renderTicketQueueEmbed, f.TICKETS, {
+    ticketId: null,
+    reason: "",
+    now: new Date(f.NOW),
+  }),
+  card("ticket-queue-empty", "An empty queue, which is good news and reads as such.", renderTicketQueueEmbed, [], {
+    ticketId: null,
+    reason: "",
+    now: new Date(f.NOW),
+  }),
+  card("ticket-staff", "One open ticket as staff see it.", renderStaffTicketEmbed, f.TICKET),
+  card("ticket-staff-closed", "A closed ticket, with the reason it was closed.", renderStaffTicketEmbed, f.TICKET_CLOSED),
   card("application", "One application under review.", renderApplicationEmbed, f.APPLICATION),
   card(
     "application-list",

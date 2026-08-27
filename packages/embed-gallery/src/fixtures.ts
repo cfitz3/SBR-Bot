@@ -53,6 +53,7 @@ import type {
   WordlistRuleDTO,
   XpStandingDTO,
 } from "@sbr/shared-types";
+import type { RoleMenuSummary, StickySummary } from "@sbr/commands-admin";
 
 /** The clock every fixture is written against, so the cards are reproducible. */
 export const NOW = Date.parse("2026-08-13T18:00:00.000Z");
@@ -979,28 +980,27 @@ export const TICKET: TicketDTO = {
   closedAt: null,
 };
 
-export const TICKETS: readonly TicketDTO[] = [
-  TICKET,
-  {
-    ...TICKET,
-    id: "tkt-2",
-    number: 42,
-    categoryId: "cat-appeal",
-    categoryKey: "APPEAL",
-    categoryName: "Appeal",
-    status: "CLOSED",
-    assigneeDiscordId: null,
-    claimedByDiscordId: null,
-    claimedAt: null,
-    // Never answered by staff, so the card has to render "—" here rather than a
-    // zero — the whole point of the field being nullable.
-    firstStaffReplyAt: null,
-    topic: null,
-    transcriptReady: true,
-    closeReason: "Appeal upheld; mute lifted.",
-    closedAt: iso(-2 * 3600_000),
-  },
-];
+export const TICKET_CLOSED: TicketDTO = {
+  ...TICKET,
+  id: "tkt-2",
+  number: 42,
+  categoryId: "cat-appeal",
+  categoryKey: "APPEAL",
+  categoryName: "Appeal",
+  status: "CLOSED",
+  assigneeDiscordId: null,
+  claimedByDiscordId: null,
+  claimedAt: null,
+  // Never answered by staff, so the card has to render "—" here rather than a
+  // zero — the whole point of the field being nullable.
+  firstStaffReplyAt: null,
+  topic: null,
+  transcriptReady: true,
+  closeReason: "Appeal upheld; mute lifted.",
+  closedAt: iso(-2 * 3600_000),
+};
+
+export const TICKETS: readonly TicketDTO[] = [TICKET, TICKET_CLOSED];
 
 export const MILESTONE: PendingMilestoneDTO = {
   id: "ms-1",
@@ -1090,3 +1090,51 @@ export const LEVEL_UP_JUMP: PendingLevelUpDTO = {
   toLevel: 15,
   totalXp: 31_250,
 };
+
+// ── Staff utilities (/note, /sticky, /rolemenu) ───────────────────────────────
+
+/** A note against a linked member: the ordinary case. */
+export const NOTE: ModerationActionDTO = {
+  id: "note-8a12",
+  guildId: "g1",
+  type: "NOTE",
+  actorDiscordId: "200000000000000001",
+  targetDiscordId: "100000000000000003",
+  reason: "Asked twice about the raffle; pointed at the pinned rules. No action taken.",
+  durationSeconds: null,
+  expiresAt: null,
+  surfaces: [],
+  enforcement: "NOT_REQUIRED",
+  enforcementDetail: null,
+  active: false,
+  updatedAt: null,
+  editedByDiscordId: null,
+  voidedAt: null,
+  voidReason: null,
+  createdAt: iso(-20 * 60_000),
+};
+
+/** The same note against somebody who has never linked a Discord account. */
+export const NOTE_UNLINKED: ModerationActionDTO = { ...NOTE, id: "note-8a13", targetDiscordId: null };
+
+/**
+ * Three stickies: an ordinary one, one long enough that the picker has to clamp
+ * its label, and one that is configured but switched off.
+ */
+export const STICKIES: readonly StickySummary[] = [
+  { channelId: "300000000000000001", content: "Read the rules before posting.", enabled: true },
+  {
+    channelId: "300000000000000002",
+    content:
+      "Carry runs are posted here only. Do not advertise in guild chat, do not DM staff about a slot, and do not repost somebody else's listing under your own name.",
+    enabled: true,
+  },
+  { channelId: "300000000000000003", content: "Applications are closed for now.", enabled: false },
+];
+
+/** Role menus, including one built on the panel and never posted anywhere. */
+export const ROLE_MENUS: readonly RoleMenuSummary[] = [
+  { id: "colours", title: "Pick a colour", optionCount: 8, channelId: "300000000000000010" },
+  { id: "pings", title: "Ping roles", optionCount: 4, channelId: "300000000000000010" },
+  { id: "events", title: "Event notifications", optionCount: 3, channelId: null },
+];

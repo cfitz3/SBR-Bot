@@ -41,10 +41,22 @@ import {
   renderJoinQueueEmbed,
   renderSafetyError,
   renderSafetyStatusEmbed,
-  renderTicketEmbed,
-  renderTicketListEmbed,
   renderWordlistEmbed,
 } from "./render.js";
+import {
+  renderNoteEmbed,
+  renderRoleMenuControls,
+  renderRoleMenuEmbed,
+  renderStaffTicketEmbed,
+  renderStickyControls,
+  renderStickyEmbed,
+  renderTicketControls,
+  renderTicketQueueEmbed,
+  trimTicketReason,
+  type RoleMenuPrompt,
+  type StickyPrompt,
+  type TicketPrompt,
+} from "./utilities.js";
 
 const NO_REASON = "No reason given";
 
@@ -230,20 +242,33 @@ const purge: AdminHandler = async (ctx, deps) => {
 };
 
 /** `/member-note` — a private staff note, recorded but never enforced. */
-const memberNote: AdminHandler = async (ctx, deps) => {
+/**
+ * `/note` — a private staff note, recorded but never enforced.
+ *
+ * It was `/member-note`. Staff say "note", the compound name only ever cost a
+ * keystroke and a moment's recall, and there is nothing else the word could mean
+ * on a staff bot. The reply is the note itself rather than a sentence about it,
+ * so the thing worth checking — did I write what I meant to write — is on screen
+ * instead of a case id in parentheses.
+ */
+const note: AdminHandler = async (ctx, deps) => {
   const target = ctx.args.getUser("target");
-  const note = ctx.args.getString("note");
-  if (!target || !note) return { ephemeral: true, text: "Usage: /member-note target:<user> note:<text>" };
+  const text = ctx.args.getString("note");
+  if (!target || !text) return { ephemeral: true, text: "Name a member and give the note." };
 
   const result = await deps.moderation.applyAction({
     guildId: ctx.guildId,
     type: "NOTE",
     actorDiscordId: ctx.actorId,
     targetDiscordId: target,
-    reason: note,
+    reason: text,
   });
   if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
-  return { ephemeral: true, text: `Noted against <@${target}>. (case ${result.value.id})` };
+  return {
+    ephemeral: true,
+    text: `Noted against <@${target}>.`,
+    embed: renderNoteEmbed(result.value),
+  };
 };
 
 const infractions: AdminHandler = async (ctx, deps) => {
@@ -688,39 +713,62 @@ async function findTicket(
 }
 
 /**
- * `/tickets` — the staff view of the queue, and the two actions that need one.
+ * `/tickets` — the queue, and the two actions that need one ticket.
  *
- * `list` and `view` read the database directly. `close` and `transcript` go
- * through the bridge bot, because closing has to dispose of a Discord channel
- * this process cannot see, and a transcript is rendered from the archive the
- * gateway writes.
+ * `action:` is gone from the command and lives on the card. Typing `/tickets`
+ * shows what is open with a picker under it; naming an id opens that one with
+ * its verbs attached. The verbs are attached only when they apply — *Close* is
+ * absent on a closed ticket and *Transcript* is absent until the archive exists,
+ * which is a better answer than a button that exists to tell you it cannot work.
+ *
+ * `reason` stays an option, and rides in the close button's custom id, so
+ * closing with a recorded reason is still one interaction and not two.
  */
 const tickets: AdminHandler = async (ctx, deps) => {
-  const action = ctx.args.getString("action") ?? "list";
-  const id = ctx.args.getString("id");
+  const action = ctx.args.getString("action") ?? "show";
+  const raw = ctx.args.getString("id");
+  const reason = trimTicketReason(ctx.args.getString("reason"));
 
-  if (action === "list") {
-    const open = await deps.community.listTickets(ctx.guildId);
-    if (!open.ok) return { ephemeral: true, text: "Couldn't read the ticket queue." };
+  const open = await deps.community.listTickets(ctx.guildId);
+  if (!open.ok) return { ephemeral: true, text: "Couldn't read the ticket queue. Try /health." };
+
+  /** The queue, plus whichever ticket is in focus if it has already left it. */
+  const withFocus = (ticket: TicketDTO | null): readonly TicketDTO[] =>
+    ticket === null || open.value.some((t) => t.id === ticket.id) ? open.value : [...open.value, ticket];
+
+  const queue = (notice?: string): AdminReply => {
+    const prompt: TicketPrompt = { ticketId: null, reason, ...(notice === undefined ? {} : { notice }) };
     return {
       ephemeral: true,
       text: open.value.length === 0 ? "Nothing open." : `${String(open.value.length)} open.`,
-      embed: renderTicketListEmbed(open.value),
+      embed: renderTicketQueueEmbed(open.value, prompt),
+      components: renderTicketControls(open.value, prompt),
     };
-  }
+  };
 
-  if (!id) return { ephemeral: true, text: `Usage: /tickets action:${action} id:<number>` };
-  const ticket = await findTicket(ctx, deps, id);
+  if (!raw) return queue();
+
+  const ticket = await findTicket(ctx, deps, raw);
   if (ticket === null) return { ephemeral: true, text: "I couldn't find that ticket." };
 
-  if (action === "view") {
-    return { ephemeral: true, text: `Ticket #${String(ticket.number)}.`, embed: renderTicketEmbed(ticket) };
-  }
+  const show = (notice?: string): AdminReply => {
+    const prompt: TicketPrompt = {
+      ticketId: ticket.id,
+      reason,
+      ...(notice === undefined ? {} : { notice }),
+    };
+    return {
+      ephemeral: true,
+      text: `Ticket #${String(ticket.number)}.`,
+      embed: renderStaffTicketEmbed(ticket, prompt),
+      components: renderTicketControls(withFocus(ticket), prompt),
+    };
+  };
 
   if (action === "transcript") {
     if (!deps.ticketBridge) return noTicketBridge();
     const transcript = await deps.ticketBridge.transcript(ctx.guildId, ticket.id);
-    if (transcript === null) return { ephemeral: true, text: "I couldn't render that transcript." };
+    if (transcript === null) return { ephemeral: true, text: "I couldn't render that transcript. Try /health." };
     return {
       ephemeral: true,
       text: `Transcript for ticket #${String(ticket.number)}.`,
@@ -734,15 +782,24 @@ const tickets: AdminHandler = async (ctx, deps) => {
       guildId: ctx.guildId,
       ticketId: ticket.id,
       actorDiscordId: ctx.actorId,
-      reason: ctx.args.getString("reason"),
+      reason: reason === "" ? null : reason,
     });
+    if (!result.ok) return { ephemeral: true, text: `I couldn't close that — ${result.detail}.` };
+    // Re-read rather than echo: the close disposes of a channel and stamps the
+    // row, and a card built from the pre-close copy would show it still open.
+    const after = await deps.community.getTicket(ticket.id);
+    const closed = after.ok ? after.value : null;
+    if (closed === null) return { ephemeral: true, text: `Closed ticket #${String(result.number)}.` };
+    const prompt: TicketPrompt = { ticketId: closed.id, reason: "", notice: "Closed." };
     return {
       ephemeral: true,
-      text: result.ok ? `Closed ticket #${String(result.number)}.` : `I couldn't close that — ${result.detail}.`,
+      text: `Closed ticket #${String(result.number)}.`,
+      embed: renderStaffTicketEmbed(closed, prompt),
+      components: renderTicketControls(withFocus(closed), prompt),
     };
   }
 
-  return { ephemeral: true, text: "Pick list, view, close or transcript." };
+  return show();
 };
 
 /** The bridge owns the channel; without it, closing would only move the row. */
@@ -781,36 +838,54 @@ const ticketNames: NonNullable<AdminCommandSpec["autocomplete"]> = async (focuse
  * which is why every action here goes over the bridge rather than being posted
  * from this process: a menu posted by the staff bot would be a menu members are
  * asked to interact with from a bot that never speaks to them.
+ *
+ * The list used to print raw ids in backticks because the next step required
+ * typing one. It no longer does — picking from the menu is the next step — so
+ * the ids stop being the most prominent thing on a card about role menus.
  */
 const rolemenu: AdminHandler = async (ctx, deps) => {
   if (!deps.roleMenuBridge) return noRoleMenuBridge();
-  const action = ctx.args.getString("action") ?? "list";
-
-  if (action === "list") {
-    const menus = await deps.roleMenuBridge.list(ctx.guildId);
-    if (menus.length === 0) {
-      return { ephemeral: true, text: "No role menus yet — build one on the panel, then post it here." };
-    }
-    const lines = menus.map((menu) => {
-      const where = menu.channelId === null ? "not posted" : `<#${menu.channelId}>`;
-      return `\`${menu.id}\` — ${menu.title} · ${String(menu.optionCount)} roles · ${where}`;
-    });
-    return { ephemeral: true, text: lines.join("\n").slice(0, 1900) };
-  }
-
-  if (action !== "post") return { ephemeral: true, text: "Pick list or post." };
-
+  const action = ctx.args.getString("action") ?? "show";
   const id = ctx.args.getString("id");
-  if (!id) return { ephemeral: true, text: "Usage: /rolemenu action:post id:<menu>" };
-
   // Defaults to here, like `/lockdown` and `/set-channel`: a staffer typing it
-  // in the channel they want it in should not have to name that channel.
+  // in the channel they want it in should not have to name that channel. The
+  // button says which channel that is, so the default is no longer invisible.
   const channelId = ctx.args.getChannel("channel") ?? ctx.channelId ?? null;
+
+  const menus = await deps.roleMenuBridge.list(ctx.guildId);
+
+  const view = (menuId: string | null, notice?: string): AdminReply => {
+    const prompt: RoleMenuPrompt = {
+      menuId,
+      channelId,
+      ...(notice === undefined ? {} : { notice }),
+    };
+    return {
+      ephemeral: true,
+      text: notice ?? (menus.length === 0 ? "No role menus yet." : `${String(menus.length)} built.`),
+      embed: renderRoleMenuEmbed(menus, prompt),
+      components: renderRoleMenuControls(menus, prompt),
+    };
+  };
+
+  if (action !== "post") return view(id);
+
+  if (!id) return view(null, "Pick which menu to post.");
   const result = await deps.roleMenuBridge.publish(ctx.guildId, id, channelId);
   if (!result.ok) return { ephemeral: true, text: `I couldn't post that — ${result.detail}.` };
+  // Re-read: publishing stamps the menu with where it landed, and the card's
+  // "Posted in" line is the only confirmation of the channel that was implied.
+  const after = await deps.roleMenuBridge.list(ctx.guildId);
+  const prompt: RoleMenuPrompt = {
+    menuId: id,
+    channelId,
+    notice: result.edited ? `Updated it in <#${String(channelId)}>.` : `Posted in <#${String(channelId)}>.`,
+  };
   return {
     ephemeral: true,
-    text: result.edited ? `Updated **${id}** where it was already posted.` : `Posted **${id}**.`,
+    text: result.edited ? "Updated where it was already posted." : "Posted.",
+    embed: renderRoleMenuEmbed(after, prompt),
+    components: renderRoleMenuControls(after, prompt),
   };
 };
 
@@ -828,25 +903,37 @@ function noRoleMenuBridge(): AdminReply {
  * The configuration is guild settings this process owns outright; the message
  * is the member-facing bot's, which is why setting one is a local write plus a
  * request to that bot to put it in place. A staffer typing this in the channel
- * they mean should not have to name it, so the channel defaults to here.
+ * they mean should not have to name it, so a set defaults to here.
+ *
+ * The verb is inferred rather than typed: a message means set, no message means
+ * show, and clearing is a button on the card of the sticky being cleared. That
+ * removes the two ways the old shape could waste a round trip — `action:set`
+ * with no message, and `action:clear` against a channel with nothing in it,
+ * which used to answer with a success message about removing nothing.
  */
 const sticky: AdminHandler = async (ctx, deps) => {
   if (!deps.stickyBridge) return noStickyBridge();
-  const action = ctx.args.getString("action") ?? "list";
+  const message = (ctx.args.getString("message") ?? "").trim();
+  // Only an explicitly named channel focuses the card. Falling back to "here"
+  // for a bare `/sticky` would answer a question about the server with a card
+  // about one channel, usually the staff room it was typed in.
+  const named = ctx.args.getChannel("channel");
+  const action = ctx.args.getString("action") ?? (message === "" ? "show" : "set");
 
-  if (action === "list") {
-    const stickies = await deps.stickyBridge.list(ctx.guildId);
-    if (stickies.length === 0) {
-      return { ephemeral: true, text: "No sticky messages yet — try `/sticky action:set message:...` in a channel." };
-    }
-    const lines = stickies.map((entry) => {
-      const state = entry.enabled ? "" : " · off";
-      return `<#${entry.channelId}>${state} — ${firstLine(entry.content)}`;
-    });
-    return { ephemeral: true, text: lines.join("\n").slice(0, 1900) };
-  }
+  const view = async (channelId: string | null, notice?: string): Promise<AdminReply> => {
+    const stickies = await deps.stickyBridge!.list(ctx.guildId);
+    const prompt: StickyPrompt = { channelId, ...(notice === undefined ? {} : { notice }) };
+    return {
+      ephemeral: true,
+      text: notice ?? (stickies.length === 0 ? "None set." : `${String(stickies.length)} set.`),
+      embed: renderStickyEmbed(stickies, prompt),
+      components: renderStickyControls(stickies, prompt),
+    };
+  };
 
-  const channelId = ctx.args.getChannel("channel") ?? ctx.channelId ?? null;
+  if (action === "show") return view(named);
+
+  const channelId = named ?? ctx.channelId ?? null;
   if (channelId === null) {
     return { ephemeral: true, text: "Name a channel — I can't tell where you typed this." };
   }
@@ -854,28 +941,28 @@ const sticky: AdminHandler = async (ctx, deps) => {
   if (action === "clear") {
     const result = await deps.stickyBridge.clear(ctx.guildId, channelId);
     if (!result.ok) return { ephemeral: true, text: `I couldn't clear that — ${result.detail}.` };
-    return {
-      ephemeral: true,
-      text: result.applied
+    // Land on the overview: the channel being cleared no longer has a card.
+    return view(
+      null,
+      result.applied
         ? `Cleared the sticky in <#${channelId}>.`
-        : `Cleared the sticky in <#${channelId}>. The old message is still there — I couldn't reach the bridge bot to take it down.`,
-    };
+        : `Cleared the sticky in <#${channelId}>. The old message is still up — I couldn't reach the bridge bot to take it down. Try /health.`,
+    );
   }
 
-  if (action !== "set") return { ephemeral: true, text: "Pick list, set or clear." };
-
-  const message = (ctx.args.getString("message") ?? "").trim();
-  if (message === "") return { ephemeral: true, text: "Usage: /sticky action:set message:<what it should say>" };
+  if (message === "") {
+    return { ephemeral: true, text: "Give the message it should repeat." };
+  }
 
   const result = await deps.stickyBridge.set(ctx.guildId, channelId, message);
   if (!result.ok) return { ephemeral: true, text: `I couldn't save that — ${result.detail}.` };
   const what = result.created ? "Sticky set in" : "Updated the sticky in";
-  return {
-    ephemeral: true,
-    text: result.applied
+  return view(
+    channelId,
+    result.applied
       ? `${what} <#${channelId}>.`
-      : `${what} <#${channelId}>. It'll appear the next time somebody talks there — I couldn't reach the bridge bot to post it now.`,
-  };
+      : `${what} <#${channelId}>. It'll appear the next time somebody talks there — I couldn't reach the bridge bot to post it now. Try /health.`,
+  );
 };
 
 /** The member-facing bot owns the message; without it, this would save and never post. */
@@ -884,12 +971,6 @@ function noStickyBridge(): AdminReply {
     ephemeral: true,
     text: "Sticky messages aren't reachable from here — the bridge bot isn't running or isn't wired to this one.",
   };
-}
-
-/** Enough of a sticky to recognise it in a list, on one line. */
-function firstLine(content: string): string {
-  const line = content.split("\n")[0] ?? "";
-  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
 }
 
 /**
@@ -1078,14 +1159,14 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       handler: purge,
     },
     {
-      name: "member-note",
+      name: "note",
       description: "Attach a private staff note to a member",
       options: [
         { name: "target", description: "Member", type: "user", required: true },
         { name: "note", description: "The note", type: "string", required: true },
       ],
       minRole: "MODERATOR",
-      handler: memberNote,
+      handler: note,
     },
     {
       name: "infractions",
@@ -1335,17 +1416,6 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       name: "tickets",
       description: "Look at the ticket queue, and close or export one",
       options: [
-        {
-          name: "action",
-          description: "What to do",
-          type: "string",
-          choices: [
-            { name: "list", value: "list" },
-            { name: "view", value: "view" },
-            { name: "close", value: "close" },
-            { name: "transcript", value: "transcript" },
-          ],
-        },
         { name: "id", description: "Ticket number or id", type: "string", autocomplete: true },
         { name: "reason", description: "Why it is being closed", type: "string" },
       ],
@@ -1357,15 +1427,6 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       name: "rolemenu",
       description: "Post a self-service role menu, or list the ones this server has",
       options: [
-        {
-          name: "action",
-          description: "What to do",
-          type: "string",
-          choices: [
-            { name: "list", value: "list" },
-            { name: "post", value: "post" },
-          ],
-        },
         { name: "id", description: "Which menu", type: "string", autocomplete: true },
         { name: "channel", description: "Where to post it (defaults to here)", type: "channel" },
       ],
@@ -1377,16 +1438,6 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       name: "sticky",
       description: "Keep a message at the bottom of a channel",
       options: [
-        {
-          name: "action",
-          description: "What to do",
-          type: "string",
-          choices: [
-            { name: "list", value: "list" },
-            { name: "set", value: "set" },
-            { name: "clear", value: "clear" },
-          ],
-        },
         { name: "message", description: "What it should say", type: "string" },
         { name: "channel", description: "Which channel (defaults to here)", type: "channel" },
       ],
