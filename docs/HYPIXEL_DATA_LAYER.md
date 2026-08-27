@@ -74,6 +74,18 @@ Nothing scheduled passes it.
 4. Normalize; if the profile's API toggles (inventory/skills/etc.) are off, mark those sections `API_DISABLED` and leave values `null`.
 5. Cache and return with `freshness`.
 
+**Skill caps are ours, not Hypixel's.** The profile carries a raw XP total and
+nothing else — the level, the ceiling and "is this maxed" are all derived here,
+from the table in `packages/progression/src/skyblock/parse.ts`. A wrong entry
+in that table is silently wrong at full confidence, which is exactly what
+happened twice: Foraging was capped at 57 (the number of levels the Foraging
+update shipped content for, not the ceiling, so a 58 rendered as a maxed 57) and
+Hunting at 50 (it stops at 25, so a maxed hunter showed 25/50, could never be
+marked, and lost a level off their skill average with no way to get it back).
+Both are corrected. The renderers no longer compare a level to a cap themselves:
+`isCapped`/`capMarker` in `@sbr/embed-kit` are the only comparison, so the next
+ceiling change is one number rather than a grep.
+
 ### Market/global acquisition flow (live command)
 - Commands (`/price`, `/bazaar`, `/lowestbin`, `/auctions`, `/mayor`, `/firesales`, `/bingo`) **read pre-computed Redis keys only**. If the key is missing/expired → `STALE` (serve last-known) or `MISSING_PROFILE`-style empty state; they **never** trigger an AH sweep.
 

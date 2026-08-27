@@ -358,7 +358,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
     "8ball", "coinflip", "cringe", "guildquote", "rank", "roll", "rps",
     // Lookups (§17).
     "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
-    "networth", "perm", "price", "profile", "skills", "slayer", "slayers", "standing", "stats",
+    "networth", "perm", "price", "profile", "skills", "slayers", "standing", "stats",
     // Progression (§17, Part IV). All three are the caller's own numbers, which
     // is why all three are "linked" below rather than open to any name typed in
     // chat. `/snapshot` is the only write of the three, and it writes a row

@@ -46,20 +46,22 @@ const SKILLS: readonly { readonly name: string; readonly key: string; readonly m
   { name: "Farming", key: "FARMING", max: 60 },
   { name: "Mining", key: "MINING", max: 60 },
   { name: "Combat", key: "COMBAT", max: 60 },
-  // The Foraging update made 50 a soft cap: levels 51-57 are unlocked with
-  // Fig/Mangrove/Helix logs and Agatha's milestones, on the same curve. Capping
-  // at 50 here would report a 57 as a 50, which is worse than reporting a
-  // ceiling most players cannot yet reach.
-  { name: "Foraging", key: "FORAGING", max: 57 },
+  // The Foraging update lifted the ceiling to 60, on the same curve as the
+  // other 60-cap skills. 57 was the number of levels the update *shipped* with
+  // content for, not the cap, and using it meant a 58 rendered as a maxed 57 —
+  // the marker went up three levels early and the remaining XP read as zero.
+  { name: "Foraging", key: "FORAGING", max: 60 },
   { name: "Fishing", key: "FISHING", max: 50 },
   { name: "Enchanting", key: "ENCHANTING", max: 60 },
   { name: "Alchemy", key: "ALCHEMY", max: 50 },
   { name: "Taming", key: "TAMING", max: 60 },
   // Added with the Foraging update: levelled by hunting mobs and by fusing and
-  // syphoning attribute shards. Counts toward the average like any other
-  // gameplay skill, which does move every member's average down until they
-  // level it — a real change in a real statistic, not a reporting artefact.
-  { name: "Hunting", key: "HUNTING", max: 50 },
+  // syphoning attribute shards. It stops at 25, not 50 — the same ceiling
+  // Runecrafting and Social use, though on the ordinary skill curve. Reading it
+  // as a 50-cap skill meant a maxed hunter showed 25/50 and could never be
+  // marked as capped, and dragged the skill average down by a level they had no
+  // way to get back. Counts toward the average like any other gameplay skill.
+  { name: "Hunting", key: "HUNTING", max: 25 },
   { name: "Carpentry", key: "CARPENTRY", max: 50 },
   { name: "Runecrafting", key: "RUNECRAFTING", max: 25 },
   { name: "Social", key: "SOCIAL", max: 25 },

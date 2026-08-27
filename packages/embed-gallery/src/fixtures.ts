@@ -120,9 +120,17 @@ export const SKILLS: SkillsDTO = {
     { name: "Combat", level: 57, maxLevel: 60, experience: 88_400_000, xpToNext: 12_400_000, progress: 0.41 },
     { name: "Farming", level: 60, maxLevel: 60, experience: 111_600_000, xpToNext: null, progress: 1 },
     { name: "Mining", level: 48, maxLevel: 60, experience: 21_300_000, xpToNext: 3_900_000, progress: 0.62 },
-    { name: "Foraging", level: 39, maxLevel: 50, experience: 5_100_000, xpToNext: 900_000, progress: 0.18 },
+    // Both corrected caps, so the gallery shows what the fix changed: Foraging
+    // sits above the old 57 without being marked, Hunting is maxed at 25 and is.
+    { name: "Foraging", level: 58, maxLevel: 60, experience: 98_200_000, xpToNext: 6_400_000, progress: 0.31 },
+    { name: "Hunting", level: 25, maxLevel: 25, experience: 4_600_000, xpToNext: null, progress: 1 },
     // A skill Hypixel has not backfilled: level known, xp unreadable.
     { name: "Fishing", level: 44, maxLevel: 50, experience: null, xpToNext: null, progress: null },
+    // Hidden entirely — the card says so rather than showing a plausible zero.
+    { name: "Alchemy", level: null, maxLevel: 50, experience: null, xpToNext: null, progress: null },
+    { name: "Carpentry", level: 50, maxLevel: 50, experience: 5_800_000, xpToNext: null, progress: 1 },
+    { name: "Runecrafting", level: 18, maxLevel: 25, experience: 4_100, xpToNext: 750, progress: 0.44 },
+    { name: "Social", level: 22, maxLevel: 25, experience: 172_000, xpToNext: 28_000, progress: 0.6 },
   ],
 };
 
@@ -131,11 +139,11 @@ export const SKILLS_OFF: SkillsDTO = { average: null, apiDisabled: true, skills:
 export const SLAYERS: SlayersDTO = {
   totalExperience: 2_640_000,
   bosses: [
-    { boss: "Zombie", experience: 1_200_000, tier: 5, maxTier: 5, kills: { "1": 400, "4": 210, "5": 96 } },
-    { boss: "Spider", experience: 640_000, tier: 4, maxTier: 4, kills: { "3": 180, "4": 61 } },
-    { boss: "Wolf", experience: 500_000, tier: 4, maxTier: 4, kills: { "4": 44 } },
-    { boss: "Enderman", experience: 300_000, tier: 3, maxTier: 4, kills: { "2": 30, "3": 12 } },
-    { boss: "Blaze", experience: 0, tier: 0, maxTier: 4, kills: {} },
+    { boss: "zombie", experience: 1_200_000, tier: 5, maxTier: 5, kills: { "1": 400, "4": 210, "5": 96 } },
+    { boss: "spider", experience: 640_000, tier: 4, maxTier: 4, kills: { "3": 180, "4": 61 } },
+    { boss: "wolf", experience: 500_000, tier: 4, maxTier: 4, kills: { "4": 44 } },
+    { boss: "enderman", experience: 300_000, tier: 3, maxTier: 4, kills: { "2": 30, "3": 12 } },
+    { boss: "blaze", experience: 0, tier: 0, maxTier: 4, kills: {} },
   ],
 };
 

@@ -322,7 +322,7 @@ const skills: CommandHandler = async (ctx, deps) => {
   const text = result.ok
     ? `${target.ign}: skill average ${formatLevel(result.value.data.average)}`
     : `${target.ign}: ${renderFailure(result.error.state)}`;
-  return { ephemeral: false, text, embed: renderSkillsEmbed(target.ign, result, only) };
+  return { ephemeral: false, text, embed: renderSkillsEmbed(target.ign, result, only, target.uuid) };
 };
 
 const slayer: CommandHandler = async (ctx, deps) => {
@@ -337,7 +337,7 @@ const slayer: CommandHandler = async (ctx, deps) => {
   const text = result.ok
     ? `${target.ign}: ${result.value.data.totalExperience.toLocaleString("en-US")} slayer xp`
     : `${target.ign}: ${renderFailure(result.error.state)}`;
-  return { ephemeral: false, text, embed: renderSlayersEmbed(target.ign, result, only) };
+  return { ephemeral: false, text, embed: renderSlayersEmbed(target.ign, result, only, target.uuid) };
 };
 
 const dungeons: CommandHandler = async (ctx, deps) => {
@@ -695,10 +695,10 @@ const TARGET_OPTIONS = [
   { name: "profile", description: "Skyblock profile name", type: "string" as const },
 ];
 
-/** Named once: `/slayers` and its deprecated `/slayer` alias must stay identical. */
+/** The one place the boss list is written down, so the choices cannot drift. */
 const SLAYER_BOSS_OPTION: CommandOptionSpec = {
   name: "boss",
-  description: "One slayer only — shows the per-tier kill breakdown",
+  description: "Narrow to one boss (every boss shows its tier breakdown either way)",
   type: "string",
   choices: [
     { name: "Zombie", value: "zombie" },
@@ -859,18 +859,6 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       cooldownMs: 15_000,
       inGame: true,
       handler: slayer,
-    },
-    {
-      // Kept for one release after the rename. Same handler, same options — the
-      // dispatcher adds the "now /slayers" notice from `deprecatedBy`.
-      name: "slayer",
-      description: "Deprecated — use /slayers",
-      options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
-      capability: "RUN_COMMAND",
-      cooldownMs: 15_000,
-      inGame: true,
-      handler: slayer,
-      deprecatedBy: "slayers",
     },
     {
       name: "dungeons",

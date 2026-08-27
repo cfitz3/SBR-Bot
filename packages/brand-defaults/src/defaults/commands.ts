@@ -275,22 +275,12 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       skill: "One skill only",
     },
   },
-  // The rename notice itself is not copy: the dispatcher builds it from
-  // `deprecatedBy` so it can never name a command that no longer exists.
-  slayer: {
-    description: "Deprecated — use /slayers",
-    option: {
-      player: "Minecraft username (defaults to you)",
-      profile: "Skyblock profile name",
-      boss: "One slayer only — shows the per-tier kill breakdown",
-    },
-  },
   slayers: {
     description: "Slayer XP, tiers and per-tier boss kills",
     option: {
       player: "Minecraft username (defaults to you)",
       profile: "Skyblock profile name",
-      boss: "One slayer only — shows the per-tier kill breakdown",
+      boss: "Narrow to one boss (every boss shows its tier breakdown either way)",
     },
   },
   standing: {

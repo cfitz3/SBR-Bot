@@ -10,6 +10,7 @@
     { "path": "../shared-types" },
     { "path": "../tickets" },
     { "path": "../observability" },
-    { "path": "../../brand" }
+    { "path": "../../brand" },
+    { "path": "../embed-kit" }
   ]
 }

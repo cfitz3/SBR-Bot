@@ -41,6 +41,11 @@ export const DEFAULT_EMBEDS = {
   field: {
     skyblockLevel: "SkyBlock Level",
     skillAverage: "Skill average",
+    /** The twelve skills as two lists: the ones the average counts, and the rest. */
+    skills: "Skills",
+    cosmeticSkills: "Cosmetic",
+    /** The uncapped skill with the least XP left — the one worth an hour tonight. */
+    closest: "Closest to next",
     catacombs: "Catacombs",
     classAverage: "Class average",
     selected: "Selected",
@@ -216,6 +221,8 @@ export const DEFAULT_EMBEDS = {
     /** Empty and unavailable states, per card. */
     noProfiles: "No Skyblock profiles on this account.",
     skillsOff: "This profile's skill API is turned off, so none of it is readable.",
+    /** One skill, asked for by name, that this profile does not expose. */
+    skillHidden: "Hidden — this profile's skill API is off for this one.",
     /** `{name}` is what the member typed. */
     noSuchSkill: 'No skill called "{name}".',
     noKills: "No recorded kills.",
