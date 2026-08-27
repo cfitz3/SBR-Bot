@@ -80,12 +80,19 @@ export const DEFAULT_THEME = {
      * `marker` is the qualifying flag — a maxed skill, a capped stat. It is gold
      * on purpose: the old `✦` rendered in the body colour, so "maxed" looked
      * exactly like "not maxed" to anyone not counting.
+     *
+     * `on`/`off` are the switch pair, for any card that lists things a guild
+     * has turned on: feature flags, lockdowns, per-source XP. Deliberately not
+     * a tick and a cross — off is a choice somebody made, not a failure, and a
+     * red cross beside "Autoresponders" reads as one.
      */
     glyphs: {
       barFilled: "▰",
       barEmpty: "▱",
       barWidth: 10,
       marker: "⭐",
+      on: "🟢",
+      off: "⚪",
     },
 
     /**

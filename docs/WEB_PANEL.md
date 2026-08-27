@@ -140,7 +140,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 | `MEMBER` (non-staff) | *No panel access* (redirect to a member landing / their own linked info only) | — |
 | `MODERATOR` (Staff) | Overview, Analytics (read), Moderation/Infractions, Members, Tickets (the open queue), Events (read) | Issue/read infractions, close tickets, mark attendance |
 | `OFFICER` | + Events (full), Bridge control | Create/cancel events, bridge suspend/unsuspend, unlink a member |
-| `ADMIN` / `OWNER` | + Settings (config, channel mapping, feature flags, screening), XP, Permissions, Health, Milestones, Ticket config, Filter | All configuration, role/channel mapping, capability and command floors, per-subject exceptions, feature toggles, screening policy, XP policy and adjustments, milestone definitions, ticket types, chat-filter rules and the escalation ladder |
+| `ADMIN` / `OWNER` | + Settings (config, channel mapping, features, screening), XP, Permissions, Health, Milestones, Ticket config, Filter | All configuration, role/channel mapping, capability and command floors, per-subject exceptions, feature toggles, screening policy, XP policy and adjustments, milestone definitions, ticket types, chat-filter rules and the escalation ladder |
 
 **No page sits at OFFICER any more.** The one that did was Recruitment, and the screening it existed to drive is automatic now (§3.4). The tier still exists in the role ladder and still gates individual mutations — bridge suspend, the five event writes, member unlink — it just isn't what any whole page turns on. Tickets went the other way: the page leads with the open queue, which is Moderator work (`ticket.close`), and the configuration on the same page stays Admin per-load rather than the whole page sitting at the higher tier and shutting out the people who answer tickets.
 
@@ -189,7 +189,7 @@ Two layers combine on every guild-scoped request: **Discord authority** (proves 
 - **Bridge** — behaviour toggles and the suspend control.
 - **Channels** — every slot in `CONFIG_CHANNEL_SLOTS`, an unbound one rendered as "not set" rather than omitted (§3.9).
 - **Roles** — platform role → Discord role id mapping (§3.9).
-- **Feature flags** — per-guild toggles from `GuildConfig.features` (§3.9).
+- **Features** — one toggle per entry in `FEATURE_CATALOGUE`, labelled and explained (§3.9).
 - **Join screening** (`BRIDGE_BOT.md` §6A) — the entry bar, the scammer-list behaviour and the auto-accept switch. Always shows the policy *in force*: a guild that has never saved one reads back the platform defaults, because rendering blanks would say "nothing is configured" while the scammer check is already running. This is what replaced the application queue of §3.7.
 
 Everything arrives in **one read** (`SettingsVM`) and therefore one access decision and one round trip. Writes stay per-field, as everywhere else (§0), routed to whichever domain service owns the value — `config.SettingsService`, then Postgres + Redis cache invalidation + pub/sub so bots reload live.
@@ -277,7 +277,7 @@ The `Application` model, `config.recruitment` and `application.decide` all still
 
 Not a tab of its own. The behaviour below is unchanged and is what the Channels, Roles and Feature flags cards do; only the address moved.
 
-- **Feature flags:** per-guild toggles from `GuildConfig.features` (e.g. in-game commands, LFG, networth, antiraid). Toggling invalidates cache + pub/sub to bots.
+- **Features:** one toggle per entry in `FEATURE_CATALOGUE` — the switches something on the platform actually reads. There is no free-text "add a flag" box: `setFeature` refuses a key no reader knows, so offering one would promise a write that cannot land. Keys stored by the old box are named under the switches rather than hidden. Toggling invalidates cache + pub/sub to bots.
 - **Role mapping:** *moved to the Permissions page (§3.16)*, and widened there from one Discord role per level to a set. The card is gone from Settings; `config.role-mapping` stays on the API for the same reason every superseded mutation does.
 - **Channel mapping:** assign functional channels → Discord channel IDs, validated against the guild's channels. Every slot in `CONFIG_CHANNEL_SLOTS` gets a control: the five originals (bridge, staff, log, applications, events) plus LFG, tickets, milestones, leaderboard and modlog. The page reads them from `GuildRuntimeConfig.channels`, the canonical binding map — which is why a slot nothing has ever written still shows up as "not set" instead of vanishing. (It read that map over five mirrored `*ChannelId` columns until Phase 11 backfilled and dropped them; the page never had to change.)
 - **View/edit raw role IDs & channel IDs** with validation and a "resolve name" preview; invalid/stale IDs flagged.

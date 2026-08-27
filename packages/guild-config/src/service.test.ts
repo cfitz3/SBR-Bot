@@ -207,9 +207,26 @@ test("every write announces the guild so other processes drop their copy", async
   });
 
   await svc.setBridgeSuspended("g1", true);
-  await svc.setFeature("g1", "events", false);
+  await svc.setFeature("g1", "welcome", false);
   await svc.setRoleMapping("g2", "OFFICER", "role-9");
   assert.deepEqual(published, ["g1", "g1", "g2"]);
+});
+
+test("a feature nobody reads is refused rather than stored", async () => {
+  // The whole point of the catalogue: a key that reaches the row but no reader
+  // is a switch wired to nothing, and it looks identical to one that works.
+  const published: string[] = [];
+  let writes = 0;
+  const svc = new GuildConfigServiceImpl({
+    repo: repo({ async setFeature() { writes += 1; } }),
+    broadcast: { async publish(guildId) { published.push(guildId); } },
+    logger: silent,
+  });
+
+  const r = await svc.setFeature("g1", "events", false);
+  assert.equal(r.ok, false);
+  assert.equal(writes, 0);
+  assert.deepEqual(published, []);
 });
 
 test("linking a Hypixel guild clears the cache and announces it like any other write", async () => {

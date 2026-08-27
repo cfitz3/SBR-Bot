@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@sbr/brand": "*",
+    "@sbr/embed-kit": "*",
     "@sbr/moderation": "*",
     "@sbr/screening": "*",
     "@sbr/observability": "*",
