@@ -4,6 +4,7 @@
  * Never throws: every path returns a CommandReply so the adapter can respond.
  */
 import { copy } from "@sbr/brand";
+import { failureReply } from "@sbr/embed-kit";
 import { isUpstreamUnavailable } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type {
@@ -132,11 +133,10 @@ export class CommandDispatcher {
         error: error instanceof Error ? error.message : "unknown",
       });
       // Degrade honestly: an unreachable data source is a different situation
-      // from a bug, and the user can act on the difference.
-      reply = {
-        ephemeral: true,
-        text: isUpstreamUnavailable(error) ? E.generic.upstreamDown : E.generic.unknown,
-      };
+      // from a bug, and the user can act on the difference — one gets the
+      // report button, the other does not, because a bug report about Hypixel
+      // being down tells staff something they know and cannot fix.
+      reply = failureReply(isUpstreamUnavailable(error) ? "UPSTREAM" : "BUG");
     }
 
     await this.captureUsage(name, ctx, success, this.now() - started);

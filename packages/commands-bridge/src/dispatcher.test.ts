@@ -45,6 +45,7 @@ import {
   type XpStandingDTO,
 } from "@sbr/shared-types";
 import { copy } from "@sbr/brand";
+import { BUG_TICKET_BUTTON_ID } from "@sbr/embed-kit";
 import type { Logger } from "@sbr/observability";
 import { SEED_CATEGORIES } from "@sbr/tickets";
 import { CommandDispatcher } from "./dispatcher.js";
@@ -630,10 +631,14 @@ test("networth marks stale data as cached", async () => {
   assert.match(r.text, /\(cached\)/);
 });
 
-test("handler errors are caught and reported gracefully", async () => {
+test("a handler that throws sends the member to /health, with a way to report it", async () => {
   const throwing = progression({ async getNetworth() { throw new Error("hypixel down"); } });
   const r = await makeDispatcher({ progression: throwing }).dispatch("networth", ctx());
-  assert.match(r.text, /Something went wrong/);
+  // Not a description of the failure: the member cannot act on "hypixel down",
+  // and the message must not repeat whatever the exception happened to say.
+  assert.doesNotMatch(r.text, /hypixel down/i);
+  assert.match(r.text, /\/health/);
+  assert.equal(r.components?.[0]?.buttons[0]?.customId, BUG_TICKET_BUTTON_ID);
 });
 
 test("an unreachable upstream degrades with its own message, not the generic one", async () => {

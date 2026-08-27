@@ -14,6 +14,7 @@
     { "path": "../screening" },
     { "path": "../guild-config" },
     { "path": "../roles" },
+    { "path": "../tickets" },
     { "path": "../xp" }
   ]
 }

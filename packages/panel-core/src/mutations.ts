@@ -113,6 +113,7 @@ import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
 import { ROLE_PREVIEW_LIMIT } from "./reads.js";
 import type { PermissionExceptionStore, PermSubjectKind, RolesInsight } from "./reads.js";
+import { isPermanentCategory } from "@sbr/tickets";
 import { SUGGESTED_POLICY } from "@sbr/xp";
 import { XP_SOURCE_ORDER } from "./service.js";
 
@@ -1623,13 +1624,21 @@ export class PanelMutations {
    * Tickets already opened under it keep their history: their `categoryId` goes
    * null rather than the rows going with it, so a closed appeal is still
    * readable after the appeal category is retired. To stop offering one without
-   * losing the menu entry, store it with `enabled: false` instead.
+   * losing the menu entry, store it with `enabled: false` instead — except for
+   * `BUG`, which is neither removable nor disableable because it is what the
+   * button under every platform error opens.
    */
   async removeTicketCategory(session: PanelSession | null, guildId: string, key: unknown): Promise<MutationResult> {
     return this.run(session, guildId, "ticket.category.remove", async () => {
       const tickets = this.d.tickets;
       if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
       if (typeof key !== "string" || !TICKET_KEY.test(key)) return invalid("key must be a ticket category key");
+      // Refused here, with a reason, rather than left to the repository's
+      // backstop — which would answer `removed: false` and read to the admin as
+      // "it was already gone", about a category still sitting on their page.
+      if (isPermanentCategory(key)) {
+        return invalid("That category is part of the platform's error reporting and cannot be removed");
+      }
 
       let removed: boolean;
       try {

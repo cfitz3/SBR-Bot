@@ -20,16 +20,42 @@ export const DEFAULT_ERRORS = {
   /** What the panel adds under a denial that a click cannot fix. */
   denyHint: "Ask a guild admin if you think this is wrong.",
 
-  /** Generic failures, reached from more than one surface. */
+  /**
+   * Generic failures, reached from more than one surface.
+   *
+   * The platform failures name `/health` and nothing else. "Something went
+   * wrong, try again in a moment" was a guess dressed as advice — trying again
+   * is exactly what a member does anyway, and it does not help if the reason is
+   * a database that has been down for ten minutes. `/health` answers the
+   * question the member actually has, which is whether it is them or us.
+   *
+   * The four that are not platform failures deliberately do not: a member who
+   * lacks a permission or typed a name that matched nothing has no reason to go
+   * read a status card, and sending them there would train everyone to ignore
+   * the pointer that matters.
+   */
   generic: {
-    unknown: "Something went wrong. Try again in a moment.",
-    saveFailed: "That didn't save.",
-    loadFailed: "That didn't load.",
+    unknown: "That didn't complete. Run `/health` to see whether the platform is up.",
+    saveFailed: "That didn't save. Run `/health` to see whether the platform is up.",
+    loadFailed: "That didn't load. Run `/health` to see whether the platform is up.",
     rateLimited: "Slow down a moment — try that again shortly.",
     notLinked: "Run `/link` to connect your Minecraft account first.",
     noPermission: "You don't have permission to do that.",
     notFound: "Nothing matched that.",
-    upstreamDown: "Hypixel isn't answering right now. This is on their end, not yours.",
+    upstreamDown: "Hypixel isn't answering. That's on their end — `/health` tracks it.",
+  },
+
+  /**
+   * The button under a platform failure.
+   *
+   * Appearance only. There is no key here that removes the button, because the
+   * button is the platform's own reporting path: a guild that switched it off
+   * would keep every bug to itself without deciding to.
+   */
+  report: {
+    button: "Report a bug",
+    /** Empty for no emoji, which is a real choice rather than a missing value. */
+    emoji: "",
   },
 
   /**
@@ -118,7 +144,7 @@ export const DEFAULT_ERRORS = {
      * handlers write through services that are transactional, and which the
      * bridge bot's read-heavy commands have no need to say at all.
      */
-    adminFailed: "That action failed unexpectedly — nothing was changed.",
+    adminFailed: "That action failed — nothing was changed. Run `/health` to see whether the platform is up.",
   },
 };
 
