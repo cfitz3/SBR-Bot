@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { checkEmbed } from "@sbr/embed-kit";
 import type { ModerationActionDTO } from "@sbr/shared-types";
 import { modLogEmbed } from "./mod-log.js";
 import { AUTOMOD_ACTOR } from "./automod-runner.js";
@@ -33,14 +34,44 @@ function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
 const field = (view: ReturnType<typeof modLogEmbed>, name: string): string | undefined =>
   view.fields?.find((f) => f.name === name)?.value;
 
+/**
+ * One labelled line out of the consolidated "Case" field.
+ *
+ * The member, the staffer, the duration and the expiry used to be four inline
+ * fields; they are four short facts always read together, so they are one field
+ * now. The tests read them the same way a reader does — by label — rather than
+ * by field, so the assertions stay about what the card says.
+ */
+const fact = (view: ReturnType<typeof modLogEmbed>, label: string): string | undefined =>
+  field(view, "Case")
+    ?.split("\n")
+    .find((line) => line.startsWith(`**${label}** `))
+    ?.slice(label.length + 5);
+
 test("the card names the member, the staffer, the duration and the reason", () => {
   const view = modLogEmbed(action(), NOW);
   assert.equal(view.title, "Muted");
-  assert.equal(field(view, "Member"), "<@member>");
-  assert.equal(field(view, "Staff"), "<@staff>");
-  assert.equal(field(view, "Duration"), "1h");
+  assert.equal(fact(view, "Member"), "<@member>");
+  assert.equal(fact(view, "Staff"), "<@staff>");
+  assert.equal(fact(view, "Duration"), "1h");
   assert.equal(field(view, "Reason"), "spam");
   assert.match(view.footer ?? "", /act-1f3b/);
+});
+
+test("the card is dated by when the punishment happened, not by when it was sent", () => {
+  // A live post makes those the same instant. `/case` renders this same card
+  // months later, and a case with no date at all — which is what this renderer
+  // used to produce — is the version of the card that is actively unhelpful.
+  const view = modLogEmbed(action(), NOW);
+  assert.equal(view.timestamp, "2026-03-01T11:00:00.000Z");
+});
+
+test("the card is legal to send and inside the house style", () => {
+  // The style checker is what keeps this renderer honest now that it goes
+  // through `card()`: an empty field value or a hand-built footer would be
+  // caught here rather than by Discord refusing the message.
+  const issues = checkEmbed(modLogEmbed(action(), NOW)).filter((i) => i.severity === "error");
+  assert.deepEqual(issues, []);
 });
 
 test("a punishment that did not take says so instead of reading as done", () => {
@@ -88,31 +119,39 @@ test("a pending action names what it is waiting on", () => {
 });
 
 test("the automatic actors read as themselves, not as a snowflake mention", () => {
-  assert.equal(field(modLogEmbed(action({ actorDiscordId: AUTOMOD_ACTOR }), NOW), "Staff"), "Automod");
+  assert.equal(fact(modLogEmbed(action({ actorDiscordId: AUTOMOD_ACTOR }), NOW), "Staff"), "Automod");
   assert.equal(
-    field(modLogEmbed(action({ actorDiscordId: EXPIRY_ACTOR, type: "UNMUTE" }), NOW), "Staff"),
+    fact(modLogEmbed(action({ actorDiscordId: EXPIRY_ACTOR, type: "UNMUTE" }), NOW), "Staff"),
     "Expired (automatic)",
   );
 });
 
 test("expiry is a relative timestamp, and reads as past once it has passed", () => {
   const soon = modLogEmbed(action(), NOW);
-  assert.match(field(soon, "Expires") ?? "", /^<t:\d+:R>$/);
+  assert.match(fact(soon, "Expires") ?? "", /^<t:\d+:R>$/);
   const gone = modLogEmbed(action({ expiresAt: "2026-03-01T11:30:00.000Z" }), NOW);
-  assert.match(field(gone, "Expired") ?? "", /^<t:\d+:R>$/);
-  assert.match(gone.footer ?? "", /expired/);
+  assert.match(fact(gone, "Expired") ?? "", /^<t:\d+:R>$/);
+  // The state moved out of the footer and into the headline, where a reader
+  // scanning the channel meets it first instead of last.
+  assert.match(gone.description ?? "", /expired/);
+});
+
+test("a punishment still running says nothing extra in the headline", () => {
+  // Every card would otherwise open with "active", which is the default state
+  // and therefore no information at all.
+  assert.equal(modLogEmbed(action(), NOW).description, undefined);
 });
 
 test("a permanent ban shows no duration or expiry line", () => {
   const view = modLogEmbed(action({ type: "BAN", durationSeconds: null, expiresAt: null }), NOW);
-  assert.equal(field(view, "Duration"), undefined);
-  assert.equal(field(view, "Expires"), undefined);
+  assert.equal(fact(view, "Duration"), undefined);
+  assert.equal(fact(view, "Expires"), undefined);
   assert.equal(view.footer, "Case act-1f3b");
 });
 
 test("an action on a member with no Discord account still renders", () => {
   const view = modLogEmbed(action({ targetDiscordId: null }), NOW);
-  assert.equal(field(view, "Member"), "an unlinked member");
+  assert.equal(fact(view, "Member"), "an unlinked member");
 });
 
 test("a voided ban stops reading as a ban", () => {
@@ -125,5 +164,5 @@ test("a voided ban stops reading as a ban", () => {
   );
   assert.equal(view.color, "NEUTRAL");
   assert.equal(field(view, "Voided"), "wrong person");
-  assert.match(view.footer ?? "", /voided/);
+  assert.match(view.description ?? "", /voided/);
 });

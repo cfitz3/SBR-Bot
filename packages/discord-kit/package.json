@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@sbr/brand": "*",
+    "@sbr/embed-kit": "*",
     "@sbr/shared-types": "*",
     "discord.js": "^14.27.0"
   }

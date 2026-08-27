@@ -13,6 +13,65 @@ import type {
 } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
+/**
+ * An ISO bound, or nothing.
+ *
+ * A date staff typed by hand is the input here, so an unreadable one has to
+ * mean "no bound" rather than an `Invalid Date` — Prisma would take that and
+ * return nothing at all, which reads as an empty log rather than a typo.
+ */
+function parseBound(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : new Date(ms);
+}
+
+/**
+ * Every `/audit` filter as one Prisma `where`.
+ *
+ * Extracted from `listActions` so it can be tested without a database, which
+ * is where the interesting part lives: three separate sources can all want to
+ * constrain `createdAt` — `sinceDays`, an explicit `since`, and `until` —
+ * and Prisma takes exactly one object per column. Assigning them one after the
+ * other, which is the obvious way to write this, silently drops whichever was
+ * written first and returns a result set that looks like an answer.
+ *
+ * `now` is a parameter for the same reason: a relative lower bound and the
+ * "still in force" cutoff are both readings of the clock, and a test that
+ * cannot fix the clock can only assert that something was set.
+ */
+export function auditWhere(query: AuditQuery, now: Date): Record<string, unknown> {
+  const where: Record<string, unknown> = { guildId: query.guildId };
+  if (query.actorDiscordId) where.actorDiscordId = query.actorDiscordId;
+  if (query.targetDiscordId) where.targetDiscordId = query.targetDiscordId;
+  if (query.type) where.type = query.type;
+
+  const lower: Date[] = [];
+  if (query.sinceDays && query.sinceDays > 0) {
+    lower.push(new Date(now.getTime() - query.sinceDays * 24 * 60 * 60 * 1000));
+  }
+  const explicitSince = parseBound(query.since);
+  if (explicitSince) lower.push(explicitSince);
+  const until = parseBound(query.until);
+  // Two lower bounds mean the caller wants the tighter one — somebody who asks
+  // for "the last 7 days" and "since the 1st" is narrowing, not widening. An
+  // unparseable date contributes nothing rather than an epoch.
+  const gte = lower.length > 0 ? new Date(Math.max(...lower.map((d) => d.getTime()))) : null;
+  if (gte !== null || until !== null) {
+    where.createdAt = { ...(gte ? { gte } : {}), ...(until ? { lte: until } : {}) };
+  }
+
+  if (query.inForceOnly) {
+    // Time-filtered here rather than after the fact: `take` would otherwise
+    // spend its budget on rows that are about to be dropped, and a page of
+    // "still in force" could come back half empty.
+    where.active = true;
+    where.type = query.type ?? { in: ["MUTE", "BAN"] };
+    where.OR = [{ expiresAt: null }, { expiresAt: { gt: now } }];
+  }
+  return where;
+}
+
 interface NewActionRecord {
   guildId: string;
   infractionId: string | null;
@@ -168,21 +227,7 @@ export const moderationRepository = {
    * an officer opening the log with no arguments sees everything recent.
    */
   async listActions(query: AuditQuery): Promise<readonly ModerationActionDTO[]> {
-    const where: Record<string, unknown> = { guildId: query.guildId };
-    if (query.actorDiscordId) where.actorDiscordId = query.actorDiscordId;
-    if (query.targetDiscordId) where.targetDiscordId = query.targetDiscordId;
-    if (query.type) where.type = query.type;
-    if (query.sinceDays && query.sinceDays > 0) {
-      where.createdAt = { gte: new Date(Date.now() - query.sinceDays * 24 * 60 * 60 * 1000) };
-    }
-    if (query.inForceOnly) {
-      // Time-filtered here rather than after the fact: `take` would otherwise
-      // spend its budget on rows that are about to be dropped, and a page of
-      // "still in force" could come back half empty.
-      where.active = true;
-      where.type = query.type ?? { in: ["MUTE", "BAN"] };
-      where.OR = [{ expiresAt: null }, { expiresAt: { gt: new Date() } }];
-    }
+    const where = auditWhere(query, new Date());
     const rows = await prisma.moderationAction.findMany({
       where,
       orderBy: { createdAt: "desc" },

@@ -363,6 +363,8 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       target: "Filter by the member acted on",
       type: "Filter by action type",
       days: "Look back this many days",
+      from: "Earliest date, YYYY-MM-DD",
+      to: "Latest date, YYYY-MM-DD",
       in_force: "Only punishments still being enforced right now",
     },
   },

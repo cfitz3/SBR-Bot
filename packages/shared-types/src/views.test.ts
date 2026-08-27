@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DataEnvelope } from "./common.js";
-import { describeAge, flattenEmbed, stalenessFooter, type EmbedView } from "./views.js";
+import { describeAge, flattenEmbed, staleness, type EmbedView } from "./views.js";
 
 const NOW = Date.parse("2026-08-06T12:00:00.000Z");
 
@@ -21,14 +21,27 @@ test("describeAge tolerates clock skew and garbage rather than rendering NaN", (
   assert.equal(describeAge("not-a-date", NOW), "just now");
 });
 
-test("stalenessFooter marks STALE data explicitly", () => {
-  const footer = stalenessFooter(envelope({ freshness: "STALE", fetchedAt: "2026-08-06T11:00:00.000Z" }), NOW);
-  assert.match(footer, /^⚠ cached data — as of 1h ago$/);
+test("staleness keeps the caveat and hands the age to Discord", () => {
+  // The footer says only what stays true. The age is the envelope's own
+  // fetchedAt, untouched, because a card read tomorrow must age with the reader.
+  const stale = staleness(envelope({ freshness: "STALE", fetchedAt: "2026-08-06T11:00:00.000Z" }));
+  assert.equal(stale.timestamp, "2026-08-06T11:00:00.000Z");
+  assert.equal(stale.footer, "⚠ cached — refresh failed");
+  assert.doesNotMatch(stale.footer ?? "", /ago|as of/);
 });
 
-test("stalenessFooter distinguishes live from cache-served", () => {
-  assert.equal(stalenessFooter(envelope(), NOW), "as of just now");
-  assert.equal(stalenessFooter(envelope({ source: "CACHE" }), NOW), "cached — as of just now");
+test("staleness distinguishes live from cache-served, and live says nothing", () => {
+  assert.deepEqual(staleness(envelope()), { timestamp: "2026-08-06T12:00:00.000Z" });
+  assert.equal(staleness(envelope({ source: "CACHE" })).footer, "served from cache");
+});
+
+test("flattenEmbed leads with the author, since identity left the title", () => {
+  const embed: EmbedView = {
+    author: { name: "Aria" },
+    title: "Skills",
+    description: "SA 51.3",
+  };
+  assert.equal(flattenEmbed(embed), "Aria · Skills · SA 51.3");
 });
 
 test("flattenEmbed collapses title, description and fields to one line", () => {

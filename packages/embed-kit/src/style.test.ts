@@ -14,7 +14,6 @@ import { FLATTEN_SEPARATOR, INLINE_ROW, padInlineRow, type EmbedView } from "@sb
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { toEmbed } from "./render.js";
 import { checkEmbed, checkEmbeds, EMBED_LIMITS, EMBED_STYLE, VIEW_COLORS, type StyleIssue } from "./style.js";
 
 /** A card that passes cleanly, so each case below differs in exactly one way. */
@@ -34,17 +33,6 @@ function only(view: EmbedView, rule: string): StyleIssue {
 
 test("the exported palette is the resolved theme, not a copy of it", () => {
   assert.equal(VIEW_COLORS, theme.embed.colors);
-});
-
-test("a rendered embed takes its colour from the palette", () => {
-  // `render.ts` used to hold a third copy of these five numbers. This asserts it
-  // is reading the shared one, at the only place the value can be observed.
-  const embed = toEmbed({ title: "Card", color: "DANGER" });
-  assert.equal(embed.data.color, theme.embed.colors.DANGER);
-});
-
-test("an embed with no stated colour falls back to NEUTRAL", () => {
-  assert.equal(toEmbed({ title: "Card" }).data.color, theme.embed.colors.NEUTRAL);
 });
 
 test("the house style is the resolved theme's", () => {
@@ -268,3 +256,53 @@ test("checkEmbeds tags each issue with the card it came from", () => {
   assert.equal(found[0]?.card, "stats");
   assert.equal(found[0]?.rule, "title.shouting");
 });
+
+// ── Rules added with the shared card layer ───────────────────────────────────
+
+test("footer.time-relative — an age baked into a footer is wrong by tomorrow", () => {
+  // This is the rule that retires `stalenessFooter`. A footer is written once;
+  // the card is read for as long as the channel is scrolled.
+  for (const footer of ["as of 4m ago", "updated 3 days ago", "just now", "Last updated 12h ago"]) {
+    assert.ok(rules(clean({ footer })).includes("footer.time-relative"), footer);
+  }
+  // A caveat that does not decay is exactly what a footer is for.
+  assert.ok(!rules(clean({ footer: "⚠ cached — refresh failed" })).includes("footer.time-relative"));
+});
+
+test("timestamp.invalid — discord.js throws on an unparseable date", () => {
+  assert.ok(rules(clean({ timestamp: "yesterday" })).includes("timestamp.invalid"));
+  assert.ok(!rules(clean({ timestamp: "2026-08-06T11:00:00.000Z" })).includes("timestamp.invalid"));
+});
+
+test("field.name-data — the reading belongs in the value, not the label", () => {
+  const data = clean({ fields: [{ name: "Combat 60", value: "maxed" }] });
+  assert.ok(rules(data).includes("field.name-data"));
+  const marked = clean({ fields: [{ name: `Combat ${theme.embed.glyphs.marker}`, value: "60" }] });
+  assert.ok(rules(marked).includes("field.name-data"));
+  // A label may hold a single digit — `F7` and `Tier 4` are the same on every
+  // card, which is the whole test of whether something is a label.
+  assert.ok(!rules(clean({ fields: [{ name: "F7", value: "12 runs" }] })).includes("field.name-data"));
+});
+
+test("field.budget — under four is a sentence, over six is a scan", () => {
+  const fields = (n: number): EmbedView =>
+    clean({ fields: Array.from({ length: n }, (_, i) => ({ name: `Label ${String.fromCharCode(97 + i)}`, value: "x" })) });
+  assert.ok(rules(fields(2)).includes("field.budget"));
+  assert.ok(!rules(fields(EMBED_STYLE.minFields)).includes("field.budget"));
+  assert.ok(!rules(fields(EMBED_STYLE.maxFields)).includes("field.budget"));
+  assert.ok(rules(fields(EMBED_STYLE.maxFields + 1)).includes("field.budget"));
+  // A card with no fields at all is a sentence on purpose, not a card missing
+  // its grid — plenty of replies are one line and should stay one line.
+  assert.ok(!rules(clean()).includes("field.budget"));
+});
+
+test("url.scheme covers the author icon and the image, not just the thumbnail", () => {
+  assert.ok(rules(clean({ author: { name: "Aria", iconUrl: "http://x/head.png" } })).includes("url.scheme"));
+  assert.ok(rules(clean({ imageUrl: "http://x/graph.png" })).includes("url.scheme"));
+});
+
+test("the author name counts toward Discord's 6000-character total", () => {
+  const view = clean({ description: "x".repeat(EMBED_LIMITS.total - 10), author: { name: "y".repeat(100) } });
+  assert.ok(rules(view).includes("limit.total"));
+});
+

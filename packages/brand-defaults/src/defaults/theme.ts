@@ -53,6 +53,55 @@ export const DEFAULT_THEME = {
       separator: " · ",
       /** What an unknown value prints as. Never "N/A", never a silent zero. */
       unknown: "—",
+
+      /**
+       * The readability budget, well under Discord's hard cap of 25.
+       *
+       * Fewer than `minFields` and the facts were worth a sentence in the
+       * description instead of a grid; more than `maxFields` and the reader is
+       * scanning rather than reading. Both are warnings, not errors — a card
+       * with a data-dependent field count (networth categories, an application
+       * that may or may not have been reviewed) legitimately crosses the line
+       * sometimes, and says so by ignoring the rule by id.
+       */
+      minFields: 4,
+      maxFields: 6,
+    },
+
+    /**
+     * The marks a card is allowed to make.
+     *
+     * These are here, rather than as literals in whichever renderer needed one
+     * first, because that is exactly how the platform ended up with two progress
+     * bars: `▰▱` in the standing card and `█░` in achievements and goals, on the
+     * same screen, meaning the same thing. A member cannot be expected to read
+     * that as one product.
+     *
+     * `marker` is the qualifying flag — a maxed skill, a capped stat. It is gold
+     * on purpose: the old `✦` rendered in the body colour, so "maxed" looked
+     * exactly like "not maxed" to anyone not counting.
+     */
+    glyphs: {
+      barFilled: "▰",
+      barEmpty: "▱",
+      barWidth: 10,
+      marker: "⭐",
+    },
+
+    /**
+     * Where a player's face comes from.
+     *
+     * Discord will not render a Minecraft skin for us, so a card that shows one
+     * is naming a third-party image host. That is a dependency, and dependencies
+     * belong in the theme where an operator can see and change it — not baked
+     * into whichever renderer needed a face first.
+     *
+     * `{uuid}` is substituted. Both must be https or the style checker rejects
+     * the card before Discord does.
+     */
+    avatars: {
+      head: "https://mc-heads.net/avatar/{uuid}/64",
+      body: "https://mc-heads.net/head/{uuid}/128",
     },
   },
 

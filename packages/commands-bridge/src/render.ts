@@ -3,9 +3,10 @@
  * formats networth respecting exact-vs-estimate and staleness.
  */
 import { copy } from "@sbr/brand";
-import { describeAge, padInlineRow, stalenessFooter, tierRank } from "@sbr/shared-types";
+import { describeAge, padInlineRow, staleness, tierRank } from "@sbr/shared-types";
 import type {
   AccessoryReportDTO,
+  DataEnvelope,
   AccessorySuggestionDTO,
   AchievementCategory,
   AchievementDTO,
@@ -175,11 +176,26 @@ export function renderNetworthEmbed(ign: string, result: HypixelResult<NetworthD
     // categories would otherwise leave the fourth stretched alone on its own row.
     ...(fields.length > 0 ? { fields: padInlineRow(fields) } : {}),
     // Missing sections are named rather than silently folded into the total.
-    ...(data.missing.length > 0
-      ? { footer: `${stalenessFooter(result.value)} • hidden: ${data.missing.join(", ")}` }
-      : { footer: stalenessFooter(result.value) }),
+    // The age is a timestamp now, so what is left for the footer is the part
+    // that stays true: which sections we could not see into.
+    ...freshnessOf(result.value, data.missing.length > 0 ? `hidden: ${data.missing.join(", ")}` : undefined),
     color: data.exact ? "SUCCESS" : "INFO",
   };
+}
+
+/**
+ * The freshness half of a card: an age Discord owns, and a caveat we own.
+ *
+ * Every stat card used to end in a hand-written "as of 4m ago", which was true
+ * when the message was sent and false for as long as anyone scrolled back to it.
+ * The age moves to `timestamp`, which is re-rendered on every read; the footer
+ * keeps only what does not decay — that we served cached numbers, and which
+ * sections of a profile we could not see into.
+ */
+function freshnessOf<T>(envelope: DataEnvelope<T>, note?: string): Pick<EmbedView, "timestamp" | "footer"> {
+  const { timestamp, footer } = staleness(envelope);
+  const parts = [footer, note].filter((part): part is string => part !== undefined && part !== "");
+  return parts.length > 0 ? { timestamp, footer: parts.join(" • ") } : { timestamp };
 }
 
 // ── Member lookups (COMMANDS.md §3) ─────────────────────────────────────────
@@ -201,7 +217,7 @@ function statEmbed<T>(
       color: result.error.state === "RATE_LIMITED" ? "WARNING" : "NEUTRAL",
     };
   }
-  return { title, ...body(result.value.data), footer: stalenessFooter(result.value) };
+  return { title, ...body(result.value.data), ...freshnessOf(result.value) };
 }
 
 function weightText(weight: number | null): string {
@@ -481,7 +497,7 @@ export function renderStatsEmbed(
         : []),
       ...(recordField === null ? [] : [recordField]),
     ]),
-    footer: stalenessFooter(profile.value),
+    ...freshnessOf(profile.value),
     color: "INFO",
   };
 }
@@ -592,7 +608,7 @@ export function renderProfileCardEmbed(ign: string, input: ProfileCardInput): Em
     title: `${ign} — profile`,
     description: headline,
     fields: [...padInlineRow([...hypixelRow, ...standingRow]), ...sections],
-    ...(input.profile.ok ? { footer: stalenessFooter(input.profile.value) } : {}),
+    ...(input.profile.ok ? freshnessOf(input.profile.value) : {}),
     color: input.profile.ok ? "INFO" : "NEUTRAL",
   };
 }

@@ -21,7 +21,7 @@ import {
 
 // The palette lives in one place — `brand/theme.ts`, re-exported by `style.ts`.
 // This module used to keep its own private copy of the same five numbers.
-import { VIEW_COLORS } from "./style.js";
+import { VIEW_COLORS } from "@sbr/embed-kit";
 
 /**
  * Discord's component limits, enforced here rather than trusted to call sites.
@@ -39,6 +39,7 @@ const MAX_ROWS_PER_MESSAGE = 5;
 const MAX_BUTTON_LABEL = 80;
 const MAX_OPTION_LABEL = 100;
 const MAX_OPTION_DESCRIPTION = 100;
+const MAX_AUTHOR_NAME = 256;
 
 /** Discord counts UTF-16 code units, which is what `String#slice` counts too. */
 function clampText(text: string, max: number): string {
@@ -58,8 +59,24 @@ export function toEmbed(view: EmbedView): EmbedBuilder {
   if (view.title) embed.setTitle(view.title);
   if (view.description) embed.setDescription(view.description);
   if (view.url) embed.setURL(view.url);
+  if (view.author) {
+    embed.setAuthor({
+      name: clampText(view.author.name, MAX_AUTHOR_NAME),
+      ...(view.author.iconUrl ? { iconURL: view.author.iconUrl } : {}),
+      ...(view.author.url ? { url: view.author.url } : {}),
+    });
+  }
   if (view.thumbnailUrl) embed.setThumbnail(view.thumbnailUrl);
+  if (view.imageUrl) embed.setImage(view.imageUrl);
   if (view.footer) embed.setFooter({ text: view.footer });
+  // An unparseable date makes discord.js throw, which would turn a cosmetic
+  // problem into a failed reply. `timestamp.invalid` flags it in the gallery;
+  // here it is simply dropped, because a card without an age still answers the
+  // question the member asked.
+  if (view.timestamp) {
+    const at = Date.parse(view.timestamp);
+    if (Number.isFinite(at)) embed.setTimestamp(new Date(at));
+  }
   for (const field of view.fields ?? []) {
     embed.addFields({ name: field.name, value: field.value, inline: field.inline ?? false });
   }

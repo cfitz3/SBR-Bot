@@ -23,7 +23,8 @@
  *   reader can click through, and `allowedMentions` is what stops the channel
  *   from notifying a member every time they are warned.
  */
-import type { EmbedView, ModerationActionDTO, ViewColor } from "@sbr/shared-types";
+import { card, facts, field } from "@sbr/embed-kit";
+import type { EmbedFieldView, EmbedView, ModerationActionDTO, ViewColor } from "@sbr/shared-types";
 import { AUTOMOD_ACTOR } from "./automod-runner.js";
 
 /**
@@ -98,20 +99,20 @@ function duration(seconds: number): string {
 }
 
 /**
- * What the enforcement field says.
+ * What the enforcement line says, or nothing at all.
  *
- * `NOT_REQUIRED` prints nothing at all rather than "not required": a warning has
- * no Discord counterpart, and a field explaining that on every warning is noise
- * in the one channel that should be readable at a glance.
+ * `NOT_REQUIRED` prints nothing rather than "not required": a warning has no
+ * Discord counterpart, and a field explaining that on every warning is noise in
+ * the one channel that should be readable at a glance.
  */
-function enforcementField(action: ModerationActionDTO): readonly { name: string; value: string }[] {
+function enforcementFields(action: ModerationActionDTO): readonly (EmbedFieldView | null)[] {
   switch (action.enforcement) {
     case "FAILED":
       return [
-        {
-          name: "⚠️ Not enforced",
-          value: `${action.enforcementDetail ?? "No reason recorded"}\nThis needs doing by hand.`,
-        },
+        field(
+          "⚠️ Not enforced",
+          `${action.enforcementDetail ?? "No reason recorded"}\nThis needs doing by hand.`,
+        ),
       ];
     case "PENDING":
       // The detail is the whole point here: "still in progress" beside a kick
@@ -120,13 +121,12 @@ function enforcementField(action: ModerationActionDTO): readonly { name: string;
       // waiting. Named, it is either "the guild has not answered yet" or a
       // reason to go and look.
       return [
-        {
-          name: "Enforcement",
-          value:
-            action.enforcementDetail === null
-              ? "Still in progress."
-              : `Still in progress — ${action.enforcementDetail}`,
-        },
+        field(
+          "Enforcement",
+          action.enforcementDetail === null
+            ? "Still in progress."
+            : `Still in progress — ${action.enforcementDetail}`,
+        ),
       ];
     case "CONFIRMED":
       // Only a `CONFIRMED_INGAME` ack settles the guild-chat leg as confirmed,
@@ -134,12 +134,12 @@ function enforcementField(action: ModerationActionDTO): readonly { name: string;
       // the command back. Worth saying out loud, because "Enforced: GUILD_CHAT"
       // previously meant no more than "we typed something".
       return [
-        {
-          name: "Enforced",
-          value: action.surfaces.includes("GUILD_CHAT")
+        field(
+          "Enforced",
+          action.surfaces.includes("GUILD_CHAT")
             ? `${action.surfaces.join(" + ")}\nConfirmed in game by the guild.`
             : action.surfaces.join(" + "),
-        },
+        ),
       ];
     default:
       return [];
@@ -149,46 +149,63 @@ function enforcementField(action: ModerationActionDTO): readonly { name: string;
 /**
  * One moderation action, as the card the mod-log channel receives.
  *
- * `now` is a parameter so the "expires in" line is testable; it defaults to the
- * wall clock because every real caller is posting the moment the action lands.
+ * `now` is a parameter so the state reading is testable; it defaults to the wall
+ * clock because every real caller is posting the moment the action lands.
+ *
+ * Built through `card()`, which is what supplies the parts this renderer used to
+ * do by hand and got subtly wrong. The action's own `createdAt` is the native
+ * `timestamp`, so the card is dated by *when the punishment happened* rather
+ * than by when the message was sent — the two are the same for a live post and
+ * are months apart when `/case` renders the same card for a case somebody is
+ * appealing. The old version had no timestamp at all, which meant a case pulled
+ * up later carried no date whatsoever.
+ *
+ * The identity, the actor, the duration and the expiry are one consolidated
+ * field rather than four inline ones. They are four short facts, they are always
+ * read together, and as separate fields they took the card past its budget
+ * before the reason was even added.
  */
 export function modLogEmbed(action: ModerationActionDTO, now: Date = new Date()): EmbedView {
   const title = TITLES[action.type] ?? action.type;
   const target = action.targetDiscordId === null ? "an unlinked member" : `<@${action.targetDiscordId}>`;
-
-  const fields: { name: string; value: string; inline?: boolean }[] = [
-    { name: "Member", value: target, inline: true },
-    { name: "Staff", value: actorName(action.actorDiscordId), inline: true },
-  ];
-
-  if (action.durationSeconds !== null && action.durationSeconds > 0) {
-    fields.push({ name: "Duration", value: duration(action.durationSeconds), inline: true });
-  }
-  if (action.expiresAt !== null) {
-    // A Discord relative timestamp rather than an ISO string: the reader's
-    // question is "how much longer", and every reader is in a different zone.
-    const unix = Math.floor(new Date(action.expiresAt).getTime() / 1000);
-    const state = punishmentState(action, now);
-    fields.push({
-      name: state === "EXPIRED" ? "Expired" : "Expires",
-      value: `<t:${unix}:R>`,
-      inline: true,
-    });
-  }
-  if (action.reason !== null && action.reason.trim().length > 0) {
-    fields.push({ name: "Reason", value: action.reason });
-  }
-  fields.push(...enforcementField(action));
-
-  if (action.voidedAt !== null && action.voidReason !== null) {
-    fields.push({ name: "Voided", value: action.voidReason });
-  }
-
   const state = punishmentState(action, now);
-  const footer =
-    state === "LIFTED" || state === "EXPIRED" || state === "VOID"
-      ? `Case ${action.id} · ${describeState(state)}`
-      : `Case ${action.id}`;
 
-  return { title, fields, footer, color: colorFor(action) };
+  // A relative timestamp rather than an ISO string: the reader's question is
+  // "how much longer", and every reader is in a different zone. It is Discord's
+  // own rendering, not text we typed — the rule is against hand-written "2
+  // hours ago", not against asking the client to say it.
+  const expiry =
+    action.expiresAt === null
+      ? null
+      : `<t:${Math.floor(new Date(action.expiresAt).getTime() / 1000)}:R>`;
+
+  return card({
+    tone: colorFor(action),
+    title,
+    // The state goes in the headline because it is the first thing a reader
+    // scanning the channel needs and the last thing they should have to hunt a
+    // field for. A punishment still running says nothing extra; anything else —
+    // lifted early, expired, withdrawn — is news.
+    ...(state === "MOMENTARY" || state === "ACTIVE" ? {} : { headline: describeState(state) }),
+    fields: [
+      field(
+        "Case",
+        facts([
+          { label: "Member", value: target },
+          { label: "Staff", value: actorName(action.actorDiscordId) },
+          ...(action.durationSeconds !== null && action.durationSeconds > 0
+            ? [{ label: "Duration", value: duration(action.durationSeconds) }]
+            : []),
+          ...(expiry ? [{ label: state === "EXPIRED" ? "Expired" : "Expires", value: expiry }] : []),
+        ]),
+      ),
+      field("Reason", action.reason?.trim() ?? ""),
+      ...enforcementFields(action),
+      action.voidedAt !== null ? field("Voided", action.voidReason ?? "") : null,
+    ],
+    // Static, and the only genuinely static thing on the card: the id a reply,
+    // an appeal and `/case` all quote.
+    footer: `Case ${action.id}`,
+    timestamp: action.createdAt,
+  });
 }
