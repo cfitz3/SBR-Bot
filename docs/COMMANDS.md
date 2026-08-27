@@ -71,8 +71,8 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/stats` | Broad stat overview for a player | Public | `player?`, `profile?` | Embed: skills avg, slayers, dungeons, networth, weight | Player/profile not found; API disabled | Cache→Live |
-| `/skills` | Detailed skill levels + XP to next | Public | `player?`, `profile?`, `skill?` | Embed/table of all skills or one skill breakdown, with each skill's cap and a count of those at it | Player not found | Cache→Live |
-| `/slayers` | Slayer XP, tiers, per-tier boss kills | Public | `player?`, `profile?`, `boss?` | Embed per-slayer breakdown; naming one boss adds its per-tier kill counts | Player not found | Cache→Live |
+| `/skills` | Detailed skill levels + XP to next | Public | `player?`, `profile?`, `skill?` | Embed: two consolidated lists (counted skills, cosmetic skills) plus the skill closest to its next level; one skill named gets its own field and a progress bar | Player not found | Cache→Live |
+| `/slayers` | Slayer XP, tiers, per-tier boss kills | Public | `player?`, `profile?`, `boss?` | Embed: one field per boss, each with tier, XP, total kills and the per-tier split; naming one boss narrows to it | Player not found | Cache→Live |
 | `/slayer` | **Deprecated** alias of `/slayers`, kept for one release | Public | as `/slayers` | Same answer, prefixed with the new name | — | Cache→Live |
 | `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
 | `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
