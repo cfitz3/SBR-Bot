@@ -60,6 +60,9 @@ import type {
   PermRosterLookup,
   TicketPatch,
 } from "./ports.js";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** Retained for the pre-Stage-5 call sites; `EventError` is the current union. */
 export type RsvpError = EventError;
@@ -199,7 +202,7 @@ export class CommunityServiceImpl implements CommunityService {
   async createEvent(input: NewEvent): Promise<Result<EventDTO, EventError>> {
     const startsAt = new Date(input.startsAt);
     if (Number.isNaN(startsAt.getTime())) {
-      return err({ kind: "INVALID_TIME", detail: "I couldn't read that start time." });
+      return err({ kind: "INVALID_TIME", detail: E.badTime });
     }
     if (startsAt.getTime() <= this.now().getTime()) {
       return err({ kind: "INVALID_TIME", detail: "that start time is in the past." });
@@ -256,7 +259,7 @@ export class CommunityServiceImpl implements CommunityService {
    * nobody, and the operator is left with a contest that silently never ran.
    */
   private checkEndsAt(endsAt: Date, startsAt: Date): EventError | null {
-    if (Number.isNaN(endsAt.getTime())) return { kind: "INVALID_TIME", detail: "I couldn't read that end time." };
+    if (Number.isNaN(endsAt.getTime())) return { kind: "INVALID_TIME", detail: E.badTime };
     if (endsAt.getTime() <= startsAt.getTime()) {
       return { kind: "INVALID_TIME", detail: "the event has to end after it starts." };
     }
@@ -312,7 +315,7 @@ export class CommunityServiceImpl implements CommunityService {
     if (input.startsAt !== undefined) {
       const startsAt = new Date(input.startsAt);
       if (Number.isNaN(startsAt.getTime())) {
-        return err({ kind: "INVALID_TIME", detail: "I couldn't read that start time." });
+        return err({ kind: "INVALID_TIME", detail: E.badTime });
       }
       // A LIVE event's start is in the past by definition, so the future rule
       // only applies while it is still scheduled.

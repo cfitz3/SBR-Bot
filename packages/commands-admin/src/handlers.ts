@@ -16,7 +16,7 @@ import type {
   WordAction,
   WordMatchType,
 } from "@sbr/shared-types";
-import { withCommandCopy } from "@sbr/brand";
+import { copy, withCommandCopy } from "@sbr/brand";
 import { isEscalation, modLogEmbed } from "@sbr/moderation";
 import type {
   AdminCommandSpec,
@@ -45,6 +45,8 @@ import {
   renderTicketListEmbed,
   renderWordlistEmbed,
 } from "./render.js";
+
+const E = copy.error;
 
 const NO_REASON = "No reason given";
 
@@ -207,7 +209,7 @@ const purge: AdminHandler = async (ctx, deps) => {
     return { ephemeral: true, text: "Usage: /purge count:<1-100> [user:<member>] [channel:<channel>]" };
   }
   const channelId = ctx.args.getChannel("channel") ?? ctx.channelId ?? null;
-  if (!channelId) return { ephemeral: true, text: "I couldn't tell which channel to purge." };
+  if (!channelId) return { ephemeral: true, text: E.surface.nameChannel };
 
   const result = await deps.effects.purge({
     guildId: ctx.guildId,
@@ -250,7 +252,7 @@ const infractions: AdminHandler = async (ctx, deps) => {
   const target = ctx.args.getUser("target");
   if (!target) return { ephemeral: true, text: "Usage: /infractions target:<user>" };
   const result = await deps.moderation.listInfractions(ctx.guildId, target);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't load infractions." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   if (result.value.length === 0) {
     return { ephemeral: true, text: `<@${target}> has a clean record.` };
   }
@@ -281,7 +283,7 @@ const audit: AdminHandler = async (ctx, deps) => {
     inForceOnly,
     limit: AUDIT_PAGE_LIMIT + 1,
   });
-  if (!result.ok) return { ephemeral: true, text: "Couldn't load the audit log." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   if (result.value.length === 0) {
     return {
       ephemeral: true,
@@ -318,7 +320,7 @@ const caseLookup: AdminHandler = async (ctx, deps) => {
   const id = ctx.args.getString("id")?.trim();
   if (!id) return { ephemeral: true, text: "Usage: /case id:<case id>" };
   const result = await deps.moderation.findAction(ctx.guildId, id);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't load that case." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   if (result.value === null) {
     // Deliberately not "no such case": the lookup is guild-scoped, so a real id
     // from another server lands here too, and staff should not learn which.
@@ -354,7 +356,7 @@ const lockdown: AdminHandler = async (ctx, deps) => {
 
 const lockdownLift: AdminHandler = async (ctx, deps) => {
   const result = await deps.safety.liftLockdown(ctx.guildId);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't lift the lockdown." };
+  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
   if (!result.value) return { ephemeral: true, text: "Nothing is locked down right now." };
   const where = result.value.channelId ? `<#${result.value.channelId}>` : "the server";
   return { ephemeral: false, text: `🔓 Lifted the lockdown on ${where}.` };
@@ -380,7 +382,7 @@ const antiraidOff: AdminHandler = async (ctx, deps) => {
 
 const safetyStatus: AdminHandler = async (ctx, deps) => {
   const result = await deps.safety.status(ctx.guildId);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't read the safety status." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   return { ephemeral: true, text: "Safety status", embed: renderSafetyStatusEmbed(result.value) };
 };
 
@@ -388,7 +390,7 @@ const safetyStatus: AdminHandler = async (ctx, deps) => {
 
 const wordlist: AdminHandler = async (ctx, deps) => {
   const result = await deps.wordlist.list(ctx.guildId);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't load the wordlist." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   return { ephemeral: true, text: `${result.value.length} rule(s).`, embed: renderWordlistEmbed(result.value) };
 };
 
@@ -425,7 +427,7 @@ const wordlistRemove: AdminHandler = async (ctx, deps) => {
   const ref = ctx.args.getString("rule");
   if (!ref) return { ephemeral: true, text: "Usage: /wordlist-remove rule:<id or exact pattern>" };
   const result = await deps.wordlist.remove(ctx.guildId, ref);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't remove that rule." };
+  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
   if (!result.value) return { ephemeral: true, text: `No rule here matches \`${ref}\`.` };
   return { ephemeral: true, text: `Removed \`${result.value.pattern}\`.` };
 };
@@ -438,7 +440,7 @@ const filterTest: AdminHandler = async (ctx, deps) => {
   const text = ctx.args.getString("text");
   if (!text) return { ephemeral: true, text: "Usage: /filter-test text:<message>" };
   const result = await deps.wordlist.test(ctx.guildId, text);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't run the filter." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   return {
     ephemeral: true,
     text: result.value.matched.length > 0 ? `Caught — ${result.value.action}.` : "Allowed.",
@@ -459,7 +461,7 @@ const setChannel: AdminHandler = async (ctx, deps) => {
   // An omitted channel clears the slot, which is the only way to unset one.
   const channelId = ctx.args.getChannel("channel");
   const result = await deps.config.setChannel(ctx.guildId, slot as ChannelSlot, channelId);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't save that channel." };
+  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
   return {
     ephemeral: true,
     text: channelId ? `${slot} channel set to <#${channelId}>.` : `${slot} channel cleared.`,
@@ -473,7 +475,7 @@ const featureToggle: AdminHandler = async (ctx, deps) => {
     return { ephemeral: true, text: "Usage: /feature-toggle feature:<name> enabled:<true|false>" };
   }
   const result = await deps.config.setFeature(ctx.guildId, feature, enabled);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't save that flag." };
+  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
   return { ephemeral: true, text: `Feature \`${feature}\` is now ${enabled ? "on" : "off"}.` };
 };
 
@@ -489,7 +491,7 @@ const setRecruitment: AdminHandler = async (ctx, deps) => {
   if (open === null) return { ephemeral: true, text: "Usage: /set-recruitment open:<true|false>" };
 
   const result = await deps.config.setRecruitment(ctx.guildId, { open });
-  if (!result.ok) return { ephemeral: true, text: "Couldn't save the recruitment settings." };
+  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
 
   return { ephemeral: false, text: `Applications are now ${open ? "open" : "closed"}.` };
 };
@@ -511,7 +513,7 @@ const setRole: AdminHandler = async (ctx, deps) => {
   if (type === "mapping") {
     const discordRoleId = ctx.args.getString("discord_role");
     const result = await deps.config.setRoleMapping(ctx.guildId, role, discordRoleId);
-    if (!result.ok) return { ephemeral: true, text: "Couldn't save that mapping." };
+    if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
     return {
       ephemeral: true,
       text: discordRoleId ? `${role} now maps to <@&${discordRoleId}>.` : `${role} mapping cleared.`,
@@ -701,7 +703,7 @@ const tickets: AdminHandler = async (ctx, deps) => {
 
   if (action === "list") {
     const open = await deps.community.listTickets(ctx.guildId);
-    if (!open.ok) return { ephemeral: true, text: "Couldn't read the ticket queue." };
+    if (!open.ok) return { ephemeral: true, text: E.generic.loadFailed };
     return {
       ephemeral: true,
       text: open.value.length === 0 ? "Nothing open." : `${String(open.value.length)} open.`,
@@ -711,7 +713,7 @@ const tickets: AdminHandler = async (ctx, deps) => {
 
   if (!id) return { ephemeral: true, text: `Usage: /tickets action:${action} id:<number>` };
   const ticket = await findTicket(ctx, deps, id);
-  if (ticket === null) return { ephemeral: true, text: "I couldn't find that ticket." };
+  if (ticket === null) return { ephemeral: true, text: E.generic.notFound };
 
   if (action === "view") {
     return { ephemeral: true, text: `Ticket #${String(ticket.number)}.`, embed: renderTicketEmbed(ticket) };
@@ -720,7 +722,7 @@ const tickets: AdminHandler = async (ctx, deps) => {
   if (action === "transcript") {
     if (!deps.ticketBridge) return noTicketBridge();
     const transcript = await deps.ticketBridge.transcript(ctx.guildId, ticket.id);
-    if (transcript === null) return { ephemeral: true, text: "I couldn't render that transcript." };
+    if (transcript === null) return { ephemeral: true, text: E.generic.loadFailed };
     return {
       ephemeral: true,
       text: `Transcript for ticket #${String(ticket.number)}.`,
@@ -848,7 +850,7 @@ const sticky: AdminHandler = async (ctx, deps) => {
 
   const channelId = ctx.args.getChannel("channel") ?? ctx.channelId ?? null;
   if (channelId === null) {
-    return { ephemeral: true, text: "Name a channel — I can't tell where you typed this." };
+    return { ephemeral: true, text: E.surface.nameChannel };
   }
 
   if (action === "clear") {
@@ -858,7 +860,7 @@ const sticky: AdminHandler = async (ctx, deps) => {
       ephemeral: true,
       text: result.applied
         ? `Cleared the sticky in <#${channelId}>.`
-        : `Cleared the sticky in <#${channelId}>. The old message is still there — I couldn't reach the bridge bot to take it down.`,
+        : `Cleared the sticky in <#${channelId}>. The old message is still up — the bridge bot didn't answer.`,
     };
   }
 
@@ -874,7 +876,7 @@ const sticky: AdminHandler = async (ctx, deps) => {
     ephemeral: true,
     text: result.applied
       ? `${what} <#${channelId}>.`
-      : `${what} <#${channelId}>. It'll appear the next time somebody talks there — I couldn't reach the bridge bot to post it now.`,
+      : `${what} <#${channelId}>. It appears the next time somebody talks there — the bridge bot didn't answer.`,
   };
 };
 
@@ -910,8 +912,8 @@ const applicationReview: AdminHandler = async (ctx, deps) => {
   const id = ctx.args.getString("id");
   if (id) {
     const result = await deps.community.getApplication(id);
-    if (!result.ok) return { ephemeral: true, text: "Couldn't load that application." };
-    if (result.value === null) return { ephemeral: true, text: "I couldn't find an application with that id." };
+    if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
+    if (result.value === null) return { ephemeral: true, text: E.generic.notFound };
     return {
       ephemeral: true,
       text: `Application ${result.value.id} — ${result.value.status.toLowerCase()}.`,
@@ -920,7 +922,7 @@ const applicationReview: AdminHandler = async (ctx, deps) => {
   }
 
   const list = await deps.community.listApplications(ctx.guildId);
-  if (!list.ok) return { ephemeral: true, text: "Couldn't load applications." };
+  if (!list.ok) return { ephemeral: true, text: E.generic.loadFailed };
   return {
     ephemeral: true,
     text: list.value.length === 0 ? "Nothing waiting for review." : `${list.value.length} waiting for review.`,
@@ -950,7 +952,7 @@ function decideHandler(accept: boolean): AdminHandler {
         ephemeral: true,
         text:
           result.error.kind === "NOT_FOUND"
-            ? "I couldn't find an application with that id."
+            ? E.generic.notFound
             : `That application was already ${result.error.status.toLowerCase()}.`,
       };
     }
@@ -978,13 +980,13 @@ const denyMember = decideHandler(false);
 
 const bridgeSuspend: AdminHandler = async (ctx, deps) => {
   const result = await deps.config.setBridgeSuspended(ctx.guildId, true);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't suspend the bridge." };
+  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
   return { ephemeral: false, text: "⏸️ Bridge relay suspended. Messages stop crossing until /bridge-unsuspend." };
 };
 
 const bridgeUnsuspend: AdminHandler = async (ctx, deps) => {
   const result = await deps.config.setBridgeSuspended(ctx.guildId, false);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't resume the bridge." };
+  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
   return { ephemeral: false, text: "▶️ Bridge relay resumed." };
 };
 

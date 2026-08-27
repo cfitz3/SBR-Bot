@@ -1,4 +1,7 @@
 import type { ModerationError } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** Parse durations like "1h", "30m", "45s", "2d" into seconds. */
 export function parseDurationSeconds(input: string | null | undefined): number | undefined {
@@ -18,7 +21,7 @@ export function renderModError(error: ModerationError): string {
     case "SELF_TARGET":
       return "You can't action yourself.";
     case "BOT_MISSING_PERMISSION":
-      return "I'm missing the Discord permission to perform that action.";
+      return E.discord.missingPermission;
     case "DURATION_REQUIRED":
       return "A duration is required for a mute (e.g. duration:1h).";
     case "NO_SUCH_CASE":

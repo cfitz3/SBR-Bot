@@ -12,6 +12,9 @@
  * `respond.ts`.
  */
 import type { MessageComponentInteraction } from "discord.js";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 export const CUSTOM_ID_SEPARATOR = ":";
 
@@ -88,7 +91,7 @@ export class ComponentRouter {
       // leaves Discord showing "This interaction failed" with no explanation.
       if (!interaction.replied && !interaction.deferred) {
         await interaction
-          .reply({ content: "That didn't work — try again in a moment.", ephemeral: true })
+          .reply({ content: E.generic.unknown, ephemeral: true })
           .catch(() => {});
       }
     }

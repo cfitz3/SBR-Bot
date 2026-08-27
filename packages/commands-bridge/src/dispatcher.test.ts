@@ -1207,7 +1207,7 @@ test("/rsvp against a missing event explains rather than failing silently", asyn
   const gone = community({ async rsvp() { return err({ kind: "NOT_FOUND" }); } });
   const r = await makeDispatcher({ community: gone }).dispatch("rsvp", ctx({ args: recordArgs({ event: "nope" }) }));
   assert.equal(r.ephemeral, true);
-  assert.match(r.text, /couldn't find an event/);
+  assert.equal(r.text, copy.error.generic.notFound);
 });
 
 test("/attendance breaks the roster into going, maybe, waitlist and declined", async () => {
@@ -1726,14 +1726,14 @@ test("online lists the roster grouped by rank", async () => {
 
 test("online says the bridge is down rather than showing an empty guild", async () => {
   const r = await makeDispatcher({ roster: { async online() { return null; } } }).dispatch("online", ctx());
-  assert.match(r.text, /offline right now/);
+  assert.equal(r.text, copy.error.bridge.offline);
   assert.equal(r.ephemeral, true);
   assert.equal(r.embed, undefined);
 });
 
 test("online distinguishes a deployment with no bridge at all", async () => {
   const r = await makeDispatcher().dispatch("online", ctx());
-  assert.match(r.text, /isn't set up here/);
+  assert.equal(r.text, copy.error.bridge.notConfigured);
 });
 
 test("online reports an empty guild plainly", async () => {

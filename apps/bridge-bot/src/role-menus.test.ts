@@ -9,6 +9,7 @@ import { ROLE_MENUS_SETTING_KEY } from "@sbr/roles";
 import type { ActionRowView, EmbedView } from "@sbr/shared-types";
 import { RoleMenuGateway, renderRoleMenu, type RoleMenuDeps } from "./role-menus.js";
 import type { RoleApplyOutcome } from "./role-effector.js";
+import { copy } from "@sbr/brand";
 
 const silentLog = {
   debug() {},
@@ -223,13 +224,13 @@ test("an unreachable admin bot is a failure, not a silent success", async () => 
   const h = make({ outcome: { ok: false, added: [], removed: [] } });
   const result = await h.gateway.press("g1", "colours", "red", "u1", []);
   assert.equal(result.ok, false);
-  assert.match(result.ok ? "" : result.detail, /try again/);
+  assert.equal(result.ok ? "" : result.detail, copy.error.generic.saveFailed);
 });
 
 test("a member who has left is told so rather than told it worked", async () => {
   const h = make({ outcome: { ok: false, memberPresent: false } });
   const result = await h.gateway.press("g1", "colours", "red", "u1", []);
-  assert.match(result.ok ? "" : result.detail, /couldn't find you/);
+  assert.equal(result.ok ? "" : result.detail, copy.error.discord.memberMissing);
 });
 
 test("the note follows what the effector did, not what was asked", async () => {

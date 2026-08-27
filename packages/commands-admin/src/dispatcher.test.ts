@@ -32,6 +32,7 @@ import { AdminDispatcher } from "./dispatcher.js";
 import { buildAdminRegistry } from "./handlers.js";
 import { parseDurationSeconds } from "./util.js";
 import type { AdminContext, RoleMenuBridge, RoleResolver, StickyBridge, TicketBridge } from "./types.js";
+import { copy } from "@sbr/brand";
 
 // A real Discord snowflake: `getUser` rejects anything that is not one, so the
 // fixture has to look like an id rather than the word "target".
@@ -690,7 +691,7 @@ test("/application-review with an id opens that application", async () => {
 test("/application-review says so when the id doesn't exist", async () => {
   const c = community({ async getApplication() { return ok(null); } });
   const r = await make({ community: c }).dispatch("application-review", ctx({ args: recordArgs({ id: "nope" }) }));
-  assert.match(r.text, /couldn't find an application/);
+  assert.equal(r.text, copy.error.generic.notFound);
 });
 
 test("/accept-member records the decision and promotes the applicant", async () => {
@@ -811,7 +812,7 @@ test("/tickets view refuses a ticket belonging to another server", async () => {
     roles: roles({ actor: "MODERATOR" }),
     community: ticketCommunity([ticket({ guildId: "other" })]),
   }).dispatch("tickets", ctx({ args: recordArgs({ action: "view", id: "tkt-1" }) }));
-  assert.match(r.text, /couldn't find/);
+  assert.equal(r.text, copy.error.generic.notFound);
 });
 
 test("/tickets close without a bridge says so rather than moving the row", async () => {
@@ -1014,7 +1015,7 @@ test("a cleared sticky the bridge could not reach admits the old message is stil
       },
     }),
   }).dispatch("sticky", ctx({ args: recordArgs({ action: "clear" }) }));
-  assert.match(r.text, /still there/);
+  assert.match(r.text, /still up/);
 });
 
 test("/sticky without a bridge says so rather than saving what nothing will post", async () => {

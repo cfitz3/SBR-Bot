@@ -11,6 +11,9 @@
  */
 import type { CommandHandler, CommandReply, CommandSpec } from "./types.js";
 import type { ReminderDTO } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** Under a minute is a timer, not a reminder, and the sweeper cannot honour it anyway. */
 export const MIN_REMINDER_MS = 60_000;
@@ -69,13 +72,13 @@ const remind: CommandHandler = async (ctx, deps): Promise<CommandReply> => {
   // The reminder comes back to where it was set, so a surface with no channel
   // has nowhere to deliver it. Guild chat is the case that matters.
   if (ctx.channelId === undefined) {
-    return { ephemeral: true, text: "Set that one from Discord — I need a channel to remind you in." };
+    return { ephemeral: true, text: E.surface.needsChannel };
   }
 
   const raw = ctx.args.getString("when") ?? "";
   const delay = parseReminderDelay(raw);
   if (delay === null) {
-    return { ephemeral: true, text: "I didn't understand that time. Try `30m`, `2h30m` or `1w`." };
+    return { ephemeral: true, text: E.badDuration };
   }
   if (delay < MIN_REMINDER_MS) return { ephemeral: true, text: "The shortest reminder I'll set is a minute." };
   if (delay > MAX_REMINDER_MS) return { ephemeral: true, text: "The longest reminder I'll set is a year." };

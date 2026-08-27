@@ -27,13 +27,16 @@ import {
   renderTicketListEmbed,
   rsvpButtons,
 } from "./render-community.js";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 // ───────────────────────────── Error wording ─────────────────────────────
 
 function eventProblem(error: EventError): string {
   switch (error.kind) {
     case "NOT_FOUND":
-      return "I couldn't find an event with that id.";
+      return E.generic.notFound;
     case "CLOSED":
       return "That event has already finished or been cancelled.";
     case "NOT_HOST":
@@ -46,7 +49,7 @@ function eventProblem(error: EventError): string {
 function lfgProblem(error: LfgError): string {
   switch (error.kind) {
     case "NOT_FOUND":
-      return "I couldn't find a run with that id.";
+      return E.generic.notFound;
     case "FULL":
       return "That run is full.";
     case "CLOSED":
@@ -72,7 +75,7 @@ function lfgProblem(error: LfgError): string {
 
 const events: CommandHandler = async (ctx, deps) => {
   const result = await deps.community.listUpcomingEvents(ctx.guildId);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't load events right now." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   const list = result.value;
   return {
     ephemeral: false,
@@ -234,7 +237,7 @@ const runs: CommandHandler = async (ctx, deps) => {
     ctx.guildId,
     activity === null ? undefined : (activity as LFGActivity),
   );
-  if (!result.ok) return { ephemeral: true, text: "Couldn't load runs right now." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   const list = result.value;
   return {
     ephemeral: false,
@@ -286,7 +289,7 @@ const ticket: CommandHandler = async (ctx, deps) => {
     // Scoped to the caller: a member seeing everyone's tickets would leak
     // reports and appeals about other people.
     const result = await deps.community.listTickets(ctx.guildId, ctx.userId);
-    if (!result.ok) return { ephemeral: true, text: "Couldn't load your tickets right now." };
+    if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
     return {
       ephemeral: true,
       text: result.value.length === 0 ? "You have no open tickets." : `${result.value.length} open.`,
@@ -312,7 +315,7 @@ const ticket: CommandHandler = async (ctx, deps) => {
         ephemeral: true,
         text:
           result.error.kind === "NOT_FOUND"
-            ? "I couldn't find a ticket with that id."
+            ? E.generic.notFound
             : result.error.kind === "FORBIDDEN"
               ? "That isn't your ticket. Staff can close it from the ticket channel."
               : "That ticket is already closed.",
@@ -349,7 +352,7 @@ const ticket: CommandHandler = async (ctx, deps) => {
     categoryId: chosen.id,
     ...(topic === null ? {} : { topic }),
   });
-  if (!result.ok) return { ephemeral: true, text: "Couldn't open a ticket right now." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.saveFailed };
   // The category's own opening message replaces the generic line when it has
   // one: it is the question staff actually want answered, and only now.
   const prompt = chosen.openingMessage.trim() === "" ? "Staff will pick it up." : chosen.openingMessage;

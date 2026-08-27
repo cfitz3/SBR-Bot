@@ -3,7 +3,7 @@
  * render. The registry wires these with capability + cooldown metadata, and the
  * Discord registration payload is derived from the same specs.
  */
-import { withCommandCopy } from "@sbr/brand";
+import { copy, withCommandCopy } from "@sbr/brand";
 import { categoryFor, flattenEmbed, LEADERBOARD_CATEGORIES, LEADERBOARD_LABELS } from "@sbr/shared-types";
 import type { AdviceDTO, AuctionsDTO, HypixelResult, LinkActor, ProgressMetric } from "@sbr/shared-types";
 import type {
@@ -51,6 +51,8 @@ import {
   formatCoins,
   formatLevel,
 } from "./render.js";
+
+const E = copy.error;
 
 /** The player a lookup is about, once the `player` option has been resolved. */
 interface Target {
@@ -137,7 +139,7 @@ const unlink: CommandHandler = async (ctx, deps) => {
     return { ephemeral: true, text: "You have no linked account." };
   }
   const result = await deps.identity.unlink(ctx.userId, linked.value.minecraftUuid);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't unlink right now — try again shortly." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.saveFailed };
   return { ephemeral: true, text: `Unlinked ${linked.value.ign}.` };
 };
 
@@ -394,7 +396,7 @@ const setprofile: CommandHandler = async (ctx, deps) => {
       text:
         result.error.kind === "NO_SUCH_PROFILE"
           ? `No profile called "${wanted}" on your account.`
-          : "Can't change your profile right now — try again shortly.",
+          : E.generic.saveFailed,
     };
   }
   return {
@@ -434,7 +436,7 @@ const milestones: CommandHandler = async (ctx, deps) => {
 
   const result = await deps.progression.getAchievements(target.uuid, ctx.guildId);
   if (!result.ok) {
-    return { ephemeral: true, text: "Couldn't read achievements just now — try again shortly." };
+    return { ephemeral: true, text: E.generic.loadFailed };
   }
   const data = result.value;
   const next = data.upcoming[0];
@@ -675,14 +677,14 @@ const auctions: CommandHandler = async (ctx, deps) => {
  */
 const online: CommandHandler = async (_ctx, deps) => {
   if (!deps.roster) {
-    return { ephemeral: true, text: "The in-game bridge isn't set up here, so I can't see who's online." };
+    return { ephemeral: true, text: E.bridge.notConfigured };
   }
 
   const roster = await deps.roster.online();
   if (roster === null) {
     return {
       ephemeral: true,
-      text: "The in-game bridge is offline right now, so I can't read the guild roster — try again shortly.",
+      text: E.bridge.offline,
     };
   }
   const embed = renderRosterEmbed(roster);

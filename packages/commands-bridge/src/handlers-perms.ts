@@ -20,6 +20,9 @@ import type {
   HandlerDeps,
 } from "./types.js";
 import { permChatLine, renderPermEmbed, renderPermListEmbed } from "./render-perms.js";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 // ───────────────────────────── Error wording ─────────────────────────────
 
@@ -97,7 +100,7 @@ async function list(ctx: CommandContext, deps: HandlerDeps): Promise<CommandRepl
   // Unscoped: perms are a public thing within the guild — half the point is
   // seeing who already has a five-stack before starting a sixth.
   const result = await deps.perms.listPerms(ctx.guildId);
-  if (!result.ok) return { ephemeral: true, text: "Couldn't load perms right now." };
+  if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
   const perms = result.value;
   return {
     ephemeral: false,

@@ -398,7 +398,7 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
     option: { name: "Which reply to post" },
   },
   remind: {
-    description: "Have me remind you about something later",
+    description: "Set a reminder for later",
     option: { when: "How long from now — 30m, 2h30m, 1w", about: "What to remind you about" },
   },
   reminders: {

@@ -46,6 +46,55 @@ export const DEFAULT_ERRORS = {
   },
 
   /**
+   * Refusals that are about *where* the member is standing, not about a failure.
+   *
+   * Guild chat has no server, no channels and no member list, so a handful of
+   * commands genuinely cannot answer there. These say which surface does work,
+   * because the member's next move is to go and use it — and they never point at
+   * `/health`, since nothing is unhealthy.
+   */
+  surface: {
+    discordOnly: "That answer needs Discord. Run it there.",
+    needsChannel: "That needs a channel to post in. Run it from Discord.",
+    /** An optional channel argument that only defaults when there is a channel to default to. */
+    nameChannel: "Name a channel — there is none to infer here.",
+  },
+
+  /**
+   * What Discord itself refused, told as Discord's answer rather than the bot's
+   * apology.
+   *
+   * The one family of failures a guild admin can fix in under a minute and
+   * nobody else can fix at all, so they name the missing permission as the cause
+   * instead of routing to `/health`: the platform is up, and a bug report would
+   * reach the wrong people.
+   */
+  discord: {
+    missingPermission: "Discord refused that — the bot is missing a permission it needs.",
+    cannotPost: "The bot cannot post in that channel. Check its permissions there.",
+    memberMissing: "Discord doesn't show you as a member of this server.",
+  },
+
+  /**
+   * The in-game relay, absent and offline being different facts with different
+   * answers.
+   *
+   * A guild that never configured Mineflayer is not having an outage, and
+   * sending its members to a status card would be a wild goose chase. A relay
+   * that is configured and down is exactly what `/health` reports.
+   */
+  bridge: {
+    notConfigured: "Guild chat isn't set up on this server.",
+    offline: "Guild chat is offline, so the roster can't be read. `/health` tracks it.",
+  },
+
+  /** A duration the parser could not read. The examples are the whole message. */
+  badDuration: "Unreadable duration. Use a form like `30m`, `2h30m` or `1w`.",
+
+  /** A date or time the parser could not read. */
+  badTime: "Unreadable time.",
+
+  /**
    * The button under a platform failure.
    *
    * Appearance only. There is no key here that removes the button, because the
@@ -73,7 +122,7 @@ export const DEFAULT_ERRORS = {
   hypixel: {
     NOT_LINKED: "You're not linked yet — use /link <ign>.",
     MISSING_PROFILE: "No Skyblock profile found for that player.",
-    RATE_LIMITED: "Hypixel is rate-limiting us right now — try again in a moment.",
+    RATE_LIMITED: "Hypixel is rate-limiting the platform right now.",
     API_DISABLED: "That data is turned off in the player's Hypixel API settings.",
   },
 
@@ -87,7 +136,7 @@ export const DEFAULT_ERRORS = {
   goal: {
     UNAVAILABLE: "Goals aren't switched on for this guild yet.",
     ALREADY_THERE: "You're already at {current} — aim higher than that.",
-    BAD_TARGET: "That target isn't a number I can chase.",
+    BAD_TARGET: "That target isn't a number.",
   },
 
   /**

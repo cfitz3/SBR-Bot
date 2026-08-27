@@ -32,6 +32,9 @@ import {
 } from "@sbr/roles";
 import type { Logger } from "@sbr/observability";
 import type { BridgeRoleEffector } from "./role-effector.js";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** The component-router namespace. `rmenu:<menuId>:<optionKey>`. */
 export const ROLE_MENU_NAMESPACE = "rmenu";
@@ -144,7 +147,7 @@ export class RoleMenuGateway {
     if (!edited) {
       const posted = await this.d.messages.post(target, embed, rows);
       if (posted === null) {
-        return { ok: false, problem: "CANNOT_POST", detail: "I cannot post in that channel — check my permissions" };
+        return { ok: false, problem: "CANNOT_POST", detail: E.discord.cannotPost };
       }
       messageId = posted;
     }
@@ -182,7 +185,7 @@ export class RoleMenuGateway {
       `role menu ${menu.id}: ${press.option.key}`,
     );
 
-    if (!outcome.memberPresent) return { ok: false, detail: "I couldn't find you in this server." };
+    if (!outcome.memberPresent) return { ok: false, detail: E.discord.memberMissing };
     if (!outcome.ok) {
       const refusal = outcome.refused.find((row) => row.roleId === press.option.roleId);
       this.d.log.warn("role menu press not applied", { guildId, menuId, optionKey, userId });
@@ -190,7 +193,7 @@ export class RoleMenuGateway {
         ok: false,
         detail:
           refusal === undefined
-            ? "I couldn't change your roles just now — try again in a moment."
+            ? E.generic.saveFailed
             : `I can't hand out **${press.option.label}**: ${refusal.detail}.`,
       };
     }
