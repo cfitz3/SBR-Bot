@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../shared-types" },
+    { "path": "../embed-kit" },
     { "path": "../tickets" },
     { "path": "../observability" },
     { "path": "../../brand" }

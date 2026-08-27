@@ -582,9 +582,9 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     );
   }
 
-  // Read-only, and the last of the late-bound ports: `/userinfo`, `/serverinfo`
-  // and `/avatar` are a view of Discord itself, so they can only be answered on
-  // this side of the line.
+  // Read-only, and the last of the late-bound ports: `/whois` and `/serverinfo`
+  // are a view of Discord itself, so they can only be answered on this side of
+  // the line.
   app.setDiscordDirectory(createDiscordDirectory(discord));
 
   // The moderation log. Automod runs in this process, so this is the only place

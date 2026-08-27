@@ -30,7 +30,7 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 | F13 | **Live guild roster** | `/online` reads `/g online` through the in-game session and reports who's on, grouped by guild rank. |
 | F14 | **Join screening & auto-accept** | Every `/g join` request is screened against the scammer list, the applicant's stats and this guild's own history, recorded, reported to staff, and — if the guild opts in — accepted automatically. |
 | F15 | **Greeting** | Welcome, farewell and guild-join messages, rendered from a guild-configured template and spoken by this bot because a member is addressed by the bot they interact with (§6D). |
-| F16 | **Member conveniences** | `/userinfo`, `/serverinfo`, `/avatar`, `/remind` + `/reminders`, `/tag`, `/levelalerts`, plus level-up announcements, autoresponders and sticky messages (§6D). |
+| F16 | **Member conveniences** | `/whois`, `/serverinfo`, `/remind` + `/reminders`, `/tag`, `/levelalerts`, plus level-up announcements, autoresponders and sticky messages (§6D). |
 | F17 | **Self-service role menus** | The message, the buttons and the interaction handler are this bot's; the grant itself is an admin-bot effector call (§6D). |
 
 ---

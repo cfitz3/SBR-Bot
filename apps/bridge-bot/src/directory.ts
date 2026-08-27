@@ -1,5 +1,5 @@
 /**
- * The discord.js half of `/userinfo`, `/serverinfo` and `/avatar`.
+ * The discord.js half of `/whois` and `/serverinfo`.
  *
  * Nothing but reads, and deliberately so: the handlers behind this port are
  * member-facing, so the narrowest thing that answers them is the right thing to

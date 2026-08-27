@@ -407,15 +407,14 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
     description: "Turn your own level-up announcements on or off",
     option: { state: "Leave it blank to see where you stand" },
   },
-  userinfo: {
-    description: "Discord account details for a member",
-    option: { member: "Whose card to show (defaults to you)" },
+  whois: {
+    description: "Who a member is here — Discord account, roles, link and standing",
+    option: {
+      member: "Whose card to show (defaults to you)",
+      public: "Post it in the channel. Standing and your record are left off a public card",
+    },
   },
   serverinfo: { description: "This Discord server at a glance" },
-  avatar: {
-    description: "Someone's Discord avatar, full size",
-    option: { member: "Whose card to show (defaults to you)" },
-  },
   rolemenu: {
     description: "Post a self-service role menu, or list the ones this server has",
     option: {
