@@ -843,6 +843,9 @@ export const EVENT_SIGNUP: EventCardView = {
   capacity: 40,
   metric: "catacombsLevel",
   prize: "500k coins and the winner's pick of next week's event",
+  // The mirror: the card links out to Discord's own scheduled event, which is
+  // what actually reminds people on the day.
+  discordEventUrl: "https://discord.com/events/100000000000000001/300000000000000001",
   going: [
     { discordId: "200000000000000001" },
     { discordId: "200000000000000002" },

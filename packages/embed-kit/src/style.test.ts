@@ -158,6 +158,13 @@ test("raw-id — a bare snowflake, but not a wrapped mention", () => {
   assert.ok(rules(clean({ description: "banned 123456789012345678" })).includes("raw-id"));
   assert.ok(!rules(clean({ description: "banned <@123456789012345678>" })).includes("raw-id"));
   assert.ok(!rules(clean({ description: "in <#123456789012345678>" })).includes("raw-id"));
+  // A link is an address. Discord's own URLs are built out of snowflakes, and a
+  // card that links to a scheduled event is hiding the id, not printing it.
+  assert.ok(
+    !rules(
+      clean({ description: "[Remind me](https://discord.com/events/123456789012345678/876543210987654321)" }),
+    ).includes("raw-id"),
+  );
 });
 
 test("placeholder — another project's dialect for 'unknown'", () => {

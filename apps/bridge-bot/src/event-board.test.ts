@@ -13,6 +13,8 @@ import {
   type EventBoardGatewayDeps,
   type EventBoardRow,
   type EventStanding,
+  type ScheduledEventRef,
+  type ScheduledEventSpec,
 } from "./event-board.js";
 
 const silentLog = {
@@ -47,6 +49,9 @@ function row(over: Partial<EventBoardRow> = {}): EventBoardRow {
   };
 }
 
+/** Comfortably after the harness's clock, so a mirror can legally be made. */
+const SOON = "2026-08-19T23:00:00.000Z";
+
 interface Bound {
   readonly channelId: string;
   readonly messageId: string | null;
@@ -62,6 +67,11 @@ function harness(
     postId?: string | null;
     editOk?: boolean;
     orphan?: string | null;
+    /** Null stands for a native event Discord no longer has. */
+    updateRef?: ScheduledEventRef | null;
+    scheduleThrows?: boolean;
+    /** A port from before this existed, which must still publish. */
+    noScheduling?: boolean;
   } = {},
 ) {
   const posted: { channelId: string; embed: EmbedView; components: readonly ActionRowView[] }[] = [];
@@ -73,6 +83,9 @@ function harness(
   }[] = [];
   const bound: Bound[] = [];
   const asked: { eventId: string; metric: string }[] = [];
+  const mirrored: { eventId: string; discordEventId: string }[] = [];
+  const scheduled: { guildId: string; spec: ScheduledEventSpec }[] = [];
+  const updated: { guildId: string; discordEventId: string; spec: ScheduledEventSpec }[] = [];
 
   const deps: EventBoardGatewayDeps = {
     events: {
@@ -88,6 +101,9 @@ function harness(
       },
       async bindBoardMessage(_eventId, channelId, messageId, final) {
         bound.push({ channelId, messageId, final });
+      },
+      async bindDiscordEvent(eventId, discordEventId) {
+        mirrored.push({ eventId, discordEventId });
       },
     },
     async getChannel() {
@@ -105,12 +121,27 @@ function harness(
       async findBoard() {
         return options.orphan ?? null;
       },
+      ...(options.noScheduling === true
+        ? {}
+        : {
+            async scheduleEvent(guildId: string, spec: ScheduledEventSpec) {
+              scheduled.push({ guildId, spec });
+              if (options.scheduleThrows === true) throw new Error("discord said no");
+              return { id: "gse-1", url: "https://discord.com/events/g/gse-1" };
+            },
+            async updateScheduledEvent(guildId: string, discordEventId: string, spec: ScheduledEventSpec) {
+              updated.push({ guildId, discordEventId, spec });
+              return options.updateRef === undefined
+                ? { id: discordEventId, url: `https://discord.com/events/g/${discordEventId}` }
+                : options.updateRef;
+            },
+          }),
     },
     log: silentLog,
     now: () => new Date("2026-08-19T21:00:00.000Z"),
   };
 
-  return { gateway: new EventBoardGateway(deps), posted, edited, bound, asked };
+  return { gateway: new EventBoardGateway(deps), posted, edited, bound, asked, mirrored, scheduled, updated };
 }
 
 test("posts a live event's board into the guild's events channel", async () => {
@@ -230,6 +261,89 @@ test("a cancelled event's message loses them too", async () => {
 
   await h.gateway.publish("g1", "e1");
   assert.deepEqual(h.edited[0]?.components, []);
+});
+
+/**
+ * The native scheduled event. It is a mirror and never a gate: everything below
+ * asserts the same thing from a different angle, which is that the message
+ * publishes regardless of what Discord's calendar does.
+ */
+test("a new scheduled event is mirrored, recorded, and linked from the message", async () => {
+  const h = harness({ event: row({ status: "SCHEDULED", startsAt: SOON }) });
+
+  const result = await h.gateway.publish("g1", "e1");
+  assert.equal(result.ok, true);
+  assert.equal(h.scheduled.length, 1);
+  assert.equal(h.scheduled[0]?.spec.name, "Dungeon night");
+  assert.equal(h.scheduled[0]?.spec.status, "SCHEDULED");
+  assert.deepEqual(h.mirrored, [{ eventId: "e1", discordEventId: "gse-1" }]);
+  const details = (h.posted[0]?.embed.fields ?? []).find((f) => f.name === "Details");
+  assert.match(details?.value ?? "", /https:\/\/discord\.com\/events\/g\/gse-1/);
+});
+
+test("an event without an end is given one, because Discord requires it", async () => {
+  const h = harness({ event: row({ status: "SCHEDULED", startsAt: SOON, endsAt: null }) });
+
+  await h.gateway.publish("g1", "e1");
+  const spec = h.scheduled[0]?.spec;
+  assert.ok(spec !== undefined);
+  assert.equal(Date.parse(spec.endsAt) - Date.parse(spec.startsAt), 2 * 60 * 60 * 1000);
+});
+
+test("an event that already has a mirror is edited, not mirrored twice", async () => {
+  const h = harness({
+    event: row({ status: "LIVE", channelId: "chan-1", messageId: "msg-9", discordEventId: "gse-7" }),
+  });
+
+  await h.gateway.publish("g1", "e1");
+  assert.equal(h.scheduled.length, 0);
+  assert.deepEqual(
+    h.updated.map((u) => ({ id: u.discordEventId, status: u.spec.status })),
+    [{ id: "gse-7", status: "ACTIVE" }],
+  );
+  // Nothing re-recorded: the id has not changed, and a write per redraw would
+  // be a write per half hour for no reason.
+  assert.deepEqual(h.mirrored, []);
+});
+
+test("a mirror a moderator deleted is not recreated", async () => {
+  const h = harness({
+    event: row({ status: "SCHEDULED", startsAt: SOON, discordEventId: "gse-7" }),
+    updateRef: null,
+  });
+
+  const result = await h.gateway.publish("g1", "e1");
+  assert.equal(result.ok, true);
+  assert.equal(h.scheduled.length, 0);
+  const details = (h.posted[0]?.embed.fields ?? []).find((f) => f.name === "Details");
+  assert.ok(!(details?.value ?? "").includes("discord.com/events"), "and no link is printed to it");
+});
+
+test("an event that has already started gets its message and no calendar entry", async () => {
+  // Discord refuses a scheduled event in the past, and there is no reminder
+  // left to give for something already running.
+  const h = harness({ event: row({ status: "LIVE" }) });
+
+  const result = await h.gateway.publish("g1", "e1");
+  assert.equal(result.ok, true);
+  assert.equal(h.scheduled.length, 0);
+});
+
+test("a failed mirror costs the link and not the message", async () => {
+  const h = harness({ event: row({ status: "SCHEDULED", startsAt: SOON }), scheduleThrows: true });
+
+  const result = await h.gateway.publish("g1", "e1");
+  assert.equal(result.ok, true);
+  assert.equal(h.posted.length, 1);
+  assert.deepEqual(h.mirrored, []);
+});
+
+test("a port with no scheduled-event support publishes the message it always did", async () => {
+  const h = harness({ event: row({ status: "SCHEDULED", startsAt: SOON }), noScheduling: true });
+
+  const result = await h.gateway.publish("g1", "e1");
+  assert.equal(result.ok, true);
+  assert.equal(h.posted.length, 1);
 });
 
 test("a completed event's board is marked final so it is written once", async () => {

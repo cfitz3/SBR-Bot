@@ -161,6 +161,16 @@ export interface EventCardView {
   readonly unlinked?: readonly { readonly discordId: string }[];
   /** Free text, informational. Nothing on this platform pays it out. */
   readonly prize?: string | null;
+  /**
+   * The native Discord scheduled event this card mirrors, when there is one.
+   *
+   * A link rather than a replacement. Discord's own event carries the things
+   * Discord is better at than an embed — a reminder when it starts, a place in
+   * the server's event list, an "Interested" count visible from the sidebar —
+   * and this card carries everything else. Absent when the mirror could not be
+   * made, in which case the line simply is not printed.
+   */
+  readonly discordEventUrl?: string | null;
   /** When this render was made. Becomes the card's native timestamp. */
   readonly updatedAt: string;
 }
@@ -290,6 +300,11 @@ export function renderEventCard(view: EventCardView): EmbedView {
   detail.push({ label: F.host, value: view.hostDiscordId == null ? null : `<@${view.hostDiscordId}>` });
   detail.push({ label: F.signedUp, value: signupCount(view) });
   if ((view.prize ?? "").trim() !== "") detail.push({ label: F.prize, value: (view.prize ?? "").trim() });
+  // Last, because it is the one line that leaves the message. A reader scanning
+  // the details wants the facts first and the button out of them after.
+  if ((view.discordEventUrl ?? "").trim() !== "") {
+    detail.push({ label: F.reminder, value: `[${C.eventNotify}](${(view.discordEventUrl ?? "").trim()})` });
+  }
 
   return card({
     tone: TONES[view.status],

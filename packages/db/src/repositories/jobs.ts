@@ -67,6 +67,8 @@ export interface EventBoardRow {
   /** The roster the message shows until the event starts, capped by the read. */
   readonly going: readonly { readonly discordId: string }[];
   readonly maybe: readonly { readonly discordId: string }[];
+  /** The native Discord scheduled event this one is mirrored by, once made. */
+  readonly discordEventId: string | null;
 }
 
 export interface EventStanding {
@@ -337,6 +339,7 @@ export const eventJobRepository = {
         messageId: true,
         trackedMetrics: true,
         prize: true,
+        discordEventId: true,
         rsvps: {
           where: { state: { in: ["GOING", "MAYBE"] } },
           orderBy: { respondedAt: "asc" },
@@ -367,6 +370,7 @@ export const eventJobRepository = {
       going: row.rsvps.filter((r) => r.state === "GOING").map((r) => ({ discordId: r.discordId })),
       maybe: row.rsvps.filter((r) => r.state === "MAYBE").map((r) => ({ discordId: r.discordId })),
       prize: row.prize,
+      discordEventId: row.discordEventId,
     };
   },
 
@@ -426,6 +430,21 @@ export const eventJobRepository = {
         where: { id: eventId },
         data: { channelId, messageId, boardUpdatedAt: new Date(), boardFinal: final },
       })
+      .catch(() => undefined);
+  },
+
+  /**
+   * Remember the native Discord scheduled event made for this one.
+   *
+   * Written once, on the pass that creates it, and read on every pass after so
+   * the mirror edits rather than making a second event. Swallowed like
+   * `bindBoardMessage`: a failed write costs a duplicate scheduled event on the
+   * next pass, which is worse than nothing and much better than a message that
+   * never gets published because its calendar entry could not be recorded.
+   */
+  async bindDiscordEvent(eventId: string, discordEventId: string): Promise<void> {
+    await prisma.event
+      .update({ where: { id: eventId }, data: { discordEventId } })
       .catch(() => undefined);
   },
 };

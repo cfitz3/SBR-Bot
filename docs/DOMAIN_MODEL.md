@@ -497,7 +497,7 @@ A scheduled community event.
 | `boardFinal` | set once the board has been edited into its result card, so `event-board` writes that card once rather than every pass |
 | `trackedMetrics` | the metric this event scores, as a one-element list; empty means untracked. Derived from the chosen activity rather than picked separately — see `EVENT_ACTIVITIES` — so an event cannot be filed as a Catacombs push while scoring networth. Longer lists exist on rows created before activities did |
 | `pollIntervalMinutes` | how often participants are polled while LIVE (default 30) |
-| `discordEventId` | the mirrored Discord scheduled event, when one was created |
+| `discordEventId` | the mirrored native Discord scheduled event. Written once, by the pass that creates it, and read on every pass after so the mirror edits rather than making a second one. Null when the event was created after it had already started, or when the admin bot could not be reached — the event message publishes either way |
 | `reminderState` | which reminder offsets have been sent |
 
 **Enum — `EventType`:** `DUNGEON`, `SLAYER`, `FISHING`, `MINING`, `GIVEAWAY`, `MEETING`, `CUSTOM`. Not chosen directly any more: the panel offers activities, and each activity carries the type it is filed under.

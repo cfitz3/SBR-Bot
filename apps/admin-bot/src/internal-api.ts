@@ -20,6 +20,7 @@ import {
   DiscordAPIError,
   GuildScheduledEventEntityType,
   GuildScheduledEventPrivacyLevel,
+  GuildScheduledEventStatus,
   PermissionFlagsBits,
   type Client,
   type Guild,
@@ -214,6 +215,53 @@ function describeError(error: unknown): string {
     return error.message;
   }
   return error instanceof Error ? error.message : "FAILED";
+}
+
+/**
+ * Discord's own limits on a scheduled event, applied here rather than trusted.
+ *
+ * An event title long enough to be rejected is a create that fails, and the
+ * caller sees only a missing reminder link for a reason nobody would guess from
+ * the panel. Truncating loses the tail of a title; refusing loses the feature.
+ */
+const EVENT_NAME_MAX = 100;
+const EVENT_DESCRIPTION_MAX = 1000;
+const EVENT_LOCATION_MAX = 100;
+
+/** The platform's four statuses, in Discord's vocabulary. */
+function eventStatus(status: string | null): GuildScheduledEventStatus | null {
+  if (status === "SCHEDULED") return GuildScheduledEventStatus.Scheduled;
+  if (status === "ACTIVE" || status === "LIVE") return GuildScheduledEventStatus.Active;
+  if (status === "COMPLETED") return GuildScheduledEventStatus.Completed;
+  if (status === "CANCELLED" || status === "CANCELED") return GuildScheduledEventStatus.Canceled;
+  return null;
+}
+
+/**
+ * The next status Discord will actually accept, or null to leave it alone.
+ *
+ * Scheduled events move one way — scheduled to active to completed, or
+ * scheduled to cancelled — and Discord rejects anything else. Asking only for
+ * transitions it allows keeps the ordinary path free of exceptions, which
+ * matters because this runs on every redraw of every open event.
+ */
+function nextEventStatus(
+  current: GuildScheduledEventStatus,
+  want: GuildScheduledEventStatus,
+): GuildScheduledEventStatus.Active | GuildScheduledEventStatus.Completed | GuildScheduledEventStatus.Canceled | null {
+  if (current === GuildScheduledEventStatus.Scheduled) {
+    if (want === GuildScheduledEventStatus.Active) return GuildScheduledEventStatus.Active;
+    if (want === GuildScheduledEventStatus.Canceled) return GuildScheduledEventStatus.Canceled;
+    // A scheduled event that finished without ever being marked live is
+    // cancelled, not completed: Discord has no scheduled-to-completed edge, and
+    // something that never started is closer to called off than to run.
+    if (want === GuildScheduledEventStatus.Completed) return GuildScheduledEventStatus.Canceled;
+    return null;
+  }
+  if (current === GuildScheduledEventStatus.Active && want === GuildScheduledEventStatus.Completed) {
+    return GuildScheduledEventStatus.Completed;
+  }
+  return null;
 }
 
 function str(value: unknown): string | null {
@@ -607,34 +655,99 @@ export class InternalApi {
   }
 
   /**
-   * Mirrors a platform event onto Discord's own scheduled-events surface, so it
-   * shows up in the server's event list and Discord handles the reminders.
+   * Mirrors a platform event onto Discord's own scheduled-events surface.
+   *
+   * Here rather than in the bridge bot because Discord wants `Manage Events`
+   * for it, and the bridge bot deliberately holds none of the privileged
+   * permissions — the same split that puts an automod timeout and a
+   * self-service role grant on this side of the loopback hop.
+   *
+   * Create and edit are one route because the caller does not want to know
+   * which it is doing: it has a row, it wants Discord to agree with the row,
+   * and whether that means a POST or a PATCH is a detail of Discord's API. The
+   * body carries `discordEventId` when there is already one to bring in line.
+   *
+   * The response always carries the `url`, because the link is what the caller
+   * actually came for — the event message prints it so members can take the
+   * reminder — and it is a valid link whether or not this call changed anything.
    */
-  private async scheduledEvent(guild: Guild, body: unknown): Promise<{ ok: boolean; id?: string; error?: string }> {
+  private async scheduledEvent(
+    guild: Guild,
+    body: unknown,
+  ): Promise<{ ok: boolean; id?: string; url?: string; error?: string }> {
     const b = (body ?? {}) as Record<string, unknown>;
     const name = str(b["name"]);
     const startsAt = str(b["startsAt"]);
     const endsAt = str(b["endsAt"]);
     const description = str(b["description"]);
-    if (name === null || startsAt === null) return { ok: false, error: "INVALID_INPUT" };
+    const existingId = str(b["discordEventId"]);
+    const wanted = eventStatus(str(b["status"]));
 
     try {
+      if (existingId !== null) return await this.editScheduledEvent(guild, existingId, b, wanted);
+      if (name === null || startsAt === null) return { ok: false, error: "INVALID_INPUT" };
+
       const created = await guild.scheduledEvents.create({
-        name,
+        name: name.slice(0, EVENT_NAME_MAX),
         scheduledStartTime: startsAt,
         // EXTERNAL is the only entity type that doesn't require a voice channel,
         // and a Skyblock competition happens outside Discord by definition.
         ...(endsAt === null ? {} : { scheduledEndTime: endsAt }),
         privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
         entityType: GuildScheduledEventEntityType.External,
-        entityMetadata: { location: "Hypixel Skyblock" },
-        ...(description === null ? {} : { description }),
+        entityMetadata: { location: (str(b["location"]) ?? "Hypixel Skyblock").slice(0, EVENT_LOCATION_MAX) },
+        ...(description === null ? {} : { description: description.slice(0, EVENT_DESCRIPTION_MAX) }),
       });
-      return { ok: true, id: created.id };
+      return { ok: true, id: created.id, url: created.url };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "FAILED" };
     }
   }
+
+  /**
+   * Bring an existing native event in line with the row it mirrors.
+   *
+   * A status move and a content revision are never sent together. Discord
+   * refuses to change the times of an event that has already started and
+   * refuses to touch a finished one at all, so the transition is asked for on
+   * its own and the details are only revised while the event is still merely
+   * scheduled. Anything else is left alone rather than attempted and logged.
+   */
+  private async editScheduledEvent(
+    guild: Guild,
+    discordEventId: string,
+    b: Record<string, unknown>,
+    wanted: GuildScheduledEventStatus | null,
+  ): Promise<{ ok: boolean; id?: string; url?: string; error?: string }> {
+    const existing = await guild.scheduledEvents.fetch(discordEventId).catch(() => null);
+    // Gone means gone: an event a moderator deleted is not resurrected here,
+    // because recreating it would undo a deliberate act on every redraw.
+    if (existing === null) return { ok: false, error: "NOT_FOUND" };
+
+    const next = wanted === null ? null : nextEventStatus(existing.status, wanted);
+    const name = str(b["name"]);
+    const startsAt = str(b["startsAt"]);
+    const endsAt = str(b["endsAt"]);
+    const description = str(b["description"]);
+
+    if (next !== null) {
+      await existing.edit({ status: next }).catch(() => undefined);
+    } else if (existing.status === GuildScheduledEventStatus.Scheduled && name !== null && startsAt !== null) {
+      await existing
+        .edit({
+          name: name.slice(0, EVENT_NAME_MAX),
+          description: description === null ? "" : description.slice(0, EVENT_DESCRIPTION_MAX),
+          scheduledStartTime: startsAt,
+          ...(endsAt === null ? {} : { scheduledEndTime: endsAt }),
+        })
+        .catch(() => undefined);
+    }
+
+    // The link is what the caller came for, and it survives an edit Discord
+    // declined — a finished event still has a page worth pointing at.
+    return { ok: true, id: existing.id, url: existing.url };
+  }
+
 }
 
 /**

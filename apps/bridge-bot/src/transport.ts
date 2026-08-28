@@ -43,6 +43,8 @@ import { startReminderSweeper } from "./reminders.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
 import { deliverEventReminder } from "./events.js";
 import { EventBoardGateway } from "./event-board.js";
+import { createScheduledEventMirror } from "./scheduled-event-effector.js";
+
 import { LeaderboardDigest } from "./leaderboard-digest.js";
 import type { BridgeApp } from "./composition.js";
 import { isRosterEnd, parseGuildOnline } from "./roster.js";
@@ -570,6 +572,15 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           );
           return found?.id ?? null;
         },
+        // The native scheduled event is a privileged write — Discord wants
+        // Manage Events for it, and this bot deliberately does not hold it. It
+        // goes over the loopback hop to the admin bot, exactly as an automod
+        // timeout and a self-service role grant do.
+        ...createScheduledEventMirror({
+          baseUrl: app.config.internalApi.baseUrl,
+          token: app.config.internalApi.token,
+          logger: app.log,
+        }),
       },
       log: app.log,
     }),

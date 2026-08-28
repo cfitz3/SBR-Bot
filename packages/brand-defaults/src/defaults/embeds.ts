@@ -67,6 +67,8 @@ export const DEFAULT_EMBEDS = {
     host: "Host",
     signedUp: "Signed up",
     prize: "Prize",
+    /** The way out of the message and into Discord's own event. */
+    reminder: "Reminder",
     /** What the event measures — one metric, or nothing. */
     scoring: "Scoring",
     /** Who is coming, while signups are the point of the message. */
@@ -321,6 +323,16 @@ export const DEFAULT_EMBEDS = {
     eventUnscored: "Turnout only — nothing is scored.",
     /** `{id}` is the event id, which is how the bot finds its own message again. */
     eventId: "id {id}",
+    eventNotify: "Remind me on Discord",
+    /**
+     * Where an External scheduled event says it happens.
+     *
+     * Discord requires a location on an external event and shows it in the
+     * server's event list. It is the game, not a channel: the guild meets in
+     * SkyBlock, and a channel name there would point at the message rather than
+     * at the thing the message is about.
+     */
+    eventLocation: "Hypixel SkyBlock",
     eventNobody: "Nobody yet.",
     /** `{n}` going, `{n}` undecided — the two counts kept apart on purpose. */
     eventGoing: "**Going ({n})**",
