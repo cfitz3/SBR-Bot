@@ -85,7 +85,6 @@ const help: CommandHandler = async () => ({
     "Stats: /stats /skills /slayers /dungeons /networth /milestones",
     "Market: /price /bazaar /lowestbin /auctions",
     "Guild: /online /leaderboard",
-    "Events: /events /create-event /rsvp /attendance",
     "Groups: /perm",
     "Help: /ticket /help",
   ].join("\n"),

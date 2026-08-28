@@ -23,7 +23,7 @@ Design for `apps/admin-bot` — the staff-facing surface that owns **moderation,
 | O2 | Onboarding | Tickets | open/assign/close support & appeal tickets. |
 | O3 | Onboarding | Member lifecycle | set roles, notes, membership status; verification oversight. |
 | P1 | **Operational** | Safety controls | lockdown, anti-raid on/off, purge. |
-| P2 | Operational | Events/attendance (staff side) | create events, record attendance (member RSVP lives on the bridge bot). |
+| P2 | Operational | Events/attendance (staff side) | create events, record attendance — **on the panel**, not as commands (`E-01`). Member RSVP is the buttons on the event's own message. |
 | A1 | **Auditability** | Immutable audit log | every action appended with actor, target, reason, before/after, timestamp, source. |
 | A2 | Auditability | Audit query | `/audit` search + panel view; tamper-evident, exportable. |
 | C1 | **Coordination** | Panel parity | shares `packages/moderation`/`identity`; changes propagate via cache invalidation + pub/sub. |
@@ -81,8 +81,11 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/lockdown` | Admin | Channel/server scope; reason; auto-expiry; **confirmation**. |
 | `/antiraid-on` / `-off` | Admin | Sensitivity + duration; announces to staff. |
 | `/audit` | Officer | Query the immutable log. |
-| `/attendance` | Officer | Mark/report attendance. |
-| `/create-event` | Officer | Schedule event; announce via bridge bot. |
+
+Events are not on this bot and are no longer on the member bot either. Creating
+one, correcting one, and recording who turned up are all on the panel's events
+page (`E-01`); the event itself is one message the bridge bot posts and keeps
+current.
 
 **Destructive-action guardrails (all of `/ban`, `/kick`, `/purge`, `/lockdown`, mass actions):**
 - Interactive **confirmation** (buttons) showing exactly who/what will be affected before commit.

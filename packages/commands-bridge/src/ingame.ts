@@ -62,7 +62,6 @@ const ALIASES: Readonly<Record<string, string>> = {
   sl: "slayers",
   dungs: "dungeons",
   cata: "dungeons",
-  event: "events",
   h: "help",
   commands: "help",
   // Fun (COMMANDS.md §19). `8b` and `dice` are what chat shortens these to; the

@@ -16,14 +16,15 @@ Sources of truth for this file:
 
 **Totals: 33 member commands, 26 staff commands, 15 reachable in-game, 2 button routes.**
 
-**Ten of the 33 are retired** (`enabled: false`): `/progress`, `/missing`,
+**Fourteen of the 33 are retired** (`enabled: false`): `/progress`, `/missing`,
 `/nextupgrade`, `/whatnext`, `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
-`/editrun`, `/closerun`. They are absent from Discord's registry, refused by the
-dispatcher, and silent in guild chat — but still in `buildBridgeRegistry()` with
-their handlers intact, which is why they are still counted and still described
-below. **23 member commands are actually reachable, and 13 in-game** (`lfg` and
-`runs` leave that surface with them). `COMMANDS.md` explains why each went. The
-rows below describe behaviour, not availability.
+`/editrun`, `/closerun`, `/events`, `/create-event`, `/rsvp`, `/attendance`.
+They are absent from Discord's registry, refused by the dispatcher, and silent
+in guild chat — but still in `buildBridgeRegistry()` with their handlers intact,
+which is why they are still counted and still described below. **19 member
+commands are actually reachable, and 12 in-game** (`lfg`, `runs` and `events`
+leave that surface with them). `COMMANDS.md` explains why each went. The rows
+below describe behaviour, not availability.
 
 ---
 
@@ -156,7 +157,23 @@ costs the bridge account nothing. The 30s cooldown and the transport's shared
 cache exist because a spammed `/g online` gets the bridge account silenced,
 which takes the whole relay down.
 
-### 2.6 Events & RSVP
+### 2.6 Events & RSVP — **all four retired (`E-01`)**
+
+An event is one message now. It is posted into the events channel when the event
+is created, it carries the roster and the three RSVP buttons while signups are
+open, it becomes the standings in place when the event starts, and it is edited
+once more into the result. Nothing has to be listed, quoted by id, or asked
+about, so the four commands that did those things have no question left to
+answer: the channel answers `/events` and `/attendance` without being asked,
+the buttons answer `/rsvp`, and creation moved to the panel — the only surface
+that can offer the activity choice this command could not.
+
+Marking who actually *turned up*, as opposed to who said they would, is a
+different question and a staff one. It stays on the panel's events page, beside
+the tracker's own observations.
+
+The rows below describe what the handlers still do, since they are flagged
+rather than deleted.
 
 | Command | Options | CD | Cap | Purpose | Output |
 |---|---|---|---|---|---|
