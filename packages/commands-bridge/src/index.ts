@@ -37,6 +37,17 @@ export {
 } from "./render.js";
 export { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
 export {
+  HELP_NAMESPACE,
+  buildHelp,
+  buildLinkHelp,
+  groupCommands,
+  helpButtonReplies,
+  helpComponents,
+  renderHelpEmbed,
+  renderLinkHelpEmbed,
+  type HelpInput,
+} from "./help.js";
+export {
   PROGRESSION_NAMESPACE,
   RANGES,
   buildProgression,

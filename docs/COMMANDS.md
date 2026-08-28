@@ -18,12 +18,17 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 > ### Retired commands
 >
-> Twelve commands are flagged `enabled: false` and are **absent from Discord's
+> Thirteen commands are flagged `enabled: false` and are **absent from Discord's
 > command list**, from `/help`, and from guild chat. They are not deleted: the
 > handlers stay compiled and under test, and turning one back on is a one-line
-> change. Sections 2, 4 and 6 below still describe them, because what they did is
+> change. Sections 1, 2, 4 and 6 below still describe them, because what they did is
 > still what they would do.
 >
+> - **§1, `/verify`** — folded into `/link`. It existed because `/link` had
+>   failed, which made it a repair path reachable only by knowing a second
+>   command name; the usual outcome was a member concluding the bot was broken.
+>   `/link` with no IGN now does what `/verify` did — re-check the account on
+>   file — and says so in its own words rather than claiming a fresh link.
 > - **§2, progression** — `/goal`, `/progress`, `/snapshot`, merged into
 >   `/progression`. They were three commands around one loop and none of them
 >   named the other two, so the usual first experience of `/progress` was an
@@ -53,8 +58,8 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/link` | Link a Discord user to a Minecraft account by matching Hypixel's in-game social Discord field against the caller | Public | `ign` (string) | On match: success embed + role grant. On mismatch: instructions to set the Discord social link in-game (`/api`→profile→social) and rerun | IGN not found; **Hypixel social Discord field empty/unset** → reject; **social field ≠ caller** → reject; another user already owns this MC account | Live (resolve UUID + read Hypixel social field) + DB (create `LinkedAccount` `VERIFIED`) + Cache |
-| `/verify` | Re-run the Hypixel social check to (re)confirm or repair an existing/pending link | Public | `ign?` | Success embed + role sync, or the same mismatch guidance as `/link` | No account to verify; social field unset or mismatched | Live (re-check Hypixel social) + DB (set `VERIFIED`) + Cache |
+| `/link` | Link a Discord account to a Minecraft one, or re-check the link already on file when called with no IGN | Public | `ign?` (string) | On match: success embed + role grant. On mismatch: instructions to set the Discord social link in-game (`/api`→profile→social) and rerun | IGN not found; **Hypixel social Discord field empty/unset** → reject; **social field ≠ caller** → reject; another user already owns this MC account | Live (resolve UUID + read Hypixel social field) + DB (create `LinkedAccount` `VERIFIED`) + Cache |
+| `/verify` | *Retired — folded into `/link`, which re-checks when called with no IGN.* Re-run the Hypixel social check to (re)confirm or repair an existing/pending link | Public | `ign?` | Success embed + role sync, or the same mismatch guidance as `/link` | No account to verify; social field unset or mismatched | Live (re-check Hypixel social) + DB (set `VERIFIED`) + Cache |
 | `/unlink` | Remove a linked Minecraft account | Linked | `account?` (if multiple) | Confirmation embed | No linked account; not owner | DB (set `UNLINKED`) + Cache invalidation |
 | `/me` | Show the caller's own linked profile summary | Linked | *(none)* | Embed: IGN, selected profile, key stats, weight, networth | Not linked; no selected profile | Cache→Live + DB (selection) |
 | `/profile` | View any member's Skyblock profile overview | Public | `player?` (IGN/@mention), `profile?` | Embed: profile summary for target | Player not found; profile API disabled by target | Cache→Live |
@@ -194,9 +199,22 @@ staff configuration (`PLATFORM_EXPANSION_PLAN.md` §4).
 
 ## 7. Member Bot — Meta
 
+`/help` is generated, not written. It reads `buildBridgeRegistry()` and groups by
+each spec's `category`, so a retired command cannot appear (it is filtered by the
+same `enabled` flag that deregisters it from Discord) and a new one appears as
+soon as it declares a category — which `help.test.ts` requires of every reachable
+spec. The hand-written list it replaced named `/verify`, which no longer exists,
+and omitted everything added after it was typed.
+
+Its one button answers "how do I link?" with the platform's written steps plus
+whatever the guild has configured on **Settings → Link walkthrough** — usually a
+recording of the Hypixel social setting, which is where new members actually get
+stuck. Both halves are optional; a guild that configures nothing still gets the
+steps.
+
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/help` | List commands / show help for one | Public | `command?` | Embed: command catalog or detail | Unknown command | Static + DB (feature flags to hide disabled cmds) |
+| `/help` | The member surface, grouped, built from the registry | Public | — | Embed: six category fields, a headline naming the caller's next step, and a "How do I link?" button | — | Static (the built registry) + DB (link state, the guild's link walkthrough) |
 | `/online` | Who's in the guild right now, by rank | Public | — | Embed: rank sections + online/total counts | Bridge offline (temporary); no in-game bridge configured (permanent) — reported separately | In-game `/g online` via the bridge session (20s shared cache) |
 
 `/online` reads the **live** roster from the Mineflayer session rather than the

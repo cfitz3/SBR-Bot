@@ -19,12 +19,12 @@ Sources of truth for this file:
 Counted from the built registries rather than by hand; the section tables below
 have drifted behind them and are being brought up to date a slice at a time.
 
-**Twelve of the 54 are retired** (`enabled: false`): `/goal`, `/progress`,
-`/snapshot`, `/missing`, `/nextupgrade`, `/whatnext`, `/lfg`, `/runs`,
-`/joinrun`, `/leaverun`, `/editrun`, `/closerun`. They are absent from Discord's
+**Thirteen of the 54 are retired** (`enabled: false`): `/verify`, `/goal`,
+`/progress`, `/snapshot`, `/missing`, `/nextupgrade`, `/whatnext`, `/lfg`,
+`/runs`, `/joinrun`, `/leaverun`, `/editrun`, `/closerun`. They are absent from Discord's
 registry, refused by the dispatcher, and silent in guild chat — but still in
 `buildBridgeRegistry()` with their handlers intact, which is why they are still
-counted and still described below. **42 member commands are actually reachable,
+counted and still described below. **41 member commands are actually reachable,
 and 23 in-game** (`lfg` and `runs` leave that surface with them; the three
 progression commands are replaced there by `/progression`, one where there were
 three). `COMMANDS.md` explains why each went. The rows below describe behaviour,
@@ -81,8 +81,8 @@ line — the text is what the in-game surface renders.
 
 | Command | Options | CD | Purpose | Output |
 |---|---|---|---|---|
-| `/link` | `ign*` | 10s | Bind a Discord account to an IGN by matching Hypixel's Discord social field against the caller's handle | Ephemeral `Linked to {ign}. ✅`, or the specific link failure (social unset, mismatch, already owned) |
-| `/verify` | `ign?` | 10s | Re-run the same social check; with no argument it re-checks the account already on file — the repair path for a stale link | Ephemeral `Verified as {ign}. ✅`, or `Nothing to verify — use /link <ign> first.` |
+| `/link` | `ign?` | 10s | With an IGN, bind a Discord account to it by matching Hypixel's Discord social field against the caller's handle. With none, re-check the account already on file — what `/verify` did | Ephemeral `Linked to **{ign}**.`, `Still linked as **{ign}** — the check passed.` on a re-check, the linking steps when there is neither a link nor an IGN, or the specific link failure (social unset, mismatch, already owned) |
+| `/verify` | `ign?` | 10s | **Retired** — folded into `/link`. Re-ran the same social check; with no argument it re-checks the account already on file — the repair path for a stale link | Ephemeral `Verified as {ign}. ✅`, or `Nothing to verify — use /link <ign> first.` |
 | `/unlink` | — | 10s | Drop the caller's linked account | Ephemeral `Unlinked {ign}.` |
 | `/me` | — | 10s | The caller's own summary; never accepts a player | **Ephemeral** stats embed (skills, slayers, dungeons, networth, and — when XP is wired — a guild standing line reading level, total XP and tenure) |
 | `/profile` | `player?` `profile?` | 10s | With `profile:` shows that one; without, lists every profile on the account so the member can see what `/setprofile` accepts | Profile embed, or profile-list embed |
@@ -137,7 +137,7 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 
 | Command | Options | CD | Purpose | Output |
 |---|---|---|---|---|
-| `/help` | — | 3s | Static catalog, grouped Account / Stats / Optimize / Market / Guild / Events / Groups / Help | Ephemeral 8-line list |
+| `/help` | — | 3s | Read off `buildBridgeRegistry()` and grouped by each spec's `category` into six buckets: Your account / Your numbers / The market / The guild / Events / Everything else. Retired commands are filtered by the same `enabled` flag that deregisters them | Ephemeral card, headline naming the caller's next step (link, or that they already have), plus a "How do I link?" button showing the platform's steps and the guild's configured walkthrough |
 | `/online` | — | 30s | Guild roster read live from the Mineflayer session (the Hypixel guild endpoint carries no presence) | Roster embed by rank. **Two failures kept distinct**: no bridge configured here (permanent) vs bridge offline right now (retryable) |
 | `/standing` | `member?` (user) | 10s | Guild XP, level, rank and the per-source breakdown behind it | Standing embed; text `{name}: level N ({xp} xp)`. **Public for yourself, ephemeral for anyone else** |
 
@@ -352,11 +352,10 @@ the code treats it as a member capability. The web panel sides with the spec —
 every `event.*` mutation is OFFICER-tier there — so the same action
 currently has two different bars depending on the surface.
 
-### 5.4 Option drift (8)
+### 5.4 Option drift (7)
 
 | Command | Difference |
 |---|---|
-| `/help` | Spec has `command?` for per-command help; code is a fixed list |
 | `/unlink` | Spec has `account?`; code always unlinks the one on file |
 | `/events` | Spec has `range?`; code always returns the upcoming list |
 | `/auctions` | Spec errors on neither/both args; code prefers `item:` and defaults to the caller |
@@ -381,7 +380,7 @@ currently has two different bars depending on the surface.
 
 ### 5.6 Consistent (worth keeping)
 
-`/link` and `/verify` social-field semantics, the `/mute` cross-surface
+`/link`'s social-field semantics (`/verify`'s too, now that it is the same handler), the `/mute` cross-surface
 contract, the `/purge` Discord limits, `/online`'s two distinct failures and its
 Discord-only stance, in-game truncation and per-IGN cooldowns, cooldown key
 shape, and `CommandUsage` on every invocation all match the spec as written.

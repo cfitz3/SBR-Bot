@@ -446,6 +446,7 @@ export function communitySpecs(): readonly CommandSpec[] {
   return [
     {
       name: "events",
+      category: "EVENTS",
       description: "Upcoming guild events",
       cooldownMs: 10_000,
       inGame: true,
@@ -453,6 +454,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "create-event",
+      category: "EVENTS",
       description: "Schedule a guild event",
       options: [
         { name: "title", description: "Event name", type: "string", required: true },
@@ -485,6 +487,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "rsvp",
+      category: "EVENTS",
       description: "Respond to a guild event",
       options: [
         EVENT_ID_OPTION,
@@ -504,6 +507,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "attendance",
+      category: "EVENTS",
       description: "Who has responded to an event",
       options: [EVENT_ID_OPTION],
       cooldownMs: 10_000,
@@ -511,6 +515,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "lfg",
+      category: "GUILD",
       description: "Start a looking-for-group post",
       options: [
         { name: "activity", description: "What you're running", type: "string", required: true, choices: ACTIVITY_CHOICES },
@@ -541,6 +546,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "runs",
+      category: "GUILD",
       description: "Open looking-for-group posts",
       options: [{ name: "activity", description: "Filter by activity", type: "string", choices: ACTIVITY_CHOICES }],
       cooldownMs: 10_000,
@@ -556,6 +562,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "joinrun",
+      category: "GUILD",
       description: "Take a slot in an open run",
       options: [{ name: "id", description: "Run id (shown by /runs)", type: "string", required: true }],
       cooldownMs: 5_000,
@@ -570,6 +577,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "leaverun",
+      category: "GUILD",
       description: "Give up your slot in a run",
       options: [{ name: "id", description: "Run id", type: "string", required: true }],
       cooldownMs: 5_000,
@@ -584,6 +592,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "editrun",
+      category: "GUILD",
       description: "Change your run's headline, notes or party size",
       options: [
         { name: "id", description: "Run id", type: "string", required: true },
@@ -604,6 +613,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "closerun",
+      category: "GUILD",
       description: "Close your run early",
       options: [{ name: "id", description: "Run id", type: "string", required: true }],
       capability: "RUN_COMMAND",
@@ -619,6 +629,7 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "ticket",
+      category: "EXTRAS",
       description: "Open, list or close a support ticket",
       options: [
         {

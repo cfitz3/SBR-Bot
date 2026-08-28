@@ -168,6 +168,7 @@ export function infoSpecs(): CommandSpec[] {
   return [
     {
       name: "userinfo",
+      category: "EXTRAS",
       description: "Discord account details for a member",
       options: [MEMBER_OPTION],
       cooldownMs: 5_000,
@@ -175,12 +176,14 @@ export function infoSpecs(): CommandSpec[] {
     },
     {
       name: "serverinfo",
+      category: "EXTRAS",
       description: "This Discord server at a glance",
       cooldownMs: 10_000,
       handler: serverinfo,
     },
     {
       name: "avatar",
+      category: "EXTRAS",
       description: "Someone's Discord avatar, full size",
       options: [MEMBER_OPTION],
       cooldownMs: 5_000,

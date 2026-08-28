@@ -11,7 +11,8 @@
  * because a gallery built only from tidy data proves the renderers work on data
  * we never see.
  */
-import type { EventBoardView, EventReminderView } from "@sbr/commands-bridge";
+import type { CommandSpec, EventBoardView, EventReminderView } from "@sbr/commands-bridge";
+import type { LinkHelpPolicy } from "@sbr/guild-config";
 import type {
   AccessoryReportDTO,
   AuctionListingDTO,
@@ -1095,4 +1096,52 @@ export const LEVEL_UP_JUMP: PendingLevelUpDTO = {
   fromLevel: 12,
   toLevel: 15,
   totalXp: 31_250,
+};
+
+/**
+ * A stand-in registry for the `/help` card.
+ *
+ * Fixed rather than the real `buildBridgeRegistry()` for the reason every other
+ * fixture here is fixed: the gallery is a check on rendering, and a card whose
+ * contents change every time somebody adds a command would make every diff of
+ * the rendered output unreadable. What it does reproduce is the shape that
+ * matters — every category populated, one long bucket, and a retired command
+ * that must not appear.
+ */
+export const HELP_SPECS: readonly CommandSpec[] = [
+  "link:ACCOUNT",
+  "unlink:ACCOUNT",
+  "profile:ACCOUNT",
+  "progression:PROGRESS",
+  "skills:PROGRESS",
+  "dungeons:PROGRESS",
+  "slayers:PROGRESS",
+  "networth:PROGRESS",
+  "price:MARKET",
+  "bazaar:MARKET",
+  "auctions:MARKET",
+  "lowestbin:MARKET",
+  "roster:GUILD",
+  "leaderboard:GUILD",
+  "standing:GUILD",
+  "events:EVENTS",
+  "lfg:EVENTS",
+  "remind:EXTRAS",
+  "tag:EXTRAS",
+  "health:EXTRAS",
+].map((entry) => {
+  const [name, category] = entry.split(":") as [string, "ACCOUNT"];
+  return {
+    name,
+    category,
+    description: name,
+    cooldownMs: 0,
+    handler: async () => ({ ephemeral: true, text: "" }),
+  } satisfies CommandSpec;
+});
+
+/** A guild that has recorded the linking steps and written a note under them. */
+export const LINK_HELP: LinkHelpPolicy = {
+  image: "https://cdn.example.com/sbr/link-walkthrough.gif",
+  body: "The API option is under Settings → My Profile → API Settings. Ask in #support if it isn't there.",
 };

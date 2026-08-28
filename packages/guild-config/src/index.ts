@@ -52,3 +52,11 @@ export {
   validateProgressionPolicy,
   type ProgressionPolicy,
 } from "./progression.js";
+export {
+  DEFAULT_LINK_HELP,
+  LINK_HELP_SETTING_KEY,
+  MAX_LINK_HELP_BODY,
+  parseLinkHelp,
+  validateLinkHelp,
+  type LinkHelpPolicy,
+} from "./link-help.js";

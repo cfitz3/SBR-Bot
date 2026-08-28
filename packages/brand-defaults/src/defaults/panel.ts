@@ -1540,6 +1540,17 @@ export const DEFAULT_PANEL = {
     cardChannels: "Channels",
     cardFeatures: "Feature flags",
     cardScreening: "Join screening",
+    cardLinkHelp: "Link walkthrough",
+    linkHelpImageLabel: "Image or clip",
+    linkHelpImagePlaceholder: "https://…",
+    linkHelpImageHint:
+      "Shown under the linking steps when a member presses \"How do I link?\" on /help. A recording of the Hypixel setting works better than a screenshot. Leave empty for none.",
+    linkHelpImageError: "The image must be an https link.",
+    linkHelpBodyLabel: "Extra instructions",
+    linkHelpBodyHint:
+      "Added under the platform's steps, not instead of them — anything specific to this guild. Leave empty for none.",
+    linkHelpBodyPlaceholder: "Ask in #support if the API option is missing.",
+    linkHelpSave: "Save walkthrough",
     channelUnset: "not set",
     suspendLabel: "Suspend the Discord ↔ in-game bridge",
     suspendHint: "Stops relaying in both directions without taking the bot offline. Commands keep working.",

@@ -11,6 +11,7 @@ import type {
   CommandSurface,
   CommunityService,
   DiscordDirectory,
+  HelpCategory,
   ReminderPort,
   TicketConfigService,
   TicketTagDTO,
@@ -242,6 +243,17 @@ export interface CommandSpec {
   readonly description: string;
   readonly options?: readonly CommandOptionSpec[];
   readonly capability?: BridgeCapability;
+  /**
+   * Which `/help` group the command is listed under.
+   *
+   * On the spec rather than in a list beside `/help`, for the reason this whole
+   * interface exists: a separate map is a second source of truth that goes stale
+   * the first time somebody adds a command and does not think about the help
+   * card. `help.test.ts` asserts every reachable command declares one, so
+   * forgetting it fails a test instead of quietly dropping the command out of
+   * the only list members read.
+   */
+  readonly category?: HelpCategory;
   readonly cooldownMs: number;
   /**
    * Reachable from in-game guild chat as `!name`. Off by default: guild chat

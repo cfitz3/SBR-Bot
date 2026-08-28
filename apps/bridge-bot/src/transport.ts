@@ -22,10 +22,12 @@ import {
 } from "discord.js";
 import { createBot, type Bot } from "mineflayer";
 import {
+  HELP_NAMESPACE,
   PROGRESSION_NAMESPACE,
   buildBridgeRegistry,
   buildProgression,
   communityButtonReplies,
+  helpButtonReplies,
   parseRsvpState,
   progressionButtonReplies,
   readLevelOptOuts,
@@ -177,6 +179,26 @@ export function registerCommunityButtons(app: BridgeApp, components: ComponentRo
     const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
     const reply = await communityButtonReplies.run(postId, interaction.user.id, action, guildId, app.handlerDeps);
     await interaction.reply({ content: reply.text, ephemeral: true });
+  });
+}
+
+/**
+ * The "How do I link?" button under `/help`.
+ *
+ * It replies rather than updating the help card, because the two answer
+ * different questions and a member who pressed for the linking steps still
+ * wants the command list they were reading. Ephemeral for the same reason the
+ * card is: this is a new member's first minute, not guild chatter.
+ */
+export function registerHelpButton(app: BridgeApp, components: ComponentRouter): void {
+  components.register(HELP_NAMESPACE, async (interaction) => {
+    const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
+    if (guildId === null) {
+      await interaction.reply({ content: "This server isn't registered with the platform.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const reply = await helpButtonReplies.link(guildId, app.handlerDeps);
+    await interaction.reply({ ...replyOptions(reply), flags: MessageFlags.Ephemeral });
   });
 }
 
@@ -585,6 +607,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   });
   registerCommunityButtons(app, components);
   registerProgressionControls(app, components);
+  registerHelpButton(app, components);
 
   // Tickets. Built here rather than in the composition root because every one
   // of its side effects needs the live client, and registered against the same

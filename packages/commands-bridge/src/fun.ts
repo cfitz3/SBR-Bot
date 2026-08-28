@@ -300,6 +300,7 @@ export function funSpecs(): readonly CommandSpec[] {
   return [
     {
       name: "8ball",
+      category: "EXTRAS",
       description: "Ask the magic 8-ball",
       options: [{ name: "question", description: "What you want to know", type: "string", required: true }],
       cooldownMs: 8_000,
@@ -308,6 +309,7 @@ export function funSpecs(): readonly CommandSpec[] {
     },
     {
       name: "roll",
+      category: "EXTRAS",
       description: "Roll dice — 100, d20, 2d6",
       options: [{ name: "dice", description: "What to roll (default 100)", type: "string" }],
       cooldownMs: 5_000,
@@ -316,6 +318,7 @@ export function funSpecs(): readonly CommandSpec[] {
     },
     {
       name: "coinflip",
+      category: "EXTRAS",
       description: "Flip a coin",
       cooldownMs: 5_000,
       inGame: true,
@@ -323,6 +326,7 @@ export function funSpecs(): readonly CommandSpec[] {
     },
     {
       name: "rps",
+      category: "EXTRAS",
       description: "Rock, paper, scissors",
       options: [
         {
@@ -343,6 +347,7 @@ export function funSpecs(): readonly CommandSpec[] {
     },
     {
       name: "guildquote",
+      category: "EXTRAS",
       description: "A quote from the guild's collection",
       cooldownMs: 15_000,
       inGame: true,
@@ -350,6 +355,7 @@ export function funSpecs(): readonly CommandSpec[] {
     },
     {
       name: "rank",
+      category: "EXTRAS",
       description: "Your entirely unofficial vibe rank",
       options: [{ name: "player", description: "Whose rank (default yours)", type: "string" }],
       cooldownMs: 10_000,
@@ -358,6 +364,7 @@ export function funSpecs(): readonly CommandSpec[] {
     },
     {
       name: "cringe",
+      category: "EXTRAS",
       description: "Add one to somebody's cringe tally",
       options: [{ name: "player", description: "Minecraft username", type: "string", required: true }],
       cooldownMs: 15_000,

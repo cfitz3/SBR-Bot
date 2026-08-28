@@ -210,6 +210,7 @@ export function permSpecs(): readonly CommandSpec[] {
   return [
     {
       name: "perm",
+      category: "GUILD",
       description: "Standing parties — create one, see a roster, add or drop people",
       options: [
         {

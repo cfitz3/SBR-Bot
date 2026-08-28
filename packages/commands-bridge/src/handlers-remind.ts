@@ -144,6 +144,7 @@ export function reminderSpecs(): CommandSpec[] {
   return [
     {
       name: "remind",
+      category: "EXTRAS",
       description: "Have me remind you about something later",
       options: [
         {
@@ -164,6 +165,7 @@ export function reminderSpecs(): CommandSpec[] {
     },
     {
       name: "reminders",
+      category: "EXTRAS",
       description: "Your pending reminders",
       options: [
         {

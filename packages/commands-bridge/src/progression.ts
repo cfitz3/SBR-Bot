@@ -488,6 +488,7 @@ export function progressionSpecs(): CommandSpec[] {
   return [
     {
       name: "progression",
+      category: "PROGRESS",
       description: "Your progress over time, your goals, and the markers behind both",
       options: [
         {
