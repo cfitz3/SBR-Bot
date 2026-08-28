@@ -28,6 +28,7 @@
     { "path": "packages/analytics" },
     { "path": "packages/commands-bridge" },
     { "path": "packages/commands-admin" },
+    { "path": "packages/embed-kit" },
     { "path": "packages/discord-kit" },
     { "path": "packages/embed-gallery" },
     { "path": "packages/panel-core" },

@@ -3,10 +3,16 @@
  * reject wholesale. Every current call site clamps its own lists, so these cover
  * the floor underneath them rather than any live caller.
  */
+import { theme } from "@sbr/brand";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ActionRowView, SelectMenuView } from "@sbr/shared-types";
-import { replyOptions, toActionRow } from "./render.js";
+import type { ActionRowView, EmbedView, SelectMenuView } from "@sbr/shared-types";
+import { replyOptions, toActionRow, toEmbed } from "./render.js";
+
+/** A card that passes cleanly, so each case below differs in exactly one way. */
+function clean(over: Partial<EmbedView> = {}): EmbedView {
+  return { title: "Roster", description: "42 members", color: "INFO", ...over };
+}
 
 function buttons(count: number): ActionRowView {
   return {
@@ -80,4 +86,35 @@ test("every reply suppresses mentions, whatever the text says", () => {
   const options = replyOptions({ text: "@everyone welcome", ephemeral: false });
   assert.deepEqual(options.allowedMentions, { parse: [] });
   assert.equal(options.content, "@everyone welcome");
+});
+
+test("a rendered embed takes its colour from the palette", () => {
+  // `render.ts` used to hold a third copy of these five numbers. This asserts it
+  // is reading the shared one, at the only place the value can be observed.
+  const embed = toEmbed({ title: "Card", color: "DANGER" });
+  assert.equal(embed.data.color, theme.embed.colors.DANGER);
+});
+
+test("an embed with no stated colour falls back to NEUTRAL", () => {
+  assert.equal(toEmbed({ title: "Card" }).data.color, theme.embed.colors.NEUTRAL);
+});
+
+test("toEmbed carries author, image and timestamp through to discord.js", () => {
+  const embed = toEmbed(
+    clean({
+      author: { name: "Aria", iconUrl: "https://mc-heads.net/avatar/abc" },
+      imageUrl: "https://example.com/graph.png",
+      timestamp: "2026-08-06T11:00:00.000Z",
+    }),
+  ).toJSON();
+  assert.equal(embed.author?.name, "Aria");
+  assert.equal(embed.image?.url, "https://example.com/graph.png");
+  assert.equal(embed.timestamp, new Date("2026-08-06T11:00:00.000Z").toISOString());
+});
+
+test("toEmbed drops an unparseable timestamp rather than throwing the reply away", () => {
+  // The checker flags it; the renderer must still send a card, because a member
+  // asked a question and a missing age is not a reason to answer nothing.
+  assert.doesNotThrow(() => toEmbed(clean({ timestamp: "yesterday" })));
+  assert.equal(toEmbed(clean({ timestamp: "yesterday" })).toJSON().timestamp, undefined);
 });

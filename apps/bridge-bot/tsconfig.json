@@ -18,6 +18,7 @@
     { "path": "../../packages/hypixel" },
     { "path": "../../packages/identity" },
     { "path": "../../packages/leaderboards" },
+    { "path": "../../packages/embed-kit" },
     { "path": "../../packages/discord-kit" },
     { "path": "../../packages/moderation" },
     { "path": "../../packages/observability" },
