@@ -7,6 +7,8 @@ export {
   authorize,
   authorizeRole,
   PAGE_TIERS,
+  PANEL_ACCESS_FLOOR,
+  managesInDiscord,
   type PanelSession,
   type PanelPage,
   type AccessDecision,

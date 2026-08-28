@@ -13,7 +13,7 @@ export const DEFAULT_ERRORS = {
   deny: {
     NOT_AUTHENTICATED: "Sign in with Discord to continue.",
     NOT_MANAGEABLE:
-      "You don't have Manage Server on this Discord guild, or the platform doesn't know about it yet.",
+      "This server isn't yours to manage. Panel access needs Manage Server in Discord, or moderator rank here.",
     INSUFFICIENT_ROLE: "Your role in this guild doesn't reach the tier this page requires.",
   },
 

@@ -16,7 +16,15 @@ import {
   type XpService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
-import { authorize, type PanelSession, type RoleResolver } from "./access.js";
+import {
+  authorize,
+  managesInDiscord,
+  PAGE_TIERS,
+  PANEL_ACCESS_FLOOR,
+  type PanelSession,
+  type RoleResolver,
+} from "./access.js";
+import { rankOfRole } from "@sbr/shared-types";
 import type {
   CommandCatalog,
   DirectoryMemberRow,
@@ -75,6 +83,42 @@ test("settings requires ADMIN: OFFICER denied, ADMIN allowed", async () => {
   assert.equal(officer.allowed, false);
   const admin = await authorize(session(), "g1", "settings", roles({ "111": "ADMIN" }));
   assert.equal(admin.allowed, true);
+});
+
+test("a staff session that Discord does not vouch for still reaches its pages", async () => {
+  // The whole point of gate one's second route. Before it, this session did not
+  // exist: a moderator without Manage Server signed in to an empty selector.
+  const staffOnly = session({ manageableGuildIds: ["g1"], discordManagedGuildIds: [] });
+  const d = await authorize(staffOnly, "g1", "overview", roles({ "111": "MODERATOR" }));
+  assert.equal(d.allowed, true);
+  // ...and gate two still holds them out of the configuration pages.
+  const settings = await authorize(staffOnly, "g1", "settings", roles({ "111": "MODERATOR" }));
+  assert.equal(settings.allowed, false);
+});
+
+test("a session minted before the split reads as Discord-managed", () => {
+  // Those sessions were built from MANAGE_GUILD and nothing else, so treating
+  // the old field as the Discord set is accurate rather than lenient. Reading
+  // it as *empty* would be the unsafe direction in the other sense: it would
+  // sign every current server manager out of the Discord-authority decisions
+  // mid-session, on a deploy, with no way to tell why.
+  assert.equal(managesInDiscord(session({ manageableGuildIds: ["g1"] }), "g1"), true);
+  assert.equal(managesInDiscord(session({ manageableGuildIds: ["g1"] }), "g2"), false);
+});
+
+test("the Discord set is not widened by the staff set", () => {
+  const staffOnly = session({ manageableGuildIds: ["g1"], discordManagedGuildIds: [] });
+  assert.equal(managesInDiscord(staffOnly, "g1"), false);
+});
+
+test("no page asks for less than the floor that admits a session", () => {
+  // A page tier under PANEL_ACCESS_FLOOR is unreachable-by-construction, which
+  // is fine, but it must not be read as a promise the panel is not keeping.
+  // `leaderboard` is the deliberate exception and says so where it is defined.
+  for (const [page, tier] of Object.entries(PAGE_TIERS)) {
+    if (page === "leaderboard") continue;
+    assert.ok(rankOfRole(tier) >= rankOfRole(PANEL_ACCESS_FLOOR), `${page} is ${tier}`);
+  }
 });
 
 // ── page data ──
