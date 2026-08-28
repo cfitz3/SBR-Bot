@@ -242,11 +242,25 @@ has had to look at them.
    marked **only if the queue took the command** — a backlog that dropped it
    leaves the request PENDING for staff rather than recording an accept that
    never happened. On REVIEW it does nothing and waits.
-6. **Report.** A full report goes to the `staff` channel. Guild chat gets at most
-   a neutral line.
+6. **Notify.** A join-notice card goes to the `staff` channel
+   (`renderJoinNoticeEmbed`, in `@sbr/screening`): the applicant in the author
+   row, the verdict and risk score in the headline, and four fields — what the
+   account looks like, what we found, what this guild already knew, and how long
+   is left. Guild chat still gets at most a neutral line.
+
+   **Only a notice that still wants a human is announced like one.** A request
+   held for review, or one whose account could not be resolved at all, carries
+   the Accept / Deny buttons *and* pings staff by role; an auto-accepted or
+   auto-denied request is the same card with neither, because it is a record of
+   something already done and a ping for it teaches staff to ignore the channel.
+   The ping targets the *lowest* staff level that has a role bound in
+   `roleMappings` — Moderator before Officer before Admin before Owner — since
+   pinging the smallest group is pinging the people least likely to be watching;
+   every role bound at that level is mentioned. A guild that has bound no staff
+   roles gets the notice unpinged rather than not at all.
 7. **Decide, by hand, inside five minutes.** Anything left PENDING — which is
    everything, when `autoAccept` is off — is answered either from the Accept /
-   Deny buttons on the staff report, or from Discord with `/join-queue`,
+   Deny buttons on the join notice, or from Discord with `/join-queue`,
    `/join-accept` and `/join-deny` (see `ADMIN_BOT.md`). The slash commands
    publish a `GAME_COMMAND` over the mod bus for this bot to type; the buttons
    are handled in-process, since they are already running here. Because that bus

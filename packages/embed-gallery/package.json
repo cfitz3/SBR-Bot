@@ -21,6 +21,7 @@
     "@sbr/commands-admin": "*",
     "@sbr/commands-bridge": "*",
     "@sbr/discord-kit": "*",
+    "@sbr/screening": "*",
     "@sbr/shared-types": "*"
   }
 }

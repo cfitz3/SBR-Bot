@@ -54,13 +54,17 @@ import {
   JoinQueueService,
   chatLine,
   formatRemaining,
+  needsStaffDecision,
   remainingWindowMs,
-  staffReport,
+  renderJoinNoticeEmbed,
   type AdmitResult,
   type JoinActionFailure,
   type JoinActionResult,
+  type JoinNoticeView,
 } from "@sbr/screening";
-import type { ActionRowView } from "@sbr/shared-types";
+import { parseRoleBindings } from "@sbr/guild-config";
+import type { ActionRowView, MemberRole } from "@sbr/shared-types";
+
 import { eventJobRepository, guildRepository } from "@sbr/db";
 import { TicketGateway } from "./tickets.js";
 import {
@@ -75,6 +79,42 @@ import { RoleMenuGateway } from "./role-menus.js";
 import { registerRoleMenuComponents, roleMenuMessagePort } from "./role-menus-discord.js";
 import { createBridgeRoleEffector } from "./role-effector.js";
 import { createDiscordDirectory } from "./directory.js";
+
+/**
+ * Who gets pinged about a request that needs a human, most-preferred first.
+ *
+ * Lowest authority first on purpose — see `staffPing`. Owner is last rather
+ * than absent so a one-person guild that has only mapped its own role still
+ * gets told, instead of being silently treated as having no staff.
+ */
+const STAFF_PING_ORDER: readonly MemberRole[] = ["MODERATOR", "OFFICER", "ADMIN", "OWNER"];
+
+/**
+ * Whom to pull in when a join request needs a human.
+ *
+ * The lowest staff level that has a Discord role bound to it, because a notice
+ * that needs *somebody* wants the widest staff audience — pinging Admin when
+ * Moderator exists narrows the pool to the people least likely to be reading
+ * the channel at 2am. Every id bound at that level is mentioned: a guild that
+ * maps two roles to Moderator means both, and picking one would be picking a
+ * half of its staff at random.
+ *
+ * Null when nothing is mapped, and the notice then goes out unpinged rather
+ * than not at all — a guild that has not configured its roles still gets the
+ * card, it just has nobody to address it to.
+ *
+ * Pure, and exported, because the ordering is the part worth testing and
+ * everything around it is a Discord send.
+ */
+export function staffPing(
+  bindings: Readonly<Record<MemberRole, readonly string[]>>,
+): { text: string; roleIds: string[] } | null {
+  for (const level of STAFF_PING_ORDER) {
+    const ids = bindings[level];
+    if (ids.length > 0) return { text: ids.map((id) => `<@&${id}>`).join(" "), roleIds: [...ids] };
+  }
+  return null;
+}
 
 export interface GuildChatLine {
   readonly name: string;
@@ -1403,15 +1443,19 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   }
 
   /**
-   * The deadline, as Discord's own relative timestamp.
+   * The deadline, measured from when we saw the request.
    *
-   * Rendered client-side, so it keeps counting down in a channel nobody is
-   * refreshing — which is the whole point. Measured from when we saw the
-   * request rather than from the stored row: the two are within a second of
+   * From chat rather than from the stored row: the two are within a second of
    * each other, and this path has to work when there is no row at all.
    */
-  function deadlineLine(seenAt: number): string {
-    return `Expires <t:${Math.floor((seenAt + JOIN_WINDOW_MS) / 1_000)}:R> — after that they can only be invited.`;
+  function deadlineAt(seenAt: number): number {
+    return seenAt + JOIN_WINDOW_MS;
+  }
+
+  /** The roles to address a pending notice to, read fresh from guild config. */
+  async function staffMention(guildId: string): Promise<{ text: string; roleIds: string[] } | null> {
+    const config = await app.handlerDeps.config.get(guildId).catch(() => null);
+    return staffPing(parseRoleBindings(config?.ok ? (config.value?.roleMappings ?? null) : null));
   }
 
   /**
@@ -1442,15 +1486,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     if (!resolved) {
       app.log.warn("join event for an unresolvable name — not screened", { ign: event.ign, kind: event.kind });
       if (event.kind !== "JOINED") {
-        await postStaffReport(
-          guildId,
-          [
-            `**Join request from ${event.ign}.**`,
-            "We couldn't look up that account, so no screening ran — decide from what you know.",
-            deadlineLine(seenAt),
-          ].join("\n"),
-          [joinControls(event.ign)],
-        );
+        await postJoinNotice(guildId, {
+          kind: "UNSCREENED",
+          ign: event.ign,
+          uuid: null,
+          screening: null,
+          deadlineAt: deadlineAt(seenAt),
+          seenAt,
+        });
       }
       return;
     }
@@ -1467,7 +1510,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
 
     if (event.kind === "JOINED") {
       await app.screening.decide(id, "JOINED", "AUTO");
-      await postStaffReport(guildId, `**${resolved.ign} joined the guild.**\n${staffReport(screening)}`);
+      await postJoinNotice(guildId, {
+        kind: "JOINED",
+        ign: resolved.ign,
+        uuid: resolved.uuid,
+        screening,
+        deadlineAt: null,
+        seenAt,
+      });
       // The staff report is the record; this is the greeting, and it is the
       // guild's to switch on. Best effort on purpose — a welcome that did not
       // land must not make the platform think the join went unhandled.
@@ -1528,41 +1578,58 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       sayInGuildChat(bot, chatLine(screening), true);
     }
 
-    // Buttons only on a request still waiting for an answer. Offering them on
-    // one we have already answered invites a second command against a row that
-    // is no longer PENDING, which Hypixel refuses — loudly, in guild chat.
-    const heading = shouldAccept
-      ? `**Auto-accepted ${resolved.ign}.**`
-      : `**Join request from ${resolved.ign} — ${screening.verdict.toLowerCase()}.**`;
-    const lines = answered ? [heading] : [heading, deadlineLine(seenAt)];
-    await postStaffReport(
-      guildId,
-      [...lines, staffReport(screening)].join("\n"),
-      answered ? undefined : [joinControls(resolved.ign)],
-    );
+    // The kind is what we did, not what the policy thought. A DENY verdict
+    // whose command could not be queued is still waiting for a human, and
+    // labelling it "denied" would take the buttons off the one notice that
+    // needs them.
+    await postJoinNotice(guildId, {
+      kind: shouldAccept ? "ACCEPTED" : answered ? "DENIED" : "REVIEW",
+      ign: resolved.ign,
+      uuid: resolved.uuid,
+      screening,
+      // Buttons and a deadline only on a request still waiting for an answer.
+      // Offering them on one we have already answered invites a second command
+      // against a row that is no longer PENDING, which Hypixel refuses —
+      // loudly, in guild chat.
+      deadlineAt: answered ? null : deadlineAt(seenAt),
+      seenAt,
+    });
   }
 
   /**
-   * Post to the guild's `staff` channel. Silent when the slot is unbound: a
-   * guild that has not configured one still gets screening, recorded and
-   * decided, it just has nowhere for the write-up to go.
+   * Post a join notice to the guild's `staff` channel.
+   *
+   * Silent when the slot is unbound: a guild that has not configured one still
+   * gets screening, recorded and decided, it just has nowhere for the write-up
+   * to go.
+   *
+   * Two things separate a notice that needs a decision from one that is the
+   * record. It carries the Accept / Deny buttons, and it pings staff by role.
+   * The ping is the point of the slice: a five-minute window is not something
+   * anybody meets by happening to look at a channel, and a notice that needed a
+   * human but pinged nobody was, in practice, a notice that expired. The
+   * auto-decided ones deliberately stay quiet — they are a log, and a log that
+   * pings is a log people mute.
    */
-  async function postStaffReport(
-    guildId: string,
-    content: string,
-    components?: readonly ActionRowView[],
-  ): Promise<void> {
+  async function postJoinNotice(guildId: string, view: JoinNoticeView): Promise<void> {
     const channelId = await app.handlerDeps.config.getChannel(guildId, "staff");
     if (!channelId) return;
     const channel = await discord.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isTextBased() || !("send" in channel)) return;
-    // The report quotes a stranger's IGN and a third-party listing reason,
-    // neither of which we control; mentions stay unparsed.
+
+    const wanted = needsStaffDecision(view.kind);
+    const mention = wanted ? await staffMention(guildId) : null;
+
+    // The card quotes a stranger's IGN and a third-party listing reason,
+    // neither of which we control, so nothing in it is allowed to mention
+    // anybody. The staff roles are the one exception, and they are named
+    // explicitly rather than parsed out of the text.
     await channel
       .send({
-        content,
-        allowedMentions: { parse: [] },
-        ...(components?.length ? { components: components.map(toActionRow) } : {}),
+        embeds: [toEmbed(renderJoinNoticeEmbed(view))],
+        ...(mention === null ? {} : { content: mention.text }),
+        allowedMentions: mention === null ? { parse: [] } : { roles: mention.roleIds },
+        ...(wanted ? { components: [joinControls(view.ign)].map(toActionRow) } : {}),
       })
       .catch((e: unknown) => {
         app.log.warn("could not post screening report", { error: String(e) });

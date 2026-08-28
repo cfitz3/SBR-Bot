@@ -2,14 +2,20 @@
  * The gallery is only worth having if it is complete, so completeness is
  * measured rather than claimed.
  *
- * Both command packages are scanned for exported functions whose names say they
- * render a card, and every one of them must appear in `GALLERY`. A renderer
+ * Every package that draws a card is scanned for exported functions whose names
+ * say so, and every one of them must appear in `GALLERY`. The list is named
+ * here rather than inferred, because "a package that draws cards" is a fact
+ * about the architecture: most domain packages hand back data and let a command
+ * package render it, and the few that ship their own card — a join notice has
+ * no command behind it, only an event in guild chat — are exactly the ones a
+ * gallery built from the command surface alone would miss. A renderer
  * added next month with no fixture fails here — which is the moment to notice,
  * rather than the moment someone reports an embed Discord refused to send.
  */
 import * as admin from "@sbr/commands-admin";
 import * as bridge from "@sbr/commands-bridge";
 import { checkEmbeds } from "@sbr/discord-kit";
+import * as screening from "@sbr/screening";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -23,22 +29,28 @@ import { coveredRenderers, GALLERY, galleryCard } from "./index.js";
  */
 const RENDERER = /^render[A-Za-z]*(Embed|Pages)$/;
 
+const SOURCES: readonly Record<string, unknown>[] = [bridge, admin, screening];
+
 function renderersOf(mod: Record<string, unknown>): readonly string[] {
   return Object.keys(mod).filter((k) => RENDERER.test(k) && typeof mod[k] === "function");
 }
 
-test("every renderer both command packages export has at least one card", () => {
+function everyRenderer(): readonly string[] {
+  return SOURCES.flatMap((mod) => renderersOf(mod));
+}
+
+test("every renderer the card-drawing packages export has at least one card", () => {
   const covered = coveredRenderers();
-  const missing = [...renderersOf(bridge), ...renderersOf(admin)].filter((name) => !covered.has(name));
+  const missing = everyRenderer().filter((name) => !covered.has(name));
   assert.deepEqual(missing, [], `renderers with no gallery card: ${missing.join(", ")}`);
 });
 
 test("the gallery names no renderer that does not exist", () => {
   // The other direction: a renamed renderer leaves a card pointing at nothing,
   // and a card that renders nothing is worse than an absent one.
-  const real = new Set([...renderersOf(bridge), ...renderersOf(admin)]);
+  const real = new Set(everyRenderer());
   for (const name of coveredRenderers()) {
-    assert.ok(real.has(name), `${name} is in the gallery but exported by neither package`);
+    assert.ok(real.has(name), `${name} is in the gallery but exported by no source package`);
   }
 });
 

@@ -11,7 +11,13 @@ export {
 } from "./service.js";
 export { JOIN_WINDOW_MS, formatRemaining, remainingWindowMs, windowClosed } from "./window.js";
 export { evaluate, parsePolicy, serializePolicy, riskWeight, type PolicyInput, type PolicyDecision } from "./policy.js";
-export { chatLine, formatCoins, reasonLines, reasonSentence, staffReport, statLine } from "./report.js";
+export { chatLine, formatCoins, reasonLines, reasonSentence } from "./report.js";
+export {
+  needsStaffDecision,
+  renderJoinNoticeEmbed,
+  type JoinNoticeKind,
+  type JoinNoticeView,
+} from "./card.js";
 export {
   JoinQueueService,
   type AdmitResult,

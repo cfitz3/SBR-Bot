@@ -12,6 +12,7 @@
     { "path": "../discord-kit" },
     { "path": "../commands-bridge" },
     { "path": "../commands-admin" },
+    { "path": "../screening" },
     { "path": "../../brand" }
   ]
 }

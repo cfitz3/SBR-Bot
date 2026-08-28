@@ -12,6 +12,7 @@
  * we never see.
  */
 import type { EventBoardView, EventReminderView } from "@sbr/commands-bridge";
+import { NO_HISTORY, UNREADABLE_STATS, type ApplicantStats, type Screening } from "@sbr/screening";
 import type {
   AccessoryReportDTO,
   AuctionListingDTO,
@@ -1090,3 +1091,73 @@ export const LEVEL_UP_JUMP: PendingLevelUpDTO = {
   toLevel: 15,
   totalXp: 31_250,
 };
+
+// ── Join requests ───────────────────────────────────────────────────────────
+//
+// Three screenings covering the three shapes the notice takes: one held for a
+// human on nothing worse than a score, one held because the scammer list had
+// something to say, and one the policy admitted on its own. The awkward parts
+// are deliberate — an applicant already in another guild, a linked Discord
+// account, a prior removal with a reason somebody typed by hand — because those
+// are the values that decide whether the History block reads as a paragraph or
+// as a list.
+
+const APPLICANT_UUID = "0a1b2c3d4e5f60718293a4b5c6d7e8f9";
+
+const APPLICANT_STATS: ApplicantStats = {
+  ...UNREADABLE_STATS,
+  profileName: "Mango",
+  skyblockLevel: 243,
+  skillAverage: 42.53,
+  catacombsLevel: 34,
+  senitherWeight: 9204,
+  networth: 4_512_000_000n,
+  currentGuild: "Skyblock Rejects",
+  unreadable: false,
+};
+
+function screening(over: Partial<Screening> = {}): Screening {
+  return {
+    uuid: APPLICANT_UUID,
+    ign: "Aria",
+    discordId: null,
+    requestedAt: new Date(NOW),
+    verdict: "REVIEW",
+    riskScore: 41,
+    reasons: ["MEETS_REQUIREMENTS"],
+    scammer: { status: "CLEAR" },
+    stats: APPLICANT_STATS,
+    history: NO_HISTORY,
+    error: null,
+    ...over,
+  };
+}
+
+/** Held for staff on the score alone, and known to us from a previous visit. */
+export const SCREENING_REVIEW: Screening = screening({
+  discordId: "100000000000000001",
+  reasons: ["REPEAT_ATTEMPTS"],
+  riskScore: 58,
+  history: { recentAttempts: 2, priorDenial: true, priorExpulsion: false, expulsionReason: null },
+});
+
+/** The one a reviewer must not miss: listed, and removed by this guild before. */
+export const SCREENING_FLAGGED: Screening = screening({
+  verdict: "DENY",
+  riskScore: 94,
+  reasons: ["SCAMMER_FLAGGED", "PRIOR_EXPULSION"],
+  scammer: { status: "FLAGGED", reason: "took payment for a carry and left the party", source: "UUID" },
+  history: { recentAttempts: 1, priorDenial: false, priorExpulsion: true, expulsionReason: "kicked for scamming" },
+});
+
+/** Nothing to say, admitted by the policy — the notice nobody has to read. */
+export const SCREENING_CLEAR: Screening = screening({ verdict: "ACCEPT", riskScore: 8 });
+
+/** The account read failed outright, so the card carries a name and a clock. */
+export const SCREENING_BROKEN: Screening = screening({
+  reasons: ["STATS_UNREADABLE", "SCAMMER_UNKNOWN"],
+  riskScore: 50,
+  stats: UNREADABLE_STATS,
+  scammer: { status: "UNKNOWN", detail: null },
+  error: "scammer list did not answer in time",
+});
