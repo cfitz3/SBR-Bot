@@ -21,7 +21,13 @@ import { coveredRenderers, GALLERY, galleryCard } from "./index.js";
  * alternative — a hand-kept list of renderers — is the drift this test exists
  * to catch.
  */
-const RENDERER = /^render[A-Za-z]*(Embed|Pages)$/;
+/**
+ * `Card` joins the suffixes with the F-01 builder: a renderer that returns a
+ * `card()` is named for what it returns, and one that is not in this pattern is
+ * invisible to the coverage check — an unchecked card, which is the single thing
+ * this package exists to prevent.
+ */
+const RENDERER = /^render[A-Za-z]*(Embed|Pages|Card)$/;
 
 function renderersOf(mod: Record<string, unknown>): readonly string[] {
   return Object.keys(mod).filter((k) => RENDERER.test(k) && typeof mod[k] === "function");

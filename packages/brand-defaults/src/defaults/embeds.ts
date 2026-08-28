@@ -60,6 +60,14 @@ export const DEFAULT_EMBEDS = {
     snapshots: "Snapshots",
     pace: "Pace",
     target: "Target",
+    /* -- perms -- */
+    /** The roster itself: one line per seat, never one field per seat. */
+    party: "Party",
+    seats: "Seats",
+    owner: "Owner",
+    notes: "Notes",
+    /** The perms a guild has, as lines inside one field. */
+    perms: "Perms",
   },
 
   /**
@@ -98,6 +106,11 @@ export const DEFAULT_EMBEDS = {
     snapshots: "Snaps",
     pace: "Pace",
     target: "Goal",
+    party: "Party",
+    seats: "Seats",
+    owner: "Owner",
+    notes: "Notes",
+    perms: "Perms",
   },
 
   /**
@@ -156,6 +169,24 @@ export const DEFAULT_EMBEDS = {
     slayerBlaze: "Inferno XP",
     slayerVampire: "Riftstalker XP",
     bestiaryMilestone: "bestiary milestone",
+  },
+
+  /**
+   * How an activity is named on a card.
+   *
+   * `LFGActivity` is an enum shouted in SCREAMING_CASE, and `toLowerCase()` was
+   * the old answer — which is why a party card said "dungeons" while every other
+   * surface in the product said "Dungeons". A table rather than a casing rule,
+   * for the same reason `metricPhrase` is one: the right casing is a fact about
+   * each word, not a transform.
+   */
+  activity: {
+    DUNGEONS: "Dungeons",
+    KUUDRA: "Kuudra",
+    SLAYERS: "Slayers",
+    FISHING: "Fishing",
+    MINING: "Mining",
+    OTHER: "Other",
   },
 
   /**
@@ -279,6 +310,38 @@ export const DEFAULT_EMBEDS = {
     goalAchievedBody: "{ign} set out for {target} {metric} — and got there.",
     /** Per-day movement, e.g. `+2.4/day`. */
     perDay: "{n}/day",
+
+    /* -- perms -- */
+    /**
+     * The headline of a party card. `{activity}` is the activity, sentence-cased
+     * by `metricPhrase`'s rule rather than by `toLowerCase()`.
+     */
+    permHeadline: "{activity} — {filled} of {capacity} seats filled.",
+    permDisbanded: "Disbanded. The name is free to use again.",
+    permNoRoster: "No seats filled yet.",
+    /**
+     * Said of a seat, not of a person: the roster knows an IGN and has no
+     * Discord account to put beside it. Short, because it sits at the end of a
+     * line that is already carrying numbers.
+     */
+    permUnlinked: "unlinked",
+    permLeftGuild: "left the guild",
+    /** `{marker}` is the shared glyph, so the legend cannot name a different one. */
+    permLagFooter: "{marker} marks a class level far behind the player's catacombs.",
+    /** A static note, which is why it is a footer rather than a field. */
+    permDefault: "Default party for /lfg.",
+    /**
+     * The same two states again, as one word each, for a list line that has
+     * already spent its room on the party's name and seat count.
+     */
+    permDefaultTag: "default",
+    permDisbandedTag: "disbanded",
+    permNone: "No parties yet.",
+    /** The list card's title. Not "Guild perms": the guild is implied. */
+    permListTitle: "Standing parties",
+    permListMineTitle: "Your parties",
+    /** `{n}` of `{total}`, on a list that runs to more than one page. */
+    permListPage: "Page {n} of {total}",
   },
 };
 

@@ -10,7 +10,7 @@
  * `@sbr/perms`. This module only turns the typed error union into a sentence
  * someone can act on, and decides what to do with each `action`.
  */
-import type { LFGActivity, PermError, PermGroupDTO } from "@sbr/shared-types";
+import type { EmbedView, LFGActivity, PermError, PermGroupDTO } from "@sbr/shared-types";
 import type {
   AutocompleteHandler,
   CommandContext,
@@ -19,7 +19,7 @@ import type {
   CommandSpec,
   HandlerDeps,
 } from "./types.js";
-import { permChatLine, renderPermEmbed, renderPermListEmbed } from "./render-perms.js";
+import { permChatLine, renderPermCard, renderPermListPages } from "./render-perms.js";
 
 // ───────────────────────────── Error wording ─────────────────────────────
 
@@ -62,7 +62,7 @@ async function isStaff(guildId: string, userId: string, deps: HandlerDeps): Prom
 
 /** Every write shares this shape: resolve the actor, act, render the roster. */
 function permReply(perm: PermGroupDTO, text: string, ephemeral: boolean): CommandReply {
-  return { ephemeral, text, embed: renderPermEmbed(perm) };
+  return { ephemeral, text, embed: renderPermCard(perm) };
 }
 
 // ─────────────────────────────── Actions ───────────────────────────────
@@ -105,8 +105,17 @@ async function list(ctx: CommandContext, deps: HandlerDeps): Promise<CommandRepl
       perms.length === 0
         ? "No perms yet. Start one with /perm action:create."
         : perms.map((p) => `${p.name} ${p.members.length}/${p.capacity}`).join(" | "),
-    embed: renderPermListEmbed(perms, false),
+    ...pages(renderPermListPages(perms, false)),
   };
+}
+
+/** Page one doubles as the embed, matching the dispatcher's paging contract. */
+function pages(views: readonly EmbedView[]): {
+  readonly embed?: EmbedView;
+  readonly pages?: readonly EmbedView[];
+} {
+  const first = views[0];
+  return first ? { embed: first, pages: views } : {};
 }
 
 async function rosterChange(

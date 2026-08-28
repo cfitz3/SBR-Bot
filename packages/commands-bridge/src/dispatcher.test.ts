@@ -44,7 +44,7 @@ import {
   type TicketCategoryDTO,
   type XpStandingDTO,
 } from "@sbr/shared-types";
-import { copy } from "@sbr/brand";
+import { copy, theme } from "@sbr/brand";
 import type { Logger } from "@sbr/observability";
 import { SEED_CATEGORIES } from "@sbr/tickets";
 import { CommandDispatcher } from "./dispatcher.js";
@@ -670,7 +670,7 @@ test("networth breaks the total down by category, largest share first", async ()
   // the second category stretched across the width. The spacer is chrome, and a
   // test about ordering should not have an opinion about it.
   assert.deepEqual(
-    fields.map((f) => f.name).filter((n) => n !== "​"),
+    fields.map((f) => f.name).filter((n) => n !== PAD),
     ["Bank — 50%", "Personal Vault — 25%"],
   );
 });
@@ -1547,17 +1547,34 @@ test("closing an already-closed ticket says so", async () => {
 
 test("/perm with no action shows the guild's perms", async () => {
   const r = await makeDispatcher().dispatch("perm", ctx({ args: noArgs }));
-  assert.equal(r.embed?.title, "Guild perms");
+  assert.equal(r.embed?.title, "Standing parties");
   assert.match(r.text, /F7 core 2\/5/);
 });
 
-test("/perm action:info renders the roster with seats, stats and mentions", async () => {
+/** `padInlineRow`'s spacer field. Chrome, not a field the card chose to send. */
+const PAD = "​";
+
+/** The one field the whole roster lives in, found by name rather than by index. */
+function party(r: { readonly embed?: { readonly fields?: readonly { name: string; value: string }[] } }): string {
+  return (r.embed?.fields ?? []).find((f) => f.name === "Party")?.value ?? "";
+}
+
+test("/perm action:info puts the whole roster in one field, not one field per seat", async () => {
   const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
-  const fields = r.embed?.fields ?? [];
-  assert.deepEqual(fields.map((f) => f.name), ["Owner", "healer", "berserk"]);
-  assert.match(fields[1]!.value, /Alpha \(<@111>\) — cata 42 · sa 51\.3/);
-  // Unlinked, unsnapshotted, unknown-cache seat: a bare name and nothing else.
-  assert.equal(fields[2]!.value, "Beta");
+  // Five seats used to mean five fields named after the roles in them. The role
+  // is data about the seat, so it belongs in the value with the numbers it
+  // qualifies, and the card gets its field budget back.
+  assert.deepEqual(
+    (r.embed?.fields ?? []).map((f) => f.name).filter((n) => n !== "​"),
+    ["Party", "Seats", "Owner"],
+  );
+  const lines = party(r).split("\n");
+  // The class the seat is played as, next to the catacombs level it is judged
+  // against — the reading the roster exists for.
+  assert.match(lines[0]!, /\*\*Healer\*\* Alpha \(<@111>\) — cata 42 · healer 38/);
+  // Unlinked, unsnapshotted, unknown-cache seat: a name, and the one fact we do
+  // have about it said plainly.
+  assert.equal(lines[1], "**Berserk** Beta — unlinked");
 });
 
 test("a seat is only marked as having left when the cache actually says so", async () => {
@@ -1570,10 +1587,29 @@ test("a seat is only marked as having left when the cache actually says so", asy
     },
   });
   const r = await makeDispatcher({ perms: gone }).dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
-  const fields = r.embed?.fields ?? [];
-  assert.match(fields[1]!.value, /left the guild/);
+  const lines = party(r).split("\n");
+  assert.match(lines[0]!, /left the guild/);
   // `inGuild: null` is "we don't know", and must not read as an accusation.
-  assert.doesNotMatch(fields[2]!.value, /left the guild/);
+  assert.doesNotMatch(lines[1]!, /left the guild/);
+});
+
+test("a seat far behind in the class it is played as is marked, and the mark is explained", async () => {
+  const lagging = perms({
+    async getPerm() {
+      return ok({ ...aPerm, members: [{ ...aPerm.members[0]!, roleLevel: 12 }] });
+    },
+  });
+  const r = await makeDispatcher({ perms: lagging }).dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
+  const glyph = theme.embed.glyphs.marker;
+  assert.ok(
+    party(r).includes(`**Healer**${glyph}`),
+    "cata 42 sitting as a healer at 12 is the case worth flagging",
+  );
+  // A legend only when something wears the glyph; on the ordinary roster above
+  // there is nothing to explain.
+  assert.ok((r.embed?.footer ?? "").includes(glyph));
+  const plain = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
+  assert.equal(plain.embed?.footer, undefined);
 });
 
 test("/perm action:create reports the new perm and how to fill it", async () => {
@@ -1582,7 +1618,7 @@ test("/perm action:create reports the new perm and how to fill it", async () => 
     ctx({ args: recordArgs({ action: "create", name: "Kuudra core", activity: "KUUDRA" }) }),
   );
   assert.match(r.text, /Created "Kuudra core"/);
-  assert.match((r.embed?.fields ?? []).map((f) => f.value).join(" "), /Nobody yet/);
+  assert.match((r.embed?.fields ?? []).map((f) => f.value).join(" "), /No seats filled yet/);
 });
 
 test("a name clash comes back as a sentence naming the taken name", async () => {

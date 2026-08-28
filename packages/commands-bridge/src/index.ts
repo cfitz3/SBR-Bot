@@ -70,7 +70,7 @@ export {
   renderTicketEmbed,
   renderTicketListEmbed,
 } from "./render-community.js";
-export { renderPermEmbed, renderPermListEmbed } from "./render-perms.js";
+export { renderPermCard, renderPermListPages } from "./render-perms.js";
 export {
   InGameDispatcher,
   INGAME_MAX_CHARS,
