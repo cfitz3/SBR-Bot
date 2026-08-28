@@ -261,6 +261,7 @@ export const communityRepository = {
         where: { id: eventId },
         data: {
           ...(patch.title === undefined ? {} : { title: patch.title }),
+          ...(patch.type === undefined ? {} : { type: patch.type }),
           ...(patch.description === undefined ? {} : { description: patch.description }),
           ...(patch.startsAt === undefined ? {} : { startsAt: patch.startsAt }),
           ...(patch.endsAt === undefined ? {} : { endsAt: patch.endsAt }),

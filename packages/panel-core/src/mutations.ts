@@ -12,6 +12,7 @@ import {
   BridgeCapability,
   CONFIG_CHANNEL_SLOTS,
   EVENT_MAX_TRACKED_METRICS,
+  eventActivity,
   EVENT_POLL_MAX_MINUTES,
   EVENT_POLL_MIN_MINUTES,
   isAchievementTier,
@@ -29,7 +30,6 @@ import type {
   CommunityService,
   ConfigChannelSlot,
   EventEdit,
-  EventType,
   GuildConfigService,
   HypixelResult,
   IdentityService,
@@ -742,17 +742,6 @@ const MAX_DURATION_SECONDS = 365 * 24 * 60 * 60;
 
 const REASON_MAX = 500;
 
-/** Event types the schema knows; anything else is a typo, not a new category. */
-const EVENT_TYPES: readonly EventType[] = [
-  "DUNGEON",
-  "SLAYER",
-  "FISHING",
-  "MINING",
-  "GIVEAWAY",
-  "MEETING",
-  "CUSTOM",
-];
-
 /** Long enough for "Catacombs F7 carry night", short enough to fit a table cell. */
 const EVENT_TITLE_MAX = 120;
 
@@ -788,6 +777,22 @@ function readTrackerSettings(
   body: Record<string, unknown>,
 ): { settings: Record<string, unknown> } | { message: string } {
   const settings: Record<string, unknown> = {};
+
+  // The activity decides both the type and the scored metric, so a body that
+  // carries one must not also carry the other: two controls for one fact is how
+  // a "Catacombs push" scoring networth became possible in the first place.
+  if (body["activity"] !== undefined) {
+    if (body["trackedMetrics"] !== undefined) {
+      return { message: "send an activity or trackedMetrics, not both" };
+    }
+    const activity = eventActivity(body["activity"]);
+    if (activity === null) return { message: "unknown activity" };
+    settings["type"] = activity.type;
+    // One metric, or none for an event that is not a contest. Written as the
+    // whole list rather than merged into the stored one, so switching activity
+    // cannot leave the previous activity's metric scoring alongside the new.
+    settings["trackedMetrics"] = activity.metric === null ? [] : [activity.metric];
+  }
 
   if (body["trackedMetrics"] !== undefined) {
     const raw = body["trackedMetrics"];
@@ -3239,14 +3244,17 @@ export class PanelMutations {
       if (typeof input !== "object" || input === null) return invalid("body must be an object");
       const body = input as Record<string, unknown>;
 
-      const title = typeof body["title"] === "string" ? body["title"].trim() : "";
-      if (title.length === 0) return invalid("a title is required");
-      if (title.length > EVENT_TITLE_MAX) return invalid(`title must be under ${EVENT_TITLE_MAX} characters`);
+      // The activity is the event's one identifying choice: it fixes the type,
+      // the metric the board scores, and the name the event carries unless
+      // somebody types a better one. The body no longer sends a type at all —
+      // an event filed as a dungeon run while scoring networth was a legal
+      // combination for as long as those were separate controls.
+      const activity = eventActivity(body["activity"]);
+      if (activity === null) return invalid("an activity is required");
 
-      const type = body["type"];
-      if (typeof type !== "string" || !EVENT_TYPES.includes(type as EventType)) {
-        return invalid(`type must be one of ${EVENT_TYPES.join(", ")}`);
-      }
+      const typed = typeof body["title"] === "string" ? body["title"].trim() : "";
+      if (typed.length > EVENT_TITLE_MAX) return invalid(`title must be under ${EVENT_TITLE_MAX} characters`);
+      const title = typed.length === 0 ? activity.defaultTitle : typed;
 
       const startsAt = body["startsAt"];
       if (typeof startsAt !== "string" || Number.isNaN(Date.parse(startsAt))) {
@@ -3285,13 +3293,18 @@ export class PanelMutations {
         guildId,
         title,
         startsAt: new Date(startsAt).toISOString(),
-        type: type as EventType,
         hostDiscordId: actorDiscordId,
         description,
         capacity,
+        // Spread after the fixed fields: `type` and `trackedMetrics` come from
+        // the activity, and the client has no say in either.
         ...tracker.settings,
+        type: activity.type,
       });
-      return { result, change: { title, type, startsAt, capacity, description, ...tracker.settings } };
+      return {
+        result,
+        change: { title, activity: activity.key, startsAt, capacity, description, ...tracker.settings },
+      };
     });
   }
 

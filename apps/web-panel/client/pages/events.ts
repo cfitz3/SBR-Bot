@@ -34,15 +34,10 @@ import type {
   PanelEvent,
 } from "@sbr/panel-core";
 import {
-  ACHIEVEMENT_CATEGORIES,
-  CATEGORY_OF_METRIC,
-  EVENT_MAX_TRACKED_METRICS,
-  EVENT_METRICS,
+  EVENT_ACTIVITIES,
   EVENT_POLL_CHOICES,
   EVENT_POLL_MAX_MINUTES,
   EVENT_POLL_MIN_MINUTES,
-  type AchievementCategory,
-  type EventMetric,
 } from "./enums.js";
 import { loadPage, postAction } from "../api.js";
 import {
@@ -57,7 +52,7 @@ import {
   table,
   type BadgeTone,
 } from "../components.js";
-import { scope, type PanelCopy } from "../copy.js";
+import { scope } from "../copy.js";
 import { h, replace } from "../dom.js";
 import { actionButton, statusSlot } from "../forms.js";
 import {
@@ -73,48 +68,39 @@ import {
 const t = scope("events");
 const c = scope("common");
 /**
- * Borrowed for the metric picker's family headings.
+ * An event's type in the guild's words.
  *
- * The families are the milestones page's families — same catalogue, same
- * grouping — so naming them again under `events` would be two spellings of
- * "Dungeons" that can disagree.
+ * No longer a form control — the activity decides the type — but still a column
+ * in the history table, where a stored value with no copy behind it falls back
+ * to the value itself rather than to a blank cell.
  */
-const fam = scope("milestones");
+function typeLabel(type: string): string {
+  return (t("type") as unknown as Readonly<Record<string, string>>)[type] ?? type.toLowerCase();
+}
 
 /**
- * The event types the schema knows, mirroring `EVENT_TYPES` in the mutations.
+ * The activity dropdown's options, in the platform's own order.
  *
- * The list is structure; the words are copy, so a guild that runs "Kuudra" where
- * we say "Dungeon" changes one key rather than the value the form writes.
+ * One control where there used to be three — a title box, a type select and a
+ * grid of eighteen tick boxes — because they were three ways of asking what the
+ * event is. The type and the scored metric are derived from this server-side;
+ * the form sends the key and nothing else.
  */
-const TYPES = [
-  "DUNGEON",
-  "SLAYER",
-  "FISHING",
-  "MINING",
-  "GIVEAWAY",
-  "MEETING",
-  "CUSTOM",
-] as const satisfies readonly (keyof PanelCopy["events"]["type"])[];
+const activityOptions = (): readonly (readonly [string, string])[] =>
+  EVENT_ACTIVITIES.map(
+    (activity) =>
+      [
+        activity.key,
+        (t("activity") as unknown as Readonly<Record<string, string>>)[activity.key] ?? activity.key,
+      ] as const,
+  );
 
-const typeOptions = (): readonly (readonly [string, string])[] =>
-  TYPES.map((value) => [value, t("type")[value]] as const);
-
-/**
- * What the tracker can score, grouped the way the milestones page groups the
- * same catalogue.
- *
- * The list itself is `EVENT_METRICS` from the enum mirror rather than a third
- * copy of it: offering a metric no capture writes would leave a leaderboard
- * permanently empty with nothing on the page to explain why, and a hand-kept
- * list is exactly how that happens. The families are computed here so a metric
- * added upstream appears under its own heading without this file being touched.
- */
-const METRIC_FAMILIES: readonly (readonly [AchievementCategory, readonly EventMetric[]])[] =
-  ACHIEVEMENT_CATEGORIES.map(
-    (category) =>
-      [category, EVENT_METRICS.filter((metric) => CATEGORY_OF_METRIC[metric] === category)] as const,
-  ).filter(([, metrics]) => metrics.length > 0);
+/** The activity an existing event looks like, matched on what its board scores. */
+function activityOf(event: PanelEvent | null): string {
+  const first = event?.trackedMetrics[0];
+  if (first === undefined) return EVENT_ACTIVITIES[0].key;
+  return EVENT_ACTIVITIES.find((a) => a.metric === first)?.key ?? EVENT_ACTIVITIES[0].key;
+}
 
 /** Statuses that still have a future. Kept as one set for the editable check. */
 const UPCOMING = new Set(["SCHEDULED", "LIVE"]);
@@ -243,45 +229,14 @@ function complaint(): { readonly el: HTMLElement; set: (message: string | null) 
 }
 
 function trackerFields(event: PanelEvent | null): TrackerFields {
-  const tracked = new Set<string>(event?.trackedMetrics ?? []);
-
-  // Checkboxes rather than a multi-select, and grouped by family rather than
-  // listed flat: eighteen metrics is too many to scan as one column, and the
-  // order they were ticked in matters — the first is what the Discord board
-  // sorts by, which a select box gives no way to show.
-  const metricBoxes = EVENT_METRICS.map((metric) => {
-    const box = h("input", {
-      class: "switch-input",
-      type: "checkbox",
-      ...(tracked.has(metric) ? { checked: true } : {}),
-      "aria-label": metricLabel(metric),
-    }) as HTMLInputElement;
-    return { metric, box };
-  });
-  const boxOf = new Map<string, HTMLInputElement>(metricBoxes.map(({ metric, box }) => [metric, box]));
-
-  const metricNote = complaint();
-  const checkedMetrics = (): readonly string[] =>
-    metricBoxes.filter(({ box }) => box.checked).map(({ metric }) => metric);
-  const syncMetrics = (): void => {
-    metricNote.set(
-      checkedMetrics().length > EVENT_MAX_TRACKED_METRICS
-        ? t("errMetrics").replace("{max}", count(EVENT_MAX_TRACKED_METRICS))
-        : null,
-    );
-  };
-  for (const { box } of metricBoxes) box.addEventListener("change", syncMetrics);
-
-  const metricRows = METRIC_FAMILIES.map(([family, metrics]) =>
-    h(
-      "div",
-      { class: "field-row metric-grid" },
-      h("span", { class: "field-label field-label-inline" }, familyLabel(family)),
-      ...metrics.map((metric) =>
-        h("label", { class: "switch-check" }, boxOf.get(metric) ?? null, h("span", {}, metricLabel(metric))),
-      ),
+  const chosen = activityOf(event);
+  const activity = h(
+    "select",
+    { class: "control control-select", "aria-label": t("activityLabel") },
+    ...activityOptions().map(([value, label]) =>
+      h("option", { value, ...(value === chosen ? { selected: true } : {}) }, label),
     ),
-  );
+  ) as HTMLSelectElement;
 
   // A closed list, not a number box. Every option is an interval the tracker
   // can actually honour; the old free number let staff ask for five minutes and
@@ -337,10 +292,13 @@ function trackerFields(event: PanelEvent | null): TrackerFields {
 
   return {
     rows: [
-      h("p", { class: "field-label" }, t("metricsLabel")),
-      ...metricRows,
-      h("p", { class: "field-hint" }, t("metricsHint").replace("{max}", count(EVENT_MAX_TRACKED_METRICS))),
-      metricNote.el,
+      h(
+        "div",
+        { class: "field-row" },
+        h("label", { class: "field-label field-label-inline" }, t("activityLabel")),
+        activity,
+      ),
+      h("p", { class: "field-hint" }, t("activityHint")),
       h(
         "div",
         { class: "field-row" },
@@ -360,10 +318,7 @@ function trackerFields(event: PanelEvent | null): TrackerFields {
       h("p", { class: "field-hint" }, t("prizeHint")),
     ],
     read(startsAtIso) {
-      const metrics = checkedMetrics();
-      if (metrics.length > EVENT_MAX_TRACKED_METRICS) {
-        return { ok: false, message: t("errMetrics").replace("{max}", count(EVENT_MAX_TRACKED_METRICS)) };
-      }
+      if (activity.value.length === 0) return { ok: false, message: t("errActivity") };
 
       const minutes = Number(poll.value);
       if (!Number.isInteger(minutes) || minutes < POLL_MIN || minutes > POLL_MAX) {
@@ -388,7 +343,9 @@ function trackerFields(event: PanelEvent | null): TrackerFields {
       return {
         ok: true,
         settings: {
-          trackedMetrics: metrics,
+          // The key, not a metric list. What it scores and what it is filed as
+          // are the server's to derive, so the two cannot disagree.
+          activity: activity.value,
           pollIntervalMinutes: minutes,
           prize: prizeText.length === 0 ? null : prizeText,
           endsAt: ends.iso,
@@ -405,16 +362,14 @@ function pollLabel(minutes: number): string {
   return t("pollHours").replace("{hours}", count(Math.round(minutes / 60)));
 }
 
-/** A metric family's words, borrowed from the milestones page's own table. */
-function familyLabel(family: string): string {
-  return (fam("category") as unknown as Readonly<Record<string, string>>)[family] ?? family;
-}
-
 // ─────────────────────────── scheduling ───────────────────────────
 
 function createForm(guildId: string, rerender: () => void): HTMLElement {
   const status = statusSlot();
 
+  // Optional, and placed after the activity for that reason: an event that is
+  // not renamed is named after what it is, which is right far more often than
+  // an empty box is worth refusing over.
   const title = h("input", {
     class: "control control-text",
     type: "text",
@@ -423,12 +378,6 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
     maxlength: TITLE_MAX,
     autocomplete: "off",
   }) as HTMLInputElement;
-
-  const type = h(
-    "select",
-    { class: "control control-select", "aria-label": t("typeLabel") },
-    ...typeOptions().map(([value, label]) => h("option", { value }, label)),
-  ) as HTMLSelectElement;
 
   // `datetime-local` rather than a text box: it is the one input that gives a
   // calendar and a clock without shipping a date picker, and its value is local
@@ -464,7 +413,6 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
     status,
     run: async () => {
       const name = title.value.trim();
-      if (name.length === 0) return { kind: "error", message: t("errNoTitle") };
 
       const iso = localInputToIso(startsAt.value);
       if (iso === null) return { kind: "error", message: t("errNoStart") };
@@ -485,7 +433,6 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
 
       return postAction(guildId, "event.create", {
         title: name,
-        type: type.value,
         startsAt: iso,
         capacity: seats,
         description: description.value.trim(),
@@ -498,7 +445,7 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
   return h(
     "div",
     { class: "fields" },
-    h("div", { class: "field-row" }, title, type),
+    h("div", { class: "field-row" }, title),
     h(
       "div",
       { class: "field-row" },
@@ -1018,7 +965,7 @@ function pastBody(events: readonly PanelEvent[], rerender: () => void): HTMLElem
     [t("colEvent"), t("colType"), t("colOutcome"), t("colStarted"), t("colWent"), t("colResult")],
     events.map((event) => [
       event.title,
-      event.type.toLowerCase(),
+      typeLabel(event.type),
       badge(event.status.toLowerCase(), statusTone(event.status)),
       dateTime(event.startsAt),
       seats(event),

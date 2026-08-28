@@ -495,12 +495,14 @@ A scheduled community event.
 | `channelId`, `messageId` | the tracker board, edited in place. The channel is stored rather than re-resolved from the `events` slot, so rebinding the slot mid-event cannot orphan a board |
 | `boardUpdatedAt` | last board edit; shown on the board so a quiet leaderboard reads differently from a stalled one |
 | `boardFinal` | set once the board has been edited into its result card, so `event-board` writes that card once rather than every pass |
-| `trackedMetrics` | metric keys this event scores; empty means untracked |
+| `trackedMetrics` | the metric this event scores, as a one-element list; empty means untracked. Derived from the chosen activity rather than picked separately — see `EVENT_ACTIVITIES` — so an event cannot be filed as a Catacombs push while scoring networth. Longer lists exist on rows created before activities did |
 | `pollIntervalMinutes` | how often participants are polled while LIVE (default 30) |
 | `discordEventId` | the mirrored Discord scheduled event, when one was created |
 | `reminderState` | which reminder offsets have been sent |
 
-**Enum — `EventType`:** `DUNGEON`, `SLAYER`, `FISHING`, `MINING`, `GIVEAWAY`, `MEETING`, `CUSTOM`.
+**Enum — `EventType`:** `DUNGEON`, `SLAYER`, `FISHING`, `MINING`, `GIVEAWAY`, `MEETING`, `CUSTOM`. Not chosen directly any more: the panel offers activities, and each activity carries the type it is filed under.
+
+**Catalogue — `EVENT_ACTIVITIES`:** what an event *is*, as one choice — the name it takes by default, the type it is filed under, and the one metric its board scores. `MEETING` and `GIVEAWAY` carry no metric, so an event with nothing to measure keeps its signup list and gets no leaderboard.
 **Enum — `EventStatus`:** `SCHEDULED`, `LIVE`, `COMPLETED`, `CANCELLED`.
 **Relationships:** N—1 `Guild`; 1—N `EventRSVP`, 1—N `EventScore`.
 

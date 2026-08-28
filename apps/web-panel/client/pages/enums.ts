@@ -152,6 +152,38 @@ export const EVENT_POLL_CHOICES = [60, 120, 180, 360, 720, 1_440] as const;
 /** How many metrics one event may score at once (`EVENT_MAX_TRACKED_METRICS`). */
 export const EVENT_MAX_TRACKED_METRICS = 5;
 
+/**
+ * What an event is, as one choice (`EVENT_ACTIVITIES`).
+ *
+ * Only the key and the metric are mirrored. The type is derived server-side and
+ * the default title is written at creation, so neither is something the form
+ * needs to know — and mirroring a default title here is how the browser and the
+ * database end up disagreeing about what an event is called.
+ */
+export const EVENT_ACTIVITIES = [
+  { key: "CATACOMBS", metric: "catacombsLevel" },
+  { key: "CLASS_HEALER", metric: "classHealer" },
+  { key: "CLASS_MAGE", metric: "classMage" },
+  { key: "CLASS_BERSERK", metric: "classBerserk" },
+  { key: "CLASS_ARCHER", metric: "classArcher" },
+  { key: "CLASS_TANK", metric: "classTank" },
+  { key: "SLAYER_ALL", metric: "slayerXp" },
+  { key: "SLAYER_ZOMBIE", metric: "slayerZombie" },
+  { key: "SLAYER_SPIDER", metric: "slayerSpider" },
+  { key: "SLAYER_WOLF", metric: "slayerWolf" },
+  { key: "SLAYER_ENDERMAN", metric: "slayerEnderman" },
+  { key: "SLAYER_BLAZE", metric: "slayerBlaze" },
+  { key: "SLAYER_VAMPIRE", metric: "slayerVampire" },
+  { key: "SKILLS", metric: "skillAverage" },
+  { key: "NETWORTH", metric: "networth" },
+  { key: "WEIGHT", metric: "senitherWeight" },
+  { key: "SKYBLOCK_LEVEL", metric: "skyblockLevel" },
+  { key: "BESTIARY", metric: "bestiaryMilestone" },
+  { key: "MEETING", metric: null },
+  { key: "GIVEAWAY", metric: null },
+] as const;
+export type EventActivityKey = (typeof EVENT_ACTIVITIES)[number]["key"];
+
 /** What kind of thing a milestone recognises. */
 export const MilestoneType = {
   SKYBLOCK_LEVEL: "SKYBLOCK_LEVEL",

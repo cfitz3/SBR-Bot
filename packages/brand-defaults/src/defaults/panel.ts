@@ -725,6 +725,35 @@ export const DEFAULT_PANEL = {
       MEETING: "Meeting",
       CUSTOM: "Custom",
     },
+    /**
+     * What the event is, as one choice — the dropdown that replaced a title
+     * box, a type select and a grid of metric tick boxes asking the same
+     * question three times. Keyed by `EventActivity.key`; an activity added
+     * upstream without copy here renders as its own key rather than as a blank
+     * option, which is visible rather than silently missing.
+     */
+    activity: {
+      CATACOMBS: "Catacombs level",
+      CLASS_HEALER: "Healer level",
+      CLASS_MAGE: "Mage level",
+      CLASS_BERSERK: "Berserk level",
+      CLASS_ARCHER: "Archer level",
+      CLASS_TANK: "Tank level",
+      SLAYER_ALL: "Slayer XP (all)",
+      SLAYER_ZOMBIE: "Revenant XP",
+      SLAYER_SPIDER: "Tarantula XP",
+      SLAYER_WOLF: "Sven XP",
+      SLAYER_ENDERMAN: "Voidgloom XP",
+      SLAYER_BLAZE: "Inferno XP",
+      SLAYER_VAMPIRE: "Riftstalker XP",
+      SKILLS: "Skill average",
+      NETWORTH: "Networth",
+      WEIGHT: "Weight",
+      SKYBLOCK_LEVEL: "Skyblock level",
+      BESTIARY: "Bestiary milestone",
+      MEETING: "Meeting (nothing scored)",
+      GIVEAWAY: "Giveaway (nothing scored)",
+    },
     tileUpcoming: "Scheduled",
     tileLive: "Running now",
     tileNext: "Next up",
@@ -742,9 +771,9 @@ export const DEFAULT_PANEL = {
     cardPreview: "What Discord will show",
     previewHint: "Drawn by the same renderer the bot posts with, from the standings above. It is not the posted message — nothing here is published.",
     previewFailed: "The preview could not be drawn.",
-    titlePlaceholder: "Catacombs F7 carry night",
+    titlePlaceholder: "Named after the activity unless you say otherwise",
     titleLabel: "Event title",
-    typeLabel: "Event type",
+    activityLabel: "Activity",
     startsLabel: "Starts at",
     startsInline: "Starts",
     capacityLabel: "Capacity",
@@ -754,6 +783,11 @@ export const DEFAULT_PANEL = {
     descriptionPlaceholder: "What is it, and what should people bring? (optional)",
     create: "Schedule",
     createNote: "You are recorded as the host, and the host is the only person who can cancel it.",
+    /**
+     * Only the edit form can say this. Creating with a blank title is allowed —
+     * the event is named after its activity — but an event that already has a
+     * name cannot be saved without one, because the form shows what is stored.
+     */
     errNoTitle: "Give the event a title.",
     errNoStart: "Pick a start date and time.",
     errPastStart: "That start time has already passed.",
@@ -808,13 +842,8 @@ export const DEFAULT_PANEL = {
       bestiaryMilestone: "Bestiary milestone",
     },
     save: "Save changes",
-    metricsLabel: "Track",
-    /** `{max}` is the cap on how many metrics one event may score at once. */
-    metricsHint: "Tick up to {max}. The first one ticked is what the Discord board sorts by. Ticking none turns scoring off without deleting the scores already collected.",
-    /** `{count}` metrics ticked in this family, out of `{total}` it offers. */
-    metricFamilyCount: "{count} of {total}",
-    /** `{max}` again: shown once the tick boxes start refusing. */
-    errMetrics: "An event can score at most {max} metrics at once.",
+    activityHint: "The activity names the event, files it under a type and decides the one thing the board scores. Meetings and giveaways score nothing.",
+    errActivity: "Pick what the event is.",
     pollLabel: "How often to check",
     pollInline: "Check every",
     /** `{hours}` whole hours. Used for every interval the dropdown offers. */

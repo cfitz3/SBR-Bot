@@ -334,6 +334,88 @@ export const EVENT_POLL_CHOICES = [60, 120, 180, 360, 720, 1440] as const;
 export const EVENT_MAX_TRACKED_METRICS = 5;
 
 /**
+ * What an event *is*, as one choice.
+ *
+ * An event used to be assembled from three independent controls: a title
+ * somebody typed, a type from one list, and a set of metrics ticked from
+ * another. Nothing tied them together, so "Catacombs night" scoring networth
+ * was a legal event, and a contest created without ticking a metric was a
+ * contest that silently scored nothing. The three questions were really one
+ * question — what are we doing tonight — asked three times.
+ *
+ * So an activity is the single choice, and it fixes all three: the name the
+ * event gets by default, the type it is filed under, and the one metric it is
+ * scored on. **One metric, not a set**: a board with five tables is five
+ * contests sharing a message, and a participant reading it cannot tell which
+ * one they are winning.
+ *
+ * `metric: null` is not an oversight. A meeting and a giveaway are events with
+ * a start time and a guest list and nothing to measure, and the alternative —
+ * forcing a metric onto them — would put a leaderboard under a meeting.
+ */
+export interface EventActivity {
+  readonly key: string;
+  readonly type: EventType;
+  /** The one metric scored, or null for an event that is not a contest. */
+  readonly metric: EventMetric | null;
+  /**
+   * The event's name unless somebody renames it afterwards.
+   *
+   * English here rather than a brand copy key, because this is a value written
+   * into a row at creation and owned by the guild from that moment — a later
+   * copy edit must not retitle events that already happened. The panel's
+   * dropdown labels *are* copy (`panel.events.activity.*`); this is the seed.
+   */
+  readonly defaultTitle: string;
+}
+
+export const EVENT_ACTIVITIES = [
+  { key: "CATACOMBS", type: "DUNGEON", metric: "catacombsLevel", defaultTitle: "Catacombs push" },
+  { key: "CLASS_HEALER", type: "DUNGEON", metric: "classHealer", defaultTitle: "Healer push" },
+  { key: "CLASS_MAGE", type: "DUNGEON", metric: "classMage", defaultTitle: "Mage push" },
+  { key: "CLASS_BERSERK", type: "DUNGEON", metric: "classBerserk", defaultTitle: "Berserk push" },
+  { key: "CLASS_ARCHER", type: "DUNGEON", metric: "classArcher", defaultTitle: "Archer push" },
+  { key: "CLASS_TANK", type: "DUNGEON", metric: "classTank", defaultTitle: "Tank push" },
+  { key: "SLAYER_ALL", type: "SLAYER", metric: "slayerXp", defaultTitle: "Slayer grind" },
+  { key: "SLAYER_ZOMBIE", type: "SLAYER", metric: "slayerZombie", defaultTitle: "Revenant grind" },
+  { key: "SLAYER_SPIDER", type: "SLAYER", metric: "slayerSpider", defaultTitle: "Tarantula grind" },
+  { key: "SLAYER_WOLF", type: "SLAYER", metric: "slayerWolf", defaultTitle: "Sven grind" },
+  { key: "SLAYER_ENDERMAN", type: "SLAYER", metric: "slayerEnderman", defaultTitle: "Voidgloom grind" },
+  { key: "SLAYER_BLAZE", type: "SLAYER", metric: "slayerBlaze", defaultTitle: "Inferno grind" },
+  { key: "SLAYER_VAMPIRE", type: "SLAYER", metric: "slayerVampire", defaultTitle: "Riftstalker grind" },
+  { key: "SKILLS", type: "CUSTOM", metric: "skillAverage", defaultTitle: "Skill average race" },
+  { key: "NETWORTH", type: "CUSTOM", metric: "networth", defaultTitle: "Profit race" },
+  { key: "WEIGHT", type: "CUSTOM", metric: "senitherWeight", defaultTitle: "Weight race" },
+  { key: "SKYBLOCK_LEVEL", type: "CUSTOM", metric: "skyblockLevel", defaultTitle: "SkyBlock level race" },
+  { key: "BESTIARY", type: "CUSTOM", metric: "bestiaryMilestone", defaultTitle: "Bestiary grind" },
+  { key: "MEETING", type: "MEETING", metric: null, defaultTitle: "Guild meeting" },
+  { key: "GIVEAWAY", type: "GIVEAWAY", metric: null, defaultTitle: "Giveaway" },
+] as const satisfies readonly EventActivity[];
+
+export type EventActivityKey = (typeof EVENT_ACTIVITIES)[number]["key"];
+
+/** Narrow an untrusted string — a panel body, a stored row — to an activity. */
+export function eventActivity(key: unknown): EventActivity | null {
+  return EVENT_ACTIVITIES.find((a) => a.key === key) ?? null;
+}
+
+/**
+ * The activity an already-stored event looks like, for a row created before
+ * activities existed or edited into something no activity describes.
+ *
+ * Matched on the metric rather than on the type, because the metric is the part
+ * that decides what the board says. An event scoring several metrics — legal
+ * until this release, and still legal in the database — matches on its first,
+ * which is the one its board sorted by. Null when nothing matches, and the
+ * caller then falls back to the stored title and type, which are still true.
+ */
+export function eventActivityForMetrics(metrics: readonly string[]): EventActivity | null {
+  const first = metrics[0];
+  if (first === undefined) return null;
+  return EVENT_ACTIVITIES.find((a) => a.metric === first) ?? null;
+}
+
+/**
  * How a metric's value should be read to a human.
  *
  * The board renders one number per metric and the right rendering differs by

@@ -4,6 +4,7 @@ import type {
   AttendanceDTO,
   EventDTO,
   EventStatus,
+  EventType,
   LFGActivity,
   LFGPostDTO,
   LFGStatus,
@@ -72,6 +73,7 @@ export interface LfgInsert {
  */
 export interface EventPatch {
   readonly title?: string;
+  readonly type?: EventType;
   readonly description?: string | null;
   readonly startsAt?: Date;
   readonly endsAt?: Date | null;
