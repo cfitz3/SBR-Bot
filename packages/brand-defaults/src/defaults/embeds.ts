@@ -337,6 +337,25 @@ export const DEFAULT_EMBEDS = {
     permDefaultTag: "default",
     permDisbandedTag: "disbanded",
     permNone: "No parties yet.",
+    /**
+     * The console could not read the guild's parties. Points at `/health`
+     * rather than narrating the failure: the member cannot fix a database, and
+     * the one thing they can do is find out whether anything else is down too.
+     */
+    permUnavailable: "Couldn't load parties. /health has the current status.",
+    permNotLinked: "Link your Minecraft account with /link before taking a seat.",
+    permNotSeated: "You don't have a seat in this party.",
+    /** A control from a message older than the thing it points at. */
+    permStaleControl: "That control is out of date. Run /perm again.",
+    /** The prompts on the two ephemeral menus that stand in front of a modal. */
+    permPickActivity: "What will the party run?",
+    permPickRole: "Which role are they filling?",
+    /** Titles and labels for the two modals. Free text goes nowhere else. */
+    permNameModalTitle: "New party",
+    permNameLabel: "Name",
+    permNotesLabel: "Notes (optional)",
+    permIgnModalTitle: "Add someone",
+    permIgnLabel: "Minecraft name",
     /** The list card's title. Not "Guild perms": the guild is implied. */
     permListTitle: "Standing parties",
     permListMineTitle: "Your parties",

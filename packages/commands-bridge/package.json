@@ -20,6 +20,7 @@
     "@sbr/brand": "*",
     "@sbr/embed-kit": "*",
     "@sbr/observability": "*",
+    "@sbr/perms": "*",
     "@sbr/shared-types": "*",
     "@sbr/tickets": "*"
   }

@@ -183,19 +183,12 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
     },
   },
   online: { description: "Who's online in the guild right now" },
-  perm: {
-    description: "Standing parties — create one, see a roster, add or drop people",
-    option: {
-      action: "What to do (default info)",
-      perm: "Which perm, by name or id",
-      name: "Name for the new perm (when creating)",
-      activity: "What it runs (when creating)",
-      ign: "Minecraft name (when adding or removing)",
-      role: "Their role, e.g. healer, tank, filler",
-      slot: "Seat order (optional)",
-      notes: "Anything worth remembering about the group",
-    },
-  },
+  /**
+   * No options: the eight this command used to take are controls on the console
+   * it opens now, and their copy went with them. The description says what
+   * pressing it gets you, since there is nothing left to fill in first.
+   */
+  perm: { description: "Standing parties — open the roster console" },
   price: {
     description: "Blended market value for an item",
     option: {

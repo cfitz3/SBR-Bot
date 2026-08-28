@@ -130,7 +130,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/editrun` | Change a run you host | Linked (owner or staff) | `id`, `title?`, `details?`, `slots?` | Updated embed | Nothing to change; not yours; run finished; slots below the current party | DB |
 | `/closerun` | End a run | Linked (owner or staff) | `id` | Embed marked closed, buttons disabled | Not yours; already closed | DB |
 | `/rsvp` | RSVP to a scheduled event | Public | `event_id`, `state` (going/maybe/no) | Updated RSVP + counts | Event full→waitlist; event past | DB (`EventRSVP`) |
-| `/perm` | Standing parties — the group you always run with | Linked | `action` (info/list/create/roster-add/roster-remove/disband/default), `perm?`, `name?`, `activity?`, `ign?`, `role?`, `slot?`, `notes?` | Roster embed: seat, IGN, linked mention, cata/SA | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileCurrent` for enrichment |
+| `/perm` | Standing parties — the group you always run with | Linked | — (opens the console; every action is a component) | Console: the guild's parties, paged, with a menu to open one; a party card is the roster in one field with cata and class levels | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster; not linked (taking a seat) | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileCurrent` for enrichment |
 
 ### `/lfg` — runs
 
@@ -161,15 +161,29 @@ named arguments, so `title`, `perm` and `permname` are marked
 ### `/perm` — standing parties
 
 A **perm** is a fixed party a member runs with repeatedly: a name, an activity,
-and a roster of seats. One command with an `action` option rather than seven
-top-level commands, for the same reason `/ticket` is one command.
+and a roster of seats. One command with no arguments at all: `/perm` opens a
+console, and everything the eight options used to do is a control on it.
+
+**Why the arguments are gone.** `/perm action:roster-add perm:"F7 core"
+ign:Aria role:healer slot:2` asked for four things before it would do one — the
+exact name of the party, the exact spelling of an IGN, which role words the
+activity accepts, and that `slot` existed — and three of the four are things the
+platform already knows. The parties are a menu, the roles are a menu built from
+the activity's own shape, and the seat is the next free one. The only free text
+left is a party's name and notes, and an IGN when an owner adds somebody who has
+never linked; all of it goes through a modal, where it is validated in front of
+the person who typed it. Every control carries its whole state in its customId,
+so a console posted before a restart still works after one, and every action
+re-checks the presser rather than trusting that a button was only shown to
+somebody allowed to press it.
 
 Three properties are worth stating because they are load-bearing:
 
 - **Addressed by name.** Names are unique per guild while a perm is *active*,
   compared case-insensitively, and freed for reuse on disband — enforced by a
-  partial unique index, since people type `/perm perm:F7 core` from memory in
-  guild chat. Ids still work anywhere a name does.
+  partial unique index, since a name typed into the new-party modal is typed
+  from memory. Ids still work anywhere a name does, and the console addresses
+  parties by id.
 - **Rosters are keyed by IGN.** A linked Discord account and a uuid are attached
   when they can be resolved and their absence is never an error. Perms are formed
   in-game, and most of a Hypixel guild has never linked an account.

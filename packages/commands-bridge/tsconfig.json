@@ -11,6 +11,7 @@
     { "path": "../embed-kit" },
     { "path": "../tickets" },
     { "path": "../observability" },
+    { "path": "../perms" },
     { "path": "../../brand" }
   ]
 }
