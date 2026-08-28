@@ -80,6 +80,7 @@ import {
   type MilestoneDefinition,
 } from "@sbr/jobs";
 import { AUTO_ROLES_SETTING_KEY, parseAutoRoles } from "@sbr/roles";
+import { eventPollFloorMinutes } from "@sbr/shared-types";
 import { XpService } from "@sbr/xp";
 import { createWorkerTicketBridge } from "./ticket-bridge.js";
 import { createWorkerEventBoard } from "./event-board-bridge.js";
@@ -380,6 +381,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
   const eventTracking: JobDefinition<number> = {
     ...defineEventTrackingJob(async () =>
       trackEvents({
+        pollFloorMinutes: eventPollFloorMinutes(ctx.config.hypixel.keyMode === "production"),
         listLiveTracked: () => eventJobRepository.listLiveTracked(),
         listParticipants: (eventId) => eventJobRepository.listParticipants(eventId),
         capture: captureProfile,

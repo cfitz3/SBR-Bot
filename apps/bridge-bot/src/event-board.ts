@@ -1,23 +1,28 @@
 /**
- * The event tracker board: one message per event in the guild's events channel,
- * posted once and edited in place while the event runs.
+ * The event message: one post per event in the guild's events channel, made
+ * when the event is created and edited in place for the rest of its life.
  *
- * Edited rather than re-posted for the same reason ticket panels are — a
- * half-hourly re-post is a channel full of dead leaderboards, each of them
- * wrong. When the event finishes the board is edited one last time into a
- * result card and left there, so the channel keeps a history instead of the
- * event disappearing at the moment it becomes interesting.
+ * It starts as the signup sheet — the roster, and the buttons that put a member
+ * on it. It becomes the leaderboard when the event goes live, in the same
+ * message, so the people who signed up are looking at the standings in the
+ * place they signed up. It is edited once more when the event finishes and left
+ * in the channel as the result.
+ *
+ * One message rather than three, because an event is one thing that happens
+ * over time. A bot that posts a fresh message per stage leaves two dead ones
+ * above the live one and no way to tell which is current; a bot that deletes
+ * the old ones throws away the channel's history of what the guild has run.
  *
  * There is no discord.js in this file. The gateway takes a port with `post` and
  * `edit` on it, which is what lets the whole decision — which channel, edit or
- * post, final or not — be tested without a gateway connection.
+ * post, buttons or none, final or not — be tested without a gateway connection.
  */
-import { BOARD_STANDINGS, renderEventBoardEmbed, type EventBoardView } from "@sbr/commands-bridge";
+import { BOARD_STANDINGS, renderEventCard, rsvpButtons, type EventCardView } from "@sbr/commands-bridge";
 import { isEventMetric } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
-import type { EmbedView } from "@sbr/shared-types";
+import type { ActionRowView, EmbedView } from "@sbr/shared-types";
 
-/** The event row the board renders, as this side describes it. */
+/** The event row the message renders, as this side describes it. */
 export interface EventBoardRow {
   readonly id: string;
   readonly guildId: string;
@@ -30,6 +35,18 @@ export interface EventBoardRow {
   readonly trackedMetrics: readonly string[];
   readonly participantCount: number;
   readonly prize: string | null;
+  /** The organiser's own words, and who they are. */
+  readonly description?: string | null;
+  readonly hostDiscordId?: string | null;
+  readonly capacity?: number | null;
+  /**
+   * The roster, which is what the message shows until the event starts.
+   *
+   * Both lists, kept apart: an organiser deciding whether tonight is worth
+   * running needs the yeses and the maybes as two numbers, not one.
+   */
+  readonly going?: readonly { readonly discordId: string }[];
+  readonly maybe?: readonly { readonly discordId: string }[];
 }
 
 export interface EventStanding {
@@ -54,9 +71,22 @@ export interface EventBoardPort {
 }
 
 export interface EventBoardDiscordPort {
-  /** Post, returning the message id, or null when it did not land. */
-  post(channelId: string, embed: EmbedView): Promise<string | null>;
-  edit(channelId: string, messageId: string, embed: EmbedView): Promise<boolean>;
+  /**
+   * Post, returning the message id, or null when it did not land.
+   *
+   * `components` is the RSVP row while the event can still be joined, and
+   * absent once it cannot. Passing it on every write rather than only on the
+   * first is what lets the final edit *remove* the buttons: a result card with
+   * a live "Going" button on it invites presses that can no longer mean
+   * anything.
+   */
+  post(channelId: string, embed: EmbedView, components?: readonly ActionRowView[]): Promise<string | null>;
+  edit(
+    channelId: string,
+    messageId: string,
+    embed: EmbedView,
+    components?: readonly ActionRowView[],
+  ): Promise<boolean>;
   /**
    * A board this bot already posted for this event, if one is in the channel.
    *
@@ -84,7 +114,7 @@ export interface EventBoardGatewayDeps {
   readonly now?: () => Date;
 }
 
-export type BoardProblem = "NO_EVENT" | "NOT_TRACKED" | "NO_CHANNEL" | "NOT_POSTED";
+export type BoardProblem = "NO_EVENT" | "NO_CHANNEL" | "NOT_POSTED";
 
 export type BoardResult =
   | {
@@ -114,21 +144,22 @@ export class EventBoardGateway {
   }
 
   /**
-   * Publish or refresh one event's board.
+   * Publish or refresh one event's message.
+   *
+   * A scheduled event is published exactly like a live one — that is the point
+   * of the merge. Before this, the message was only made once the event went
+   * live, and the signup post was a separate message from a separate command;
+   * two messages about one event, and the one members had pressed buttons on
+   * was the one that then stopped being updated.
    *
    * `guildId` is the caller's claim and the event's own guild is the truth: a
-   * board request naming another server's event is refused rather than posted
-   * into whichever channel the caller happens to own.
+   * request naming another server's event is refused rather than posted into
+   * whichever channel the caller happens to own.
    */
   async publish(guildId: string, eventId: string): Promise<BoardResult> {
     const event = await this.d.events.boardEvent(eventId);
     if (event === null || event.guildId !== guildId) {
       return { ok: false, problem: "NO_EVENT", detail: "no such event in this server" };
-    }
-    if (event.status === "SCHEDULED" && event.messageId === null) {
-      // Boards belong to events that are happening. A scheduled one already has
-      // its own post with the RSVP buttons on it.
-      return { ok: false, problem: "NOT_TRACKED", detail: "the board opens when the event goes live" };
     }
 
     // The stored channel wins: a board follows the message it was posted as,
@@ -139,11 +170,14 @@ export class EventBoardGateway {
     }
 
     const view = await this.view(event);
-    const embed = renderEventBoardEmbed(view);
+    const embed = renderEventCard(view);
     const final = isFinal(event.status);
+    // The buttons live as long as the answer does. A cancelled or finished
+    // event keeps its card and loses its controls, in one edit.
+    const components = final ? [] : rsvpButtons(event.id);
 
     if (event.messageId !== null) {
-      const edited = await this.d.discord.edit(channelId, event.messageId, embed);
+      const edited = await this.d.discord.edit(channelId, event.messageId, embed, components);
       if (edited) {
         await this.d.events.bindBoardMessage(eventId, channelId, event.messageId, final);
         return { ok: true, channelId, messageId: event.messageId, edited: true, final };
@@ -155,12 +189,12 @@ export class EventBoardGateway {
     const orphan = this.d.discord.findBoard ? await this.d.discord.findBoard(channelId, eventId).catch(() => null) : null;
     if (orphan !== null) {
       this.log.info("adopting a board this event already has", { eventId, channelId, messageId: orphan });
-      const edited = await this.d.discord.edit(channelId, orphan, embed);
+      const edited = await this.d.discord.edit(channelId, orphan, embed, components);
       await this.d.events.bindBoardMessage(eventId, channelId, edited ? orphan : null, edited && final);
       if (edited) return { ok: true, channelId, messageId: orphan, edited: true, final };
     }
 
-    const messageId = await this.d.discord.post(channelId, embed);
+    const messageId = await this.d.discord.post(channelId, embed, components);
     if (messageId === null) {
       // Un-record first, exactly as a panel does: a stored id pointing at
       // nothing sends every future pass down the edit path to fail the same way.
@@ -172,28 +206,33 @@ export class EventBoardGateway {
   }
 
   /**
-   * Every configured metric gets its own table, in the organiser's order --
-   * re-ranking here would mean the board disagreed with the form they filled
-   * in, and showing only the first would hide most of a multi-metric contest.
+   * One event, as the card wants it.
    *
-   * Metrics the tracker does not recognise are dropped rather than rendered
-   * empty. They cannot have scores, because the tracker filters by the same
-   * predicate before it polls; an empty table for one would read as "nobody has
-   * gained any weight yet" about a metric that was never being measured. The
-   * service layer refuses unknown metrics at write time now, so this only
-   * covers rows stored before it did.
+   * One metric, not a list. An event is one activity now (`E-01`): the activity
+   * chosen at creation decides both what the event is called and the single
+   * thing it measures, so a card with three tables under it is a shape the
+   * platform can no longer produce. Rows created before that can still carry
+   * several, and the first is what their board has been sorting by — so that is
+   * the one kept, and the ranking members have been watching does not change
+   * underneath them on the day this ships.
+   *
+   * A metric the tracker does not recognise is dropped rather than rendered
+   * empty. It cannot have scores, because the tracker filters by the same
+   * predicate before it polls; an empty table under "weight" would read as
+   * "nobody has gained any weight yet" about a metric never being measured.
    */
-  private async view(event: EventBoardRow): Promise<EventBoardView> {
-    const metrics = event.trackedMetrics.filter(isEventMetric);
-    const tables = await Promise.all(
-      metrics.map(async (metric) => ({
-        metric,
-        // One metric's read failing costs that table and not the board: a
-        // partial board is still worth posting, and the next pass retries.
-        standings: (await this.d.events.standings(event.id, metric, BOARD_STANDINGS).catch(() => []))
-          .map((s) => ({ discordId: s.discordId, delta: s.delta })),
-      })),
-    );
+  private async view(event: EventBoardRow): Promise<EventCardView> {
+    const metric = event.trackedMetrics.find(isEventMetric) ?? null;
+    const standings =
+      metric === null
+        ? []
+        : // A failed read costs the table and not the message: a card with the
+          // roster and the details on it is still worth posting, and the next
+          // pass retries.
+          (await this.d.events.standings(event.id, metric, BOARD_STANDINGS).catch(() => [])).map((s) => ({
+            discordId: s.discordId,
+            delta: s.delta,
+          }));
     const unlinked = await this.d.events.unlinkedParticipants(event.id).catch(() => []);
 
     return {
@@ -202,7 +241,13 @@ export class EventBoardGateway {
       status: event.status,
       startsAt: event.startsAt,
       endsAt: event.endsAt,
-      metrics: tables,
+      description: event.description ?? null,
+      hostDiscordId: event.hostDiscordId ?? null,
+      capacity: event.capacity ?? null,
+      metric,
+      standings,
+      going: event.going ?? [],
+      maybe: event.maybe ?? [],
       participantCount: event.participantCount,
       unlinked,
       prize: event.prize,

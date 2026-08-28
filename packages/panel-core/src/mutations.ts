@@ -14,7 +14,7 @@ import {
   EVENT_MAX_TRACKED_METRICS,
   eventActivity,
   EVENT_POLL_MAX_MINUTES,
-  EVENT_POLL_MIN_MINUTES,
+  eventPollFloorMinutes,
   isAchievementTier,
   isConfigChannelSlot,
   isEventMetric,
@@ -526,6 +526,15 @@ export interface PanelMutationsDeps {
    */
   readonly eventEffects?: EventEffects;
   /**
+   * True where this deployment holds a production-tier Hypixel key, which is
+   * what lets an event be polled every half hour instead of every hour.
+   *
+   * Optional and false by default: an install that has not said so is assumed
+   * to be under the personal-key cap, which is the safe direction for a limit
+   * whose purpose is to be hard to exceed by accident.
+   */
+  readonly hypixelProductionKey?: boolean;
+  /**
    * Optional like the two above. Absent, the menu document still saves — it is
    * a settings row — but Publish refuses rather than reporting a message that
    * was never posted.
@@ -775,6 +784,7 @@ const EVENT_PRIZE_MAX = 200;
  */
 function readTrackerSettings(
   body: Record<string, unknown>,
+  floorMinutes: number,
 ): { settings: Record<string, unknown> } | { message: string } {
   const settings: Record<string, unknown> = {};
 
@@ -813,10 +823,11 @@ function readTrackerSettings(
       return { message: "pollIntervalMinutes must be a number" };
     }
     // Bounded here as well as in the service, so the panel says why rather than
-    // relaying a generic rejection. The floor is the Hypixel per-player cap, not
-    // a preference — see EVENT_POLL_MIN_MINUTES.
-    if (raw < EVENT_POLL_MIN_MINUTES || raw > EVENT_POLL_MAX_MINUTES) {
-      return { message: `the tracker polls every ${EVENT_POLL_MIN_MINUTES} to ${EVENT_POLL_MAX_MINUTES} minutes` };
+    // relaying a generic rejection. The floor is the Hypixel per-player cap and
+    // not a preference — an hour on a personal key, half of one where a
+    // production key has been configured. See `eventPollFloorMinutes`.
+    if (raw < floorMinutes || raw > EVENT_POLL_MAX_MINUTES) {
+      return { message: `the tracker polls every ${floorMinutes} to ${EVENT_POLL_MAX_MINUTES} minutes` };
     }
     settings["pollIntervalMinutes"] = raw;
   }
@@ -3286,7 +3297,7 @@ export class PanelMutations {
       // to be corrected in a second step — and one that went LIVE before that
       // step captured its baselines against the wrong metric list, which no
       // later edit can undo.
-      const tracker = readTrackerSettings(body);
+      const tracker = readTrackerSettings(body, this.pollFloor());
       if ("message" in tracker) return invalid(tracker.message);
 
       const result = await this.d.community.createEvent({
@@ -3301,6 +3312,20 @@ export class PanelMutations {
         ...tracker.settings,
         type: activity.type,
       });
+
+      // The message goes up now, not at the next sweep. It is the signup sheet:
+      // an event created for tonight whose post appears half an hour later has
+      // spent that half hour invisible to the people it needed answers from.
+      // Best-effort on purpose — the event is created and stored either way, and
+      // the sweep posts the message on its next pass if this call cannot.
+      if (result.ok && this.d.eventEffects !== undefined) {
+        try {
+          await this.d.eventEffects.publishBoard(guildId, result.value.id, actorDiscordId);
+        } catch {
+          // Left to the sweep.
+        }
+      }
+
       return {
         result,
         change: { title, activity: activity.key, startsAt, capacity, description, ...tracker.settings },
@@ -3365,7 +3390,7 @@ export class PanelMutations {
         edit["capacity"] = raw;
       }
 
-      const tracker = readTrackerSettings(body);
+      const tracker = readTrackerSettings(body, this.pollFloor());
       if ("message" in tracker) return invalid(tracker.message);
       Object.assign(edit, tracker.settings);
 
@@ -3551,6 +3576,11 @@ export class PanelMutations {
    * panel that only records its successes hides exactly the pattern (a wave of
    * refused writes) worth noticing.
    */
+  /** The shortest poll interval this deployment is allowed to offer. */
+  private pollFloor(): number {
+    return eventPollFloorMinutes(this.d.hypixelProductionKey === true);
+  }
+
   private async run(
     session: PanelSession | null,
     guildId: string,

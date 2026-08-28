@@ -58,8 +58,15 @@ export interface EventBoardRow {
   readonly trackedMetrics: readonly string[];
   /** GOING RSVPs — who the event is actually about. */
   readonly participantCount: number;
-  /** Free text, shown on the board. Informational: nothing pays it out. */
+  /** Free text, shown on the card. Informational: nothing pays it out. */
   readonly prize: string | null;
+  /** The organiser's own words, and who they are. */
+  readonly description: string | null;
+  readonly hostDiscordId: string | null;
+  readonly capacity: number | null;
+  /** The roster the message shows until the event starts, capped by the read. */
+  readonly going: readonly { readonly discordId: string }[];
+  readonly maybe: readonly { readonly discordId: string }[];
 }
 
 export interface EventStanding {
@@ -68,6 +75,14 @@ export interface EventStanding {
   readonly delta: number;
 }
 
+
+/**
+ * How many names the roster read fetches.
+ *
+ * Sized to what the card actually prints — twenty mentions and a "+N more" —
+ * plus a little headroom, because both states share one query.
+ */
+const ROSTER_NAMES = 40;
 
 export const eventJobRepository = {
   /** SCHEDULED and LIVE events across every guild — the sweep's whole input. */
@@ -252,6 +267,12 @@ export const eventJobRepository = {
     const rows = await prisma.event.findMany({
       where: {
         OR: [
+          // A scheduled event with no message yet has never been announced at
+          // all: its message *is* the signup sheet, so this is what puts one in
+          // the channel. Already-posted scheduled events are absent on purpose
+          // — a roster changes when somebody presses a button, and the press
+          // refreshes the message itself rather than waiting half an hour.
+          { status: "SCHEDULED", messageId: null },
           { status: "LIVE", OR: [{ boardUpdatedAt: null }, { boardUpdatedAt: { lt: staleBefore } }] },
           { status: { in: ["COMPLETED", "CANCELLED"] }, boardFinal: false, NOT: { messageId: null } },
         ],
@@ -266,6 +287,7 @@ export const eventJobRepository = {
     // clock and the tracker polls hourly at the fastest, so without this every
     // data change costs two edits, the second redrawing the same table.
     const needsCheck = rows.filter((r) => r.status === "LIVE" && r.boardUpdatedAt !== null);
+
     const moved = new Map<string, Date | null>();
     if (needsCheck.length > 0) {
       const groups = await prisma.eventScore.groupBy({
@@ -288,7 +310,16 @@ export const eventJobRepository = {
       .map((r) => ({ id: r.id, guildId: r.guildId }));
   },
 
-  /** Everything the board renders, in one read. */
+  /**
+   * Everything the event message renders, in one read.
+   *
+   * The roster comes back with it rather than from a second call, because the
+   * message is the signup sheet before it is a leaderboard and a card missing
+   * its roster is a card missing its whole purpose for the first half of an
+   * event's life. Capped at `ROSTER_NAMES`: the card prints twenty mentions and
+   * a remainder, and reading four hundred rows to render twenty is a query the
+   * board runs on every pass.
+   */
   async boardEvent(eventId: string): Promise<EventBoardRow | null> {
     const row = await prisma.event.findUnique({
       where: { id: eventId },
@@ -296,13 +327,22 @@ export const eventJobRepository = {
         id: true,
         guildId: true,
         title: true,
+        description: true,
         status: true,
         startsAt: true,
         endsAt: true,
+        capacity: true,
+        hostDiscordId: true,
         channelId: true,
         messageId: true,
         trackedMetrics: true,
         prize: true,
+        rsvps: {
+          where: { state: { in: ["GOING", "MAYBE"] } },
+          orderBy: { respondedAt: "asc" },
+          take: ROSTER_NAMES,
+          select: { discordId: true, state: true },
+        },
         _count: { select: { rsvps: { where: { state: "GOING" } } } },
       },
     });
@@ -311,13 +351,21 @@ export const eventJobRepository = {
       id: row.id,
       guildId: row.guildId,
       title: row.title,
+      description: row.description,
       status: row.status as EventBoardRow["status"],
       startsAt: row.startsAt.toISOString(),
       endsAt: row.endsAt?.toISOString() ?? null,
+      capacity: row.capacity,
+      hostDiscordId: row.hostDiscordId,
       channelId: row.channelId,
       messageId: row.messageId,
       trackedMetrics: row.trackedMetrics,
+      // The count is the full one, from the aggregate: the roster is capped and
+      // the number of people coming is not something to report a truncated
+      // version of.
       participantCount: row._count.rsvps,
+      going: row.rsvps.filter((r) => r.state === "GOING").map((r) => ({ discordId: r.discordId })),
+      maybe: row.rsvps.filter((r) => r.state === "MAYBE").map((r) => ({ discordId: r.discordId })),
       prize: row.prize,
     };
   },

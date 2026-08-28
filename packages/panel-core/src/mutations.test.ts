@@ -166,7 +166,12 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
     decideApplication: record("decideApplication"),
     closeTicket: record("closeTicket"),
     setMemberRole: record("setMemberRole"),
-    createEvent: record("createEvent"),
+    // Answers with the created event rather than recording and returning void:
+    // the message that announces it is posted from the id this hands back.
+    async createEvent(input: Record<string, unknown>) {
+      recorded.calls.push({ method: "createEvent", args: [input] });
+      return ok({ id: "evt_new", guildId: "g1" });
+    },
     cancelEvent: record("cancelEvent"),
     updateEvent: record("updateEvent"),
     completeEvent: record("completeEvent"),
@@ -456,6 +461,8 @@ function make(
     noExceptions?: boolean;
     /** What `remove` reports back: false is "another admin got there first". */
     exceptionRemoved?: boolean;
+    /** This deployment holds a production-tier Hypixel key (DP-1). */
+    productionKey?: boolean;
     /** Same, for a deployment with no roster to preview role changes against. */
     noRolesInsight?: boolean;
     /** The roster the dry run reads, when there is one. */
@@ -484,6 +491,7 @@ function make(
     ...(over.noEventEffects === true
       ? {}
       : { eventEffects: eventEffectsRecorder(recorded, over.eventEffectsThrow === true) }),
+    ...(over.productionKey === true ? { hypixelProductionKey: true } : {}),
     ...(over.noRoleMenuEffects === true
       ? {}
       : { roleMenuEffects: roleMenuEffectsRecorder(recorded, over.roleMenuEffectsThrow === true) }),
@@ -928,7 +936,7 @@ test("an officer schedules an event hosted by themselves, not by the body", asyn
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(recorded.calls, [
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "createEvent"), [
     {
       method: "createEvent",
       args: [
@@ -953,6 +961,35 @@ test("an officer schedules an event hosted by themselves, not by the body", asyn
  * as long as those were three independent controls — stops being an event
  * somebody can create by accident.
  */
+/**
+ * The message is the signup sheet, so it goes up with the event and not at the
+ * next sweep — an event created for tonight cannot spend half an hour invisible
+ * to the people it needs answers from.
+ */
+test("creating an event posts its message straight away", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.createEvent(session(), "g1", {
+    activity: "CATACOMBS",
+    startsAt: "2026-09-01T18:00:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls.at(-1), { method: "publishBoard", args: ["g1", "evt_new", "111"] });
+});
+
+/** A bot that cannot post is not a reason to lose the event that was created. */
+test("an event survives a bot that cannot post its message", async () => {
+  const { mutations } = make({ roleMap: { "111": "OFFICER" }, eventEffectsThrow: true });
+
+  const result = await mutations.createEvent(session(), "g1", {
+    activity: "CATACOMBS",
+    startsAt: "2026-09-01T18:00:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+});
+
 test("the activity fixes the type and the one metric, whatever the body claims", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
 
@@ -1052,6 +1089,31 @@ test("a poll interval under the Hypixel floor is refused rather than silently cl
   assert.equal(result.ok, false);
   assert.match(JSON.stringify(result), /60 to 1440 minutes/);
   assert.equal(recorded.calls.some((c) => c.method === "updateEvent"), false, "nothing was written");
+});
+
+/**
+ * DP-1, as a flag rather than a change: half-hourly polling is what a contest
+ * wants and what the per-player cap forbids, so the shorter floor is unlocked
+ * by the same setting that asserts the production grant and by nothing else.
+ */
+test("a production key unlocks the half-hourly floor the personal key forbids", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" }, productionKey: true });
+
+  const result = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", pollIntervalMinutes: 30 });
+
+  assert.equal(result.ok, true);
+  const sent = recorded.calls.find((c) => c.method === "updateEvent")?.args[0] as Record<string, unknown>;
+  assert.equal(sent["pollIntervalMinutes"], 30);
+});
+
+test("and nothing below it: the grant moves the floor, it does not remove one", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" }, productionKey: true });
+
+  const result = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", pollIntervalMinutes: 15 });
+
+  assert.equal(result.ok, false);
+  assert.match(JSON.stringify(result), /30 to 1440 minutes/);
+  assert.equal(recorded.calls.some((c) => c.method === "updateEvent"), false);
 });
 
 test("an unknown metric is refused, and a known one from the widened catalog is not", async () => {

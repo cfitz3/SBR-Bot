@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../../packages/analytics" },
+    { "path": "../../brand" },
     { "path": "../../packages/bridge" },
     { "path": "../../packages/commands-bridge" },
     { "path": "../../packages/community" },

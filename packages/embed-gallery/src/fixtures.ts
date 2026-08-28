@@ -11,7 +11,7 @@
  * because a gallery built only from tidy data proves the renderers work on data
  * we never see.
  */
-import type { EventBoardView, EventReminderView } from "@sbr/commands-bridge";
+import type { EventCardView, EventReminderView } from "@sbr/commands-bridge";
 import type {
   AccessoryReportDTO,
   AuctionListingDTO,
@@ -825,39 +825,53 @@ export const EVENT_REMINDER: EventReminderView = {
   offsetMinutes: 15,
 };
 
-export const EVENT_BOARD: EventBoardView = {
+/**
+ * The event message, at the three stages it is edited through.
+ *
+ * Three fixtures of one message rather than three cards, because that is the
+ * thing being reviewed: whether the same post reads correctly as a signup
+ * sheet, as a live table, and as a result left in the channel.
+ */
+export const EVENT_SIGNUP: EventCardView = {
   eventId: EVENT.id,
   title: EVENT.title,
+  status: "SCHEDULED",
+  startsAt: iso(2 * 86_400_000),
+  endsAt: iso(2 * 86_400_000 + 3 * 60 * 60_000),
+  description: "Bring pots and a stack of superboom. We run until the last party clears.",
+  hostDiscordId: "100000000000000002",
+  capacity: 40,
+  metric: "catacombsLevel",
+  prize: "500k coins and the winner's pick of next week's event",
+  going: [
+    { discordId: "200000000000000001" },
+    { discordId: "200000000000000002" },
+    { discordId: "200000000000000003" },
+  ],
+  maybe: [{ discordId: "200000000000000004" }],
+  participantCount: 3,
+  updatedAt: iso(-2 * 60_000),
+};
+
+export const EVENT_BOARD: EventCardView = {
+  ...EVENT_SIGNUP,
   status: "LIVE",
   startsAt: iso(-90 * 60_000),
   endsAt: iso(3 * 60 * 60_000),
-  prize: "500k coins and the winner's pick of next week's event",
   participantCount: 27,
-  // Two metrics, because one was the shape that hid the other: the gallery is
-  // where a renderer's multi-column case is meant to be visible.
-  metrics: [
-    {
-      metric: "catacombsLevel",
-      standings: [
-        { discordId: "200000000000000001", delta: 4.82 },
-        { discordId: "200000000000000002", delta: 3.11 },
-        { discordId: "200000000000000003", delta: 2.4 },
-        { discordId: "200000000000000004", delta: 0.75 },
-      ],
-    },
-    {
-      metric: "slayerEnderman",
-      standings: [
-        { discordId: "200000000000000002", delta: 1_842_000 },
-        { discordId: "200000000000000001", delta: 960_500 },
-      ],
-    },
+  standings: [
+    { discordId: "200000000000000001", delta: 4.82 },
+    { discordId: "200000000000000002", delta: 3.11 },
+    { discordId: "200000000000000003", delta: 2.4 },
+    { discordId: "200000000000000004", delta: 0.75 },
   ],
+  // One person came and cannot be scored. The card has to name them, because
+  // being absent from a leaderboard with no explanation reads as a bug.
   unlinked: [{ discordId: "200000000000000009" }],
   updatedAt: iso(-4 * 60_000),
 };
 
-export const EVENT_BOARD_FINAL: EventBoardView = {
+export const EVENT_BOARD_FINAL: EventCardView = {
   ...EVENT_BOARD,
   status: "COMPLETED",
   endsAt: iso(-5 * 60_000),

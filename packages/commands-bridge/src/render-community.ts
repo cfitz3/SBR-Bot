@@ -15,9 +15,18 @@ import type {
   PendingMilestoneDTO,
   RsvpEntryDTO,
   TicketDTO,
+  ViewColor,
 } from "@sbr/shared-types";
 import { copy } from "@sbr/brand";
-import { eventMetricFormat, FLATTEN_SEPARATOR, isEventMetric, padInlineRow } from "@sbr/shared-types";
+import { card, facts, field, type Fact } from "@sbr/embed-kit";
+import { eventMetricFormat, isEventMetric, padInlineRow } from "@sbr/shared-types";
+
+/**
+ * The event card's own words, read once. Same split as `render.ts` uses: `C`
+ * is per-card copy, `F` is the field names shared across cards.
+ */
+const C = copy.embed.card;
+const F = copy.embed.field;
 
 /**
  * Discord renders `<t:unix:R>` as a live relative timestamp in the viewer's own
@@ -49,19 +58,27 @@ export function renderEventsEmbed(events: readonly EventDTO[]): EmbedView {
   };
 }
 
+/**
+ * One event, from the DTO a command holds.
+ *
+ * An adapter rather than a second renderer: a member who sees the event message
+ * in the events channel and then runs a command about the same event should be
+ * looking at the same card, not at a smaller relative of it. Everything the DTO
+ * cannot say — who is on the roster, what the standings are — is simply absent,
+ * and the card is built to render without it.
+ */
 export function renderEventEmbed(event: EventDTO): EmbedView {
-  const fields: EmbedFieldView[] = [
-    { name: "Starts", value: `${timestampTag(event.startsAt)} (${timestampTag(event.startsAt, "R")})`, inline: true },
-    { name: "Capacity", value: event.capacity === null ? "unlimited" : `${event.capacity}`, inline: true },
-    { name: "Host", value: event.hostDiscordId == null ? "—" : `<@${event.hostDiscordId}>`, inline: true },
-  ];
-  const embed: EmbedView = {
+  return renderEventCard({
+    eventId: event.id,
     title: event.title,
-    fields,
-    footer: `id ${event.id}`,
-    color: event.status === "CANCELLED" ? "DANGER" : "INFO",
-  };
-  return event.description == null ? embed : { ...embed, description: event.description };
+    status: event.status === "CANCELLED" ? "CANCELLED" : "SCHEDULED",
+    startsAt: event.startsAt,
+    description: event.description ?? null,
+    hostDiscordId: event.hostDiscordId ?? null,
+    capacity: event.capacity,
+    participantCount: event.rsvpCount,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export interface EventReminderView {
@@ -99,40 +116,52 @@ export interface EventBoardStandingView {
   readonly delta: number;
 }
 
-/** One tracked metric and the table under it. */
-export interface EventBoardMetricView {
-  readonly metric: string;
-  readonly standings: readonly EventBoardStandingView[];
-}
-
-export interface EventBoardView {
+/**
+ * One event, at whatever stage of its life it is in.
+ *
+ * There is one message per event and this renders all of it: the signup roster
+ * before it starts, the live table while it runs, the result card afterwards.
+ * That is why almost every field is optional — the same view is assembled from
+ * a full board read, from an events-page row, and from a command's DTO, and a
+ * caller that cannot answer a question leaves it out rather than inventing an
+ * answer for it.
+ */
+export interface EventCardView {
   readonly eventId: string;
   readonly title: string;
   readonly status: "SCHEDULED" | "LIVE" | "COMPLETED" | "CANCELLED";
   readonly startsAt: string;
   readonly endsAt?: string | null;
+  /** The organiser's own words about the event. */
+  readonly description?: string | null;
+  readonly hostDiscordId?: string | null;
+  readonly capacity?: number | null;
   /**
-   * Every metric the event scores, each with its own table.
+   * The one metric this event scores, or null for an event that scores nothing.
    *
-   * A list rather than one primary metric: an organiser who picked three
-   * metrics ran a three-part contest, and a board that showed only the first
-   * one was quietly hiding two thirds of the result. Empty when the event
-   * tracks nothing, which is a legitimate state -- a social meetup has a board
-   * for the countdown and the turnout, not for a leaderboard.
+   * One rather than a list, because an event is one activity now (`E-01`): the
+   * activity picked at creation fixes both what the event is called and what it
+   * measures. Rows created before that could carry several, and the caller
+   * passes the first — the one their board already sorted by — so an old
+   * contest keeps the ranking it has been running with.
    */
-  readonly metrics: readonly EventBoardMetricView[];
+  readonly metric?: string | null;
+  readonly standings?: readonly EventBoardStandingView[];
+  /** Who said yes, and who said maybe — the roster the signup message shows. */
+  readonly going?: readonly { readonly discordId: string }[];
+  readonly maybe?: readonly { readonly discordId: string }[];
   readonly participantCount: number;
   /**
    * People who said they were coming and have no linked Minecraft account.
    *
-   * Named on the board rather than dropped, matching what the panel does with
+   * Named on the card rather than dropped, matching what the panel does with
    * the same fact: somebody absent from the standings because nothing can read
    * their stats should find that out here, while there is still time to link.
    */
   readonly unlinked?: readonly { readonly discordId: string }[];
   /** Free text, informational. Nothing on this platform pays it out. */
   readonly prize?: string | null;
-  /** When this render was made, for the "last updated" stamp. */
+  /** When this render was made. Becomes the card's native timestamp. */
   readonly updatedAt: string;
 }
 
@@ -211,80 +240,113 @@ function trim(value: number): string {
   return value.toFixed(2).replace(/\.?0+$/, "");
 }
 
-const STATUS_LABELS: Readonly<Record<EventBoardView["status"], string>> = {
-  SCHEDULED: "starting soon",
-  LIVE: "live now",
-  COMPLETED: "final results",
-  CANCELLED: "cancelled",
+/** The sentence the card opens with, which is the whole of what changed. */
+const HEADLINES: Readonly<Record<EventCardView["status"], string>> = {
+  SCHEDULED: C.eventOpen,
+  LIVE: C.eventLive,
+  COMPLETED: C.eventDone,
+  CANCELLED: C.eventOff,
+};
+
+const TONES: Readonly<Record<EventCardView["status"], ViewColor>> = {
+  SCHEDULED: "INFO",
+  LIVE: "SUCCESS",
+  COMPLETED: "NEUTRAL",
+  CANCELLED: "DANGER",
 };
 
 /**
- * The tracker board: one message per event, posted once and edited in place.
+ * The event card: one message per event, posted once and edited in place.
  *
- * It is written to be readable at every stage of an event's life, because it is
- * the same message throughout — a scheduled event shows a countdown and no
- * standings, a live one shows the top of the table, and a completed one is left
- * in the channel as the result card rather than deleted.
+ * It is deliberately the same card at every stage rather than three cards that
+ * replace each other. An event is one thing that happens over time — signups,
+ * then a contest, then a result — and a channel that posts a fresh message at
+ * each stage leaves two dead ones above the live one, each of them wrong. So
+ * the sections come and go and the message does not: the roster is there until
+ * the event starts, the standings appear when there is something to rank, and
+ * the last edit leaves the result in the channel as the event's own record.
+ *
+ * Nothing here puts data in a field name. The counts that used to be in them —
+ * "Top 4 · catacombs level", "Not scored — no linked account (1)" — read as
+ * headings that change under you while the numbers move; they are inside the
+ * values now, where a number belongs.
  */
-export function renderEventBoardEmbed(view: EventBoardView): EmbedView {
+export function renderEventCard(view: EventCardView): EmbedView {
   const final = view.status === "COMPLETED" || view.status === "CANCELLED";
-  const when = final
-    ? `Ended ${timestampTag(view.endsAt == null ? view.updatedAt : view.endsAt, "R")}`
-    : `${timestampTag(view.startsAt)} (${timestampTag(view.startsAt, "R")})`;
+  const described = (view.description ?? "").trim();
+  const ends = view.endsAt == null || final ? null : timestampTag(view.endsAt, "R");
+  const ended = final && view.endsAt != null ? timestampTag(view.endsAt) : null;
 
-  const fields: EmbedFieldView[] = [
-    { name: view.status === "LIVE" ? "Started" : "Starts", value: when, inline: true },
-    { name: "Participants", value: `${view.participantCount}`, inline: true },
+  const detail: Fact[] = [
+    {
+      label: view.status === "SCHEDULED" ? F.starts : F.started,
+      value: `${timestampTag(view.startsAt)} (${timestampTag(view.startsAt, "R")})`,
+    },
   ];
+  // Only one of the two: a finished event says when it ended, a running one
+  // says how long is left, and neither wants the other's line.
+  if (ends !== null) detail.push({ label: F.ends, value: ends });
+  if (ended !== null) detail.push({ label: F.ended, value: ended });
+  detail.push({ label: F.host, value: view.hostDiscordId == null ? null : `<@${view.hostDiscordId}>` });
+  detail.push({ label: F.signedUp, value: signupCount(view) });
+  if ((view.prize ?? "").trim() !== "") detail.push({ label: F.prize, value: (view.prize ?? "").trim() });
 
-  // Time remaining, but only while there is any: a finished event already says
-  // when it ended on the line above, and repeating it as "ends in -3 hours" is
-  // the kind of detail that makes a card look unmaintained.
-  if (!final && view.endsAt != null) {
-    fields.push({ name: "Ends", value: timestampTag(view.endsAt, "R"), inline: true });
-  }
-
-  if (view.prize != null && view.prize.trim() !== "") {
-    fields.push({ name: "Prize", value: view.prize.trim(), inline: false });
-  }
-
-  // What is being scored, named on the board itself. Without it a viewer has to
-  // ask staff -- or guess from the numbers -- what the contest is measuring.
-  if (view.metrics.length > 0) {
-    fields.push({
-      name: "Scoring",
-      value: view.metrics.map((m) => metricLabel(m.metric)).join(FLATTEN_SEPARATOR),
-      inline: false,
-    });
-  }
-
-  for (const entry of view.metrics) {
-    const shown = Math.min(entry.standings.length, BOARD_STANDINGS);
-    fields.push({
-      name: shown === 0 ? `Standings · ${metricLabel(entry.metric)}` : `Top ${shown} · ${metricLabel(entry.metric)}`,
-      value: standingsBlock(entry.metric, entry.standings),
-      inline: false,
-    });
-  }
-
-  const unlinked = view.unlinked ?? [];
-  if (unlinked.length > 0) {
-    fields.push({
-      name: `Not scored — no linked account (${unlinked.length})`,
-      value: mentionList(unlinked),
-      inline: false,
-    });
-  }
-
-  return {
-    title: `${view.title} — ${STATUS_LABELS[view.status]}`,
-    fields,
-    footer: `id ${view.eventId} • updated ${timestampTag(view.updatedAt, "R")}`,
-    color: view.status === "CANCELLED" ? "DANGER" : view.status === "LIVE" ? "SUCCESS" : "INFO",
-  };
+  return card({
+    tone: TONES[view.status],
+    title: view.title,
+    // The status sentence leads, and the organiser's own words follow it: the
+    // reader wants "is this open" answered before they read the pitch.
+    headline: described === "" ? HEADLINES[view.status] : `${HEADLINES[view.status]}\n\n${described}`,
+    fields: [
+      field(F.details, facts(detail)),
+      field(F.scoring, view.metric == null ? C.eventUnscored : metricLabel(view.metric)),
+      // The roster is what the message is *for* until the event starts. After
+      // that the standings are, and printing both would push the table under
+      // a list of names that has stopped changing.
+      view.status === "SCHEDULED" ? field(F.roster, rosterBlock(view)) : null,
+      view.status === "SCHEDULED" || view.metric == null
+        ? null
+        : field(F.standings, standingsBlock(view.metric, view.standings ?? [])),
+      field(F.notScored, unlinkedBlock(view.unlinked ?? [])),
+    ],
+    // Static: the id is how `findBoard` recognises this message as this
+    // event's after a crash, and it never changes. The freshness that used to
+    // sit beside it is the native timestamp now.
+    footer: C.eventId.replace("{id}", view.eventId),
+    timestamp: view.updatedAt,
+  });
 }
 
-/** How many rows the board shows. Ten fits a field without scrolling past it. */
+/** `12` or `12/20` — a cap is only worth printing when there is one. */
+function signupCount(view: EventCardView): string {
+  const going = view.participantCount;
+  return view.capacity == null ? `${going}` : `${going}/${view.capacity}`;
+}
+
+/**
+ * Who is coming, before the event starts.
+ *
+ * Maybes are listed under the yeses rather than mixed in with them: an
+ * organiser deciding whether to run a carry night needs the two counts apart,
+ * and a roster that reads them as one number is the reason they ask in chat.
+ */
+function rosterBlock(view: EventCardView): string {
+  const going = view.going ?? [];
+  const maybe = view.maybe ?? [];
+  if (going.length === 0 && maybe.length === 0) return C.eventNobody;
+  const lines: string[] = [];
+  if (going.length > 0) lines.push(`${C.eventGoing.replace("{n}", String(going.length))} ${mentionList(going)}`);
+  if (maybe.length > 0) lines.push(`${C.eventMaybe.replace("{n}", String(maybe.length))} ${mentionList(maybe)}`);
+  return lines.join("\n");
+}
+
+/** The unlinked, named with their count in the value rather than in a heading. */
+function unlinkedBlock(entries: readonly { readonly discordId: string }[]): string {
+  if (entries.length === 0) return "";
+  return `${C.eventUnlinked.replace("{n}", String(entries.length))} ${mentionList(entries)}`;
+}
+
+/** How many rows the card shows. Ten fits a field without scrolling past it. */
 export const BOARD_STANDINGS = 10;
 
 /**
@@ -297,12 +359,12 @@ function standingsBlock(metric: string, standings: readonly EventBoardStandingVi
   if (standings.length === 0) {
     // Not an error: the first poll of a live event has captured baselines and
     // nothing else, so everyone is legitimately on zero.
-    return "No scores yet — the first poll sets everyone's baseline.";
+    return C.eventNoScores;
   }
   // Everyone on zero is a different fact from nobody being ranked, and saying so
   // beats printing a column of "+0" that reads as a broken tracker.
   if (standings.every((s) => s.delta === 0)) {
-    return `Nobody has gained any ${metricLabel(metric)} yet.`;
+    return C.eventLevel.replace("{metric}", metricLabel(metric));
   }
   return standings
     .slice(0, BOARD_STANDINGS)

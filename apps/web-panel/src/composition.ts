@@ -390,7 +390,10 @@ export async function createPanelApp(): Promise<PanelApp> {
       token: config.internalApi.token,
       logger: log,
     }),
-    // Same bridge, same token: the tracker board lives in a guild channel the
+    // Which key this deployment holds decides how often an event may be polled,
+    // and therefore the shortest interval the events page will accept.
+    hypixelProductionKey: config.hypixel.keyMode === "production",
+    // Same bridge, same token: the event message lives in a guild channel the
     // bridge bot is in, and redrawing it is one REST call there.
     eventEffects: createEventEffects({
       baseUrl: config.internalApi.bridgeBaseUrl,

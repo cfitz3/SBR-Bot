@@ -353,11 +353,11 @@ unrelated edit.
 The welcome editor previews char-for-char in the browser, and the obvious move was to copy
 it. It does not work here, and the reason is worth writing down: **the browser only receives
 `panel` and `error` copy.** `embed.field.*` and `embed.metricPhrase` never reach it. A
-client-side mirror of `renderEventBoardEmbed` would therefore be a second implementation
+client-side mirror of `renderEventCard` would therefore be a second implementation
 with its own copy of the strings, and it would start lying the moment a guild overrode one.
 
 So the preview is a `GET /api/guilds/:id/event-board?event=:id` that calls the bridge's own
-`renderEventBoardEmbed` on the same rows the page is already showing, and renders the
+`renderEventCard` on the same rows the page is already showing, and renders the
 returned `EmbedView`. It cannot disagree with the post, because it *is* the post.
 
 This adds a `@sbr/commands-bridge` dependency to the `web-panel` app. Deliberately to the

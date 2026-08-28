@@ -322,6 +322,33 @@ export function isEventMetric(value: unknown): value is EventMetric {
  * The ceiling is a day, past which "tracked" and "not tracked" stop differing.
  */
 export const EVENT_POLL_MIN_MINUTES = 60;
+
+/**
+ * The floor a production-tier Hypixel key buys, in minutes.
+ *
+ * Thirty is the cadence a contest actually wants: an hour-long floor means the
+ * standings members are watching are up to an hour stale, and the last hour of
+ * a close event is the hour nobody can see. It is not the shipped default,
+ * because the one-request-per-player-per-hour cap in the Developer API Policy
+ * applies to this platform until Hypixel grants a production key that lifts it.
+ *
+ * So this is a flag, not a change: `eventPollFloorMinutes` returns sixty on
+ * every install, and thirty only where `HYPIXEL_KEY_MODE=production` asserts
+ * the grant — the same switch that already widens the per-player limiter, so
+ * the two cannot drift into disagreeing about what we are allowed to do.
+ */
+export const EVENT_POLL_PRODUCTION_MIN_MINUTES = 30;
+
+/**
+ * The shortest interval this install may poll an event at.
+ *
+ * Both callers pass the same fact through it — the tracker clamps reads and the
+ * panel refuses writes — so an operator is never offered an interval the poller
+ * would silently round up.
+ */
+export function eventPollFloorMinutes(productionKey: boolean): number {
+  return productionKey ? EVENT_POLL_PRODUCTION_MIN_MINUTES : EVENT_POLL_MIN_MINUTES;
+}
 export const EVENT_POLL_MAX_MINUTES = 1440;
 
 /**

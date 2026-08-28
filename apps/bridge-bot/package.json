@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@sbr/analytics": "*",
+    "@sbr/brand": "*",
     "@sbr/bridge": "*",
     "@sbr/commands-bridge": "*",
     "@sbr/community": "*",

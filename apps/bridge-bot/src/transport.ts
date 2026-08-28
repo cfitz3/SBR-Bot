@@ -22,6 +22,7 @@ import {
   readLevelOptOuts,
 } from "@sbr/commands-bridge";
 import { EchoLedger } from "@sbr/bridge";
+import { copy } from "@sbr/brand";
 import type { ModAckOutcome } from "@sbr/redis";
 import {
   ComponentRouter,
@@ -154,6 +155,17 @@ export function registerCommunityButtons(app: BridgeApp, components: ComponentRo
     }
     const reply = await communityButtonReplies.rsvp(eventId, interaction.user.id, state, app.handlerDeps);
     await interaction.reply({ content: reply.text, ephemeral: true });
+
+    // The roster on the message is what the press just changed, so the message
+    // is redrawn now rather than at the next sweep. Detached and swallowed: the
+    // member's answer is already recorded and already acknowledged, and a
+    // channel the bot can no longer edit is not a reason to fail their RSVP.
+    const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
+    if (guildId !== null) {
+      void app.eventBoard?.publish(guildId, eventId).catch((error: unknown) => {
+        app.log.warn("could not refresh the event message", { eventId, error: String(error) });
+      });
+    }
   });
 
   components.register("run", async (interaction, [postId, action]) => {
@@ -510,24 +522,35 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       events: eventJobRepository,
       getChannel: (guildId) => app.handlerDeps.config.getChannel(guildId, "events"),
       discord: {
-        async post(channelId, embed) {
+        async post(channelId, embed, components) {
           const channel = await discord.channels.fetch(channelId).catch(() => null);
           if (!channel || !channel.isTextBased() || !("send" in channel)) return null;
           const message = await (channel as SendableChannel)
-            // The standings are a column of `<@id>` mentions and none of them
-            // is a ping: the board is redrawn every half hour and would
-            // otherwise notify the top ten each time.
-            .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+            // The roster and the standings are columns of `<@id>` mentions and
+            // none of them is a ping: the message is redrawn on every RSVP and
+            // would otherwise notify everybody on it each time.
+            .send({
+              embeds: [toEmbed(embed)],
+              allowedMentions: { parse: [] },
+              components: (components ?? []).map(toActionRow),
+            })
             .catch(() => null);
           return message?.id ?? null;
         },
-        async edit(channelId, messageId, embed) {
+        async edit(channelId, messageId, embed, components) {
           const channel = await discord.channels.fetch(channelId).catch(() => null);
           if (!channel || !channel.isTextBased() || !("messages" in channel)) return false;
           const message = await channel.messages.fetch(messageId).catch(() => null);
           if (message === null) return false;
           const edited = await message
-            .edit({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+            // Always sent, empty included: this is what takes the RSVP buttons
+            // off a finished event, and an omitted `components` would leave
+            // them there to be pressed.
+            .edit({
+              embeds: [toEmbed(embed)],
+              allowedMentions: { parse: [] },
+              components: (components ?? []).map(toActionRow),
+            })
             .catch(() => null);
           return edited !== null;
         },
@@ -536,14 +559,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           if (!channel || !channel.isTextBased() || !("messages" in channel)) return null;
           const recent = await channel.messages.fetch({ limit: 50 }).catch(() => null);
           if (recent === null) return null;
-          // The board stamps `id <eventId>` in its footer, which is what makes
-          // one identifiable at all. Restricted to this bot's own messages so a
+          // The card stamps the event id in its footer, which is what makes one
+          // identifiable at all. Restricted to this bot's own messages so a
           // member quoting the id in a footer-shaped line cannot hand us a
           // message we would then try to edit.
           const found = recent.find(
             (m) =>
               m.author.id === discord.user?.id &&
-              m.embeds.some((e) => (e.footer?.text ?? "").includes(`id ${eventId}`)),
+              m.embeds.some((e) => (e.footer?.text ?? "").includes(copy.embed.card.eventId.replace("{id}", eventId))),
           );
           return found?.id ?? null;
         },

@@ -21,7 +21,10 @@ import { coveredRenderers, GALLERY, galleryCard } from "./index.js";
  * alternative — a hand-kept list of renderers — is the drift this test exists
  * to catch.
  */
-const RENDERER = /^render[A-Za-z]*(Embed|Pages)$/;
+// `Card` joined `Embed` when F-01 landed: a renderer that builds one card
+// through the shared builder is named for what it builds, and the gallery has
+// to see those too or the newest cards are exactly the uncovered ones.
+const RENDERER = /^render[A-Za-z]*(Embed|Pages|Card)$/;
 
 function renderersOf(mod: Record<string, unknown>): readonly string[] {
   return Object.keys(mod).filter((k) => RENDERER.test(k) && typeof mod[k] === "function");

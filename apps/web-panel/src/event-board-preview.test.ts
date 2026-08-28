@@ -98,9 +98,10 @@ test("the preview carries the prize, the standings and the unlinked", () => {
 test("the stamp is the moment of the preview, not the last redraw", () => {
   const embed = boardPreview(allowed(vm({ events: [event({ boardUpdatedAt: START })] })), NOW).data?.embed;
   assert.ok(embed);
-  // Discord timestamp tags are seconds since the epoch, so this is the one
-  // number that says which clock the footer was drawn from.
-  assert.match(JSON.stringify(embed), new RegExp(String(Math.floor(NOW.getTime() / 1000))));
+  // The card carries a native timestamp rather than a hand-typed stamp in the
+  // footer, so this is the one field that says which clock it was drawn from —
+  // and it is the preview's clock, not the last redraw's.
+  assert.equal(embed.timestamp, NOW.toISOString());
 });
 
 test("an unknown status is previewed as scheduled rather than throwing", () => {

@@ -22,7 +22,13 @@
  * fetching — the same function the bulk cadence uses — so there is one
  * profile-read path rather than two that drift, and one per-player claim.
  */
-import { EVENT_METRICS, EVENT_POLL_MIN_MINUTES, isEventMetric, type EventMetric } from "@sbr/shared-types";
+import {
+  EVENT_METRICS,
+  EVENT_POLL_MIN_MINUTES,
+  EVENT_POLL_PRODUCTION_MIN_MINUTES,
+  isEventMetric,
+  type EventMetric,
+} from "@sbr/shared-types";
 
 import {
   refreshProfiles,
@@ -66,6 +72,15 @@ export interface EventScoreWrite {
 }
 
 export interface EventTrackingDeps {
+  /**
+   * The shortest interval this install may poll at, from
+   * `eventPollFloorMinutes(config.hypixel.keyMode === "production")`.
+   *
+   * Injected rather than read here because this package has no config: the
+   * cadence a contest is allowed is a property of the key the deployment holds,
+   * and the one place that knows which key that is composes the worker.
+   */
+  readonly pollFloorMinutes?: number;
   /** LIVE events that track at least one metric. */
   listLiveTracked(): Promise<readonly TrackableEvent[]>;
   /**
@@ -139,7 +154,11 @@ export async function trackEvents(deps: EventTrackingDeps): Promise<number> {
     const metrics = event.trackedMetrics.filter(isEventMetric);
     if (metrics.length === 0) continue;
 
-    const intervalMinutes = Math.max(EVENT_POLL_FLOOR_MINUTES, event.pollIntervalMinutes);
+    // Clamped as well as validated at write time: rows carrying a shorter
+    // interval predate the floor, or were written while a production key was
+    // configured and this install no longer holds one.
+    const floor = Math.max(EVENT_POLL_PRODUCTION_MIN_MINUTES, deps.pollFloorMinutes ?? EVENT_POLL_FLOOR_MINUTES);
+    const intervalMinutes = Math.max(floor, event.pollIntervalMinutes);
     // Claimed before the participant read, so a duplicate pass costs one Redis
     // round trip rather than a database query and a fan-out of writes.
     const release = deps.claimPoll ? await deps.claimPoll(event.id, intervalMinutes * 60) : async () => {};
