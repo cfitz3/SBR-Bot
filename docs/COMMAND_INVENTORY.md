@@ -96,7 +96,7 @@ erroring.
 | `/slayers` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and per-tier boss kills. Naming one boss switches to its full tier breakdown | Slayers embed; text `{ign}: N slayer xp` |
 | `/slayer` | as `/slayers` | 15s | ✔ | **Deprecated alias.** Answers identically, with `` `/slayer` is now `/slayers`. `` in front. Remove after one release | as `/slayers` |
 | `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level and progress to the next, class levels and average, completions per floor (`F…` normal, `M…` master), fastest S+ | Dungeons embed; text `{ign}: catacombs N` |
-| `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate; six largest categories with their share of the total and their three most valuable items | Networth embed; text `{ign}: {total}` |
+| `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate; every value-bearing category as one column, richest first, each with its share of the total. A dropdown opens any category that can be itemised, listing its ten most valuable items against a fresh read | Networth embed; text `{ign}: {total}` |
 | `/milestones` | `player?` | 15s | — | Guild achievements + standing: earned (top 5) and closest unearned (top 5) w/ progress | Achievements embed; text `{ign}: N/M achievements · next: {label}` |
 | `/progress` | `metric?` (4 choices) `range?` (1–365, default 30) | 15s | — | The **caller's** progression over time; requires a link | Progress embed; text `{ign}: networth over 30d — +N` or `not enough history` |
 

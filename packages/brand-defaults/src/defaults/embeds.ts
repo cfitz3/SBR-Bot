@@ -58,6 +58,10 @@ export const DEFAULT_EMBEDS = {
     lastEarned: "Last earned",
     whereFrom: "Where it came from",
     snapshots: "Snapshots",
+    /** `/networth`: the vertical category list, and the sections behind it. */
+    breakdown: "Where it is",
+    notCounted: "Not counted",
+    mostValuable: "Most valuable",
     pace: "Pace",
     target: "Target",
   },
@@ -235,6 +239,14 @@ export const DEFAULT_EMBEDS = {
     /** `{subject}` is the item or player searched for. */
     noAuctions: "No active auctions for {subject}.",
     networthHidden: "Unknown — the profile's API settings hide the data this needs.",
+    /** `/networth`. The card title; identity is the author row. */
+    networth: "Networth",
+    networthEstimate: " — estimate, some sections are hidden",
+    networthNoCategories: "Nothing on this profile is worth anything yet.",
+    networthPick: "Open a category",
+    networthOfTotal: "of the total",
+    networthNoItems: "The total is readable, the items behind it are not.",
+    networthCategoryGone: "That category is empty on this profile now.",
     /**
      * `{n}` is the window in days.
      *

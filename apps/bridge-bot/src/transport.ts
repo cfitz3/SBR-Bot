@@ -18,6 +18,8 @@ import { createBot, type Bot } from "mineflayer";
 import {
   buildBridgeRegistry,
   communityButtonReplies,
+  networthCategoryReply,
+  NETWORTH_NAMESPACE,
   parseRsvpState,
   readLevelOptOuts,
 } from "@sbr/commands-bridge";
@@ -27,6 +29,7 @@ import {
   ComponentRouter,
   customId,
   interactionArgs,
+  replyOptions,
   respond,
   toActionRow,
   toEmbed,
@@ -166,6 +169,40 @@ export function registerCommunityButtons(app: BridgeApp, components: ComponentRo
     const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
     const reply = await communityButtonReplies.run(postId, interaction.user.id, action, guildId, app.handlerDeps);
     await interaction.reply({ content: reply.text, ephemeral: true });
+  });
+}
+
+/**
+ * The category dropdown under a `/networth` card.
+ *
+ * Anyone may open it, including someone who did not run the command. Networth
+ * is a public lookup — `/networth <player>` answers for anybody — so gating the
+ * menu on the original caller would protect nothing and would break the common
+ * case of two people reading the same card.
+ *
+ * The reply is ephemeral, so a channel where five people open five categories
+ * still shows one card.
+ */
+export function registerNetworthMenu(app: BridgeApp, components: ComponentRouter): void {
+  components.register(NETWORTH_NAMESPACE, async (interaction, [uuid, ign, profileId]) => {
+    const category = interaction.isStringSelectMenu() ? interaction.values[0] : undefined;
+    if (!uuid || !ign || category === undefined) {
+      await interaction.reply({ content: "That menu is from an older version and no longer works.", ephemeral: true });
+      return;
+    }
+    // Deferred: this is a live Hypixel read behind a cache, and Discord's
+    // three-second window is not something a rate-limited upstream respects.
+    await interaction.deferReply({ ephemeral: true });
+    const reply = await networthCategoryReply(
+      { uuid, ign },
+      profileId === undefined || profileId === "" ? undefined : profileId,
+      category,
+      app.handlerDeps,
+    );
+    // The ephemeral flag is dropped twice over: the defer above already set it,
+    // and Discord types an edit as unable to carry it at all.
+    const { flags: _ephemeral, ...options } = replyOptions({ ...reply, ephemeral: false });
+    await interaction.editReply(options);
   });
 }
 
@@ -455,6 +492,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     onError: (namespace, error) => app.log.error("component handler threw", { namespace, error: String(error) }),
   });
   registerCommunityButtons(app, components);
+  registerNetworthMenu(app, components);
 
   // Tickets. Built here rather than in the composition root because every one
   // of its side effects needs the live client, and registered against the same

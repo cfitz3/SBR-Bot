@@ -75,11 +75,20 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/slayers` | Slayer XP, tiers, per-tier boss kills | Public | `player?`, `profile?`, `boss?` | Embed per-slayer breakdown; naming one boss adds its per-tier kill counts | Player not found | Cache→Live |
 | `/slayer` | **Deprecated** alias of `/slayers`, kept for one release | Public | as `/slayers` | Same answer, prefixed with the new name | — | Cache→Live |
 | `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
-| `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
+| `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + one vertical breakdown listing every category with its share; a category dropdown opens the itemised view | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
 | `/progress` | Progression over time, with the pace it implies | Linked | `metric?`, `range?` | Embed: change over the window, both endpoints (named, if the member named them), per-day pace, snapshot count | Fewer than two saved snapshots → says to run `/snapshot` | DB (`ProfileSnapshot`, user-saved rows only) |
 | `/goal` | Set a target on one of the four tracks and watch it | Linked | `action?` (list/set/clear), `metric?`, `target?` | Embed: bar, current/target, days at recent pace | Goal storage unwired → says so; target already met → says where they are | DB (`ProgressionGoal`, `ProfileSnapshot`, `ProfileCurrent`) |
 | `/snapshot` | Pin your current stats so `/progress` has something to compare against | Linked | `label?` | Text: saved, how many of the 24 you hold, the name if you gave one | Not read yet → says so; same reading already saved → says to wait for the next refresh | DB (`ProfileCurrent` → `ProfileSnapshot`); **no Hypixel request** |
 | `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned grouped by category (rarest tier first, tier badge or icon, XP paid) + the four closest unearned w/ progress bars, `n/total` headline, hidden-locked count, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet"; hidden achievements counted, never named | DB (`Milestone`, `MilestoneDefinition`, `ProfileCurrent`) |
+
+`/networth`'s breakdown is one vertical list rather than a row of columns, so
+every category that holds value is on the card and the shares add up to the
+headline. The itemisation sits behind the category dropdown under it: the reply
+is ephemeral, so a shared card is not buried, and the dropdown is stateless —
+the target and profile ride in its id and the reply is a fresh read, so a card
+scrolled back to next week still opens, on today's numbers. Guild chat has
+neither embeds nor dropdowns; `!nw` still answers with the total, which is the
+part a chat line can carry.
 
 ---
 

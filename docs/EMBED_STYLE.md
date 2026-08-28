@@ -84,7 +84,7 @@ everything.
 
 **Ragged inline runs have a fix, not just a rule.** `padInlineRow(fields)`
 (`@sbr/shared-types`) completes the last inline row with zero-width spacers, so a
-card whose field count depends on data — networth categories, whether a stats card
+card whose field count depends on data — whether a stats card
 had guild standing, whether an application was reviewed — keeps its last field in
 its column instead of stretching it across the width. It lives in `shared-types`
 rather than in the theme for the same reason `FLATTEN_SEPARATOR` does: the

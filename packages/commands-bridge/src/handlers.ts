@@ -11,10 +11,16 @@ import type {
   CommandContext,
   CommandHandler,
   CommandOptionSpec,
+  CommandReply,
   CommandSpec,
   HandlerDeps,
 } from "./types.js";
 import { communitySpecs } from "./handlers-community.js";
+import {
+  networthComponents,
+  renderNetworthCategoryEmbed,
+  renderNetworthEmbed,
+} from "./networth.js";
 import { permSpecs } from "./handlers-perms.js";
 import { infoSpecs } from "./handlers-info.js";
 import { levelAlertSpecs } from "./handlers-levels.js";
@@ -36,7 +42,6 @@ import {
   renderLowestBinEmbed,
   renderAchievementsEmbed,
   renderNetworth,
-  renderNetworthEmbed,
   renderPriceEmbed,
   renderProfileEmbed,
   renderProfileListEmbed,
@@ -149,11 +154,45 @@ const networth: CommandHandler = async (ctx, deps) => {
   return {
     ephemeral: false,
     // `text` stays populated: guild chat has no embeds, and it is the fallback
-    // any surface can render.
+    // any surface can render. The dropdown has no equivalent there, which is
+    // fine — the overview is the answer, the drill-down is an extra.
     text: `${target.ign}: ${renderNetworth(nw)}`,
-    embed: renderNetworthEmbed(target.ign, nw),
+    embed: renderNetworthEmbed(target.ign, nw, target.uuid),
+    // Only when the read succeeded and there is something to open. A menu under
+    // a failure card is a control that cannot do anything.
+    ...(nw.ok
+      ? { components: networthComponents(nw.value.data, target, profileArg) }
+      : {}),
   };
 };
+
+/**
+ * The category dropdown's reply, as a plain function.
+ *
+ * Kept here rather than in the transport for the same reason the community
+ * buttons are: the app layer should only have to supply interaction plumbing,
+ * and a test should be able to open a category without a Discord client.
+ *
+ * The read is fresh rather than carried in the customId. A menu outlives the
+ * message it was posted under, and a breakdown encoded into a control would go
+ * stale silently — the one failure mode a networth card cannot afford, because
+ * nothing about a stale figure looks stale.
+ */
+export async function networthCategoryReply(
+  target: { readonly uuid: string; readonly ign: string },
+  profileId: string | undefined,
+  category: string,
+  deps: HandlerDeps,
+): Promise<CommandReply> {
+  const nw = await deps.progression.getNetworth(target.uuid, profileId);
+  return {
+    // Ephemeral: the overview is the shared message, and a drill-down per
+    // presser posted into the channel would bury it.
+    ephemeral: true,
+    text: `${target.ign}: ${renderNetworth(nw)}`,
+    embed: renderNetworthCategoryEmbed(target.ign, nw, category, target.uuid),
+  };
+}
 
 const stats: CommandHandler = async (ctx, deps) => {
   const target = await resolveTarget(ctx, deps);

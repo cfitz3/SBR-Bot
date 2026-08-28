@@ -2,12 +2,19 @@
  * @sbr/commands-bridge — transport-agnostic member-bot command layer.
  */
 export { CommandDispatcher, type CommandDispatcherDeps } from "./dispatcher.js";
-export { buildBridgeRegistry } from "./handlers.js";
+export { buildBridgeRegistry, networthCategoryReply } from "./handlers.js";
 export { InMemoryCooldownGate } from "./cooldown.js";
 // The full renderer surface is exported, not just the handful the bots call
 // directly, because `@sbr/embed-gallery` builds every card this platform can
 // send by calling these — a gallery that reimplemented them would check itself
 // rather than the product.
+export {
+  categoryLabel,
+  networthComponents,
+  renderNetworthCategoryEmbed,
+  renderNetworthEmbed,
+  NETWORTH_NAMESPACE,
+} from "./networth.js";
 export {
   formatCoins,
   renderAccessoriesEmbed,
@@ -23,7 +30,6 @@ export {
   renderLinkError,
   renderLowestBinEmbed,
   renderNetworth,
-  renderNetworthEmbed,
   renderPriceEmbed,
   renderProfileEmbed,
   renderProfileListEmbed,

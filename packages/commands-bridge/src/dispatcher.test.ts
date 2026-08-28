@@ -582,6 +582,32 @@ test("networth is refused without RUN_COMMAND capability", async () => {
   assert.match(r.text, /don't have permission/);
 });
 
+test("the networth card comes with a way into the categories it can itemise", async () => {
+  const r = await makeDispatcher().dispatch("networth", ctx());
+  const menu = r.components?.[0]?.select;
+
+  // Only `personal_vault` has items; `bank` is money, so it stays on the
+  // overview and out of the menu.
+  assert.deepEqual(menu?.options.map((o) => o.value), ["personal_vault"]);
+  assert.equal(menu?.options[0]?.label, "Personal Vault");
+
+  // Everything the press needs is in the id, so the menu still works after a
+  // restart of this process.
+  assert.equal(menu?.customId, "nw:uuid-aria:Aria:");
+});
+
+test("a failed read carries no menu, because there is nothing to open", async () => {
+  const broken = makeDispatcher({
+    progression: progression({
+      async getNetworth() {
+        return hypixelFailure("RATE_LIMITED");
+      },
+    }),
+  });
+  const r = await broken.dispatch("networth", ctx());
+  assert.equal(r.components, undefined);
+});
+
 test("cooldown blocks a rapid second invocation", async () => {
   const d = makeDispatcher();
   const first = await d.dispatch("networth", ctx());
@@ -665,20 +691,20 @@ test("networth carries an embed whose age is a timestamp, not a sentence", async
 
 test("networth breaks the total down by category, largest share first", async () => {
   const fields = (await makeDispatcher().dispatch("networth", ctx())).embed?.fields ?? [];
-  // Named categories only: two of them do not fill Discord's three-to-a-row, so
-  // `padInlineRow` completes the row with a zero-width spacer rather than leave
-  // the second category stretched across the width. The spacer is chrome, and a
-  // test about ordering should not have an opinion about it.
-  assert.deepEqual(
-    fields.map((f) => f.name).filter((n) => n !== "​"),
-    ["Bank — 50%", "Personal Vault — 25%"],
-  );
+  // One field, one line per category, richest first — not one inline field per
+  // category with the share welded into its name.
+  assert.deepEqual(fields.map((f) => f.name), ["Where it is", "Not counted"]);
+  assert.deepEqual((fields[0]?.value ?? "").split("\n"), [
+    "**Bank** 4.10b (50%)",
+    "**Personal Vault** 2.05b (25%)",
+  ]);
 });
 
-test("a category names the items carrying its value", async () => {
-  const fields = (await makeDispatcher().dispatch("networth", ctx())).embed?.fields ?? [];
-  const vault = fields.find((f) => f.name.startsWith("Personal Vault"));
-  assert.equal(vault?.value, "2.05b\n• Hyperion **1.00b**");
+test("the itemisation moves behind the menu rather than under each column", async () => {
+  const r = await makeDispatcher().dispatch("networth", ctx());
+  // The overview says where the money is; what it is made of is a press away.
+  assert.doesNotMatch(r.embed?.fields?.[0]?.value ?? "", /Hyperion/);
+  assert.equal(r.components?.[0]?.select?.options[0]?.description, "2.05b · 25%");
 });
 
 test("a cached-during-outage reading says so in the footer", async () => {
@@ -699,9 +725,11 @@ test("a cached-during-outage reading says so in the footer", async () => {
   assert.ok(Number.isFinite(Date.parse(r.embed?.timestamp ?? "")));
 });
 
-test("hidden sections are named in the footer rather than folded into the total", async () => {
+test("hidden sections are named on the card rather than folded into the total", async () => {
   const r = await makeDispatcher().dispatch("networth", ctx());
-  assert.match(r.embed?.footer ?? "", /hidden: inventory/);
+  // On the card, not in the footer: which sections are missing is a fact about
+  // the profile, and the footer is for facts about our own read of it.
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Not counted")?.value, "inventory");
   assert.match(r.embed?.description ?? "", /estimate/);
 });
 
