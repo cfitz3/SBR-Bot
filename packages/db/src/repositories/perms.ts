@@ -8,6 +8,7 @@
  * sees three narrow ports and stays testable without a database.
  */
 import { Prisma } from "@prisma/client";
+import { classMetricFor, classRolesFor } from "@sbr/perms";
 import type {
   CachedGuildMember,
   GuildMemberDirectory,
@@ -200,20 +201,51 @@ export const memberProgressSource: MemberProgressSource = {
       select: {
         catacombsLevel: true,
         skillAverage: true,
+        // The per-class dungeon levels ride in the JSON blob rather than in
+        // columns (see `snapshot-metrics.ts`), so the roster reads the blob.
+        metrics: true,
         minecraftAccount: { select: { uuid: true } },
       },
     });
 
     const out: Record<string, MemberProgress> = {};
     for (const row of rows) {
+      const classLevels = readClassLevels(row.metrics);
       out[row.minecraftAccount.uuid] = {
         catacombsLevel: row.catacombsLevel,
         skillAverage: row.skillAverage,
+        ...(classLevels === null ? {} : { classLevels }),
       };
     }
     return out;
   },
 };
+
+/**
+ * The five dungeon class levels out of a `metrics` blob, keyed by role name.
+ *
+ * Re-keyed here rather than passed through as `classHealer` because the roster
+ * looks a seat up by the role it already holds. Which roles are classes, and
+ * which metric holds each one, is `@sbr/perms`'s table rather than a second copy
+ * here — a class renamed there must not leave this reading the old key. Null
+ * when the blob holds none of them, which is the ordinary case for an account
+ * read before the widened metric catalog existed.
+ *
+ * A non-finite reading is dropped rather than passed on: `metrics` is JSON we
+ * wrote but did not type, and a NaN reaching a card prints as "NaN" next to a
+ * member's name.
+ */
+function readClassLevels(metrics: unknown): Record<string, number> | null {
+  if (typeof metrics !== "object" || metrics === null) return null;
+  const blob = metrics as Record<string, unknown>;
+  const out: Record<string, number> = {};
+  for (const role of classRolesFor("DUNGEONS")) {
+    const metric = classMetricFor("DUNGEONS", role);
+    const value = metric === null ? undefined : blob[metric];
+    if (typeof value === "number" && Number.isFinite(value)) out[role] = value;
+  }
+  return Object.keys(out).length === 0 ? null : out;
+}
 
 /** IGN → linked Discord id. Only verified links count as an identity. */
 export const linkDirectory: LinkDirectory = {

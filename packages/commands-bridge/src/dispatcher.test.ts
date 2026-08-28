@@ -460,8 +460,8 @@ const aPerm: PermGroupDTO = {
   capacity: 5,
   createdAt: "2026-08-01T00:00:00.000Z",
   members: [
-    { ign: "Alpha", role: "healer", slot: 0, discordId: "111", uuid: "u-alpha", inGuild: true, catacombsLevel: 42, skillAverage: 51.25 },
-    { ign: "Beta", role: "berserk", slot: 1, discordId: null, uuid: null, inGuild: null, catacombsLevel: null, skillAverage: null },
+    { ign: "Alpha", role: "healer", slot: 0, discordId: "111", uuid: "u-alpha", inGuild: true, catacombsLevel: 42, skillAverage: 51.25, roleLevel: 38 },
+    { ign: "Beta", role: "berserk", slot: 1, discordId: null, uuid: null, inGuild: null, catacombsLevel: null, skillAverage: null, roleLevel: null },
   ],
 };
 

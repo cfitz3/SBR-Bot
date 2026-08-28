@@ -50,6 +50,19 @@ export interface CachedGuildMember {
 export interface MemberProgress {
   readonly catacombsLevel: number | null;
   readonly skillAverage: number | null;
+  /**
+   * Per-class dungeon levels, keyed by this package's own role names —
+   * `healer`, `mage`, `berserk`, `archer`, `tank`.
+   *
+   * Keyed by role rather than by the platform's `classHealer` metric names so
+   * the roster can look a seat up by the role it already holds, without every
+   * renderer learning the metric catalog's spelling. `classMetricFor` is the
+   * one place the two vocabularies meet.
+   *
+   * Absent rather than zero-filled: a class we have never read and a class at
+   * level 0 are different claims, and only one of them is an accusation.
+   */
+  readonly classLevels?: Readonly<Record<string, number>> | null;
 }
 
 export interface PermRepository {

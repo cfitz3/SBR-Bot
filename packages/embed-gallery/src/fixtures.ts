@@ -940,11 +940,15 @@ export const PERM: PermGroupDTO = {
   notes: "Runs at 8pm UK. Ping before swapping classes.",
   createdAt: iso(-60 * 86_400_000),
   capacity: 5,
+  // Roles are stored lowercase — people type them from memory in guild chat —
+  // and the card is what capitalises them.
   members: [
-    { ign: "Aria", role: "Mage", slot: 1, discordId: "100000000000000001", uuid: "u1", inGuild: true, catacombsLevel: 48, skillAverage: 51.3 },
-    { ign: "Bramble", role: "Healer", slot: 2, discordId: "100000000000000002", uuid: "u2", inGuild: true, catacombsLevel: 45, skillAverage: 44.1 },
-    // Unlinked and no longer in the guild: three separate unknowns on one row.
-    { ign: "Cinder", role: "Tank", slot: 3, discordId: null, uuid: null, inGuild: null, catacombsLevel: null, skillAverage: null },
+    { ign: "Aria", role: "mage", slot: 1, discordId: "100000000000000001", uuid: "u1", inGuild: true, catacombsLevel: 48, skillAverage: 51.3, roleLevel: 44 },
+    // Deep in Catacombs and shallow in the class she is sitting in: the seat
+    // this card exists to make visible.
+    { ign: "Bramble", role: "healer", slot: 2, discordId: "100000000000000002", uuid: "u2", inGuild: true, catacombsLevel: 45, skillAverage: 44.1, roleLevel: 17 },
+    // Unlinked and no longer in the guild: four separate unknowns on one row.
+    { ign: "Cinder", role: "tank", slot: 3, discordId: null, uuid: null, inGuild: null, catacombsLevel: null, skillAverage: null, roleLevel: null },
   ],
 };
 

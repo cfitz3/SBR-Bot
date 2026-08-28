@@ -7,6 +7,8 @@
 export { PermServiceImpl, type PermServiceDeps } from "./service.js";
 export {
   capacityOf,
+  classMetricFor,
+  classRolesFor,
   normalizeRole,
   rolesFor,
   shapeOf,
