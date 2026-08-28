@@ -53,7 +53,6 @@ import {
   renderServerInfoEmbed,
   renderSkillsEmbed,
   renderSlayersEmbed,
-  renderStandingEmbed,
   renderProfileCardEmbed,
   renderStatsEmbed,
   renderTicketEmbed,
@@ -184,7 +183,7 @@ export const GALLERY: readonly GalleryCard[] = [
   ),
   card(
     "profile-card",
-    "`/me` — the member's own card, every section present.",
+    "`/me` — the member's own card, every section present, standing among them.",
     renderProfileCardEmbed,
     IGN,
     {
@@ -192,6 +191,7 @@ export const GALLERY: readonly GalleryCard[] = [
       slayers: f.live(f.SLAYERS),
       dungeons: f.live(f.DUNGEONS),
       networth: f.live(f.NETWORTH),
+      uuid: f.UUID,
       standing: f.STANDING,
       record: f.MEMBER_RECORD,
       achievements: f.ACHIEVEMENTS,
@@ -209,6 +209,8 @@ export const GALLERY: readonly GalleryCard[] = [
       slayers: f.live(f.SLAYERS),
       dungeons: f.live(f.DUNGEONS_UNPLAYED),
       networth: f.live(f.NETWORTH),
+      // No uuid here on purpose: the author row has to read as a name when the
+      // caller never resolved a head, and this is the card that shows it.
       achievements: f.ACHIEVEMENTS_OFF,
       podium: f.PODIUM_NO_MEDALS,
     },
@@ -223,6 +225,7 @@ export const GALLERY: readonly GalleryCard[] = [
       slayers: f.failed<SlayersDTO>("RATE_LIMITED"),
       dungeons: f.failed<DungeonsDTO>("RATE_LIMITED"),
       networth: f.failed<NetworthDTO>("RATE_LIMITED"),
+      uuid: f.UUID,
       standing: f.STANDING,
       record: f.MEMBER_RECORD_CLEAN,
       achievements: f.ACHIEVEMENTS,
@@ -347,14 +350,6 @@ export const GALLERY: readonly GalleryCard[] = [
     "raw-id",
   ),
   card("serverinfo", "`/serverinfo` — the server at a glance.", renderServerInfoEmbed, f.DISCORD_GUILD),
-  card("standing", "`/xp` — a member's guild XP and where it came from.", renderStandingEmbed, IGN, f.STANDING),
-  card(
-    "standing-new",
-    "A member who has earned nothing yet, and is unranked rather than last.",
-    renderStandingEmbed,
-    "Nettle",
-    f.STANDING_NEW,
-  ),
   card(
     "leaderboard",
     "`/leaderboard` — ties, a mention label and a pinned viewer row.",

@@ -45,6 +45,9 @@ export const DEFAULT_EMBEDS = {
     /* ── /whois and /serverinfo ── */
     account: "Account",
     thisServer: "This server",
+    /** The Hypixel half of the member card, consolidated. */
+    skyblock: "SkyBlock",
+    events: "Events",
     roles: "Roles",
     link: "Link",
     counts: "Counts",
@@ -240,6 +243,8 @@ export const DEFAULT_EMBEDS = {
     /* ── /whois and /serverinfo ── */
     /** What the card is; the author row says who it is about. */
     whois: "Discord profile",
+    /** `/me`. Says what the card is; the author row says whose it is. */
+    memberCard: "Member card",
     noGateway: "That one needs Discord — I can't see the server from here.",
     noSuchAccount: "Discord has no account with that id.",
     serverUnreadable: "I can't see this server right now. Try again shortly.",

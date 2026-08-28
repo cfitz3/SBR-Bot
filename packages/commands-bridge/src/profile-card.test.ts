@@ -152,10 +152,22 @@ const field = (view: { fields?: readonly { name: string; value: string }[] }, na
 
 // ── the Hypixel half ──
 
-test("the headline names the SkyBlock level and profile", () => {
+test("the headline names the SkyBlock level and profile, and the title names the card", () => {
   const view = renderProfileCardEmbed("Alpha", input());
-  assert.equal(view.title, "Alpha — profile");
+  // The title says what the card is; who it is about is the author row, which
+  // is the one place identity belongs and the only one with room for a face.
+  assert.equal(view.title, "Member card");
+  assert.equal(view.author?.name, "Alpha");
   assert.match(view.description ?? "", /SkyBlock Level/);
+});
+
+test("a uuid draws the head and the render; without one the name still shows", () => {
+  const withFace = renderProfileCardEmbed("Alpha", input({ uuid: "4d9a51f6a1b7482c9e0b1d3c5f7a9b2e" }));
+  assert.ok(withFace.author?.iconUrl);
+  assert.ok(withFace.thumbnailUrl);
+  const without = renderProfileCardEmbed("Alpha", input());
+  assert.equal(without.author?.name, "Alpha");
+  assert.equal(without.thumbnailUrl, undefined);
 });
 
 test("an unreadable profile still renders the guild half", () => {
@@ -172,16 +184,17 @@ test("an unreadable profile still renders the guild half", () => {
   );
   assert.ok(names(view).includes("Guild standing"));
   assert.ok(names(view).includes("Events"));
-  // And says so rather than printing zeroes for the account.
-  assert.equal(field(view, "Networth")?.value, "—");
+  // And says so rather than printing zeroes for the account. The five Hypixel
+  // numbers are one consolidated field now, so the unknown marker is inside it.
+  assert.match(field(view, "SkyBlock")?.value ?? "", /\*\*Networth\*\* —/);
 });
 
 // ── sections that are absent, not zeroed ──
 
-test("no standing means no standing fields", () => {
+test("no standing means no standing section, and no caveat about one", () => {
   const view = renderProfileCardEmbed("Alpha", input());
   assert.ok(!names(view).includes("Guild standing"));
-  assert.ok(!names(view).includes("Tenure"));
+  assert.equal(view.footer, undefined);
 });
 
 test("achievements switched off are omitted rather than shown as zero", () => {
@@ -273,12 +286,15 @@ test("leaderboard positions are one field, absent when there are none", () => {
   assert.match(value, /42/);
 });
 
-test("the standing row reads level, xp and rank together", () => {
+test("the standing section carries everything /standing was a whole card for", () => {
   const view = renderProfileCardEmbed("Alpha", input({ standing: STANDING }));
   const value = field(view, "Guild standing")?.value ?? "";
   assert.match(value, /Level 12/);
   assert.match(value, /#4/);
-  assert.match(field(view, "Tenure")?.value ?? "", /240/);
+  assert.match(value, /240 days/);
+  // The bar, and the breakdown that was the point of the card it came from.
+  assert.match(value, /[▰▱]/);
+  assert.match(value, /Where it came from:/);
 });
 
 test("a clean record adds nothing — there is nothing to tell the member", () => {

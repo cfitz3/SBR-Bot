@@ -181,7 +181,7 @@ function linkField(link: LinkedIdentityDTO | null | undefined): ReturnType<typeo
   return field(F.link, [`**${link.ign}**`, verified].filter((p): p is string => p !== null).join(" · "));
 }
 
-/** Guild standing as one line. `/xp` is where the per-source breakdown lives. */
+/** Guild standing as one line. `/me` is where the per-source breakdown lives. */
 function standingField(standing: XpStandingDTO | null | undefined): ReturnType<typeof field> {
   if (standing === undefined) return null;
   if (standing === null) return field(F.guildStanding, C.noXpYet);

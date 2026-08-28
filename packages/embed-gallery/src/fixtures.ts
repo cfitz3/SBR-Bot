@@ -58,6 +58,9 @@ import type {
 /** The clock every fixture is written against, so the cards are reproducible. */
 export const NOW = Date.parse("2026-08-13T18:00:00.000Z");
 
+/** The gallery player’s uuid — what `player()` draws the head and render from. */
+export const UUID = "4d9a51f6a1b7482c9e0b1d3c5f7a9b2e";
+
 /** The same instant as a `Date`, for renderers that take one. */
 export const NOW_DATE = new Date(NOW);
 

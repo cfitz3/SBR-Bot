@@ -188,7 +188,8 @@ test("the listed goal renders its bar, its numbers and its projection", async ()
   const s = store({ goals: [goal()] });
   const reply = await run(recordArgs({ action: "list" }), s);
   const line = reply.embed?.fields?.[0]?.value ?? "";
-  assert.match(line, /█/);
+  // One bar across the whole platform — the glyphs come from the theme.
+  assert.match(line, /▰|▱/);
   assert.match(line, /210/);
   assert.match(line, /250/);
   assert.match(line, /~80d/);

@@ -365,9 +365,10 @@ There is no panel surface for stickies yet; they are managed through `/sticky`.
 
 ### Not built, and why
 
-- **`/rank`** — already exists as a joke command (`packages/commands-bridge/src/fun.ts`),
-  and `/me` plus `/standing` already deliver level, XP and record. A third
-  spelling of the same answer is not a feature.
+- **`/rank`** — a levelling command was never built, and the joke one that
+  shared the name is now withdrawn (`COMMANDS.md` §20). `/me` delivers level,
+  XP and record on one card; a third spelling of the same answer is not a
+  feature.
 - **Starboard** — deferred: needs `GuildMessageReactions` on the shared
   member-facing token and a reaction hot path.
 - **Birthdays** — deferred: storing a date of birth for minors is a privacy

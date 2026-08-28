@@ -354,6 +354,12 @@ export function funSpecs(): readonly CommandSpec[] {
       options: [{ name: "player", description: "Whose rank (default yours)", type: "string" }],
       cooldownMs: 10_000,
       inGame: true,
+      // Retired. It printed a made-up score next to the word “rank”, in a guild
+      // where rank is a real thing with real permissions attached to it, and the
+      // disclaimer at the end of the line is not where anybody stops reading.
+      // Withdrawn rather than deleted: the joke is fine, the word was the
+      // problem, and turning it back on under a different name is one line.
+      enabled: false,
       handler: rank,
     },
     {

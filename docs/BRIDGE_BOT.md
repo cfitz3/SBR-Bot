@@ -51,7 +51,7 @@ Prefix commands (prefix + enabled set from `GuildConfig`). **Read-only / low-ris
 | `!price <item>` `!bz <item>` `!lbin <item>` | market lookups | `RUN_COMMAND` | Cache (worker) |
 | `!weight <ign?>` | Senither/farming weight | `RUN_COMMAND` | Cache→Live |
 | `!help` | condensed catalog | Public | Static |
-| `!8ball` `!roll` `!coinflip` `!rps` `!guildquote` `!rank` `!cringe` | fun (`COMMANDS.md` §20) | Public | None (Redis counter for `!cringe`) |
+| `!8ball` `!roll` `!coinflip` `!rps` `!guildquote` `!cringe` | fun (`COMMANDS.md` §20) | Public | None (Redis counter for `!cringe`) |
 
 **The fun commands never echo what somebody typed**, which is a bridge concern
 rather than a taste one: this bot speaks with the guild's voice in guild chat, so

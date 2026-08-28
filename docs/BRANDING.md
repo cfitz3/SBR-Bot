@@ -66,7 +66,7 @@ Keys are **structural, never sentence-derived**: `panel.members.title`, not `pan
 | `embed.tone.*`, `embed.footer.*`, `embed.unknown` | Tone words, shared footers, the "no value" dash | Bot renderers |
 | `embed.field.*` | Field names that appear on more than one card | The lookup cards and the profile card |
 | `embed.metricPhrase.*` | The same metrics sentence-cased, for mid-sentence use | The event board |
-| `embed.xpSource.*` | How each XP source is named to a member | `/standing` |
+| `embed.xpSource.*` | How each XP source is named to a member | `/me` |
 | `embed.card.*` | Card titles, the title template and its nouns, and every "nothing to show" line | `render.ts` |
 
 ### Card titles are a template, not fifteen sentences

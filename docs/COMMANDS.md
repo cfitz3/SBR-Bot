@@ -337,13 +337,12 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 | `!weight` | `progression` (Senither/farming) | Run cmd | Cache→Live |
 | `!lfg`, `!runs` | `/lfg`,`/runs` | Run cmd (linked) | DB + Cache |
 | `!perm` | `/perm` | Run cmd (linked) | DB + member cache |
-| `!standing` | `/standing` | Run cmd (linked) | DB (`XpBalance`, `XpEvent`) |
 | `!help` | `/help` (condensed) | Public | Static |
-| `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank`, `!cringe` | §20 | Public | None (Redis counter for `!cringe`) |
+| `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!cringe` | §20 | Public | None (Redis counter for `!cringe`) |
 
-`!standing` is `"linked"` although it writes nothing. XP is attributed to a
-Discord account, so an IGN that resolves to no link has no standing to report —
-here the link is the *lookup key*, not a permission.
+`!me` is `"linked"` although it writes nothing. Standing is attributed to a
+Discord account, so an IGN that resolves to no link has none to report — here
+the link is the *lookup key*, not a permission.
 
 **In-game error handling:** invalid command → short usage hint; on cooldown → silent or `⌛` reply; API failure → `⚠ data unavailable, try later`; unauthorized → `no permission` one-liner. Errors never dump stack traces into guild chat.
 
@@ -358,17 +357,19 @@ scan already stores.
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/standing` | A member's guild XP, level, rank and where the XP came from | Linked | `member?` | Embed: level + progress bar, rank, tenure, per-source breakdown | XP not enabled; member has never earned any | DB (`XpBalance`, `XpEvent`) |
-| `/me` | Personal summary; now also carries level, total XP, rank and the caller's own record | Linked | — | Existing embed + "Guild standing", "Tenure" and "Your record" fields | (standing and record failures degrade silently) | DB |
+| `/me` | The member's own card: SkyBlock progress, guild standing, achievements, events and their own record | Linked | — | One card; "Guild standing" carries level, progress bar, rank, tenure and the per-source breakdown | XP not enabled, or the member has never earned any (the section is absent, not zeroed) | DB (`XpBalance`, `XpEvent`) + Hypixel |
+| `/whois` | Somebody else's standing, as one line on their card | Public | `member?` | See §16 | — | DB |
 
-**Visibility.** `/standing` with no argument is public in-channel; `/standing
-member:` is **ephemeral**. Someone else's standing is theirs to publish, and a
-command that posts it for them turns a lookup into an announcement.
+**Visibility.** Standing appears in full only on `/me`, which is the caller's
+own card and ephemeral. Someone else's is theirs to publish, so `/whois` carries
+a one-line summary and only on the private card — a lookup that posts another
+member's XP for them turns a lookup into an announcement.
 
 **Freshness.** Standings are derived, not live: the `xp-aggregate` job weights
 each day's activity counters into the ledger every three hours (see
-`WORKERS.md`). The embed says so in its footer rather than implying today's
-chat is already counted.
+`WORKERS.md`). The card says so in its footer rather than implying today's
+chat is already counted — and only when the standing section is actually on it,
+because a caveat about a section that is not there is noise.
 
 **Two documented deviations from the original plan (Phase 5):**
 
@@ -377,7 +378,7 @@ chat is already counted.
   IGN → Discord id resolution. Widening that interface for a decorative field
   would have touched every fake of it in the test suite. Standing therefore
   lands on `/me` — the one lookup certain the account and the person are the
-  same — and on `/standing member:`.
+  same — and, as a single line, on `/whois member:`.
 - **`/me` carries a record, but not through the moderation service.** The
   deviation as first written said `/me` would show no infractions at all,
   because the member `HandlerDeps` holds no `ModerationService` and adding one
@@ -491,12 +492,11 @@ not, and those constraints are the design.
 | `/coinflip` | Flip a coin | Member | — | Heads or Tails | — | None |
 | `/rps` | Rock, paper, scissors | Member | `throw` (choice, required) | The two throws and the verdict | Not one of the three | None |
 | `/guildquote` | A quote from the guild's collection | Member | — | One quote | Nothing quotable (every attempt was filtered) | `GuildSetting` `fun.quotes` |
-| `/rank` | An unofficial vibe rank | Member | `player?` (default you) | A title, a score out of 100, and a disclaimer | Not a Minecraft name; unlinked caller with no name given | None |
 | `/cringe` | Add one to somebody's cringe tally | Member | `player` (required) | The new total | Not a Minecraft name; no counter wired | Redis `fun:tally:*` |
 
 **They never echo what somebody typed.** `/8ball` answers without repeating the
 question, `/rps` echoes only the throw it managed to parse out of a fixed set,
-and `/rank` and `/cringe` accept a Minecraft name or nothing. The bridge speaks
+and `/cringe` accepts a Minecraft name or nothing. The bridge speaks
 with the guild's voice, so a command that repeats arbitrary text is a way to make
 the guild say anything — through a path the chat filter was never asked about.
 
@@ -508,11 +508,12 @@ cache). A quote that fails is skipped, up to three attempts — a guild whose wh
 list trips the filter says "nothing quotable right now" rather than walking a
 hundred entries on every call. With no filter wired, quotes are said as stored.
 
-**A vibe rank sticks.** `/rank` hashes the subject rather than rolling, so the
-same person gets the same rank next week. A joke rank that rerolls is a random
-number generator; one that sticks is something people compare and argue about.
-The reply says it is not a real rank, because guild ranks are a real thing with
-real permissions attached.
+**`/rank` is withdrawn.** It printed a made-up score out of 100 beside the word
+*rank*, in a guild where rank is a real thing with real permissions attached to
+it, and the disclaimer at the end of the line is not where anybody stops
+reading. It is `enabled: false` rather than deleted — the handler still
+compiles and the hash-not-roll behaviour that made the joke worth having is
+intact, so bringing it back under a word that is not already taken is one line.
 
 **The only state is a counter.** `/cringe` increments a Redis key keyed by the
 *typed name* — never by a Discord id — with a 90-day expiry reset on every bump,

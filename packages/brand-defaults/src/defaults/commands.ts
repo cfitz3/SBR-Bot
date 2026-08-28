@@ -230,6 +230,7 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       label: 'What to call it — "before dungeon grind"',
     },
   },
+  /** Retired — see `fun.ts`. The keys stay with the spec that stays. */
   rank: {
     description: "Your entirely unofficial vibe rank",
     option: {
@@ -291,12 +292,6 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       player: "Minecraft username (defaults to you)",
       profile: "Skyblock profile name",
       boss: "One slayer only — shows the per-tier kill breakdown",
-    },
-  },
-  standing: {
-    description: "Your guild XP, level and where it came from",
-    option: {
-      member: "Whose standing to show (defaults to you)",
     },
   },
   stats: {

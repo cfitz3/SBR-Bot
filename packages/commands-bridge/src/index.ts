@@ -31,7 +31,6 @@ export {
   renderRosterEmbed,
   renderSkillsEmbed,
   renderSlayersEmbed,
-  renderStandingEmbed,
   renderProfileCardEmbed,
   renderStatsEmbed,
 } from "./render.js";
