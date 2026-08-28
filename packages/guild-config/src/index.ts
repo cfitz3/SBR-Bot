@@ -43,3 +43,12 @@ export {
   type RoleBindings,
   type RolePolicy,
 } from "./roles.js";
+export {
+  DEFAULT_PROGRESSION_METRICS,
+  DEFAULT_PROGRESSION_POLICY,
+  MAX_OFFERED_METRICS,
+  PROGRESSION_SETTING_KEY,
+  parseProgressionPolicy,
+  validateProgressionPolicy,
+  type ProgressionPolicy,
+} from "./progression.js";

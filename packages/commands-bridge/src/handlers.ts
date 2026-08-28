@@ -20,6 +20,7 @@ import { infoSpecs } from "./handlers-info.js";
 import { levelAlertSpecs } from "./handlers-levels.js";
 import { goalSpecs } from "./handlers-goals.js";
 import { snapshotSpecs } from "./handlers-snapshot.js";
+import { progressionSpecs } from "./progression.js";
 import { reminderSpecs } from "./handlers-remind.js";
 import { tagSpecs } from "./handlers-tags.js";
 import { funSpecs } from "./fun.js";
@@ -933,10 +934,13 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
         },
       ],
       cooldownMs: 15_000,
-      // Back on. It went dark with the advice trio in Phase 17 — "until they're
-      // tuned" — but it never read the auction house that retired them: it
-      // charts our own snapshots. What it actually lacked was a reason to look
-      // at it twice, which is the pace line and the goals it now sits beside.
+      // Retired: merged into /progression. Charting, the goal for the charted
+      // metric, and the save that makes next week's chart possible were three
+      // commands around one loop, and none of them mentioned the other two — so
+      // the usual first experience of this one was an empty chart and no idea
+      // why. The spec stays so the handler stays compiled and tested; this flag
+      // is what deregisters the command from Discord and the in-game router.
+      enabled: false,
       inGame: "linked",
       handler: progress,
     },
@@ -1059,6 +1063,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     ...levelAlertSpecs(),
     ...goalSpecs(),
     ...snapshotSpecs(),
+    ...progressionSpecs(),
     ...reminderSpecs(),
     ...tagSpecs(),
     ...permSpecs(),

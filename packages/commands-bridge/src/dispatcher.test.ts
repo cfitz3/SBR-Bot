@@ -143,6 +143,7 @@ const achievements: AchievementsDTO = {
 function progression(over: Partial<ProgressionService> = {}): ProgressionService {
   return {
     async getAchievements() { return ok(achievements); },
+    async getTrackedMetrics() { return live({ profileId: "p1" } as never); },
     async setGoal() { return err({ kind: "UNAVAILABLE" as const }); },
     async listGoals() { return ok([]); },
     async clearGoal() { return ok(false); },
@@ -905,16 +906,37 @@ test("milestones says achievements are off rather than reporting none earned", a
   assert.match(r.embed?.description ?? "", /aren't switched on/);
 });
 
-test("progress reports the change across the window", async () => {
+test("progression reports the change across the window", async () => {
   const r = await makeDispatcher().dispatch(
-    "progress",
+    "progression",
     ctx({ args: recordArgs({ metric: "networth", range: "30" }) }),
   );
   assert.match(r.embed?.description ?? "", /\+2\.00b/);
-  assert.match(r.embed?.title ?? "", /networth/);
+  assert.match(r.embed?.title ?? "", /Networth/);
 });
 
-test("progress with a single reading refuses to imply zero change", async () => {
+test("the card carries the metric menu, the windows and the three writes", async () => {
+  const r = await makeDispatcher().dispatch(
+    "progression",
+    ctx({ args: recordArgs({ metric: "networth", range: "30" }) }),
+  );
+  const rows = r.components ?? [];
+  assert.equal(rows.length, 3);
+  // The window the member is already looking at is not offered as somewhere to go.
+  assert.deepEqual(
+    rows[1]?.buttons.map((b) => [b.label, b.disabled === true]),
+    [["7d", false], ["30d", true], ["90d", false]],
+  );
+  // Every control round-trips the whole state of the card, so a press from
+  // scrollback rebuilds what the member was looking at rather than a default.
+  assert.equal(rows[0]?.select?.customId, "prg:metric:30");
+  assert.deepEqual(
+    rows[2]?.buttons.map((b) => b.customId),
+    ["prg:save:networth:30", "prg:goal:networth:30", "prg:clear:networth:30"],
+  );
+});
+
+test("progression with a single reading refuses to imply zero change", async () => {
   const one = progression({
     async getProgress(_u, metric, rangeDays) {
       return ok<ProgressSeriesDTO>({
@@ -925,8 +947,11 @@ test("progress with a single reading refuses to imply zero change", async () => 
       });
     },
   });
-  const r = await makeDispatcher({ progression: one }).dispatch("progress", ctx());
-  assert.match(r.embed?.description ?? "", /Only one saved snapshot/);
+  const r = await makeDispatcher({ progression: one }).dispatch("progression", ctx());
+  assert.match(r.embed?.description ?? "", /One marker so far/);
+  // And the button under it says what to do about that, in the words a
+  // first-timer needs rather than the ones a regular would.
+  assert.equal((r.components ?? [])[2]?.buttons[0]?.label, "Save marker");
   assert.doesNotMatch(r.embed?.description ?? "", /\+0/);
 });
 

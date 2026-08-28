@@ -86,6 +86,22 @@ export const DEFAULT_THEME = {
       barEmpty: "▱",
       barWidth: 10,
       marker: "⭐",
+
+      /**
+       * The sparkline ramp, lowest to highest, and the gap.
+       *
+       * Same reasoning as the bar above it, applied before the drift happens
+       * rather than after: `/price` draws a price series, and the next card that
+       * wants to draw one must not get to pick its own ramp.
+       *
+       * `sparkGap` is deliberately not the lowest step. A bucket where nothing
+       * traded has no price, and drawing it at the floor would report a crash
+       * that did not happen.
+       */
+      spark: "▁▂▃▄▅▆▇█",
+      sparkGap: "·",
+      /** Hourly buckets over a week are 168 points; a phone shows about this many. */
+      sparkWidth: 24,
     },
 
     /**

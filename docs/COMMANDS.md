@@ -18,19 +18,22 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 > ### Retired commands
 >
-> Nine commands are flagged `enabled: false` and are **absent from Discord's
+> Twelve commands are flagged `enabled: false` and are **absent from Discord's
 > command list**, from `/help`, and from guild chat. They are not deleted: the
 > handlers stay compiled and under test, and turning one back on is a one-line
-> change. Sections 4 and 6 below still describe them, because what they did is
+> change. Sections 2, 4 and 6 below still describe them, because what they did is
 > still what they would do.
 >
+> - **§2, progression** — `/goal`, `/progress`, `/snapshot`, merged into
+>   `/progression`. They were three commands around one loop and none of them
+>   named the other two, so the usual first experience of `/progress` was an
+>   empty chart and no way to learn why. The chart, the goal on the charted
+>   metric and the save that makes next week's chart possible are now one card
+>   with the other two as buttons under it.
 > - **§4, the advice engine** — `/missing`, `/nextupgrade`, `/whatnext`. The
 >   advice reads a live auction house the platform no longer keeps warm, so its
 >   suggestions were confident and stale. A confidently wrong upgrade
 >   recommendation is worse than none.
->   `/progress` went dark with them and has since come back: it never read the
->   auction house, it charts our own snapshots, and Part IV gave it the pace
->   line and the goals that were the actual missing half.
 > - **§6, looking-for-group** — `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
 >   `/editrun`, `/closerun`, the `run:` buttons, the `!run` alias and the `lfg`
 >   channel slot. Parties get formed in guild chat; the board went stale faster
@@ -76,9 +79,10 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 | `/slayer` | **Deprecated** alias of `/slayers`, kept for one release | Public | as `/slayers` | Same answer, prefixed with the new name | — | Cache→Live |
 | `/dungeons` | Catacombs level, class levels, floor completions/PBs | Public | `player?`, `profile?` | Embed: cata level and XP to the next, class levels and average, completions per floor (normal and master), fastest S+ | Player not found; no dungeon data | Cache→Live |
 | `/networth` | Full networth breakdown (gear/reforge/gems/museum/bank) | Public | `player?`, `profile?` | Embed: total + category breakdown with each category's share and its three most valuable items | Player not found; museum private | Cache→Live (`skyhelper-networth` + `pricing`) |
-| `/progress` | Progression over time, with the pace it implies | Linked | `metric?`, `range?` | Embed: change over the window, both endpoints (named, if the member named them), per-day pace, snapshot count | Fewer than two saved snapshots → says to run `/snapshot` | DB (`ProfileSnapshot`, user-saved rows only) |
-| `/goal` | Set a target on one of the four tracks and watch it | Linked | `action?` (list/set/clear), `metric?`, `target?` | Embed: bar, current/target, days at recent pace | Goal storage unwired → says so; target already met → says where they are | DB (`ProgressionGoal`, `ProfileSnapshot`, `ProfileCurrent`) |
-| `/snapshot` | Pin your current stats so `/progress` has something to compare against | Linked | `label?` | Text: saved, how many of the 24 you hold, the name if you gave one | Not read yet → says so; same reading already saved → says to wait for the next refresh | DB (`ProfileCurrent` → `ProfileSnapshot`); **no Hypixel request** |
+| `/progression` | Your progress over time, your goals, and the markers behind both | Linked | `metric?`, `range?` (7/30/90 days) | Ephemeral card: change over the window, both endpoints, per-day pace, marker count, the goal on the charted metric. Under it a metric menu, the three windows, and buttons to save a marker, set a goal and clear one | Nothing saved yet → the card says so and the button under it reads *Begin tracking* | DB (`ProfileSnapshot` user-saved rows, `ProgressionGoal`, `ProfileCurrent`); **no Hypixel request** |
+| `/progress` | *Retired — merged into `/progression`.* Progression over time, with the pace it implies | Linked | `metric?`, `range?` | Embed: change over the window, both endpoints (named, if the member named them), per-day pace, snapshot count | Fewer than two saved snapshots → says to run `/snapshot` | DB (`ProfileSnapshot`, user-saved rows only) |
+| `/goal` | *Retired — merged into `/progression`.* Set a target on one of the four tracks and watch it | Linked | `action?` (list/set/clear), `metric?`, `target?` | Embed: bar, current/target, days at recent pace | Goal storage unwired → says so; target already met → says where they are | DB (`ProgressionGoal`, `ProfileSnapshot`, `ProfileCurrent`) |
+| `/snapshot` | *Retired — merged into `/progression`.* Pin your current stats so the chart has something to compare against | Linked | `label?` | Text: saved, how many of the 24 you hold, the name if you gave one | Not read yet → says so; same reading already saved → says to wait for the next refresh | DB (`ProfileCurrent` → `ProfileSnapshot`); **no Hypixel request** |
 | `/milestones` | The guild's achievements and the player's standing against them | Public | `player?` | Earned grouped by category (rarest tier first, tier badge or icon, XP paid) + the four closest unearned w/ progress bars, `n/total` headline, hidden-locked count, "measured" footer | Achievements off → says so; no snapshot → thresholds listed, progress "not measured yet"; hidden achievements counted, never named | DB (`Milestone`, `MilestoneDefinition`, `ProfileCurrent`) |
 
 ---

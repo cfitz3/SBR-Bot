@@ -4,21 +4,30 @@
  * dispatcher / BridgeService; parsing helpers are pure for tests.
  */
 import {
+  ActionRowBuilder,
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
+  ModalBuilder,
   REST,
   Routes,
+  TextInputBuilder,
+  TextInputStyle,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   type Message,
+  type ModalSubmitInteraction,
   type TextBasedChannel,
 } from "discord.js";
 import { createBot, type Bot } from "mineflayer";
 import {
+  PROGRESSION_NAMESPACE,
   buildBridgeRegistry,
+  buildProgression,
   communityButtonReplies,
   parseRsvpState,
+  progressionButtonReplies,
   readLevelOptOuts,
 } from "@sbr/commands-bridge";
 import { EchoLedger } from "@sbr/bridge";
@@ -27,11 +36,13 @@ import {
   ComponentRouter,
   customId,
   interactionArgs,
+  replyOptions,
   respond,
   toActionRow,
   toEmbed,
   toSlashCommands,
 } from "@sbr/discord-kit";
+import type { ReplyView } from "@sbr/discord-kit";
 import type { GuildRosterDTO, GuildRosterSource } from "@sbr/shared-types";
 import { startLevelAnnouncer } from "./levels.js";
 import { startGoalWatcher } from "./goals.js";
@@ -167,6 +178,124 @@ export function registerCommunityButtons(app: BridgeApp, components: ComponentRo
     const reply = await communityButtonReplies.run(postId, interaction.user.id, action, guildId, app.handlerDeps);
     await interaction.reply({ content: reply.text, ephemeral: true });
   });
+}
+
+/**
+ * The card body for an edit.
+ *
+ * Ephemerality is decided when the interaction is first answered — by the
+ * deferral here, by the original command reply on the message being updated —
+ * so an edit that repeated the flag would be setting something it does not own.
+ */
+function cardEdit(reply: ReplyView) {
+  const { flags: _decidedAtDeferral, ...body } = replyOptions(reply);
+  return body;
+}
+
+/** The one modal `/progression` opens: the target for the charted metric. */
+const GOAL_TARGET_FIELD = "target";
+
+/**
+ * The controls on a `/progression` card.
+ *
+ * The card replaced three commands, so its buttons carry what those commands
+ * did — which makes them writes, and makes the stateless-id contract matter
+ * more here than on a paginator. Every press re-derives the whole card from the
+ * metric and window in its own id, so one from last week still works after a
+ * restart, and a press is indistinguishable from re-running the command.
+ *
+ * Presses `update()` the message rather than replying: the card is ephemeral
+ * and self-only, and a member cycling through four metrics should end with one
+ * card, not four. The goal button is the exception — a modal is a response of
+ * its own, so its answer arrives through `handleProgressionModal` below.
+ */
+export function registerProgressionControls(app: BridgeApp, components: ComponentRouter): void {
+  components.register(PROGRESSION_NAMESPACE, async (interaction, [action, a, b]) => {
+    const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
+    if (guildId === null) {
+      await interaction.reply({ content: "This server isn't registered with the platform.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    // The goal button opens a modal, which must be the *first* response to the
+    // interaction — so it is handled before anything that would defer or update.
+    if (action === "goal") {
+      const modal = new ModalBuilder()
+        .setCustomId(`${PROGRESSION_NAMESPACE}:goal:${a ?? ""}:${b ?? ""}`)
+        .setTitle("Set a goal")
+        .addComponents(
+          new ActionRowBuilder<TextInputBuilder>().addComponents(
+            new TextInputBuilder()
+              .setCustomId(GOAL_TARGET_FIELD)
+              .setLabel("The number to reach")
+              .setPlaceholder("2b, 250, 45.5")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMaxLength(24),
+          ),
+        );
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // Everything else reads the database and may value a profile, which is
+    // comfortably longer than Discord's three-second budget on a bad day.
+    await interaction.deferUpdate();
+    const userId = interaction.user.id;
+    const deps = app.handlerDeps;
+    const reply = await (action === "metric"
+      ? progressionButtonReplies.metric(
+          interaction.isStringSelectMenu() ? (interaction.values[0] ?? "") : "",
+          a,
+          userId,
+          guildId,
+          deps,
+        )
+      : action === "range"
+        ? progressionButtonReplies.range(a, b, userId, guildId, deps)
+        : action === "save"
+          ? progressionButtonReplies.save(a, b, userId, guildId, deps)
+          : action === "clear"
+            ? progressionButtonReplies.clear(a, b, userId, guildId, deps)
+            : buildProgression(userId, guildId, a ?? null, Number(b), deps));
+    await interaction.editReply(cardEdit(reply)).catch(() => {});
+  });
+}
+
+/**
+ * The goal modal's answer.
+ *
+ * Modals are not message components, so they never reach the component router;
+ * this is offered the submission alongside the ticket owner and claims only its
+ * own namespace. It replies with a fresh card rather than a bare confirmation,
+ * because the thing the member wanted to see is the goal sitting under the
+ * trend that feeds it.
+ */
+export async function handleProgressionModal(
+  interaction: ModalSubmitInteraction,
+  app: BridgeApp,
+): Promise<boolean> {
+  const id = interaction.customId;
+  if (!id.startsWith(`${PROGRESSION_NAMESPACE}:goal:`)) return false;
+
+  const guildId = interaction.guildId ? await app.resolveGuild(interaction.guildId).catch(() => null) : null;
+  if (guildId === null) {
+    await interaction.reply({ content: "This server isn't registered with the platform.", flags: MessageFlags.Ephemeral });
+    return true;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const [, , metric, range] = id.split(":");
+  const reply = await progressionButtonReplies.setGoal(
+    metric,
+    range,
+    interaction.fields.getTextInputValue(GOAL_TARGET_FIELD),
+    interaction.user.id,
+    guildId,
+    app.handlerDeps,
+  );
+  await interaction.editReply(cardEdit(reply)).catch(() => {});
+  return true;
 }
 
 /**
@@ -455,6 +584,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     onError: (namespace, error) => app.log.error("component handler threw", { namespace, error: String(error) }),
   });
   registerCommunityButtons(app, components);
+  registerProgressionControls(app, components);
 
   // Tickets. Built here rather than in the composition root because every one
   // of its side effects needs the live client, and registered against the same
@@ -802,9 +932,10 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     } else if (i.isModalSubmit()) {
       // Modals do not come through the component router — they are not message
       // components — so they are offered to each owner in turn.
-      void handleTicketModal(i, ticketRouting).catch((e: unknown) =>
-        app.log.error("modal failed", { error: String(e) }),
-      );
+      void (async () => {
+        if (await handleProgressionModal(i, app)) return;
+        await handleTicketModal(i, ticketRouting);
+      })().catch((e: unknown) => app.log.error("modal failed", { error: String(e) }));
     }
   });
   discord.once(Events.ClientReady, (c) => app.log.info("bridge discord gateway ready", { tag: c.user.tag }));

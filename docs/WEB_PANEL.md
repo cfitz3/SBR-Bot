@@ -77,7 +77,7 @@ Writes live in `PanelMutations` (`panel-core/src/mutations.ts`), a sibling of `P
 - **Rate limit** is per user and per mutation on `cd:web:{mutation}:{discordId}` — a guard against a stuck key or a double-clicked toggle, not a quota.
 - **Audit.** Every authorized attempt is captured as `CommandUsage(surface=WEB_PANEL)`, failures included, so a burst of refused writes is visible. Config changes additionally go through a `ConfigAuditSink`; they are *not* written as `ModerationAction`s, whose `type` enum describes actions taken on a person. Today the sink emits a typed analytics event; the port is what makes a durable `ConfigAudit` table a wiring change later.
 
-Available now: `config.channel`, `config.setting`, `config.screening`, `config.role-mapping`, `config.feature`, `config.recruitment`, `config.hypixel`, `xp.source`, `xp.adjust`, `xp.suggest`, `milestone.upsert`, `milestone.remove`, `ticket.type.upsert`, `ticket.type.remove`, `ticket.panel.save`, `wordlist.upsert`, `wordlist.delete`, `moderation.defaults`, `moderation.relay-sync`, `automod.test`, `automod.rule.upsert`, `automod.rule.remove`, `automod.enable`, `config.cooldowns`, `roles.binding`, `roles.rank`, `roles.capability`, `roles.command`, `roles.exception`, `roles.exception.remove`, `health.run-job`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.update`, `event.complete`, `event.attendance`, `event.board.publish`, `event.cancel`, `member.role`, `member.unlink`.
+Available now: `config.channel`, `config.setting`, `config.screening`, `config.role-mapping`, `config.feature`, `config.recruitment`, `config.hypixel`, `xp.source`, `xp.adjust`, `xp.suggest`, `milestone.upsert`, `milestone.remove`, `progression.metrics`, `ticket.type.upsert`, `ticket.type.remove`, `ticket.panel.save`, `wordlist.upsert`, `wordlist.delete`, `moderation.defaults`, `moderation.relay-sync`, `automod.test`, `automod.rule.upsert`, `automod.rule.remove`, `automod.enable`, `config.cooldowns`, `roles.binding`, `roles.rank`, `roles.capability`, `roles.command`, `roles.exception`, `roles.exception.remove`, `health.run-job`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.update`, `event.complete`, `event.attendance`, `event.board.publish`, `event.cancel`, `member.role`, `member.unlink`.
 
 `config.recruitment` and `application.decide` are the two with **no control on any page**, and stay because the JSON API is independently usable (§0) and because removing a mutation is a contract break where removing a tab is not. Nothing in the UI calls them since Recruitment went away (§3.7).
 
@@ -341,6 +341,26 @@ Moving it out is what let it gain the two read-only lists it now carries. An adm
 - **Tier, icon and hidden are editable here.** They already existed on `MilestoneDefinitionDTO` and were carried by the mutation; the page simply never exposed them. Tier is presentation only, the icon is capped at four characters counted as code points (so one emoji is one), and hidden means members see only that an unnamed achievement exists until they earn it — the reveal is the reward.
 - **"Held by N" comes from `MilestoneDefinitionService.countHolders`**, an optional method: a page that lists what the guild recognises is worth having without a count beside each row and is not worth losing over one, so the read is absorbed to `{}` on failure and the port stays optional for callers that do not implement it. The count groups `Milestone` rows on `(metric, thresholdValue)` rather than joining on `definitionId`, because a milestone detected against a built-in default carries no definition id — a join would report the twenty-odd defaults as held by nobody, which is exactly backwards.
 - **Community definitions read differently, and say so.** `COMMUNITY_MILESTONE_METRICS` (events attended, event podiums, days in the guild, guild XP) are counted by this platform rather than read from Hypixel, so they are recognised from the standing the moment the number is reached — retroactively, for members already past it — and never announced. Their families carry a note saying that, their holder badge reads "Not counted" rather than "Nobody yet" (there are no recorded crossings to count), and the "Announced" switch is omitted rather than shown-and-ignored: a control that saves happily and does nothing is worse than no control.
+- **Charted metrics — what `/progression` offers.** A card above the definitions
+  picks which of `SNAPSHOT_MILESTONE_METRICS` appear in the metric menu on the
+  member-facing `/progression` card. It lives on this page rather than one of its
+  own because it is the same question the definitions ask — which of the tracked
+  numbers this guild cares about — and splitting the two would let a guild
+  recognise a fairy-souls milestone while being unable to chart fairy souls.
+  It is the only control here that saves as a unit, hence plain boxes and a Save
+  button rather than switches: the set is one value, the cap of 25 is Discord's
+  limit on a select menu, and "at least one" is a rule about the set — writing
+  each tick separately would mean refusing the flip that empties the menu, which
+  reads as a broken checkbox rather than as the rule it is. Narrowing it changes
+  nothing about what is recorded: the tracker keeps every metric either way, and
+  a reading not taken is history that cannot be recovered later.
+- **`progression.metrics` is its own mutation, not `config.setting`.** The generic
+  setting write is deliberately opaque about value shape, so a mistyped metric
+  would be stored, silently dropped by the tolerant reader, and reported as
+  saved. The typed mutation runs `validateProgressionPolicy` — which is the whole
+  reason the policy module has a strict writer beside its tolerant reader — and
+  its audit entry records the count rather than the list, because the list is the
+  setting and the audit is a record of the change.
 - **Access:** Admin+.
 
 ### 3.18 Leaderboard — standings, read-only

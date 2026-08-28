@@ -232,6 +232,32 @@ export const SNAPSHOT_MILESTONE_METRICS = [
   // bracket tables move with every mob patch, and a number we derive wrongly
   // is worse than a number we simply repeat.
   "bestiaryMilestone",
+  // Per-skill levels. The average is the number people quote, and it is also
+  // the number that hides everything: a 45 average is a very different account
+  // depending on whether Enchanting is carrying it or Combat is. Levels rather
+  // than XP for the same reason as the dungeon classes — the level is what the
+  // game shows and what a member is actually working towards.
+  "skillFarming",
+  "skillMining",
+  "skillCombat",
+  "skillForaging",
+  "skillFishing",
+  "skillEnchanting",
+  "skillAlchemy",
+  "skillTaming",
+  "skillHunting",
+  "skillCarpentry",
+  // Collections and standing that move on weeks when nothing else does. A
+  // member grinding souls, donating to the museum or unlocking minion slots has
+  // made real progress that never touches skill average or networth, and a
+  // tracker that cannot see it tells them they stood still.
+  "fairySouls",
+  "museumDonations",
+  "petScore",
+  "minionSlots",
+  // One wallet rather than eight: essence is earned in eight flavours and spent
+  // on one kind of thing, and eight lines on a chart would say less than one.
+  "essence",
 ] as const;
 export type SnapshotMilestoneMetric = (typeof SNAPSHOT_MILESTONE_METRICS)[number];
 
@@ -403,6 +429,25 @@ const CATEGORY_OF_METRIC: Readonly<Record<MilestoneMetric, AchievementCategory>>
   classArcher: "DUNGEONS",
   classTank: "DUNGEONS",
   skillAverage: "SKILLS",
+  skillFarming: "SKILLS",
+  skillMining: "SKILLS",
+  skillCombat: "SKILLS",
+  skillForaging: "SKILLS",
+  skillFishing: "SKILLS",
+  skillEnchanting: "SKILLS",
+  skillAlchemy: "SKILLS",
+  skillTaming: "SKILLS",
+  skillHunting: "SKILLS",
+  skillCarpentry: "SKILLS",
+  // Collections sit under PROGRESSION rather than earning a family of their
+  // own: a fairy-soul or museum threshold is the same kind of achievement as a
+  // SkyBlock level one — steady accumulation — and a category with four members
+  // would be a menu heading nobody scans past.
+  fairySouls: "PROGRESSION",
+  museumDonations: "PROGRESSION",
+  petScore: "PROGRESSION",
+  minionSlots: "PROGRESSION",
+  essence: "WEALTH",
   slayerXp: "SLAYER",
   slayerZombie: "SLAYER",
   slayerSpider: "SLAYER",
@@ -442,6 +487,21 @@ export const METRIC_LABELS: Readonly<Record<MilestoneMetric, string>> = {
   slayerEnderman: "Voidgloom XP",
   slayerBlaze: "Inferno XP",
   slayerVampire: "Riftstalker XP",
+  skillFarming: "Farming level",
+  skillMining: "Mining level",
+  skillCombat: "Combat level",
+  skillForaging: "Foraging level",
+  skillFishing: "Fishing level",
+  skillEnchanting: "Enchanting level",
+  skillAlchemy: "Alchemy level",
+  skillTaming: "Taming level",
+  skillHunting: "Hunting level",
+  skillCarpentry: "Carpentry level",
+  fairySouls: "Fairy souls",
+  museumDonations: "Museum donations",
+  petScore: "Pet score",
+  minionSlots: "Minion slots",
+  essence: "Essence (total)",
   bestiaryMilestone: "Bestiary milestone",
   eventsAttended: "Events attended",
   eventPodiums: "Event podiums",

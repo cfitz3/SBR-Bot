@@ -75,6 +75,71 @@ function clampFraction(fraction: number): number {
 }
 
 /**
+ * A price series as one line of block glyphs.
+ *
+ * The one chart this platform draws, for the same reason there is one progress
+ * bar: `/price` needed a week of history in an embed, and the alternatives were
+ * a rendered PNG on an image host we would then have to run, or whatever ramp
+ * the next renderer felt like typing.
+ *
+ * Three rules, all of them about not inventing data:
+ *
+ *  - **A gap is not a floor.** A bucket where nothing traded has no price, and
+ *    drawing it at the bottom of the ramp reports a crash that did not happen.
+ *    It gets the theme's gap glyph instead.
+ *  - **The scale is the series' own.** Prices are levels, not fractions of some
+ *    absolute, so the ramp spans this series' min to its max. A flat series has
+ *    no range to divide by and renders at the bottom of the ramp rather than
+ *    dividing by zero into `NaN` repeats.
+ *  - **Buckets are averaged, never dropped.** A week of hourly points is 168
+ *    values and a phone shows about two dozen, so points are grouped and each
+ *    group is averaged. Sampling every seventh point instead would let a spike
+ *    land in an unsampled hour and vanish from a chart that claims to show it.
+ */
+export function sparkline(values: readonly (number | null | undefined)[], width: number = GLYPHS.sparkWidth): string {
+  const buckets = bucketise(values, width);
+  const known = buckets.filter((v): v is number => v !== null);
+  if (known.length === 0) return "";
+
+  const low = Math.min(...known);
+  const span = Math.max(...known) - low;
+  const top = GLYPHS.spark.length - 1;
+
+  return buckets
+    .map((v) => {
+      if (v === null) return GLYPHS.sparkGap;
+      const step = span === 0 ? 0 : Math.round(((v - low) / span) * top);
+      return GLYPHS.spark[step] ?? GLYPHS.sparkGap;
+    })
+    .join("");
+}
+
+/**
+ * Group a series down to at most `width` points, averaging each group.
+ *
+ * A group made entirely of gaps stays a gap: averaging nothing is nothing, and
+ * an hour with no trades does not become a price because the hours either side
+ * of it had one.
+ */
+function bucketise(
+  values: readonly (number | null | undefined)[],
+  width: number,
+): readonly (number | null)[] {
+  if (width < 1 || values.length === 0) return [];
+  if (values.length <= width) {
+    return values.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null));
+  }
+
+  const size = values.length / width;
+  return Array.from({ length: width }, (_, i) => {
+    const group = values
+      .slice(Math.floor(i * size), Math.floor((i + 1) * size))
+      .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    if (group.length === 0) return null;
+    return group.reduce((a, b) => a + b, 0) / group.length;
+  });
+}
+/**
  * Whether a value has reached its cap.
  *
  * A function rather than an inline `>=` because the caps themselves are the

@@ -60,6 +60,7 @@ import type {
   SafetyStatusDTO,
   SkillsDTO,
   SlayersDTO,
+  TrackedReadingDTO,
   SnapshotMetricsDTO,
   TicketCategoryDTO,
   TicketCategoryInput,
@@ -173,6 +174,15 @@ export interface ProgressionService {
   getSkills(uuid: string, profileId?: string): Promise<HypixelResult<SkillsDTO>>;
   getSlayers(uuid: string, profileId?: string): Promise<HypixelResult<SlayersDTO>>;
   getDungeons(uuid: string, profileId?: string): Promise<HypixelResult<DungeonsDTO>>;
+
+  /**
+   * Every metric the tracker records, read in one pass.
+   *
+   * Exists so the snapshot worker has one call to make instead of four plus a
+   * hand-written assembly of the result. Widening the catalog then changes one
+   * function rather than one function and a caller that no compiler was checking.
+   */
+  getTrackedMetrics(uuid: string, profileId?: string): Promise<HypixelResult<TrackedReadingDTO>>;
   /** Every profile on the account, for `/profile` and `/setprofile` autocomplete. */
   listProfiles(uuid: string): Promise<HypixelResult<readonly ProfileSummaryDTO[]>>;
   /**
@@ -465,17 +475,19 @@ export interface MilestoneAnnouncerPort {
  */
 export interface ProgressionRepository {
   listMilestones(minecraftUuid: string, limit: number): Promise<readonly MilestoneDTO[]>;
+  /**
+   * The member's own saved markers, oldest first.
+   *
+   * A whole reading per marker rather than the four the first charts used.
+   * Narrowing it here was what made the chartable set four metrics wide while
+   * the catalog was twenty-seven: the series was pre-filtered at the port, so
+   * every widening upstream stopped at this line. A marker is a reading; what
+   * of it a member looks at is their choice, made at the card.
+   */
   listSnapshots(
     minecraftUuid: string,
     since: Date,
-  ): Promise<readonly {
-    readonly capturedAt: string;
-    readonly label: string | null;
-    readonly skyblockLevel: number | null;
-    readonly networth: number | null;
-    readonly skillAverage: number | null;
-    readonly catacombsLevel: number | null;
-  }[]>;
+  ): Promise<readonly (SnapshotMetricsDTO & { readonly label: string | null })[]>;
   /**
    * The member's current reading, or null if they have never been refreshed.
    *

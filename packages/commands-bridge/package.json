@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@sbr/brand": "*",
+    "@sbr/embed-kit": "*",
+    "@sbr/guild-config": "*",
     "@sbr/observability": "*",
     "@sbr/shared-types": "*",
     "@sbr/tickets": "*"

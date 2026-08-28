@@ -8,22 +8,27 @@ end lists every difference, which is the working list for the tightening pass.
 
 Sources of truth for this file:
 
-- `packages/commands-bridge/src/handlers.ts` — 24 member specs
-- `packages/commands-bridge/src/handlers-community.ts` — 9 community specs + 2 button routes
+- `packages/commands-bridge/src/handlers.ts` — the member registry, including the
+  per-feature specs spread into it (`progression`, `remind`, `tag`, `fun`, …)
+- `packages/commands-bridge/src/handlers-community.ts` — the community specs + 2 button routes
 - `packages/commands-bridge/src/ingame.ts` — the `!` surface and its aliases
-- `packages/commands-admin/src/handlers.ts` — 26 staff specs
+- `packages/commands-admin/src/handlers.ts` — the staff registry
 - the two dispatchers, for the gates every command passes through
 
-**Totals: 33 member commands, 26 staff commands, 15 reachable in-game, 2 button routes.**
+**Totals: 54 member specs, 41 staff specs, 23 reachable in-game, 2 button routes.**
+Counted from the built registries rather than by hand; the section tables below
+have drifted behind them and are being brought up to date a slice at a time.
 
-**Ten of the 33 are retired** (`enabled: false`): `/progress`, `/missing`,
-`/nextupgrade`, `/whatnext`, `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
-`/editrun`, `/closerun`. They are absent from Discord's registry, refused by the
-dispatcher, and silent in guild chat — but still in `buildBridgeRegistry()` with
-their handlers intact, which is why they are still counted and still described
-below. **23 member commands are actually reachable, and 13 in-game** (`lfg` and
-`runs` leave that surface with them). `COMMANDS.md` explains why each went. The
-rows below describe behaviour, not availability.
+**Twelve of the 54 are retired** (`enabled: false`): `/goal`, `/progress`,
+`/snapshot`, `/missing`, `/nextupgrade`, `/whatnext`, `/lfg`, `/runs`,
+`/joinrun`, `/leaverun`, `/editrun`, `/closerun`. They are absent from Discord's
+registry, refused by the dispatcher, and silent in guild chat — but still in
+`buildBridgeRegistry()` with their handlers intact, which is why they are still
+counted and still described below. **42 member commands are actually reachable,
+and 23 in-game** (`lfg` and `runs` leave that surface with them; the three
+progression commands are replaced there by `/progression`, one where there were
+three). `COMMANDS.md` explains why each went. The rows below describe behaviour,
+not availability.
 
 ---
 
@@ -98,11 +103,14 @@ erroring.
 | `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level and progress to the next, class levels and average, completions per floor (`F…` normal, `M…` master), fastest S+ | Dungeons embed; text `{ign}: catacombs N` |
 | `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate; six largest categories with their share of the total and their three most valuable items | Networth embed; text `{ign}: {total}` |
 | `/milestones` | `player?` | 15s | — | Guild achievements + standing: earned (top 5) and closest unearned (top 5) w/ progress | Achievements embed; text `{ign}: N/M achievements · next: {label}` |
-| `/progress` | `metric?` (4 choices) `range?` (1–365, default 30) | 15s | — | The **caller's** progression over time; requires a link | Progress embed; text `{ign}: networth over 30d — +N` or `not enough history` |
+| `/progression` | `metric?` (free text, matched against the guild's offered set) `range?` (7/30/90, default 30) | 15s | — | The **caller's** own numbers: the chart, the goal on the charted metric, and the markers behind both. Requires a link | Progression card + metric menu, window buttons, and `Save marker` / `Set goal` / `Clear goal`; text `{ign}: Networth over 30d — +N` |
+| `/progress` | `metric?` (4 choices) `range?` (1–365, default 30) | 15s | — | **Retired.** The **caller's** progression over time; requires a link | Progress embed; text `{ign}: networth over 30d — +N` or `not enough history` |
 
-`/progress` falls back to `networth` for an unrecognised metric rather than
-erroring — the option is choice-constrained in Discord, so that path only exists
-for the in-game and test surfaces.
+`/progression` takes the metric as free text rather than as choices: the offered
+set is guild configuration (panel → Milestones → *Charted metrics*) and Discord
+choices are fixed at registration. An unrecognised metric falls back to the first
+the guild offers, and the card's menu is the discoverable list. The retired
+`/progress` fell back to `networth` the same way.
 
 ### 2.3 Optimization
 

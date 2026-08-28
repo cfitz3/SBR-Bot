@@ -70,6 +70,12 @@ export function snapshotSpecs(): CommandSpec[] {
       // Longer than `/goal`: each save spends one of a member's two dozen slots,
       // and a spammed one would push their own older markers off the end.
       cooldownMs: 60_000,
+      // Retired: merged into /progression, which charts a metric, shows the goal
+      // for it and saves the marker from one card. Saving was the step nobody
+      // knew to take — it is now a button under the empty chart it fixes. The
+      // spec stays so the handler stays compiled and tested; this flag is what
+      // deregisters the command from Discord and from the in-game router.
+      enabled: false,
       // Linked-only in guild chat: it saves the caller's own reading, which an
       // unlinked player does not have.
       inGame: "linked",

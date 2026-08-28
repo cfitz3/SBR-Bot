@@ -12,7 +12,9 @@ import {
   LEADERBOARD_CATEGORIES,
   LEADERBOARD_LABELS,
   rankOfRole,
+  SNAPSHOT_MILESTONE_METRICS,
   type MemberRole,
+  type SnapshotMilestoneMetric,
 } from "@sbr/shared-types";
 import {
   parseAutomod,
@@ -77,6 +79,9 @@ import {
   COOLDOWN_SETTING_KEY,
   DEFAULT_CAPABILITY_FLOOR,
   ROLES,
+  MAX_OFFERED_METRICS,
+  PROGRESSION_SETTING_KEY,
+  parseProgressionPolicy,
   ROLE_POLICY_SETTING_KEY,
   capabilityFloor,
   commandFloor,
@@ -585,6 +590,21 @@ export interface MilestonesVM {
    * nothing to count. Empty when the service cannot answer at all.
    */
   readonly holders: Readonly<Record<string, number>>;
+  /**
+   * The metrics `/progression` puts on its menu here.
+   *
+   * On this page rather than a page of its own because it is the same question
+   * milestones ask — which of the tracked numbers this guild cares about — and
+   * splitting it across two screens would mean a guild that recognises a
+   * fairy-souls milestone could not chart fairy souls without knowing to look
+   * somewhere else. The tracker records every metric regardless; this only
+   * decides what is offered.
+   */
+  readonly progressionMetrics: readonly SnapshotMilestoneMetric[];
+  /** Every metric that could be offered, so the page can list the unpicked ones. */
+  readonly metricCatalog: readonly SnapshotMilestoneMetric[];
+  /** Discord's cap on a select menu, which is the cap on the offered set. */
+  readonly maxProgressionMetrics: number;
 }
 
 /**
@@ -1329,9 +1349,21 @@ export class PanelService {
     const access = await authorize(session, guildId, "milestones", this.d.roles);
     if (!access.allowed) return this.denied(access, "milestones", guildId);
 
+    // Read before the early return: the offered set is stored in guild config
+    // and has nothing to do with whether a definition service is wired, so a
+    // deployment without milestones can still choose what /progression charts.
+    const offered = parseProgressionPolicy(
+      await this.d.config.getSetting<unknown>(guildId, PROGRESSION_SETTING_KEY).catch(() => null),
+    ).metrics;
+    const catalogue = {
+      progressionMetrics: offered,
+      metricCatalog: SNAPSHOT_MILESTONE_METRICS,
+      maxProgressionMetrics: MAX_OFFERED_METRICS,
+    };
+
     const milestones = this.d.milestones;
     if (milestones === undefined) {
-      return { access, data: { installed: false, definitions: [], holders: {} } };
+      return { access, data: { installed: false, definitions: [], holders: {}, ...catalogue } };
     }
 
     // The counts are a nicety on top of the configuration, so they absorb their
@@ -1341,7 +1373,7 @@ export class PanelService {
       milestones.list(guildId),
       milestones.countHolders?.(guildId).catch(() => ({})) ?? Promise.resolve({}),
     ]);
-    return { access, data: { installed: true, definitions, holders } };
+    return { access, data: { installed: true, definitions, holders, ...catalogue } };
   }
 
   /**
