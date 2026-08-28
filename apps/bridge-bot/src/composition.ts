@@ -103,6 +103,7 @@ import {
   type LevelUpAnnouncerPort,
   type MilestoneAnnouncerPort,
   type ReminderPort,
+  type FiringLedger,
   type TicketConfigService,
   type PlayerLookup,
   type ProgressMetric,
@@ -116,6 +117,7 @@ import { createBridgeEnforcer } from "./enforcement-effector.js";
 import type { TicketGateway } from "./tickets.js";
 import type { RoleMenuGateway } from "./role-menus.js";
 import type { StickyKeeper } from "./sticky.js";
+import type { TriggerRunner } from "./triggers.js";
 import type { EventBoardGateway } from "./event-board.js";
 import type { LeaderboardDigest } from "./leaderboard-digest.js";
 import type { WelcomeProfile } from "./welcome.js";
@@ -170,6 +172,23 @@ export interface BridgeApp {
   ignForDiscordId(discordId: string): Promise<string | null>;
   /** The guild's canned replies, for `/tag` and the autoresponder. */
   readonly tags: Pick<TicketConfigService, "listTags">;
+  /**
+   * "Has this trigger already fired?", asked atomically.
+   *
+   * Exposed on the app rather than reached for inside the transport because the
+   * transport should be handed its ports, and because a starboard that reposts
+   * once is the single property of this feature worth being able to fake in a
+   * test.
+   */
+  readonly firings: FiringLedger;
+  /**
+   * The trigger runner, late-bound like the sticky keeper: it acts on messages
+   * in the community server, so it cannot exist before the client does. Bound
+   * back so a config broadcast can drop its cached rules — otherwise a rule
+   * switched off in the panel keeps firing for up to a minute.
+   */
+  setTriggers(runner: TriggerRunner | null): void;
+  readonly triggers: TriggerRunner | null;
   /** Resolve a Discord guild snowflake to the internal Guild.id used by services. */
   resolveGuild(discordGuildId: string): Promise<string | null>;
   /**
@@ -538,6 +557,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   let liveDigest: LeaderboardDigest | null = null;
   let liveRoleMenus: RoleMenuGateway | null = null;
   let liveSticky: StickyKeeper | null = null;
+  let liveTriggers: TriggerRunner | null = null;
   let liveDirectory: DiscordDirectory | null = null;
   // A thrown error rather than a null answer while unattached — the window is
   // the few hundred ms between composition and login, and "Discord has no such
@@ -848,6 +868,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     // on the staff bot reaches this process the same way every other config
     // change does.
     liveSticky?.invalidate(guildId);
+    // Trigger rules are a settings document too, and a starboard that keeps
+    // running after staff disabled it is the complaint this line prevents.
+    liveTriggers?.invalidate(guildId);
     log.debug("guild config invalidated by broadcast", { guildId });
   });
 
@@ -915,6 +938,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
         .then((link) => link?.ign ?? null)
         .catch(() => null),
     tags: ticketConfigRepository,
+    firings: adapters.firings,
     memberBus: adapters.memberBus,
     linkedDiscordIdForIgn: (ign) => identityRepository.findDiscordIdByIgn(ign).catch(() => null),
     async welcomeProfile(guildId, discordId) {
@@ -982,6 +1006,12 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setSticky(keeper) {
       liveSticky = keeper;
+    },
+    setTriggers(runner) {
+      liveTriggers = runner;
+    },
+    get triggers() {
+      return liveTriggers;
     },
     get sticky() {
       return liveSticky;

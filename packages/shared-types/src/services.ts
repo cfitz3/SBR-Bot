@@ -1270,6 +1270,30 @@ export interface TallyStore {
 }
 
 /**
+ * "Has this already fired?", asked once and answered once.
+ *
+ * A trigger sees the same message many times — every added reaction is another
+ * event on the same message, and a board at ten stars keeps receiving an
+ * eleventh. Without a claim, the first message to cross a threshold is reposted
+ * on every reaction after it, which is the failure mode every hand-rolled
+ * starboard ships with.
+ *
+ * The check has to be atomic, not read-then-write: two reactions landing in the
+ * same tick would both read "not posted" and both post. This is a port rather
+ * than a Redis call in the bot so the trigger runner stays testable offline,
+ * and so a deployment without Redis degrades to "posts more than once", never
+ * to "crashes on a reaction".
+ */
+export interface FiringLedger {
+  /**
+   * True exactly once per key. The TTL is the window in which a repeat counts
+   * as the same firing — long enough that a board cannot repost a week-old
+   * message, short enough that the keyspace does not grow without bound.
+   */
+  claim(guildId: string, key: string, ttlSeconds: number): Promise<boolean>;
+}
+
+/**
  * Server-safety postures: `/lockdown` and `/antiraid-*`.
  *
  * Every posture is time-boxed and expires on its own (ADMIN_BOT.md §6) so a

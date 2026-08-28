@@ -355,7 +355,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
   assert.deepEqual(names, [
     // Fun (§19). They read nothing about anybody and write nothing anybody is
     // accountable for, so they widen the surface by exactly one joke each.
-    "8ball", "coinflip", "cringe", "guildquote", "rank", "roll", "rps",
+    "8ball", "coinflip", "guildquote", "rank", "roll", "rps",
     // Lookups (§17).
     "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
     "networth", "perm", "price", "profile", "skills", "slayer", "slayers", "standing", "stats",

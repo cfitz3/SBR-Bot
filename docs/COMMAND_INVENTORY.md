@@ -15,19 +15,19 @@ Sources of truth for this file:
 - `packages/commands-admin/src/handlers.ts` — the staff registry
 - the two dispatchers, for the gates every command passes through
 
-**Totals: 54 member specs, 41 staff specs, 23 reachable in-game, 2 button routes.**
+**Totals: 54 member specs, 41 staff specs, 22 reachable in-game, 2 button routes.**
 Counted from the built registries rather than by hand; the section tables below
 have drifted behind them and are being brought up to date a slice at a time.
 
-**Thirteen of the 54 are retired** (`enabled: false`): `/verify`, `/goal`,
+**Fourteen of the 54 are retired** (`enabled: false`): `/verify`, `/goal`,
 `/progress`, `/snapshot`, `/missing`, `/nextupgrade`, `/whatnext`, `/lfg`,
-`/runs`, `/joinrun`, `/leaverun`, `/editrun`, `/closerun`. They are absent from Discord's
+`/runs`, `/joinrun`, `/leaverun`, `/editrun`, `/closerun`, `/cringe`. They are absent from Discord's
 registry, refused by the dispatcher, and silent in guild chat — but still in
 `buildBridgeRegistry()` with their handlers intact, which is why they are still
-counted and still described below. **41 member commands are actually reachable,
-and 23 in-game** (`lfg` and `runs` leave that surface with them; the three
-progression commands are replaced there by `/progression`, one where there were
-three). `COMMANDS.md` explains why each went. The rows below describe behaviour,
+counted and still described below. **40 member commands are actually reachable,
+and 22 in-game** (`lfg`, `runs` and `cringe` leave that surface with them; the
+three progression commands are replaced there by `/progression`, one where there
+were three). `COMMANDS.md` explains why each went. The rows below describe behaviour,
 not availability.
 
 ---

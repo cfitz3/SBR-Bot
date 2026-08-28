@@ -18,11 +18,11 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 > ### Retired commands
 >
-> Thirteen commands are flagged `enabled: false` and are **absent from Discord's
+> Fourteen commands are flagged `enabled: false` and are **absent from Discord's
 > command list**, from `/help`, and from guild chat. They are not deleted: the
 > handlers stay compiled and under test, and turning one back on is a one-line
-> change. Sections 1, 2, 4 and 6 below still describe them, because what they did is
-> still what they would do.
+> change. Sections 1, 2, 4, 6 and 20 below still describe them, because what they
+> did is still what they would do.
 >
 > - **§1, `/verify`** — folded into `/link`. It existed because `/link` had
 >   failed, which made it a repair path reachable only by knowing a second
@@ -44,6 +44,12 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 >   channel slot. Parties get formed in guild chat; the board went stale faster
 >   than anyone closed a post. `/perm` stays: the party lists it keeps are
 >   useful on their own, and `LFGPost` / `LFGActivity` rows are untouched.
+> - **§20, `/cringe`** — retired outright rather than replaced. It is the only
+>   fun command aimed at a named person, and a public counter of how cringe
+>   somebody is has no version that ages well in a guild that later has to
+>   moderate itself. A guild that wants a running joke now aims a message
+>   trigger (the panel's Triggers page, docs/WEB_PANEL.md) at a message
+>   somebody chose to post, rather than at a name somebody else typed.
 >
 > The flag is honoured in three places — `toSlashCommands` (so the command
 > leaves Discord's registry), the dispatcher (so a stale client is refused with
@@ -361,7 +367,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 | `!perm` | `/perm` | Run cmd (linked) | DB + member cache |
 | `!standing` | `/standing` | Run cmd (linked) | DB (`XpBalance`, `XpEvent`) |
 | `!help` | `/help` (condensed) | Public | Static |
-| `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank`, `!cringe` | §20 | Public | None (Redis counter for `!cringe`) |
+| `!8ball`, `!roll`, `!coinflip`, `!rps`, `!guildquote`, `!rank` | §20 | Public | None |
 
 `!standing` is `"linked"` although it writes nothing. XP is attributed to a
 Discord account, so an IGN that resolves to no link has no standing to report —
@@ -502,7 +508,7 @@ over who appears on one.
 
 ## 20. Member Bot — Fun
 
-Seven commands whose entire job is that guild chat is a social room. They are
+Six live commands whose entire job is that guild chat is a social room. They are
 listed here because they are held to constraints the rest of the platform is
 not, and those constraints are the design.
 
@@ -514,11 +520,11 @@ not, and those constraints are the design.
 | `/rps` | Rock, paper, scissors | Member | `throw` (choice, required) | The two throws and the verdict | Not one of the three | None |
 | `/guildquote` | A quote from the guild's collection | Member | — | One quote | Nothing quotable (every attempt was filtered) | `GuildSetting` `fun.quotes` |
 | `/rank` | An unofficial vibe rank | Member | `player?` (default you) | A title, a score out of 100, and a disclaimer | Not a Minecraft name; unlinked caller with no name given | None |
-| `/cringe` | Add one to somebody's cringe tally | Member | `player` (required) | The new total | Not a Minecraft name; no counter wired | Redis `fun:tally:*` |
+| `/cringe` | *Retired — see the note above §1.* Add one to somebody's cringe tally | Member | `player` (required) | The new total | Not a Minecraft name; no counter wired | Redis `fun:tally:*` |
 
 **They never echo what somebody typed.** `/8ball` answers without repeating the
 question, `/rps` echoes only the throw it managed to parse out of a fixed set,
-and `/rank` and `/cringe` accept a Minecraft name or nothing. The bridge speaks
+and `/rank` accepts a Minecraft name or nothing. The bridge speaks
 with the guild's voice, so a command that repeats arbitrary text is a way to make
 the guild say anything — through a path the chat filter was never asked about.
 
@@ -536,7 +542,7 @@ number generator; one that sticks is something people compare and argue about.
 The reply says it is not a real rank, because guild ranks are a real thing with
 real permissions attached.
 
-**The only state is a counter.** `/cringe` increments a Redis key keyed by the
+**The only state was a counter.** `/cringe`, retired, incremented a Redis key keyed by the
 *typed name* — never by a Discord id — with a 90-day expiry reset on every bump,
 so a joke nobody is still telling disappears on its own. The port behind it can
 only add: there is no read, no reset and no listing, because a tally that can be

@@ -13,6 +13,7 @@
  */
 import type { CommandSpec, EventBoardView, EventReminderView } from "@sbr/commands-bridge";
 import type { LinkHelpPolicy } from "@sbr/guild-config";
+import type { TriggerPostView } from "@sbr/triggers";
 import type {
   AccessoryReportDTO,
   AuctionListingDTO,
@@ -1144,4 +1145,30 @@ export const HELP_SPECS: readonly CommandSpec[] = [
 export const LINK_HELP: LinkHelpPolicy = {
   image: "https://cdn.example.com/sbr/link-walkthrough.gif",
   body: "The API option is under Settings → My Profile → API Settings. Ask in #support if it isn't there.",
+};
+
+/** A message a starboard reposted: text, one image, and more attached. */
+export const STARBOARD: TriggerPostView = {
+  label: "Starboard",
+  authorName: "Aria",
+  authorAvatarUrl: "https://cdn.discordapp.com/embed/avatars/1.png",
+  content:
+    "Finally got the Necron chestplate after 340 runs." +
+    "\n\n" +
+    "Screenshot before anyone asks whether I bought it.",
+  imageUrl: "https://cdn.example.com/sbr/necron.png",
+  hasOtherAttachments: true,
+  channelId: "111111111111111111",
+  jumpUrl: "https://discord.com/channels/1/2/3",
+  reaction: { emoji: "⭐", count: 12 },
+  postedAt: "2026-08-01T18:22:00.000Z",
+};
+
+/** The other shape: an image with no caption, put on a board by a phrase rule. */
+export const STARBOARD_BARE: TriggerPostView = {
+  ...STARBOARD,
+  label: "Screenshots",
+  content: "   ",
+  hasOtherAttachments: false,
+  reaction: null,
 };

@@ -12,6 +12,7 @@
     { "path": "../moderation" },
     { "path": "../analytics" },
     { "path": "../screening" },
+    { "path": "../triggers" },
     { "path": "../guild-config" },
     { "path": "../roles" },
     { "path": "../xp" }

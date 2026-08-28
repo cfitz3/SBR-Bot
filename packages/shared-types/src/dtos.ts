@@ -1265,3 +1265,44 @@ export interface SafetyStatusDTO {
   readonly lockdown: LockdownStateDTO | null;
   readonly antiRaid: AntiRaidStateDTO | null;
 }
+
+/**
+ * What a trigger rule watches for.
+ *
+ * A tagged union rather than a bag of optional fields, so a rule cannot be half
+ * a reaction count and half a phrase — and so adding a condition later is a
+ * variant the compiler makes every consumer handle rather than another `if` in
+ * a matcher somebody forgets to update.
+ */
+export type TriggerCondition =
+  | { readonly kind: "REACTION_COUNT"; readonly emoji: string; readonly threshold: number }
+  | { readonly kind: "MESSAGE_CONTAINS"; readonly phrase: string };
+
+/** What happens when it does. Same reasoning as `TriggerCondition`. */
+export type TriggerAction =
+  | { readonly kind: "REPOST"; readonly channelId: string }
+  | { readonly kind: "PIN" }
+  | { readonly kind: "REPLY"; readonly text: string };
+
+/**
+ * One rule: a condition, an action and the scope both apply in.
+ *
+ * A starboard is the pairing `REACTION_COUNT(⭐, 3) → REPOST(#starboard)`. It
+ * has no type of its own here on purpose — see `@sbr/triggers`.
+ */
+export interface TriggerRule {
+  readonly id: string;
+  /** What staff called it. Shown in the panel and in the log line when it fires. */
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly when: TriggerCondition;
+  readonly then: TriggerAction;
+  /** Where it applies. Empty means everywhere the bot can see. */
+  readonly channels: readonly string[];
+  /** Where it never applies, even if `channels` is empty. */
+  readonly exemptChannels: readonly string[];
+  /** Whether a bot's message can trip it. Off by default. */
+  readonly includeBots: boolean;
+  /** Whether the author's own reaction counts toward the threshold. Off by default. */
+  readonly includeSelf: boolean;
+}

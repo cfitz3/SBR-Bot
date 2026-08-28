@@ -27,6 +27,7 @@ import {
 } from "../forms.js";
 import { h, replace } from "../dom.js";
 import { channelSlotCopy } from "./channel-slots.js";
+import { triggersForm } from "./triggers.js";
 
 const t = scope("settings");
 
@@ -285,6 +286,7 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
       card(t("cardFeatures"), features),
       card(t("cardScreening"), screening),
       card(t("cardLinkHelp"), linkHelpForm(guildId, result.data.linkHelp)),
+      card(t("cardTriggers"), triggersForm(guildId, result.data.triggers)),
     ),
   );
 }
