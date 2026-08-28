@@ -38,6 +38,8 @@ import type {
   LeaderboardPositionDTO,
   LFGPostDTO,
   LowestBinDTO,
+  MarketHistoryDTO,
+  MarketRange,
   MemberRecordDTO,
   ModerationActionDTO,
   NetworthDTO,
@@ -430,6 +432,41 @@ export const LOWEST_BIN_NONE: LowestBinDTO = {
   price: null,
   listings: 0,
 };
+
+/**
+ * A week of hourly buckets, built rather than transcribed.
+ *
+ * A hand-written series would be twenty numbers somebody chose to look nice; a
+ * generated one has the two things the chart has to survive — a trend it should
+ * show, and gaps it must not fill in. The sine gives the shape, the modulus
+ * gives the quiet hours, and both are deterministic so a fixture diff means a
+ * rendering change rather than a new random draw.
+ */
+function series(itemId: string, base: number, range: MarketRange, points: number): MarketHistoryDTO {
+  const step = 3_600_000;
+  return {
+    itemId,
+    range,
+    points: Array.from({ length: points }, (_, i) => {
+      const at = new Date(NOW - (points - i) * step).toISOString();
+      // Every eleventh hour has no trades. An untraded hour has no price, and
+      // the chart must draw that as a gap rather than as a crash to zero.
+      if (i % 11 === 7) return { at, min: null, max: null, avg: null, volume: null };
+      const drift = 1 + Math.sin(i / 9) * 0.06 + (i / points) * 0.04;
+      const avg = Math.round(base * drift);
+      return { at, min: Math.round(avg * 0.97), max: Math.round(avg * 1.03), avg, volume: 40 + (i % 17) };
+    }),
+  };
+}
+
+/** An auction item over a week: the case the card was designed around. */
+export const HISTORY_WEEK: MarketHistoryDTO = series("NECRON_HANDLE", 470_000_000, "WEEK", 168);
+
+/** A bazaar item over a day — few enough points to be drawn one for one. */
+export const HISTORY_DAY: MarketHistoryDTO = series("ENCHANTED_DIAMOND_BLOCK", 1_900_000, "DAY", 24);
+
+/** Coflnet answered, and had nothing. Distinct from Coflnet not answering. */
+export const HISTORY_EMPTY: MarketHistoryDTO = { itemId: "PARTY_HAT_CRAB", range: "WEEK", points: [] };
 
 const AUCTION_RUNNING: AuctionListingDTO = {
   auctionId: "auc-1",

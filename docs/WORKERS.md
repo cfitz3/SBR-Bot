@@ -55,7 +55,7 @@ mirrors the Discord roster for the panel's directory — see §2.15.)*
 - **Idempotency:** snapshot is a full overwrite (last-writer-wins); no partial state.
 - **Retry:** backoff on 5xx/timeout/`RATE_LIMITED`; on failure keep the previous snapshot.
 - **Logging:** run + item count + age; failure counter feeds data-layer health.
-- **Failure impact:** low/short — `/bazaar`, `/price` serve last snapshot tagged `STALE`.
+- **Failure impact:** low/short — `/price` serves the last snapshot tagged `STALE`.
 
 ### 2.2 `ah-sweep` (+ `ah-ended-ingest`)
 - **Trigger / frequency:** repeatable; sweep 3–5 min, ended-ingest 1–2 min.

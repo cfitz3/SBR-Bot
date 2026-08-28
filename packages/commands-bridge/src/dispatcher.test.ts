@@ -962,31 +962,36 @@ test("usage is captured for each dispatch", async () => {
 
 // ── Economy ─────────────────────────────────────────────────────────────────
 
-test("price reports the blended estimate with both sources", async () => {
-  const priced: PricingService = {
-    async getPrice(itemId) {
-      return live({
-        itemId,
-        bazaarInstantSell: 1_200,
-        bazaarInstantBuy: 1_500,
-        lowestBin: 1_400,
-        estimatedValue: 1_400,
-      });
-    },
-  };
-  const r = await makeDispatcher({ pricing: priced }).dispatch(
-    "price",
-    ctx({ args: recordArgs({ item: "hyperion" }) }),
-  );
-  assert.match(r.embed?.description ?? "", /HYPERION/);
-  const values = (r.embed?.fields ?? []).map((f) => f.value);
-  assert.deepEqual(values, ["1.4k", "1.5k", "1.2k"]);
+test("the card carries both books, so one command answers what four used to", async () => {
+  // `/price`, `/bazaar`, `/lowestbin` and `/auctions item:` were four cards about
+  // one item. The order book and the lowest BIN are consolidated into one field
+  // here rather than split across two replies nobody could see side by side.
+  const r = await makeDispatcher().dispatch("price", ctx({ args: recordArgs({ item: "hyperion" }) }));
+  const now = (r.embed?.fields ?? []).find((f) => f.name === "Right now")?.value ?? "";
+  assert.match(now, /[*][*]Instant buy[*][*] 1[.]5k/);
+  assert.match(now, /[*][*]Instant sell[*][*] 1[.]2k/);
+  assert.match(now, /[*][*]Spread[*][*] 300/);
+  assert.match(now, /[*][*]Lowest BIN[*][*] 900[.]00m/);
+  assert.match(now, /[*][*]Listings[*][*] 4/);
 });
 
 test("an unpriced item reads as unknown, never as zero", async () => {
-  const r = await makeDispatcher().dispatch("price", ctx({ args: recordArgs({ item: "hyperion" }) }));
-  // The default pricing stub fails, so the embed carries the failure message.
-  assert.doesNotMatch(r.embed?.description ?? r.text, /\b0\b/);
+  const cold = market({
+    async getBazaarQuote() { return hypixelFailure("MISSING_PROFILE"); },
+    async getLowestBin(itemId) {
+      return live<LowestBinDTO>({ itemId, displayName: null, price: null, listings: 0 });
+    },
+  });
+  const r = await makeDispatcher({ market: cold }).dispatch("price", ctx({ args: recordArgs({ item: "hyperion" }) }));
+  assert.doesNotMatch(r.embed?.description ?? r.text, /0/);
+});
+
+test("an item on neither book is not an outage", async () => {
+  // `/bazaar` used to report a failure for an item that simply is not sold on
+  // the bazaar, which is most of them.
+  const off = market({ async getBazaarQuote() { return hypixelFailure("MISSING_PROFILE"); } });
+  const r = await makeDispatcher({ market: off }).dispatch("price", ctx({ args: recordArgs({ item: "hyperion" }) }));
+  assert.match(r.embed?.description ?? "", /900[.]00m/);
 });
 
 test("an unknown item name is rejected before any upstream call", async () => {
@@ -1001,47 +1006,25 @@ test("price without an item asks for one", async () => {
   assert.match(r.text, /Which item/);
 });
 
-test("bazaar shows both sides of the book and the spread", async () => {
-  const r = await makeDispatcher().dispatch("bazaar", ctx({ args: recordArgs({ item: "hyperion" }) }));
-  const fields = r.embed?.fields ?? [];
-  assert.equal(fields.find((f) => f.name === "Instant buy")?.value, "1.5k");
-  assert.equal(fields.find((f) => f.name === "Instant sell")?.value, "1.2k");
-  assert.equal(fields.find((f) => f.name === "Spread")?.value, "300");
+test("the card ships with its window buttons, so the history is one press away", async () => {
+  const r = await makeDispatcher().dispatch("price", ctx({ args: recordArgs({ item: "hyperion" }) }));
+  const ids = (r.components ?? [])[0]?.buttons.map((b) => b.customId) ?? [];
+  assert.deepEqual(ids, ["mk:r:DAY:HYPERION", "mk:r:WEEK:HYPERION", "mk:r:MONTH:HYPERION", "mk:l::HYPERION"]);
 });
 
-test("an item that isn't on the bazaar says so rather than reporting an outage", async () => {
-  const off = market({ async getBazaarQuote() { return hypixelFailure("MISSING_PROFILE"); } });
-  const r = await makeDispatcher({ market: off }).dispatch(
-    "bazaar",
-    ctx({ args: recordArgs({ item: "hyperion" }) }),
-  );
-  assert.match(r.text, /isn't sold on the bazaar/);
+test("the retired market commands are deregistered, not merely inert", async () => {
+  // `enabled: false` is what keeps them out of Discord's registry. A handler
+  // that silently did nothing would leave four dead commands in the picker.
+  const specs = buildBridgeRegistry();
+  for (const name of ["bazaar", "lowestbin"]) {
+    assert.equal(specs.get(name)?.enabled, false, name);
+  }
+  assert.equal(specs.get("price")?.enabled, undefined);
 });
 
-test("lowestbin reports the cheapest listing and how many there were", async () => {
-  const r = await makeDispatcher().dispatch("lowestbin", ctx({ args: recordArgs({ item: "hyperion" }) }));
-  assert.match(r.embed?.description ?? "", /900\.00m/);
-  assert.equal((r.embed?.fields ?? [])[0]?.value, "4");
-});
-
-test("a cold sweep cache is reported as no listing, not as free", async () => {
-  const cold = market({
-    async getLowestBin(itemId) {
-      return live<LowestBinDTO>({ itemId, displayName: null, price: null, listings: 0 });
-    },
-  });
-  const r = await makeDispatcher({ market: cold }).dispatch(
-    "lowestbin",
-    ctx({ args: recordArgs({ item: "hyperion" }) }),
-  );
-  assert.match(r.embed?.description ?? "", /No BIN listing/);
-  assert.match(r.text, /no BIN listing/);
-});
-
-test("auctions with an item reads the sweep cache", async () => {
-  const r = await makeDispatcher().dispatch("auctions", ctx({ args: recordArgs({ item: "hyperion" }) }));
-  assert.match(r.embed?.title ?? "", /Auctions — HYPERION/);
-  assert.match(r.embed?.description ?? "", /No active auctions/);
+test("auctions no longer takes an item, because the listings live under the price", async () => {
+  const spec = buildBridgeRegistry().get("auctions");
+  assert.deepEqual(spec?.options?.map((o) => o.name), ["player"]);
 });
 
 test("auctions without an item falls back to the caller's own listings", async () => {

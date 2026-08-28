@@ -1268,61 +1268,6 @@ function itemLabel(itemId: string, displayName: string | null): string {
   return displayName ?? itemId;
 }
 
-/** `/price` — the blended valuation, with the sources it was blended from. */
-export function renderPriceEmbed(result: HypixelResult<PriceDTO>): EmbedView {
-  return statEmbed("Price", result, (data) => ({
-    description: `**${data.itemId}** — ${coinsOrUnknown(data.estimatedValue)}`,
-    fields: [
-      { name: "Lowest BIN", value: coinsOrUnknown(data.lowestBin), inline: true },
-      { name: "Bazaar buy", value: coinsOrUnknown(data.bazaarInstantBuy), inline: true },
-      { name: "Bazaar sell", value: coinsOrUnknown(data.bazaarInstantSell), inline: true },
-    ],
-    color: data.estimatedValue === null ? "NEUTRAL" : "SUCCESS",
-  }));
-}
-
-/** `/bazaar` — the order book, buy side and sell side kept distinct. */
-export function renderBazaarEmbed(result: HypixelResult<BazaarQuoteDTO>): EmbedView {
-  return statEmbed("Bazaar", result, (data) => ({
-    description: `**${itemLabel(data.itemId, data.displayName)}**`,
-    fields: [
-      { name: "Instant buy", value: coinsOrUnknown(data.instantBuy), inline: true },
-      { name: "Instant sell", value: coinsOrUnknown(data.instantSell), inline: true },
-      { name: "Spread", value: coinsOrUnknown(data.spread), inline: true },
-      {
-        name: "Buy volume",
-        value: data.buyVolume === null ? "—" : formatNumber(data.buyVolume),
-        inline: true,
-      },
-      {
-        name: "Sell volume",
-        value: data.sellVolume === null ? "—" : formatNumber(data.sellVolume),
-        inline: true,
-      },
-    ],
-    color: "SUCCESS",
-  }));
-}
-
-/** `/lowestbin` — a cold sweep cache says so rather than reporting no listings. */
-export function renderLowestBinEmbed(result: HypixelResult<LowestBinDTO>): EmbedView {
-  return statEmbed("Lowest BIN", result, (data) => {
-    if (data.price === null) {
-      return {
-        description:
-          `No BIN listing for **${itemLabel(data.itemId, data.displayName)}** in the last ` +
-          `auction sweep. It may be unsold, or not yet covered by the sweep.`,
-        color: "NEUTRAL",
-      };
-    }
-    return {
-      description: `**${itemLabel(data.itemId, data.displayName)}** — ${formatCoins(data.price)}`,
-      fields: [{ name: "Listings", value: formatNumber(data.listings), inline: true }],
-      color: "SUCCESS",
-    };
-  });
-}
-
 /**
  * `/auctions` — a player's own listings, or the cheapest listings for an item.
  * The two share a renderer because they answer the same shape of question.

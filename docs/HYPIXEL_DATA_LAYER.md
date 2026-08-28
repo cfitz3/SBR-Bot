@@ -75,7 +75,7 @@ Nothing scheduled passes it.
 5. Cache and return with `freshness`.
 
 ### Market/global acquisition flow (live command)
-- Commands (`/price`, `/bazaar`, `/lowestbin`, `/auctions`, `/mayor`, `/firesales`, `/bingo`) **read pre-computed Redis keys only**. If the key is missing/expired → `STALE` (serve last-known) or `MISSING_PROFILE`-style empty state; they **never** trigger an AH sweep.
+- Commands (`/price`, `/auctions`, `/mayor`, `/firesales`, `/bingo`) **read pre-computed Redis keys only**. (`/price`'s history chart comes from Coflnet on its own port and cache, outside this layer entirely — see `docs/INTEGRATIONS.md`.) If the key is missing/expired → `STALE` (serve last-known) or `MISSING_PROFILE`-style empty state; they **never** trigger an AH sweep.
 
 ---
 

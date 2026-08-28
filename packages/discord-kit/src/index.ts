@@ -41,6 +41,7 @@ export {
   player,
   progressBar,
   progressLine,
+  sparkline,
   VIEW_COLORS,
   type CardSpec,
   type CheckOptions,

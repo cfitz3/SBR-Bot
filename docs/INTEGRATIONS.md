@@ -25,6 +25,7 @@ Research on third-party repos/libraries to integrate so we build domain logic on
 | **DuckySoLucky/hypixel-discord-chat-bridge** | Two-way guild↔Discord bridge (discord.js v14 + mineflayer), command system, Docker | `apps/bridge-bot`, `packages/bridge` | Bridge event loop, command routing patterns | **Reference only** | Same Mineflayer ban risk; it's a full app to learn from, not import |
 | **xMdb/hypixel-guild-chat-bot** | Guild chat bot (another bridge implementation) | `apps/bridge-bot` | Bridge patterns | **Reference only** | Could not verify repo status via search — **confirm it still exists** before relying on it |
 | **Altpapier/Skyblock-Item-Emojis** | DB of every Skyblock item as a Discord emoji (v3: emojis.json + images.json, FurfSky textures) | `packages/shared-types` (asset map) → `bridge-bot`, `admin-bot`, `web-panel` | Sourcing/hosting our own item emojis | **Data/asset** | Discord changed rules: emojis no longer usable in some slash-command contexts; verify usage surface; give credit |
+| **Coflnet SkyApi** (`sky.coflnet.com`) | Hourly/daily price history per item tag (min/max/avg/volume) for both auction and bazaar items | `packages/pricing` (history port) | Recording our own price time series | **Direct (HTTP, history only)** | **History and context only** — never the live price a trade is made on (DP-2). Third-party uptime we do not control, so the port answers `null` and the card degrades to prices without a chart; timestamps come back zoneless and must be read as UTC |
 | **SkyCrypt** (SkyCryptWebsite: Frontend + Go Backend) | Full per-player Skyblock stats site (skills, gear, pets, dungeons, etc.) | `packages/progression`, `web-panel` | Building every stat parser/visualization ourselves | **Reference only** | AGPL-family / heavy; use for parsing patterns & item logic. **Only trust `SkyCryptWebsite`/`skycryptsite` orgs — others are known phishing forks** |
 
 ---
@@ -41,6 +42,12 @@ Research on third-party repos/libraries to integrate so we build domain logic on
 - **`senitherweight`** (tonydawhale) gives Senither weight directly from API data — **direct, wrapped** in `packages/progression`. ([repo](https://github.com/tonydawhale/senitherweight))
 - **`hypixel-skyblock-facade`** (Senither) is the canonical *source* of the weight strategy but ships as a **standalone HTTP service** (Docker, port 9281). We want in-process calc, so treat it as **reference** — port formulas / cross-check against `senitherweight`. ([repo](https://github.com/Senither/hypixel-skyblock-facade))
 - **`farming-weight`** (EliteFarmers) — **direct, wrapped** for farming weight/fortune/income. ⚠️ It **moved** out of the old `EliteFarmers/FarmingWeight` repo into `EliteFarmers/Website` under `packages/`; the standalone package was MIT but the Website repo is **GPL-3.0**, so confirm the exact license of the folder we pull before shipping. Input must be pre-processed (not raw API). ([old repo](https://github.com/EliteFarmers/FarmingWeight) · [current](https://github.com/EliteFarmers/Website) · [docs](https://mintlify.wiki/EliteFarmers/Website/developers/farming-weight/overview))
+
+### Price history — layered on top, never underneath
+- **Coflnet SkyApi** answers `GET /api/item/price/{TAG}/history/{day|week|month}` with a bucketed series (`min`, `max`, `avg`, `volume`, `time`) covering auction *and* bazaar items — the one thing the Hypixel API does not give us, because it only ever reports *now*. It backs the chart and the "25% above the 7-day average" line on the `/price` card.
+- **It is a history source, not a market source** (decision DP-2). Live order book, lowest BIN and networth valuation stay on the Hypixel-backed path in `packages/pricing`. Coflnet gets its own port, its own cache (15 min / 1 h / 6 h by range) and its own breaker, and every read may answer `null`: a Coflnet outage costs a card its chart and nothing else.
+- **Three outcomes are kept distinct**, because collapsing them lies to the reader: no recorded past → empty series (cached); an item Coflnet has never seen (400 `item_not_found`) → empty series, *not* counted against the breaker; unreachable or misshapen → `null`, counted, never cached.
+- Timestamps arrive **without a zone** and are UTC upstream; parsing them as local time shifts the whole series by the host offset — invisible on a chart and wrong on the axis. ([API](https://sky.coflnet.com/api))
 
 ### Bridge implementations — reference architecture, not dependencies
 All three bridges rely on **Mineflayer** (a non-standard client) to sit in Hypixel guild chat, which carries a **real account-ban risk** and needs Minecraft account credentials. They are **applications, not libraries** — we study their event loop, formatting, limbo-handling, and command routing, then implement `packages/bridge` + `apps/bridge-bot` ourselves.
@@ -61,7 +68,8 @@ All three bridges rely on **Mineflayer** (a non-standard client) to sit in Hypix
 3. **Skyblock data formats drift constantly.** `farming-weight` and `skyblock-parser` both warn that keeping up with Hypixel API changes is the *consumer's* job. Our `packages/hypixel` normalizer is the single choke point that absorbs this churn so downstream math packages stay stable.
 4. **Pick one Hypixel wrapper and one weight source.** Don't carry `@zikeji/hypixel` *and* `hypixel-api-reborn`, or `senitherweight` *and* the facade, at runtime — choose, wrap, and keep the other as reference to avoid divergent behavior.
 5. **Wrap everything behind our service interfaces.** Networth, weights, farming, and the API wrapper are all external engines whose APIs (and maintenance) we don't control — the adapter layer in each package is what lets us swap or fork later without touching the bots or panel.
-6. **Verify two repos before committing:** `xMdb/hypixel-guild-chat-bot` (couldn't confirm status) and the exact upstream location/version of `farming-weight` (post-move).
+6. **Coflnet is the only third-party runtime dependency in the request path.** It is confined to history, behind a port with its own cache and breaker, and allowed to answer nothing — the design rule is that no external service we do not run can take a price off a card.
+7. **Verify two repos before committing:** `xMdb/hypixel-guild-chat-bot` (couldn't confirm status) and the exact upstream location/version of `farming-weight` (post-move).
 
 ---
 
@@ -72,6 +80,7 @@ All three bridges rely on **Mineflayer** (a non-standard client) to sit in Hypix
 - [Senither/hypixel-skyblock-facade](https://github.com/Senither/hypixel-skyblock-facade)
 - [tonydawhale/senitherweight](https://github.com/tonydawhale/senitherweight)
 - [EliteFarmers/FarmingWeight (moved)](https://github.com/EliteFarmers/FarmingWeight) · [EliteFarmers/Website](https://github.com/EliteFarmers/Website) · [farming-weight docs](https://mintlify.wiki/EliteFarmers/Website/developers/farming-weight/overview)
+- [Coflnet SkyApi](https://sky.coflnet.com/api) · [GitHub](https://github.com/Coflnet/HypixelSkyblock)
 - [slothpixel/skyblock-parser](https://github.com/slothpixel/skyblock-parser)
 - [Altpapier/hypixel-discord-guild-bridge](https://github.com/Altpapier/hypixel-discord-guild-bridge)
 - [DuckySoLucky/hypixel-discord-chat-bridge](https://github.com/DuckySoLucky/hypixel-discord-chat-bridge)

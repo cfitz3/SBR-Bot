@@ -11,6 +11,7 @@ import {
   player,
   progressBar,
   progressLine,
+  sparkline,
 } from "./card.js";
 import { checkEmbed } from "./style.js";
 
@@ -159,4 +160,42 @@ test("card does not trim a card down to the field budget", () => {
   });
   assert.equal(view.fields?.length, 9);
   assert.equal(checkEmbed(view).filter((i) => i.rule === "field.budget").length, 1);
+});
+
+test("a sparkline spans its own series, low to high", () => {
+  // Prices are levels, not fractions of an absolute, so the ramp is relative.
+  assert.equal(sparkline([1, 2, 3, 4, 5, 6, 7, 8]), G.spark);
+  assert.equal(sparkline([10, 20]), `${G.spark[0] ?? ""}${G.spark[7] ?? ""}`);
+});
+
+test("a flat series draws flat rather than dividing by its own zero range", () => {
+  // The old failure mode of every bar this platform has drawn: a zero span
+  // becomes NaN repeats, and `String.repeat(NaN)` throws mid-render.
+  assert.equal(sparkline([5, 5, 5]), (G.spark[0] ?? "").repeat(3));
+});
+
+test("a bucket with no trades is a gap, not the bottom of the ramp", () => {
+  // Drawing an untraded hour at the floor reports a crash that did not happen.
+  const line = sparkline([10, null, 20]);
+  assert.equal(line[1], G.sparkGap);
+  assert.notEqual(line[1], G.spark[0]);
+});
+
+test("a series with nothing readable in it draws nothing at all", () => {
+  assert.equal(sparkline([null, undefined, Number.NaN]), "");
+  assert.equal(sparkline([]), "");
+});
+
+test("a long series is averaged down, so a spike cannot fall between samples", () => {
+  const flat = Array.from({ length: 100 }, () => 10);
+  const withSpike = [...flat];
+  withSpike[57] = 1000;
+
+  assert.equal(sparkline(flat, 10).length, 10);
+  // Every point is in some bucket, so the spike survives the reduction.
+  assert.notEqual(sparkline(withSpike, 10), sparkline(flat, 10));
+});
+
+test("a series shorter than the width is drawn as-is rather than stretched", () => {
+  assert.equal(sparkline([1, 2, 3], 24).length, 3);
 });

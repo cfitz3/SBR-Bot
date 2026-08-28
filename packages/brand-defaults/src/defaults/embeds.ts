@@ -60,6 +60,13 @@ export const DEFAULT_EMBEDS = {
     snapshots: "Snapshots",
     pace: "Pace",
     target: "Target",
+
+    /* ── market ── */
+    /** `{range}` is the window in words — "24 hours", "7 days", "30 days". */
+    priceNow: "Right now",
+    priceVolume: "Moving",
+    priceHistory: "History",
+    cheapestListings: "Cheapest listings",
   },
 
   /**
@@ -208,6 +215,8 @@ export const DEFAULT_EMBEDS = {
      * about a player, so the item is what a reader should hit first.
      */
     auctions: "Auctions — {subject}",
+    /** `{item}` is the item's display name. The one market card. */
+    market: "{item}",
     /** `{guild}` is the guild's own name, when the roster carries one. */
     roster: "{guild} — online now",
     /** …and when it does not. Not "Unknown — online now". */
@@ -235,6 +244,22 @@ export const DEFAULT_EMBEDS = {
     /** `{subject}` is the item or player searched for. */
     noAuctions: "No active auctions for {subject}.",
     networthHidden: "Unknown — the profile's API settings hide the data this needs.",
+
+    /* ── market ── */
+    /** Neither book quotes it. Not "0 coins": nobody is trading it at any price. */
+    marketNoPrice: "Nothing is being bought or sold right now.",
+    /** History is context, so its absence is a note on the card, not a failure. */
+    marketNoHistory: "No price history for this item yet.",
+    /** The history source is down or paused. Says which, because they differ. */
+    marketHistoryDown: "Price history is unavailable right now.",
+    /** `{n}` is a signed percentage. */
+    marketUp: "{n}% above the {range} average",
+    marketDown: "{n}% below the {range} average",
+    marketFlat: "in line with the {range} average",
+    marketPickRange: "Pick a window",
+    marketListings: "Listings",
+    /** `{item}` is the display name. The sweep may simply not have reached it. */
+    marketNoListings: "No buy-it-now listings for {item} in the last auction sweep.",
     /**
      * `{n}` is the window in days.
      *
