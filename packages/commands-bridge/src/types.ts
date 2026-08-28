@@ -11,6 +11,7 @@ import type {
   CommandSurface,
   CommunityService,
   DiscordDirectory,
+  ServerActivitySource,
   ReminderPort,
   TicketConfigService,
   TicketTagDTO,
@@ -140,6 +141,12 @@ export interface HandlerDeps {
    * answer it — in guild chat those commands say so rather than guessing.
    */
   readonly discord?: DiscordDirectory;
+  /**
+   * The counters behind `/serverinfo`'s activity section. Separate from
+   * `discord` because it answers what the gateway cannot: a card can have the
+   * server's shape without the platform's database, and vice versa.
+   */
+  readonly serverActivity?: ServerActivitySource;
   /**
    * `/remind`. Optional like the rest of the client-dependent ports: a
    * deployment without it says reminders are not set up rather than pretending

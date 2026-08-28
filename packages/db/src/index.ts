@@ -68,6 +68,7 @@ export {
 export { reminderRepository } from "./repositories/reminders.js";
 export { xpRepository, activitySink, xpLevelUpAnnouncementRepository } from "./repositories/xp.js";
 export { leaderboardSource } from "./repositories/leaderboards.js";
+export { serverActivityRepository } from "./repositories/server-activity.js";
 export { milestoneDefinitionRepository, milestoneAnnouncementRepository } from "./repositories/milestones.js";
 export { roleGrantRepository } from "./repositories/role-grants.js";
 export { roleSyncRepository, memberRoleDirtyMarker } from "./repositories/role-sync.js";

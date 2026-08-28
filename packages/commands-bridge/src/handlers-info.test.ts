@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { noArgs, recordArgs } from "@sbr/shared-types";
-import type { CommandArgs, DiscordDirectory, DiscordUserInfo } from "@sbr/shared-types";
+import type {
+  CommandArgs,
+  DiscordDirectory,
+  DiscordUserInfo,
+  ServerActivityDTO,
+  ServerActivitySource,
+} from "@sbr/shared-types";
 import { infoSpecs } from "./handlers-info.js";
 import type { CommandContext, HandlerDeps } from "./types.js";
 
@@ -12,16 +18,42 @@ function ctx(args: CommandArgs = noArgs): CommandContext {
   return { guildId: GUILD, userId: CALLER, surface: "BRIDGE_BOT", args };
 }
 
-/** These three reach for exactly one dep, which is the point of the file. */
-function deps(discord?: DiscordDirectory): HandlerDeps {
-  return { ...(discord === undefined ? {} : { discord }) } as unknown as HandlerDeps;
+/** These three reach for two deps at most, which is the point of the file. */
+function deps(discord?: DiscordDirectory, serverActivity?: ServerActivitySource): HandlerDeps {
+  return {
+    ...(discord === undefined ? {} : { discord }),
+    ...(serverActivity === undefined ? {} : { serverActivity }),
+  } as unknown as HandlerDeps;
 }
 
-function run(name: string, args: CommandArgs, discord?: DiscordDirectory) {
+function run(name: string, args: CommandArgs, discord?: DiscordDirectory, activity?: ServerActivitySource) {
   const spec = infoSpecs().find((s) => s.name === name);
   assert.ok(spec, `no ${name} spec`);
-  return spec.handler(ctx(args), deps(discord));
+  return spec.handler(ctx(args), deps(discord, activity));
 }
+
+function week(over: Partial<ServerActivityDTO> = {}): ServerActivityDTO {
+  return {
+    trackedMembers: 312,
+    linkedMembers: 274,
+    activeMembers: 96,
+    discordMessages: 4_118,
+    guildChatMessages: 962,
+    top: { discordId: "900000000000000009", ign: "Aria", discordMessages: 412, guildChatMessages: 96 },
+    windowDays: 7,
+    ...over,
+  };
+}
+
+const counted = (dto: ServerActivityDTO | null = week()): ServerActivitySource => ({
+  async serverWeek() {
+    return dto;
+  },
+});
+
+/** One field's value, by name. */
+const value = (reply: { embed?: { fields?: readonly { name: string; value: string }[] } }, name: string) =>
+  reply.embed?.fields?.find((f) => f.name === name)?.value;
 
 function user(over: Partial<DiscordUserInfo> = {}): DiscordUserInfo {
   return {
@@ -153,13 +185,67 @@ test("an id Discord has never heard of is refused rather than rendered", async (
 });
 
 test("serverinfo reports the counts it was given", async () => {
+  const reply = await run("serverinfo", noArgs, directory(), counted());
+
+  assert.equal(reply.embed?.title, "Skyblock and Relax");
+  // The Discord count is the headline, and the card does not then repeat it
+  // as a fact and invite the reader to check the two against each other.
+  assert.equal(reply.embed?.description, "1,234 members");
+  assert.match(value(reply, "Server") ?? "", /[*][*]Boosts[*][*] 9 [(]tier 2[)]/);
+  assert.match(value(reply, "Server") ?? "", /<@owner-1>/);
+});
+
+test("our own numbers are ours, and are not passed off as Discord's", async () => {
+  const reply = await run("serverinfo", noArgs, directory(), counted());
+
+  // Tracked is smaller than the Discord count on purpose: bots are in one
+  // and not the other, and a card that conflated them would be wrong twice.
+  const members = value(reply, "Members") ?? "";
+  assert.match(members, /[*][*]Tracked here[*][*] 312/);
+  assert.match(members, /[*][*]Linked[*][*] 274/);
+  assert.match(members, /[*][*]Active this week[*][*] 96/);
+});
+
+test("the busiest member is named as a mention, with their IGN when they have one", async () => {
+  const reply = await run("serverinfo", noArgs, directory(), counted());
+
+  const top = value(reply, "Busiest this week") ?? "";
+  assert.match(top, /^<@900000000000000009> [(]Aria[)]/);
+  assert.match(top, /412/);
+});
+
+test("a quiet week says nobody spoke rather than showing an empty section", async () => {
+  const reply = await run("serverinfo", noArgs, directory(), counted(week({
+    activeMembers: 0,
+    discordMessages: 0,
+    guildChatMessages: 0,
+    top: null,
+  })));
+
+  // Zero counted is a different fact from nothing counted, and the card keeps
+  // the difference: the totals are still there, and the name is not invented.
+  assert.match(value(reply, "Messages this week") ?? "", /[*][*]Discord[*][*] 0/);
+  assert.match(value(reply, "Busiest this week") ?? "", /Nobody has said anything/);
+});
+
+test("a deployment counting nothing loses the week and keeps the server", async () => {
   const reply = await run("serverinfo", noArgs, directory());
 
-  const fields = reply.embed?.fields ?? [];
+  assert.equal(value(reply, "Members"), undefined);
+  assert.equal(value(reply, "Busiest this week"), undefined);
+  assert.match(value(reply, "Messages this week") ?? "", /isn't being counted/);
+  assert.match(value(reply, "Server") ?? "", /Channels/);
+});
+
+test("a counter store that throws costs the week, not the card", async () => {
+  const reply = await run("serverinfo", noArgs, directory(), {
+    async serverWeek() {
+      throw new Error("database is having a day");
+    },
+  });
+
   assert.equal(reply.embed?.title, "Skyblock and Relax");
-  assert.equal(fields.find((f) => f.name === "Members")?.value, "1,234");
-  assert.equal(fields.find((f) => f.name === "Boosts")?.value, "9 (tier 2)");
-  assert.equal(fields.find((f) => f.name === "Owner")?.value, "<@owner-1>");
+  assert.match(value(reply, "Messages this week") ?? "", /isn't being counted/);
 });
 
 test("a server the bot cannot currently see says so rather than showing zeroes", async () => {

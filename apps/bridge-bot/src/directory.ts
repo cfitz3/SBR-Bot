@@ -11,6 +11,15 @@
  * id typed in from another server and a momentary API hiccup all produce the
  * same shape, and the card says which of those it is from what came back rather
  * than from an exception.
+ *
+ * The guild id it is handed is the platform's, not Discord's. Every command
+ * runs against an internal `Guild.id` — the interaction handler resolves the
+ * snowflake to one before dispatch — so the translation back belongs here, in
+ * the only layer that knows Discord exists. It was missing, which is why
+ * `/serverinfo` answered "I can't see this server": the fetch was being given a
+ * cuid and Discord, reasonably, had no server by that name. `/userinfo` failed
+ * more quietly still, reporting every member as not in the server, because a
+ * guild that cannot be fetched has no members to find.
  */
 import type { Client } from "discord.js";
 import type { DiscordDirectory, DiscordGuildInfo, DiscordUserInfo } from "@sbr/shared-types";
@@ -18,16 +27,30 @@ import type { DiscordDirectory, DiscordGuildInfo, DiscordUserInfo } from "@sbr/s
 /** Discord's own cap; the renderer trims further for width. */
 const MAX_ROLES = 50;
 
-export function createDiscordDirectory(client: Client): DiscordDirectory {
+export function createDiscordDirectory(
+  client: Client,
+  /** Internal `Guild.id` → Discord snowflake. Null when the guild is unknown to us. */
+  resolveDiscordId: (guildId: string) => Promise<string | null>,
+): DiscordDirectory {
+  /** One place to fetch a guild, so neither command can forget the translation. */
+  async function fetchGuild(guildId: string) {
+    const snowflake = await resolveDiscordId(guildId).catch(() => null);
+    if (snowflake === null) return null;
+    return client.guilds.fetch(snowflake).catch(() => null);
+  }
+
   return {
     async lookupUser(guildId, userId): Promise<DiscordUserInfo | null> {
       const user = await client.users.fetch(userId).catch(() => null);
       if (user === null) return null;
 
-      const guild = await client.guilds.fetch(guildId).catch(() => null);
+      const guild = await fetchGuild(guildId);
       // `fetch` rather than the cache: a member who has never spoken is not
       // cached, and reporting them as "not in this server" would be wrong.
       const member = guild === null ? null : await guild.members.fetch(userId).catch(() => null);
+      // `@everyone` carries the *guild's* snowflake as its id, which is not the
+      // id this port was called with. Read it off the guild we actually fetched.
+      const everyone = guild?.id ?? null;
 
       return {
         id: user.id,
@@ -46,7 +69,7 @@ export function createDiscordDirectory(client: Client): DiscordDirectory {
                 // Highest first, and `@everyone` dropped: it is on every member
                 // and so tells the reader nothing about this one.
                 roleIds: [...member.roles.cache.values()]
-                  .filter((role) => role.id !== guildId)
+                  .filter((role) => role.id !== everyone)
                   .sort((a, b) => b.position - a.position)
                   .slice(0, MAX_ROLES)
                   .map((role) => role.id),
@@ -56,7 +79,7 @@ export function createDiscordDirectory(client: Client): DiscordDirectory {
     },
 
     async guildInfo(guildId): Promise<DiscordGuildInfo | null> {
-      const guild = await client.guilds.fetch(guildId).catch(() => null);
+      const guild = await fetchGuild(guildId);
       if (guild === null) return null;
 
       return {

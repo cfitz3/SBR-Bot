@@ -60,6 +60,11 @@ export const DEFAULT_EMBEDS = {
     snapshots: "Snapshots",
     pace: "Pace",
     target: "Target",
+    /** `/serverinfo`: the server's shape, and the week behind it. */
+    members: "Members",
+    server: "Server",
+    messagesWeek: "Messages this week",
+    busiestWeek: "Busiest this week",
   },
 
   /**
@@ -235,6 +240,13 @@ export const DEFAULT_EMBEDS = {
     /** `{subject}` is the item or player searched for. */
     noAuctions: "No active auctions for {subject}.",
     networthHidden: "Unknown — the profile's API settings hide the data this needs.",
+
+    /* ── /serverinfo ── */
+    /** `{n}` is the member count Discord reports. */
+    serverHeadline: "{n} members",
+    /** Shown in place of the week's counters when nothing is wired to keep them. */
+    serverNoActivity: "Activity isn't being counted here.",
+    serverNobodyActive: "Nobody has said anything yet this week.",
     /**
      * `{n}` is the window in days.
      *

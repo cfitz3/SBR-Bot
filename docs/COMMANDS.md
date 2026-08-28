@@ -548,12 +548,21 @@ side — configuration, limits and failure modes.
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/userinfo` | Discord account details for a member | Public | `member?` (default you) | Embed: account age, joined, roles | Member not in this server | Discord (gateway cache) |
-| `/serverinfo` | This Discord server at a glance | Public | — | Embed: members, channels, roles, created | — | Discord (gateway cache) |
+| `/serverinfo` | This Discord server at a glance | Public | — | Embed: the Discord half (members, channels, roles, emoji, boosts, owner, created) and the platform's own week (tracked and linked members, active members, Discord and guild-chat message counts, the busiest member) | Bot cannot see the server → says so | Discord (gateway) + DB (`ActivityDaily`, `GuildMember`, `LinkedAccount`) |
 | `/avatar` | Someone's Discord avatar, full size | Public | `member?` (default you) | Embed with the image | Member not in this server | Discord (gateway cache) |
 | `/levelalerts` | Turn your own level-up announcements on or off | Member | `state?` (`on`/`off`; blank shows where you stand) | Ephemeral confirmation | — | `GuildSetting` `levels.optOut` |
 | `/remind` | Have the bot remind you later | Member | `when` (`30m`, `2h30m`, `1w2d`), `about` | Ephemeral confirmation with a live `<t:…:R>` timestamp | Unparseable duration; under a minute or over a year; already 10 pending; over 280 characters | DB (`Reminder`) |
 | `/reminders` | Your pending reminders | Member | `cancel?` (id) | Ephemeral list, or confirmation of a cancellation | Unknown id; not yours | DB (`Reminder`) |
 | `/tag` | Post one of this server's canned replies | Member | `name` (required, autocomplete) | The reply, posted publicly | No reply by that name (a disabled tag reads as absent); tags not set up on this deployment | DB (ticket tag store) |
+
+**`/serverinfo` answers from two places and says which is which.** Discord
+knows how many accounts are in the server; it does not know how many of them
+this platform tracks, how many have linked a Minecraft name, or who has been
+talking. Those come from the same daily counters the activity leaderboards
+read, over a rolling seven days, and a deployment that keeps none of them gets
+the Discord half of the card and an explicit note rather than a section of
+zeroes. The counts cover members, not bots: our roster is smaller than
+Discord's number and is supposed to be.
 
 **Reminders are yours alone.** There is no "remind someone else" — that would be
 a way to make the bot ping a person on command — and no way to list or cancel

@@ -36,6 +36,7 @@ import {
   xpRepository,
   activitySink,
   podiumRepository,
+  serverActivityRepository,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { fetchHttp, HypixelClient, type SkyblockProfileDTO } from "@sbr/hypixel";
@@ -595,6 +596,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     screen,
     tallies: adapters.tallies,
     discord,
+    // The week behind `/serverinfo`. Read-only and guild-wide, so it needs
+    // none of the ports the member-scoped sections above are narrowed from.
+    serverActivity: serverActivityRepository,
     reminders: reminderRepository,
     tags: ticketConfigRepository,
     logger: log,

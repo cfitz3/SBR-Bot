@@ -293,7 +293,27 @@ export const GALLERY: readonly GalleryCard[] = [
     renderUserInfoEmbed,
     f.DISCORD_USER_OUTSIDER,
   ),
-  card("serverinfo", "`/serverinfo` — the server at a glance.", renderServerInfoEmbed, f.DISCORD_GUILD),
+  card(
+    "serverinfo",
+    "`/serverinfo` — the server's shape, and the week the platform counted.",
+    renderServerInfoEmbed,
+    f.DISCORD_GUILD,
+    f.SERVER_WEEK,
+  ),
+  card(
+    "serverinfo-quiet",
+    "The same card on a week nobody spoke in — counted, and said so.",
+    renderServerInfoEmbed,
+    f.DISCORD_GUILD,
+    f.SERVER_WEEK_QUIET,
+  ),
+  card(
+    "serverinfo-uncounted",
+    "A deployment keeping no counters: the Discord half, and no invented week.",
+    renderServerInfoEmbed,
+    f.DISCORD_GUILD,
+    null,
+  ),
   card("standing", "`/xp` — a member's guild XP and where it came from.", renderStandingEmbed, IGN, f.STANDING),
   card(
     "standing-new",

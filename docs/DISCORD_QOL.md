@@ -264,7 +264,7 @@ All member-facing, all on SBR Bot.
 | Command | What it does | Notes |
 | --- | --- | --- |
 | `/userinfo [member]` | Discord account details | Public |
-| `/serverinfo` | The server at a glance | 10s cooldown |
+| `/serverinfo` | The server at a glance, plus the week's activity | 10s cooldown; the activity half needs the database |
 | `/avatar [member]` | Full-size avatar | Public |
 | `/levelalerts [on\|off]` | Your own level-up announcements | Blank shows where you stand |
 | `/remind <when> <about>` | A reminder to yourself | `30m`, `2h30m`, `1w2d` |

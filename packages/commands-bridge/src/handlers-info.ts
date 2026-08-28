@@ -9,12 +9,20 @@
  * anybody without that being a disclosure of guild records. `/me` and
  * `/standing` remain the commands that speak for the platform.
  */
-import type { DiscordGuildInfo, DiscordUserInfo, EmbedView } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+import { card, facts, field } from "@sbr/embed-kit";
+import type { DiscordGuildInfo, DiscordUserInfo, EmbedView, ServerActivityDTO } from "@sbr/shared-types";
 import type { CommandHandler, CommandReply, CommandSpec } from "./types.js";
 import { flattenEmbed } from "@sbr/shared-types";
 
 /** Discord renders more roles than this as a wall; the count carries the rest. */
 const MAX_ROLES_SHOWN = 12;
+
+const C = copy.embed.card;
+const F = copy.embed.field;
+
+/** Thousands separators everywhere: these are counts people compare. */
+const count = (n: number): string => n.toLocaleString("en-US");
 
 /**
  * The one honest answer when the bot has no gateway.
@@ -93,29 +101,90 @@ export function renderUserInfoEmbed(info: DiscordUserInfo): EmbedView {
   };
 }
 
-export function renderServerInfoEmbed(info: DiscordGuildInfo): EmbedView {
-  return {
+/**
+ * The server card.
+ *
+ * Two halves from two places, and the card says which is which. Discord knows
+ * the server's shape — how many accounts are in it, how many channels and roles
+ * it has, when it was made. It does not know how many of those accounts this
+ * platform tracks, how many have linked a Minecraft name, or who has been
+ * talking, so the week comes from our own counters and is simply absent when a
+ * deployment keeps none.
+ *
+ * Created lives as a fact rather than in the native timestamp: the timestamp
+ * says how fresh a reading is, and a server's founding date is neither a
+ * reading nor fresh.
+ */
+export function renderServerInfoEmbed(
+  info: DiscordGuildInfo,
+  activity?: ServerActivityDTO | null,
+): EmbedView {
+  const week = activity ?? null;
+
+  return card({
     title: info.name,
-    fields: [
-      { name: "Members", value: info.memberCount.toLocaleString("en-US"), inline: true },
-      { name: "Channels", value: String(info.channelCount), inline: true },
-      { name: "Roles", value: String(info.roleCount), inline: true },
-      { name: "Emoji", value: String(info.emojiCount), inline: true },
-      {
-        name: "Boosts",
-        value: `${String(info.boostCount)} (tier ${String(info.boostTier)})`,
-        inline: true,
-      },
-      {
-        name: "Owner",
-        value: info.ownerId === null ? "Unknown" : `<@${info.ownerId}>`,
-        inline: true,
-      },
-      { name: "Created", value: stamp(info.createdAt), inline: false },
-    ],
-    color: "INFO",
+    headline: C.serverHeadline.replace("{n}", count(info.memberCount)),
     ...(info.iconUrl === null ? {} : { thumbnailUrl: info.iconUrl }),
-  };
+    fields: [
+      // Our own numbers, and only ours: the Discord count is the headline, so
+      // repeating it here would be the card disagreeing with itself about which
+      // number the answer is. Tracked is smaller than Discord's count and
+      // should be — bots are in one and not the other.
+      week === null
+        ? null
+        : field(
+            F.members,
+            facts([
+              { label: "Tracked here", value: count(week.trackedMembers) },
+              { label: "Linked", value: count(week.linkedMembers) },
+              { label: "Active this week", value: count(week.activeMembers) },
+            ]),
+            true,
+          ),
+      field(
+        F.server,
+        facts([
+          { label: "Channels", value: count(info.channelCount) },
+          { label: "Roles", value: count(info.roleCount) },
+          { label: "Emoji", value: count(info.emojiCount) },
+          { label: "Boosts", value: `${count(info.boostCount)} (tier ${String(info.boostTier)})` },
+          { label: "Owner", value: info.ownerId === null ? null : `<@${info.ownerId}>` },
+          { label: "Created", value: stamp(info.createdAt) },
+        ]),
+        true,
+      ),
+      week === null
+        ? field(F.messagesWeek, C.serverNoActivity)
+        : field(
+            F.messagesWeek,
+            facts([
+              { label: "Discord", value: count(week.discordMessages) },
+              { label: "Guild chat", value: count(week.guildChatMessages) },
+            ]),
+          ),
+      week === null ? null : field(F.busiestWeek, busiest(week)),
+    ],
+    tone: "INFO",
+  });
+}
+
+/**
+ * The week's loudest member, named the way they would recognise.
+ *
+ * A mention rather than a stored display name: nicknames change and ours would
+ * be the one that is out of date. The IGN rides alongside when they are linked,
+ * because half this server knows people by their Minecraft name and not by
+ * their Discord one.
+ */
+function busiest(week: ServerActivityDTO): string {
+  const top = week.top;
+  if (top === null) return C.serverNobodyActive;
+  const who = top.ign === null ? `<@${top.discordId}>` : `<@${top.discordId}> (${top.ign})`;
+  const lines = facts([
+    { label: "Discord", value: count(top.discordMessages) },
+    { label: "Guild chat", value: count(top.guildChatMessages) },
+  ]);
+  return `${who}\n${lines}`;
 }
 
 const userinfo: CommandHandler = async (ctx, deps) => {
@@ -128,9 +197,18 @@ const userinfo: CommandHandler = async (ctx, deps) => {
 
 const serverinfo: CommandHandler = async (ctx, deps) => {
   if (deps.discord === undefined) return noDiscord();
-  const info = await deps.discord.guildInfo(ctx.guildId);
-  if (info === null) return { ephemeral: true, text: "I can't see this server right now — try again shortly." };
-  const embed = renderServerInfoEmbed(info);
+  // Both halves at once: the week is a database read and the shape is a
+  // gateway read, and neither is a reason for the other to wait.
+  const [info, week] = await Promise.all([
+    deps.discord.guildInfo(ctx.guildId),
+    // A counter store that is unwired, or that throws, costs the card its
+    // activity section and nothing else.
+    deps.serverActivity === undefined
+      ? Promise.resolve(null)
+      : deps.serverActivity.serverWeek(ctx.guildId).catch(() => null),
+  ]);
+  if (info === null) return { ephemeral: true, text: "Couldn't read this server. Try /health." };
+  const embed = renderServerInfoEmbed(info, week);
   return { ephemeral: false, text: flattenEmbed(embed), embed };
 };
 
