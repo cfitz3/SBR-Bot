@@ -14,7 +14,10 @@ import type {
   LfgError,
   RSVPState,
 } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+import { allFloors } from "@sbr/perms";
 import { findCategory, openableCategories } from "@sbr/tickets";
+import { lfgRequestReplies } from "./lfg-request.js";
 import type { AutocompleteHandler, CommandHandler, CommandReply, CommandSpec, HandlerDeps } from "./types.js";
 import {
   lfgButtons,
@@ -27,6 +30,17 @@ import {
   renderTicketListEmbed,
   rsvpButtons,
 } from "./render-community.js";
+
+const C = copy.embed.card;
+
+/**
+ * The floors `/lfg` offers, from the one table that defines them.
+ *
+ * Twenty of Discord's twenty-five choices, which is why they can all be offered
+ * rather than grouped behind a second option — and why the menu flow exists for
+ * the day that stops being true.
+ */
+const FLOOR_CHOICES = allFloors().map((floor) => ({ name: floor.label, value: floor.code }));
 
 // ───────────────────────────── Error wording ─────────────────────────────
 
@@ -146,36 +160,26 @@ const attendance: CommandHandler = async (ctx, deps) => {
 
 // ──────────────────────────────── LFG ────────────────────────────────
 
+/**
+ * `/lfg` — ask the guild for a group.
+ *
+ * Two ways in, and they are different requests rather than two spellings of one.
+ * Without a floor it opens the menu, which is the path that can ask for classes.
+ * With a floor it posts immediately: that is the express lane, and it is the
+ * only lane guild chat has, because `!lfg f7` arrives as a token and there are
+ * no components to press afterwards. A post made that way asks for any class,
+ * which is what somebody in a hurry meant.
+ */
 const lfg: CommandHandler = async (ctx, deps) => {
-  const details = ctx.args.getString("details");
-  const title = ctx.args.getString("title");
-  const permName = ctx.args.getString("permname");
-  const usePerm = ctx.args.getBoolean("perm");
-  const result = await deps.community.createLfg({
-    guildId: ctx.guildId,
-    authorDiscordId: ctx.userId,
-    activity: (ctx.args.getString("activity") ?? "OTHER") as LFGActivity,
-    slotsTotal: ctx.args.getNumber("slots") ?? 5,
-    ...(details === null ? {} : { details }),
-    ...(title === null ? {} : { title }),
-    // A named perm wins over `perm:true` — someone who typed a name meant that
-    // party, not whichever one happens to be their default.
-    ...(permName !== null ? { perm: permName } : usePerm === true ? { perm: true } : {}),
-    // Runs go stale fast; two hours keeps `/runs` from filling with dead parties.
-    expiresInMinutes: 120,
-  });
-  if (!result.ok) return { ephemeral: true, text: lfgProblem(result.error) };
-
-  const post = result.value;
-  // Published to the board rather than only answered in place, so a run posted
-  // from in-game chat is still visible to Discord.
-  await deps.lfgBoard?.publish(post);
-  return {
-    ephemeral: false,
-    text: `${post.activity.toLowerCase()} run open — ${post.slotsFilled}/${post.slotsTotal} (id ${post.id}).`,
-    embed: renderLfgEmbed(post),
-    components: lfgButtons(post),
-  };
+  const floor = ctx.args.getString("floor");
+  if (floor === null || floor.trim() === "") {
+    // The menu cannot be shown to a chat line, so say what to type instead of
+    // sending a reply whose controls are invisible.
+    return ctx.surface === "INGAME"
+      ? { ephemeral: true, text: C.lfgFloorNeeded }
+      : lfgRequestReplies.start();
+  }
+  return lfgRequestReplies.post(ctx.guildId, ctx.userId, floor, [], deps);
 };
 
 /**
@@ -511,32 +515,23 @@ export function communitySpecs(): readonly CommandSpec[] {
     },
     {
       name: "lfg",
-      description: "Start a looking-for-group post",
+      description: "Ask the guild for a group",
+      // One option, and it is optional: `/lfg` is the menu, `/lfg floor:F7` and
+      // `!lfg f7` are the express lane. It is first and positional so the
+      // in-game router maps the single token people type onto it.
       options: [
-        { name: "activity", description: "What you're running", type: "string", required: true, choices: ACTIVITY_CHOICES },
-        { name: "slots", description: "Party size including you (default 5)", type: "integer", minValue: 2, maxValue: 20 },
-        // Discord-only: guild chat has no named args, so `!lfg dungeons 5 need a
-        // healer` must keep putting the free text in `details` (see
-        // `positionalArgs`). In-game the shape stays `!lfg <activity> [slots] [details]`.
-        { name: "title", description: "Short headline for the post", type: "string", inGamePositional: false },
-        { name: "details", description: "Requirements or notes", type: "string" },
-        { name: "perm", description: "Bring your usual party for this activity", type: "boolean", inGamePositional: false },
-        { name: "permname", description: "…or a specific perm by name", type: "string", inGamePositional: false },
+        { name: "floor", description: "Post straight away for this floor, without the menu", type: "string", choices: FLOOR_CHOICES },
       ],
       capability: "RUN_COMMAND",
+      // A minute between requests. Long enough that the channel cannot be
+      // flooded, short enough that a member who picked the wrong floor is not
+      // stuck with it — reposting is the only correction an announcement has.
       cooldownMs: 60_000,
       // The one write reachable from guild chat (COMMANDS.md §17): forming a
       // party is the thing people are already in-game to do. `"linked"`, not
       // `true` — the post is attributed to its author, so the speaking IGN has
       // to resolve to a Discord account first.
       inGame: "linked",
-      // Retired: looking-for-group never found an audience — parties get formed
-      // in guild chat and the board went stale faster than anyone closed a
-      // post. Decision 3 of Phase 17 in
-      // `~/.claude/plans/typed-dreaming-torvalds.md`. `LFGPost`, `LFGActivity`
-      // and `@sbr/perms` are untouched: `/perm` still keeps the party lists,
-      // and existing posts stay readable in the database.
-      enabled: false,
       handler: lfg,
     },
     {

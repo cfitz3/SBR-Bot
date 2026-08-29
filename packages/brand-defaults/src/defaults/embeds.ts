@@ -68,6 +68,13 @@ export const DEFAULT_EMBEDS = {
     notes: "Notes",
     /** The perms a guild has, as lines inside one field. */
     perms: "Perms",
+    /* -- lfg -- */
+    /** What is being run: "Master Mode 7", not "M7" — the card has the room. */
+    floor: "Floor",
+    /** The classes the requester is short of. Never "Roles": people say class. */
+    wanted: "Looking for",
+    /** What the requester themselves brings — the class they run, and its level. */
+    plays: "Plays",
   },
 
   /**
@@ -111,6 +118,9 @@ export const DEFAULT_EMBEDS = {
     owner: "Owner",
     notes: "Notes",
     perms: "Perms",
+    floor: "Floor",
+    wanted: "Want",
+    plays: "Plays",
   },
 
   /**
@@ -329,7 +339,7 @@ export const DEFAULT_EMBEDS = {
     /** `{marker}` is the shared glyph, so the legend cannot name a different one. */
     permLagFooter: "{marker} marks a class level far behind the player's catacombs.",
     /** A static note, which is why it is a footer rather than a field. */
-    permDefault: "Default party for /lfg.",
+    permDefault: "Default party.",
     /**
      * The same two states again, as one word each, for a list line that has
      * already spent its room on the party's name and seat count.
@@ -361,6 +371,42 @@ export const DEFAULT_EMBEDS = {
     permListMineTitle: "Your parties",
     /** `{n}` of `{total}`, on a list that runs to more than one page. */
     permListPage: "Page {n} of {total}",
+
+    /* -- lfg -- */
+    /**
+     * The prompts on the three steps. Each one asks for exactly the thing the
+     * control under it offers, because a prompt that restates the command is a
+     * line the reader has to skip to reach the menu.
+     */
+    lfgPickType: "What are you running?",
+    lfgPickFloor: "Which floor?",
+    lfgPickClasses: "Which classes are you short of? Post without picking for any.",
+    /** The button that ends the flow, and the card it produces. */
+    lfgPost: "Post",
+    lfgTitle: "Looking for group",
+    /**
+     * The headline. `{who}` is a mention, so the card names the requester in the
+     * first line even where the author row's IGN means nothing to the reader.
+     */
+    lfgHeadline: "{who} is looking for a group.",
+    /** Said in the wanted field when no class was asked for. Not an empty field. */
+    lfgAnyClass: "Any class",
+    /** The ephemeral confirmation, naming where it went. */
+    lfgPosted: "Posted in {channel}.",
+    /**
+     * Not a failure: nobody has set the channel yet, and the member cannot. It
+     * says who can rather than pointing at a status page that would read healthy.
+     */
+    lfgNoChannel: "No looking-for-group channel is set — staff can set one on the panel.",
+    lfgPostFailed: "Couldn't post that. /health has the current status.",
+    lfgNotLinked: "Link your Minecraft account with /link before posting.",
+    lfgStaleControl: "That control is out of date. Run /lfg again.",
+    /**
+     * Guild chat has no menus, so the floor has to be typed — and the answer to
+     * "which floor" is the shape of the argument, spelled out.
+     */
+    lfgFloorNeeded: "Name a floor — !lfg f7.",
+    lfgUnknownFloor: "No floor called \"{floor}\". Floors are f1-f7, m1-m7, e and k1-k5.",
   },
 };
 

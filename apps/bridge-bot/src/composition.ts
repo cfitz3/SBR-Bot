@@ -79,6 +79,7 @@ import {
   buildBridgeRegistry,
   type CapabilityChecker,
   type HandlerDeps,
+  type LfgAnnouncer,
   type UsageSink,
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
@@ -258,6 +259,15 @@ export interface BridgeApp {
    * commands report that they cannot answer rather than answering emptily.
    */
   setDiscordDirectory(directory: DiscordDirectory | null): void;
+  /**
+   * Where a `/lfg` request is sent, once the client exists.
+   *
+   * Late-bound like the directory: the request itself is offline code that has
+   * already decided the channel, the ping role and the card, and this is the
+   * one step that needs a socket. Until it is set a post fails rather than
+   * silently succeeding, and the member is told so.
+   */
+  setLfgAnnouncer(announcer: LfgAnnouncer | null): void;
   /**
    * Arrivals and departures, published by the admin bot. This process greets
    * them: a member is addressed by the bot they interact with.
@@ -539,6 +549,14 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   let liveRoleMenus: RoleMenuGateway | null = null;
   let liveSticky: StickyKeeper | null = null;
   let liveDirectory: DiscordDirectory | null = null;
+  let liveAnnouncer: LfgAnnouncer | null = null;
+  // False rather than a throw while unattached: the caller turns this into the
+  // sentence the member reads, and "couldn't post that" is true either way.
+  const lfgAnnouncer: LfgAnnouncer = {
+    async announce(input) {
+      return liveAnnouncer === null ? false : liveAnnouncer.announce(input);
+    },
+  };
   // A thrown error rather than a null answer while unattached — the window is
   // the few hundred ms between composition and login, and "Discord has no such
   // account" would be a claim about the world instead of about our own wiring.
@@ -595,6 +613,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     screen,
     tallies: adapters.tallies,
     discord,
+    lfgAnnouncer,
     reminders: reminderRepository,
     tags: ticketConfigRepository,
     logger: log,
@@ -988,6 +1007,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setDiscordDirectory(directory) {
       liveDirectory = directory;
+    },
+    setLfgAnnouncer(announcer) {
+      liveAnnouncer = announcer;
     },
     get roleMenus() {
       return liveRoleMenus;

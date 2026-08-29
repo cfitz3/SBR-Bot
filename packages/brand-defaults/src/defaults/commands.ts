@@ -130,15 +130,16 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       id: "Run id",
     },
   },
+  /**
+   * One option, where there were six. Five of them described a board post that
+   * no longer exists, and the sixth — the activity — is the first question the
+   * menu asks. `floor` stays because guild chat has no menus: `!lfg f7` has to
+   * work, and an option is the only shape a chat token can arrive in.
+   */
   lfg: {
-    description: "Start a looking-for-group post",
+    description: "Ask the guild for a group",
     option: {
-      activity: "What you're running",
-      slots: "Party size including you (default 5)",
-      title: "Short headline for the post",
-      details: "Requirements or notes",
-      perm: "Bring your usual party for this activity",
-      permname: "…or a specific perm by name",
+      floor: "Post straight away for this floor, without the menu",
     },
   },
   link: {

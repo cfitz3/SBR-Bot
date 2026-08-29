@@ -364,6 +364,10 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // chat. `/snapshot` is the only write of the three, and it writes a row
     // about nobody but the caller.
     "goal", "progress", "snapshot",
+    // The one write that is about other people (§17). It posts nothing a member
+    // did not type and reaches no data — `!lfg f7` is an announcement, and the
+    // announcement is the point of running it from the game.
+    "lfg",
   ].sort());
 
   // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
@@ -373,7 +377,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // attributed to a Discord account, and an IGN that resolves to none has no
   // standing to report — the link *is* the lookup key, not a permission.
   assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), [
-    "goal", "perm", "progress", "snapshot", "standing",
+    "goal", "lfg", "perm", "progress", "snapshot", "standing",
   ].sort());
 
   // And the identity commands stay Discord-only: `/link` in guild chat would

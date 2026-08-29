@@ -84,6 +84,20 @@ export {
 } from "./perm-console.js";
 export { permProblem } from "./perm-errors.js";
 export {
+  renderLfgRequestCard,
+  type LfgPlays,
+  type LfgRequestView,
+} from "./render-lfg.js";
+export {
+  classRows,
+  floorRows,
+  lfgRequestCopy,
+  lfgRequestReplies,
+  typeRows,
+  LFG_NS,
+  LFG_PING_ROLE_SETTING_KEY,
+} from "./lfg-request.js";
+export {
   InGameDispatcher,
   INGAME_MAX_CHARS,
   INGAME_PREFIX,
@@ -103,6 +117,7 @@ export type {
   CommandSpec,
   CommandHandler,
   HandlerDeps,
+  LfgAnnouncer,
   LfgBoard,
   CooldownGate,
   CooldownPolicySource,

@@ -73,6 +73,7 @@ import {
 } from "./tickets-discord.js";
 import { RoleMenuGateway } from "./role-menus.js";
 import { registerRoleMenuComponents, roleMenuMessagePort } from "./role-menus-discord.js";
+import { createLfgAnnouncer, registerLfgComponents } from "./lfg-discord.js";
 import { handlePermModal, registerPermComponents } from "./perms-discord.js";
 import { createBridgeRoleEffector } from "./role-effector.js";
 import { createDiscordDirectory } from "./directory.js";
@@ -465,6 +466,13 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     deps: app.handlerDeps,
   };
   registerPermComponents(components, permRouting);
+
+  // `/lfg`. Registered beside the perm console for the same reason — the flow
+  // is offline code in `@sbr/commands-bridge` and only the send needs a socket
+  // — and over the same routing, because both need exactly the guild resolver
+  // and the handler deps.
+  registerLfgComponents(components, permRouting);
+  app.setLfgAnnouncer(createLfgAnnouncer(discord, app.log));
 
   // Tickets. Built here rather than in the composition root because every one
   // of its side effects needs the live client, and registered against the same

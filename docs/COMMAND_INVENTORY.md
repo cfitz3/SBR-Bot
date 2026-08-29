@@ -14,16 +14,18 @@ Sources of truth for this file:
 - `packages/commands-admin/src/handlers.ts` — 26 staff specs
 - the two dispatchers, for the gates every command passes through
 
-**Totals: 33 member commands, 26 staff commands, 15 reachable in-game, 2 button routes.**
+**Totals: 53 member commands, 41 staff commands, 26 reachable in-game, 2 button
+routes.** Counted from the registries themselves rather than from this file, so
+the per-section tables below can lag a slice; the numbers cannot.
 
-**Ten of the 33 are retired** (`enabled: false`): `/progress`, `/missing`,
-`/nextupgrade`, `/whatnext`, `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
-`/editrun`, `/closerun`. They are absent from Discord's registry, refused by the
-dispatcher, and silent in guild chat — but still in `buildBridgeRegistry()` with
-their handlers intact, which is why they are still counted and still described
-below. **23 member commands are actually reachable, and 13 in-game** (`lfg` and
-`runs` leave that surface with them). `COMMANDS.md` explains why each went. The
-rows below describe behaviour, not availability.
+**Eight of the 53 are retired** (`enabled: false`): `/missing`, `/nextupgrade`,
+`/whatnext`, `/runs`, `/joinrun`, `/leaverun`, `/editrun`, `/closerun`. They are
+absent from Discord's registry, refused by the dispatcher, and silent in guild
+chat — but still in `buildBridgeRegistry()` with their handlers intact, which is
+why they are still counted and still described below. **45 member commands are
+actually reachable.** `/lfg` is not among the retired: the board it used to open
+went, and the command stayed, announcing a request instead. `COMMANDS.md`
+explains why each went. The rows below describe behaviour, not availability.
 
 ---
 
@@ -34,10 +36,10 @@ The two bots gate differently, and the difference matters for the redefinition.
 **Bridge bot** (`CommandDispatcher`) — spec lookup → capability → cooldown →
 handler → usage capture. Never throws.
 
-- **Capability** is checked only when the spec declares one. Exactly ten do
-  (`RUN_COMMAND`): `stats`, `skills`, `slayers`, `dungeons`, `networth`,
-  `missing`, `nextupgrade`, `whatnext`, `create-event`, `lfg`. The other 23 are
-  ungated — any member can run them. Denial reads *"You don't have permission to
+- **Capability** is checked only when the spec declares one. Nine live specs do
+  (`RUN_COMMAND`): `stats`, `skills`, `slayer`, `slayers`, `dungeons`,
+  `networth`, `perm`, `create-event`, `lfg`. The rest are ungated — any member
+  can run them. Denial reads *"You don't have permission to
   use that command."*
 - **Cooldown** is per `surface:command:user` in Redis, from the spec's
   `cooldownMs`. Denial reads *"Slow down — try that again in Ns."*
@@ -172,7 +174,7 @@ the host may cancel, or the service's own `INVALID_TIME` detail.
 
 | Command | Options | CD | Cap | Purpose | Output |
 |---|---|---|---|---|---|
-| `/lfg` | `activity*` (6 choices) `slots?` (2–20, default 5) `details?` | 60s | ✔ | Open a run. Fixed 2h expiry so `/runs` doesn't fill with dead parties | Public LFG embed **with join/leave buttons**; text `dungeons run open — 1/5 (id X).` |
+| `/lfg` | `floor?` (20 choices — E, F1–F7, M1–M7, K1–K5) | 60s | ✔ | Ask the guild for a group. No floor opens the menu (type → floor → classes); a floor posts straight away | Ephemeral steps, then one public card in the `lfg` channel with `lfg.pingRole` pinged; text `Posted in #lfg.` |
 | `/runs` | `activity?` | 10s | — | Open LFG posts | List embed; text `dungeons 3/5 | slayers 2/4`, or `No open runs right now.` |
 | `/joinrun` | `id*` | 5s | — | Take a slot | Updated LFG embed + buttons; text `Joined — 4/5.` |
 | `/leaverun` | `id*` | 5s | — | Give up a slot | `Left — 3/5.` |
@@ -208,12 +210,15 @@ it adds: prefix parsing, positional→named argument mapping, an allow-list, IGN
 identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 
 - **Allow-list is the authorization boundary.** Only specs carrying `inGame`
-  are reachable: `help`, `profile`, `stats`, `skills`, `slayers`, `dungeons`,
-  `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs`, `leaderboard`
-  (all `true`), and
-  `lfg` and `standing` (`"linked"` — `lfg` is the only in-game write and is
-  attributed to its author, and `standing` is keyed by Discord id, so both need
-  the speaking IGN to resolve to a Discord account first). Everything else is
+  are reachable: `help`, `profile`, `stats`, `skills`, `slayer`, `slayers`,
+  `dungeons`, `networth`, `price`, `bazaar`, `lowestbin`, `events`,
+  `leaderboard` and the seven fun commands (`8ball`, `coinflip`, `cringe`,
+  `guildquote`, `rank`, `roll`, `rps`) — all `true` — plus `perm`, `goal`,
+  `progress`, `snapshot`, and
+  `lfg` and `standing` (`"linked"` — `lfg` is the only in-game command that
+  writes anything other people see, and is attributed to its author, and
+  `standing` is keyed by Discord id, so both need the speaking IGN to resolve to
+  a Discord account first). Everything else is
   silently unknown; naming Discord-only commands would just invite attempts.
   `!standing` takes **no positional argument** — guild chat proves which
   *player* is speaking but not which Discord account they mean by a name, so it
@@ -225,7 +230,8 @@ identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
   checked *before* identity so a spamming IGN costs no DB lookup.
 - **Unlinked players still get public lookups**, under a placeholder id. Only
   `lfg` refuses, and it names the fix: *"Link your account on Discord first
-  (/link {ign}) to use !lfg."*
+  (/link {ign}) to use !lfg."* `!lfg` with no floor after it answers with what
+  to type — guild chat cannot show the menu the Discord surface opens.
 - **Missing required options** get a usage hint: `Usage: !price <item>`.
 - **Output** is one line, ≤252 chars (256 packet limit minus `/gc `), embed
   preferred over text because it carries the numbers, fields joined with ` | `,

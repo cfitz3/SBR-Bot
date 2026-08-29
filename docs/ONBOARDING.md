@@ -122,7 +122,7 @@ who should be able to see them:
 |---|---|---|
 | `bridge` | the guild-chat relay | **the gated one.** See §4. |
 | `events` | event posts and RSVPs | |
-| `lfg` | looking-for-group posts | |
+| `lfg` | `/lfg` requests | |
 | `tickets` | the ticket panel post | members open, staff answer |
 
 **Staff — requires `@Moderator` or above**

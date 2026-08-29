@@ -329,6 +329,10 @@ export const DEFAULT_PANEL = {
       label: "Level-up announcements",
       hint: "Where level-ups are posted. Unset and nobody is announced — the XP is still earned either way.",
     },
+    lfg: {
+      label: "Looking for group",
+      hint: "Where /lfg posts land. Unset and the command says so rather than posting where it was run.",
+    },
   },
 
   /** Guild selector — the one page with no guild in scope. */
@@ -1512,9 +1516,13 @@ export const DEFAULT_PANEL = {
     cardGuild: "Guild",
     cardBridge: "Bridge",
     cardChannels: "Channels",
+    cardLfg: "Looking for group",
     cardFeatures: "Feature flags",
     cardScreening: "Join screening",
     channelUnset: "not set",
+    lfgPingLabel: "Role pinged by /lfg",
+    lfgPingHint: "Mentioned when a member posts a request. Leave unset and requests go out unpinged.",
+    lfgPingUnset: "no ping",
     suspendLabel: "Suspend the Discord ↔ in-game bridge",
     suspendHint: "Stops relaying in both directions without taking the bot offline. Commands keep working.",
     featureAddLabel: "Add a flag",
