@@ -311,6 +311,31 @@ shape rather than removed.
 | `/antiraid-on` | Enable raid protection (join gating, rate caps) | Admin | `sensitivity?`, `duration?` | Confirmation + active settings | Already on | DB (`GuildConfig`) + Cache |
 | `/antiraid-off` | Disable raid protection | Admin | *(none)* | Confirmation | Not active | DB + Cache |
 
+**What anti-raid actually does, and what `sensitivity` is now.** Until this
+release the posture was a flag and a sensitivity that nothing read: `/safety`
+reported it, the sweep expired it, and no join path consulted either. It is now
+a rule set — burst threshold and window, minimum account age, an optional avatar
+requirement, what a gated member gets, and whether it engages and lifts itself —
+stored under `moderation.antiraid` and enforced at `GuildMemberAdd` by the admin
+bot's raid gate.
+
+`sensitivity` is consequently a **preset, not a mode**. LOW/MEDIUM/HIGH pick a
+starting set of numbers for a guild that has never configured anti-raid; a guild
+that has keeps its own, and typing `HIGH` does not overwrite them. The rules
+themselves are edited on the panel (Moderation → Anti-raid, Admin-tier), which
+also carries a dry run: describe a burst and it is replayed through the same
+evaluator the gate uses, reporting which arrival would engage the posture, what
+each one would get, and whether automod and the wordlist are running behind it.
+
+Every preset flags rather than removes. A gated member who is kicked or banned
+goes through `ModerationService.applyAction`, so it is a case with an actor, a
+reason and a reversal path rather than a silent removal. The gate fails **open**:
+if it cannot read its rules it lets the member in and logs, because a server that
+stops admitting anybody over a Redis timeout is the worse failure.
+
+The commands stay. They are the switch — a human deciding the server is under
+attack now — and the panel is the configuration; neither replaces the other.
+
 ---
 
 ## 16. Admin Bot — Content Filtering

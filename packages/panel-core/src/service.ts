@@ -15,13 +15,16 @@ import {
   type MemberRole,
 } from "@sbr/shared-types";
 import {
+  parseAntiRaid,
   parseAutomod,
   parseEscalationPolicy,
   parseRelaySync,
   punishmentState,
+  ANTIRAID_SETTING_KEY,
   AUTOMOD_SETTING_KEY,
   ESCALATION_SETTING_KEY,
   RELAY_SYNC_SETTING_KEY,
+  type AntiRaidRules,
   type AutomodPolicy,
   type EscalationPolicy,
   type PunishmentState,
@@ -253,6 +256,15 @@ export interface ModerationVM {
   readonly filter: WordlistVM;
   /** Resolved automod policy — defaults layered under whatever the guild stored. */
   readonly automod: AutomodPolicy;
+  /**
+   * Resolved anti-raid rules, same treatment as automod's.
+   *
+   * Read here rather than on a page of its own because an operator tuning a
+   * join threshold is doing moderation work and wants the automod rules and the
+   * wordlist in the same view — which is also the pairing the dry run reports
+   * on.
+   */
+  readonly antiraid: AntiRaidRules;
   readonly cooldowns: CooldownPolicy;
 }
 
@@ -943,7 +955,17 @@ export class PanelService {
     // for the member whose id is the empty string, which is nobody.
     const targeted =
       targetDiscordId === "" ? null : this.d.moderation.listInfractions(guildId, targetDiscordId);
-    const [infractions, recent, actions, inForce, filter, storedAutomod, storedCooldowns, relay] = await Promise.all([
+    const [
+      infractions,
+      recent,
+      actions,
+      inForce,
+      filter,
+      storedAutomod,
+      storedAntiRaid,
+      storedCooldowns,
+      relay,
+    ] = await Promise.all([
       targeted,
       this.d.moderation.listRecentInfractions(guildId, 50),
       this.d.moderation.listActions(query),
@@ -952,6 +974,7 @@ export class PanelService {
       this.d.moderation.listInForce(guildId, targetDiscordId === "" ? null : targetDiscordId),
       this.loadFilter(guildId),
       this.d.config.getSetting<unknown>(guildId, AUTOMOD_SETTING_KEY),
+      this.d.config.getSetting<unknown>(guildId, ANTIRAID_SETTING_KEY),
       this.d.config.getSetting<unknown>(guildId, COOLDOWN_SETTING_KEY),
       // Never a reason to fail the page: the case log is why anybody is here,
       // and an unreachable Redis is itself something worth seeing the rest of
@@ -970,6 +993,7 @@ export class PanelService {
       canConfigure: rankOfRole(access.role) >= rankOfRole("ADMIN"),
       filter,
       automod: parseAutomod(storedAutomod),
+      antiraid: parseAntiRaid(storedAntiRaid),
       cooldowns: parseCooldowns(storedCooldowns),
       relay,
     };

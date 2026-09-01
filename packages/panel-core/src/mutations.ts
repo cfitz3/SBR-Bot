@@ -62,11 +62,17 @@ import type {
   WordMatchType,
 } from "@sbr/shared-types";
 import {
+  ANTIRAID_SETTING_KEY,
   AUTOMOD_ACTION_TYPES,
   AUTOMOD_SETTING_KEY,
   AUTOMOD_TRIGGER_KINDS,
+  defaultAntiRaidRules,
+  describeAntiRaidRules,
   ESCALATION_SETTING_KEY,
   evaluateAutomod,
+  parseAntiRaid,
+  RAID_JOIN_ACTIONS,
+  simulateRaid,
   MAX_GAME_MUTE_SECONDS,
   parseAutomod,
   RELAY_DISCORD_ACTIONS,
@@ -77,7 +83,10 @@ import {
   type AutomodRule,
   type AutomodTrigger,
   type AutomodTriggerKind,
+  type AntiRaidRules,
   type EscalationAction,
+  type RaidJoinAction,
+  type SimulatedJoin,
   type RelayDiscordAction,
   type RelayGameAction,
   type RelaySyncRow,
@@ -220,6 +229,19 @@ export const MUTATION_TIERS = {
    * halfway, which is what an operator wants at the moment they want it.
    */
   "automod.enable": "ADMIN",
+  /**
+   * The anti-raid rules. Admin, and for a sharper reason than automod's: these
+   * numbers decide who gets through the door at all, and a threshold set too
+   * tight turns an ordinary busy evening into a server that kicks everybody
+   * who arrives.
+   */
+  "antiraid.save": "ADMIN",
+  /**
+   * The anti-raid dry run. Moderator, on `automod.test`'s reasoning — it stores
+   * nothing and gates nobody, and the person who needs to know why a member was
+   * turned away is the moderator reading the flag.
+   */
+  "antiraid.test": "MODERATOR",
   /**
    * The auto-role rules. Admin because a rule hands out Discord roles to
    * members with nobody in the loop, and one of those roles can be the one
@@ -2273,6 +2295,203 @@ export class PanelMutations {
   }
 
   /**
+   * Save the anti-raid rules.
+   *
+   * Strict where `parseAntiRaid` is lenient, for the reason the automod pair
+   * gives: the parser is salvaging a row that is already stored, this is the
+   * gate deciding what gets stored. A configuration that would parse back into
+   * something other than what the admin typed is refused rather than quietly
+   * corrected, because the correction here is a threshold and the admin would
+   * go on believing their number was the one in force.
+   */
+  async saveAntiRaid(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "antiraid.save", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const enabled = body["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+      const autoEngage = body["autoEngage"];
+      if (typeof autoEngage !== "boolean") return invalid("autoEngage must be a boolean");
+      const requireAvatar = body["requireAvatar"];
+      if (typeof requireAvatar !== "boolean") return invalid("requireAvatar must be a boolean");
+      const lockdownOnEngage = body["lockdownOnEngage"];
+      if (typeof lockdownOnEngage !== "boolean") return invalid("lockdownOnEngage must be a boolean");
+
+      const burst = body["burst"];
+      if (typeof burst !== "object" || burst === null || Array.isArray(burst)) {
+        return invalid("burst must be an object");
+      }
+      const burstRow = burst as Record<string, unknown>;
+      const joins = burstRow["joins"];
+      // The floor is 2 rather than 1 because a threshold of one join is not a
+      // burst rule, it is the posture permanently on, and an admin who wants
+      // that has the switch for it.
+      if (!isCount(joins, MAX_ANTIRAID_BURST_JOINS) || joins < 2) {
+        return invalid(`burst.joins must be a whole number from 2 to ${MAX_ANTIRAID_BURST_JOINS}`);
+      }
+      const windowSeconds = burstRow["windowSeconds"];
+      if (!isCount(windowSeconds, MAX_ANTIRAID_WINDOW_SECONDS) || windowSeconds < 5) {
+        return invalid(
+          `burst.windowSeconds must be a whole number from 5 to ${MAX_ANTIRAID_WINDOW_SECONDS}`,
+        );
+      }
+
+      const minAccountAgeHours = body["minAccountAgeHours"];
+      if (!isCount(minAccountAgeHours, MAX_ANTIRAID_ACCOUNT_AGE_HOURS)) {
+        return invalid(
+          `minAccountAgeHours must be a whole number from 0 to ${MAX_ANTIRAID_ACCOUNT_AGE_HOURS}`,
+        );
+      }
+
+      const joinAction = body["joinAction"];
+      if (
+        typeof joinAction !== "string" ||
+        !(RAID_JOIN_ACTIONS as readonly string[]).includes(joinAction)
+      ) {
+        return invalid(`joinAction must be one of ${RAID_JOIN_ACTIONS.join(", ")}`);
+      }
+
+      // Null is a real answer — the posture stays on until a human lifts it —
+      // so it is taken before the range check rather than treated as absent.
+      const rawLift = body["autoLiftMinutes"];
+      if (rawLift !== null && (!isCount(rawLift, MAX_ANTIRAID_LIFT_MINUTES) || rawLift < 1)) {
+        return invalid(
+          `autoLiftMinutes must be a whole number from 1 to ${MAX_ANTIRAID_LIFT_MINUTES}, or null`,
+        );
+      }
+      // A posture that engages by itself and never lifts by itself is how a
+      // guild ends up gating every arrival for a fortnight after a raid nobody
+      // remembers. Refused rather than corrected: which of the two the admin
+      // meant is theirs to say.
+      if (autoEngage && rawLift === null) {
+        return invalid("a posture that engages by itself needs an auto-lift, or switch auto-engage off");
+      }
+
+      const rules: AntiRaidRules = {
+        enabled,
+        burst: { joins, windowSeconds },
+        autoEngage,
+        minAccountAgeHours,
+        requireAvatar,
+        joinAction: joinAction as RaidJoinAction,
+        autoLiftMinutes: rawLift,
+        lockdownOnEngage,
+      };
+
+      const result = await this.d.config.setSetting(guildId, ANTIRAID_SETTING_KEY, rules);
+      return {
+        result,
+        change: { ...rules, burst: { ...rules.burst } },
+        note: describeAntiRaidRules(rules),
+      };
+    });
+  }
+
+  /**
+   * Replay a burst of arrivals through the stored rules and report the outcome.
+   *
+   * Like `testAutomod`, this runs *the* evaluator rather than a description of
+   * it, and for a sharper version of the same reason: anti-raid rules are only
+   * exercised during a raid, which is the worst possible moment to discover a
+   * threshold was wrong. This is the only way to find out beforehand.
+   *
+   * The report also names what else would be running — whether automod is on,
+   * whether the wordlist has any rules — because the slice asked for rules
+   * tested against the other moderation features, and the honest answer to
+   * "what happens to a raider" is rarely anti-raid alone: a raid of accounts
+   * all posting the same slur meets the wordlist first, and an operator tuning
+   * join thresholds should see that rather than tightening a gate that was
+   * never the thing catching them.
+   *
+   * Nothing is stored and nobody is gated.
+   */
+  async testAntiRaid(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "antiraid.test", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const rawJoins = body["joins"];
+      if (!Array.isArray(rawJoins) || rawJoins.length === 0) {
+        return invalid("joins must be a non-empty list");
+      }
+      if (rawJoins.length > MAX_ANTIRAID_TEST_JOINS) {
+        return invalid(`joins must be ${MAX_ANTIRAID_TEST_JOINS} arrivals or fewer`);
+      }
+      const joins: SimulatedJoin[] = [];
+      for (const [index, entry] of rawJoins.entries()) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          return invalid(`joins[${String(index)}] must be an object`);
+        }
+        const row = entry as Record<string, unknown>;
+        const age = row["accountAgeHours"];
+        if (
+          typeof age !== "number" ||
+          !Number.isFinite(age) ||
+          age < 0 ||
+          age > MAX_ANTIRAID_ACCOUNT_AGE_HOURS
+        ) {
+          return invalid(
+            `joins[${String(index)}].accountAgeHours must be a number from 0 to ${MAX_ANTIRAID_ACCOUNT_AGE_HOURS}`,
+          );
+        }
+        const hasAvatar = row["hasAvatar"];
+        if (typeof hasAvatar !== "boolean") {
+          return invalid(`joins[${String(index)}].hasAvatar must be a boolean`);
+        }
+        joins.push({ accountAgeHours: age, hasAvatar });
+      }
+
+      const postureActive = body["postureActive"] ?? false;
+      if (typeof postureActive !== "boolean") return invalid("postureActive must be a boolean");
+
+      const rules = parseAntiRaid(await this.d.config.getSetting(guildId, ANTIRAID_SETTING_KEY));
+      const run = simulateRaid(rules, joins, postureActive);
+
+      const automod = parseAutomod(await this.d.config.getSetting(guildId, AUTOMOD_SETTING_KEY));
+      const listed = this.d.wordlist ? await this.d.wordlist.list(guildId) : null;
+      const wordlistRules = listed !== null && listed.ok ? listed.value.length : 0;
+
+      const gated = run.outcomes.filter((o) => o.action !== "ALLOW").length;
+      const engaged =
+        run.engagedAt === null
+          ? postureActive
+            ? "The posture was already on for this run."
+            : "No arrival tripped the burst threshold, so nothing engaged."
+          : `Arrival ${String(run.engagedAt)} tripped the burst threshold and engaged the posture.`;
+      const alongside = [
+        automod.enabled && automod.rules.some((r) => r.enabled)
+          ? "Automod is on and would also see anything they post."
+          : "Automod is off, so anyone let through posts unchecked.",
+        wordlistRules === 0
+          ? "The wordlist is empty."
+          : `The wordlist has ${String(wordlistRules)} rule${wordlistRules === 1 ? "" : "s"} behind this.`,
+      ].join(" ");
+
+      const note = `${engaged} ${String(gated)} of ${String(joins.length)} arrivals would be gated. ${alongside}`;
+
+      return {
+        result: { ok: true },
+        change: {
+          arrivals: joins.length,
+          postureActive,
+          engagedAt: run.engagedAt,
+          totals: { ...run.totals },
+        },
+        note,
+      };
+    });
+  }
+
+  /**
    * Add or replace one automod rule.
    *
    * A rule at a time, not a policy at a time. Two admins on the page at once
@@ -3684,6 +3903,13 @@ function invalid(detail: string): Step {
  * actually send — Discord's own limit is 2,000 — and finite so the endpoint
  * cannot be used to run a regex over a megabyte of text.
  */
+const MAX_ANTIRAID_BURST_JOINS = 200;
+const MAX_ANTIRAID_WINDOW_SECONDS = 3_600;
+/** A year. Past this the question belongs to screening, not a raid defence. */
+const MAX_ANTIRAID_ACCOUNT_AGE_HOURS = 24 * 365;
+const MAX_ANTIRAID_LIFT_MINUTES = 24 * 60;
+/** Enough to model a burst; past this the operator is stress-testing the box. */
+const MAX_ANTIRAID_TEST_JOINS = 50;
 const MAX_AUTOMOD_TEST_LENGTH = 2_000;
 const MAX_AUTOMOD_TEST_MENTIONS = 200;
 const MAX_AUTOMOD_TEST_COUNTER = 10_000;

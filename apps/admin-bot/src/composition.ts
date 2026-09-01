@@ -23,12 +23,15 @@ import {
 import {
   createGameCommandBus,
   ESCALATION_SETTING_KEY,
+  ANTIRAID_SETTING_KEY,
   ModerationServiceImpl,
+  parseAntiRaid,
   RELAY_SYNC_SETTING_KEY,
   SafetyServiceImpl,
   WordlistServiceImpl,
   type DiscordEnforcer,
   type ModLogSink,
+  type AntiRaidRules,
   type StaffAlertSink,
 } from "@sbr/moderation";
 import type { EmbedView } from "@sbr/shared-types";
@@ -49,6 +52,7 @@ import {
 import { closeRedis, createRedisAdapters, getRedis, pingRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import { DiscordGuildEffects } from "./effects.js";
+import { RAID_GATE_ACTOR, type RaidGateDeps } from "./raid-gate.js";
 import { createTicketBridge } from "./ticket-bridge.js";
 import { createRoleMenuBridge } from "./role-menu-bridge.js";
 import { createStickyBridge } from "./sticky-bridge.js";
@@ -103,6 +107,11 @@ export interface AdminApp {
    * log is for the guild's own staff.
    */
   setModLogPoster(post: ((channelId: string, embed: EmbedView) => Promise<boolean>) | null): void;
+  /**
+   * What the transport hands `attachRaidGate`. On the app rather than built in
+   * the transport because every one of its effects is a service this file owns.
+   */
+  readonly raidGate: RaidGateDeps;
   /** The infrastructure probes, for the watchtower's own reading. */
   readonly health: HealthRegistry;
   /** Live heartbeats across the fleet. */
@@ -377,6 +386,71 @@ export async function createAdminApp(): Promise<AdminApp> {
   const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
 
   /**
+   * What the raid gate is allowed to do, assembled from the services that
+   * already exist rather than given its own reach into the database.
+   *
+   * `engage` and `punish` both go through a service so an automatic decision
+   * leaves the same trail a typed one does: an engage is the same posture
+   * `/antiraid on` sets and the same one the sweep lifts, and a removal is a
+   * case with an actor, a reason and a reversal path.
+   */
+  const raidGate: RaidGateDeps = {
+    resolveGuild: (discordGuildId) => guildRepository.resolveInternalId(discordGuildId),
+    async rules(guildId): Promise<AntiRaidRules> {
+      const stored = await guildConfigRepository
+        .getSetting(guildId, ANTIRAID_SETTING_KEY)
+        .catch(() => null);
+      return parseAntiRaid(stored);
+    },
+    async postureActive(guildId) {
+      const status = await safety.status(guildId).catch(() => null);
+      return status !== null && status.ok && status.value.antiRaid !== null;
+    },
+    async engage(guildId, rules) {
+      await safety
+        .enableAntiRaid({
+          guildId,
+          actorDiscordId: RAID_GATE_ACTOR,
+          // The stored rules are the configuration; sensitivity is only the
+          // preset they started from, and MEDIUM is what the posture records
+          // for an engage nobody chose a sensitivity for.
+          sensitivity: "MEDIUM",
+          durationSeconds: rules.autoLiftMinutes === null ? null : rules.autoLiftMinutes * 60,
+        })
+        .catch(() => null);
+      if (rules.lockdownOnEngage) {
+        await safety
+          .lockdown({
+            guildId,
+            actorDiscordId: RAID_GATE_ACTOR,
+            scope: "SERVER",
+            reason: "Anti-raid engaged",
+            durationSeconds: rules.autoLiftMinutes === null ? null : rules.autoLiftMinutes * 60,
+          })
+          .catch(() => null);
+      }
+    },
+    async punish({ guildId, discordId, action, reason }) {
+      await moderation
+        .applyAction({
+          guildId,
+          type: action,
+          actorDiscordId: RAID_GATE_ACTOR,
+          targetDiscordId: discordId,
+          reason,
+          durationSeconds: null,
+        })
+        .catch(() => null);
+    },
+    async flag({ guildId, discordId, reasons }) {
+      await staffAlerts
+        .alert(guildId, `Anti-raid flagged <@${discordId}> — ${reasons.join("; ")}`)
+        .catch(() => undefined);
+    },
+    logger: log,
+  };
+
+  /**
    * The in-game join queue: `/join-queue`, `/join-accept`, `/join-deny`,
    * `/guild-invite`.
    *
@@ -464,6 +538,7 @@ export async function createAdminApp(): Promise<AdminApp> {
     log,
     dispatcher,
     effects,
+    raidGate,
     sweepSafety: () => safety.sweepExpired(),
     async sweepPunishments() {
       // Two jobs on one cadence. Reversal lifts what has expired; the second

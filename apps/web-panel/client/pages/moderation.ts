@@ -46,6 +46,7 @@ import {
   statusSlot,
   textField,
   toggleField,
+  validateWhole,
 } from "../forms.js";
 import { count, describeSpan, parseDurationSeconds, relativeTime } from "../format.js";
 import { BridgeCapability } from "./enums.js";
@@ -73,14 +74,16 @@ const actionHint = (value: string): string => lookup(t("actionHint"), value, "")
 /** Only these two carry a duration; the rest are instantaneous. */
 const TIMED = new Set(["MUTE", "BAN"]);
 
-type Section = "history" | "automod" | "filter" | "cooldowns";
+type Section = "history" | "automod" | "antiraid" | "filter" | "cooldowns";
 
-const SECTIONS: readonly Section[] = ["history", "automod", "filter", "cooldowns"];
+const SECTIONS: readonly Section[] = ["history", "automod", "antiraid", "filter", "cooldowns"];
 
 const sectionLabel = (id: Section): string => {
   switch (id) {
     case "automod":
       return t("tabAutomod");
+    case "antiraid":
+      return t("tabAntiRaid");
     case "filter":
       return t("tabFilter");
     case "cooldowns":
@@ -190,6 +193,8 @@ function subtitle(data: ModerationVM): string {
             .replace("{total}", count(data.automod.rules.length))
         : t("subtitleAutomodOff");
     }
+    case "antiraid":
+      return t("subtitleAntiRaid");
     case "filter":
       return t("subtitleFilter");
     case "cooldowns":
@@ -226,6 +231,8 @@ function sectionBody(guildId: string, data: ModerationVM, rerender: () => void):
   switch (state.section) {
     case "automod":
       return automodSection(guildId, data, rerender);
+    case "antiraid":
+      return antiRaidSection(guildId, data);
     case "filter":
       return filterCards(guildId, data.filter, rerender);
     case "cooldowns":
@@ -1197,6 +1204,227 @@ function triggerFields(draft: Draft, save: () => Promise<WriteResult>): readonly
  * a rolling window cannot be replayed — the operator says "pretend they have
  * sent 6 already" and sees what the rule would do.
  */
+// ─────────────────────────── 2b. anti-raid ───────────────────────────
+
+/**
+ * The join gate: what turns it on, who it stops, and what they get.
+ *
+ * It sits beside Automod rather than on a page of its own because the two are
+ * the same question asked at different doors — one about what a member posts,
+ * one about whether they get in — and because the dry run below reports on both
+ * together. An operator tightening a join threshold usually wants to know
+ * whether the wordlist was the thing catching those accounts anyway.
+ *
+ * Every control saves the whole rule set. Unlike automod rules, which are
+ * edited one at a time by different people, these eight fields are one
+ * decision: a burst threshold with no action, or an action with no threshold,
+ * is not a state worth being able to save.
+ */
+function antiRaidSection(guildId: string, data: ModerationVM): readonly (HTMLElement | null)[] {
+  const rules = data.antiraid;
+  if (!data.canConfigure) return [card(t("cardAntiRaid"), h("p", { class: "field-hint" }, t("antiRaidReadOnly")))];
+
+  const save = (over: Partial<Record<string, unknown>>): Promise<WriteResult> =>
+    postAction(guildId, "antiraid.save", {
+      enabled: rules.enabled,
+      burst: { joins: rules.burst.joins, windowSeconds: rules.burst.windowSeconds },
+      autoEngage: rules.autoEngage,
+      minAccountAgeHours: rules.minAccountAgeHours,
+      requireAvatar: rules.requireAvatar,
+      joinAction: rules.joinAction,
+      autoLiftMinutes: rules.autoLiftMinutes,
+      lockdownOnEngage: rules.lockdownOnEngage,
+      ...over,
+    });
+
+  const body = h(
+    "div",
+    { class: "fields" },
+    h("p", { class: "field-hint" }, t("antiRaidIntro")),
+    fieldGroup(
+      toggleField({
+        label: t("antiRaidEnabledLabel"),
+        hint: t("antiRaidEnabledHint"),
+        checked: rules.enabled,
+        save: (enabled) => save({ enabled }),
+      }),
+      toggleField({
+        label: t("antiRaidAutoEngageLabel"),
+        hint: t("antiRaidAutoEngageHint"),
+        checked: rules.autoEngage,
+        // An auto-engaging posture needs an auto-lift, which the mutation
+        // refuses without. Sending one here rather than surfacing that refusal
+        // turns a correct rule into a form the operator cannot get out of.
+        save: (autoEngage) =>
+          save(
+            autoEngage && rules.autoLiftMinutes === null
+              ? { autoEngage, autoLiftMinutes: 60 }
+              : { autoEngage },
+          ),
+      }),
+      textField({
+        label: t("antiRaidBurstJoinsLabel"),
+        hint: t("antiRaidBurstJoinsHint"),
+        value: String(rules.burst.joins),
+        validate: (raw) => validateWhole(raw, 2, 200),
+        save: (raw) =>
+          save({ burst: { joins: Number(raw.trim()), windowSeconds: rules.burst.windowSeconds } }),
+      }),
+      textField({
+        label: t("antiRaidWindowLabel"),
+        hint: t("antiRaidWindowHint"),
+        value: String(rules.burst.windowSeconds),
+        validate: (raw) => validateWhole(raw, 5, 3_600),
+        save: (raw) => save({ burst: { joins: rules.burst.joins, windowSeconds: Number(raw.trim()) } }),
+      }),
+      textField({
+        label: t("antiRaidAgeLabel"),
+        hint: t("antiRaidAgeHint"),
+        value: String(rules.minAccountAgeHours),
+        validate: (raw) => validateWhole(raw, 0, 24 * 365),
+        save: (raw) => save({ minAccountAgeHours: Number(raw.trim()) }),
+      }),
+      toggleField({
+        label: t("antiRaidAvatarLabel"),
+        hint: t("antiRaidAvatarHint"),
+        checked: rules.requireAvatar,
+        save: (requireAvatar) => save({ requireAvatar }),
+      }),
+      selectField({
+        label: t("antiRaidActionLabel"),
+        hint: t("antiRaidActionHint"),
+        value: rules.joinAction,
+        options: [
+          ["FLAG", t("antiRaidActionFlag")],
+          ["ALLOW", t("antiRaidActionAllow")],
+          ["KICK", t("antiRaidActionKick")],
+          ["BAN", t("antiRaidActionBan")],
+        ],
+        save: (joinAction) => save({ joinAction }),
+      }),
+      textField({
+        label: t("antiRaidLiftLabel"),
+        hint: t("antiRaidLiftHint"),
+        value: rules.autoLiftMinutes === null ? "" : String(rules.autoLiftMinutes),
+        placeholder: t("antiRaidLiftPlaceholder"),
+        // Blank is a real answer here — stays on until lifted — so it is not
+        // treated as an unfilled field.
+        validate: (raw) => (raw.trim() === "" ? null : validateWhole(raw, 1, 24 * 60)),
+        save: (raw) => save({ autoLiftMinutes: raw.trim() === "" ? null : Number(raw.trim()) }),
+      }),
+      toggleField({
+        label: t("antiRaidLockdownLabel"),
+        hint: t("antiRaidLockdownHint"),
+        checked: rules.lockdownOnEngage,
+        save: (lockdownOnEngage) => save({ lockdownOnEngage }),
+      }),
+    ),
+  );
+
+  return [card(t("cardAntiRaid"), body), card(t("cardRaidTest"), raidTestBox(guildId))];
+}
+
+/**
+ * The dry run.
+ *
+ * An operator describes a burst — how many arrive, how old their accounts are,
+ * whether they have a profile picture — and the panel replays it through the
+ * same evaluator the gate uses. It exists because anti-raid rules are otherwise
+ * only ever exercised during a raid, which is the worst possible moment to find
+ * out a threshold was wrong.
+ *
+ * Deliberately coarse. Asking for a per-arrival table would model a raid more
+ * precisely and answer a question nobody has; the questions operators actually
+ * ask are "does my threshold trip" and "does this catch ordinary new members
+ * too", and both are answered by a count and an age.
+ */
+function raidTestBox(guildId: string): HTMLElement {
+  const status = statusSlot();
+  let arrivals = "10";
+  let ageHours = "2";
+  let hasAvatar = false;
+  let postureActive = false;
+
+  const arrivalsInput = h("input", {
+    class: "control control-text control-short",
+    type: "text",
+    value: arrivals,
+    autocomplete: "off",
+    "aria-label": t("raidTestArrivalsAria"),
+  }) as HTMLInputElement;
+  arrivalsInput.addEventListener("input", () => {
+    arrivals = arrivalsInput.value;
+  });
+
+  const ageInput = h("input", {
+    class: "control control-text control-short",
+    type: "text",
+    value: ageHours,
+    autocomplete: "off",
+    "aria-label": t("raidTestAgeAria"),
+  }) as HTMLInputElement;
+  ageInput.addEventListener("input", () => {
+    ageHours = ageInput.value;
+  });
+
+  const run = actionButton({
+    label: t("raidTestRun"),
+    tone: "primary",
+    status,
+    run: () => {
+      if (!whole(arrivals, 1, 50)) {
+        return Promise.resolve<WriteResult>({ kind: "error", message: t("errRaidArrivals") });
+      }
+      if (!whole(ageHours, 0, 24 * 365)) {
+        return Promise.resolve<WriteResult>({ kind: "error", message: t("errRaidAge") });
+      }
+      const joins = Array.from({ length: Number(arrivals.trim()) }, () => ({
+        accountAgeHours: Number(ageHours.trim()),
+        hasAvatar,
+      }));
+      return postAction(guildId, "antiraid.test", { joins, postureActive });
+    },
+  });
+
+  return h(
+    "div",
+    { class: "fields" },
+    h("p", { class: "field-hint" }, t("raidTestIntro")),
+    h(
+      "div",
+      { class: "field" },
+      h("label", { class: "field-label" }, t("raidTestArrivalsLabel")),
+      h("div", { class: "field-row" }, arrivalsInput),
+    ),
+    h(
+      "div",
+      { class: "field" },
+      h("label", { class: "field-label" }, t("raidTestAgeLabel")),
+      h("div", { class: "field-row" }, ageInput),
+    ),
+    toggleField({
+      label: t("raidTestAvatarLabel"),
+      hint: t("raidTestAvatarHint"),
+      checked: hasAvatar,
+      save: async (next) => {
+        hasAvatar = next;
+        return { kind: "ok" };
+      },
+    }),
+    toggleField({
+      label: t("raidTestPostureLabel"),
+      hint: t("raidTestPostureHint"),
+      checked: postureActive,
+      save: async (next) => {
+        postureActive = next;
+        return { kind: "ok" };
+      },
+    }),
+    h("div", { class: "field-row" }, run),
+    status.el,
+  );
+}
+
 function testBox(guildId: string, policy: AutomodPolicy): HTMLElement {
   const status = statusSlot();
   const text = reasonBox(t("testPlaceholder"), 3);

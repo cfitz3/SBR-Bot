@@ -2333,6 +2333,150 @@ test("an officer cannot decide what a Discord ban does inside the game guild", a
   assert.deepEqual(recorded.calls, []);
 });
 
+// ── anti-raid ──
+
+const raidBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  enabled: true,
+  burst: { joins: 8, windowSeconds: 60 },
+  autoEngage: true,
+  minAccountAgeHours: 48,
+  requireAvatar: false,
+  joinAction: "FLAG",
+  autoLiftMinutes: 60,
+  lockdownOnEngage: false,
+  ...over,
+});
+
+test("saving anti-raid rules stores them and says what they now do", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "ADMIN" } });
+
+  const result = await mutations.saveAntiRaid(session(), "g1", raidBody({ joinAction: "KICK" }));
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /8 joins in 60s/);
+  const write = recorded.calls.find((c) => c.method === "setSetting");
+  assert.equal(write?.args[1], "moderation.antiraid");
+});
+
+test("anti-raid rules that would not mean what the admin typed are refused", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "ADMIN" } });
+
+  const cases: unknown[] = [
+    "not an object",
+    raidBody({ enabled: "yes" }),
+    raidBody({ burst: { joins: 1, windowSeconds: 60 } }),
+    raidBody({ burst: { joins: 8, windowSeconds: 2 } }),
+    raidBody({ burst: null }),
+    raidBody({ minAccountAgeHours: -1 }),
+    raidBody({ joinAction: "TIMEOUT" }),
+    raidBody({ autoLiftMinutes: 0 }),
+    // A posture that turns itself on and never turns itself off.
+    raidBody({ autoEngage: true, autoLiftMinutes: null }),
+  ];
+  for (const [i, body] of cases.entries()) {
+    const result = await mutations.saveAntiRaid(session(), "g1", body);
+    assert.equal(result.ok, false, `case ${String(i)}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${String(i)}`);
+  }
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "setSetting"), []);
+});
+
+test("staying on until lifted is accepted when nothing engages by itself", async () => {
+  const { mutations } = make({ roleMap: { "111": "ADMIN" } });
+
+  const result = await mutations.saveAntiRaid(
+    session(),
+    "g1",
+    raidBody({ autoEngage: false, autoLiftMinutes: null }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /staff switch it on/);
+  assert.match(result.note ?? "", /until lifted/);
+});
+
+test("a moderator may try a raid against the rules but not change them", async () => {
+  const { mutations } = make({ roleMap: { "111": "MODERATOR" } });
+
+  assert.equal((await mutations.saveAntiRaid(session(), "g1", raidBody())).access.allowed, false);
+  assert.equal(
+    (
+      await mutations.testAntiRaid(session(), "g1", {
+        joins: [{ accountAgeHours: 1, hasAvatar: true }],
+      })
+    ).access.allowed,
+    true,
+  );
+});
+
+test("the dry run replays the burst and reports which arrival engaged the posture", async () => {
+  const { mutations, recorded } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: {
+      "moderation.antiraid": {
+        enabled: true,
+        burst: { joins: 3, windowSeconds: 60 },
+        autoEngage: true,
+        minAccountAgeHours: 48,
+        requireAvatar: false,
+        joinAction: "KICK",
+        autoLiftMinutes: 60,
+        lockdownOnEngage: false,
+      },
+    },
+  });
+
+  const result = await mutations.testAntiRaid(session(), "g1", {
+    joins: [
+      { accountAgeHours: 1, hasAvatar: false },
+      { accountAgeHours: 1, hasAvatar: false },
+      { accountAgeHours: 1, hasAvatar: false },
+      { accountAgeHours: 900, hasAvatar: true },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /Arrival 3/);
+  const change = recorded.audits.at(-1)?.change as Record<string, unknown>;
+  assert.equal(change["engagedAt"], 3);
+  assert.deepEqual(change["totals"], { ALLOW: 3, FLAG: 0, KICK: 1, BAN: 0 });
+  // A dry run stores nothing.
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "setSetting"), []);
+});
+
+test("the dry run says what else is running alongside the gate", async () => {
+  const { mutations } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy() },
+  });
+
+  const result = await mutations.testAntiRaid(session(), "g1", {
+    joins: [{ accountAgeHours: 1, hasAvatar: true }],
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /Automod is on/);
+});
+
+test("a malformed dry run is refused rather than answered about something else", async () => {
+  const { mutations } = make({ roleMap: { "111": "MODERATOR" } });
+
+  const cases: unknown[] = [
+    "not an object",
+    { joins: [] },
+    { joins: "one" },
+    { joins: [{ accountAgeHours: -1, hasAvatar: true }] },
+    { joins: [{ accountAgeHours: 1 }] },
+    { joins: [{ accountAgeHours: 1, hasAvatar: true }], postureActive: "yes" },
+    { joins: Array.from({ length: 51 }, () => ({ accountAgeHours: 1, hasAvatar: true })) },
+  ];
+  for (const [i, body] of cases.entries()) {
+    const result = await mutations.testAntiRaid(session(), "g1", body);
+    assert.equal(result.ok, false, `case ${String(i)}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${String(i)}`);
+  }
+});
+
 // ── the automod test box ──
 
 /**

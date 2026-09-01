@@ -17,7 +17,13 @@ import type {
   WordMatchType,
 } from "@sbr/shared-types";
 import { withCommandCopy } from "@sbr/brand";
-import { isEscalation, modLogEmbed } from "@sbr/moderation";
+import {
+  ANTIRAID_SETTING_KEY,
+  describeAntiRaidRules,
+  parseAntiRaid,
+  isEscalation,
+  modLogEmbed,
+} from "@sbr/moderation";
 import type {
   AdminCommandSpec,
   AdminContext,
@@ -360,16 +366,33 @@ const lockdownLift: AdminHandler = async (ctx, deps) => {
   return { ephemeral: false, text: `🔓 Lifted the lockdown on ${where}.` };
 };
 
+/**
+ * Turn the posture on, and say what it will actually do.
+ *
+ * Sensitivity is a preset for a guild that has never configured anti-raid on
+ * the panel, not a mode: `parseAntiRaid` layers it under whatever is stored, so
+ * an admin who set their own thresholds keeps them and somebody typing HIGH
+ * here does not silently overwrite them. The reply quotes the resolved rules
+ * because "on at HIGH sensitivity" told staff nothing about who was being
+ * turned away — which was true in a stronger sense than anyone realised, since
+ * until this release the answer was nobody.
+ */
 const antiraidOn: AdminHandler = async (ctx, deps) => {
+  const sensitivity = (ctx.args.getString("sensitivity") as RaidSensitivity | null) ?? "MEDIUM";
   const result = await deps.safety.enableAntiRaid({
     guildId: ctx.guildId,
     actorDiscordId: ctx.actorId,
-    sensitivity: (ctx.args.getString("sensitivity") as RaidSensitivity | null) ?? "MEDIUM",
+    sensitivity,
     durationSeconds: parseDurationSeconds(ctx.args.getString("duration")) ?? null,
   });
   if (!result.ok) return { ephemeral: true, text: renderSafetyError(result.error) };
+  const stored = await deps.config.getSetting(ctx.guildId, ANTIRAID_SETTING_KEY).catch(() => null);
+  const rules = parseAntiRaid(stored, sensitivity);
   const until = result.value.expiresAt ? ` until ${relativeTs(result.value.expiresAt)}` : "";
-  return { ephemeral: false, text: `🛡️ Anti-raid on at ${result.value.sensitivity} sensitivity${until}.` };
+  return {
+    ephemeral: false,
+    text: `🛡️ Anti-raid on${until}. ${describeAntiRaidRules(rules)}`,
+  };
 };
 
 const antiraidOff: AdminHandler = async (ctx, deps) => {

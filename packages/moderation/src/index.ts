@@ -10,6 +10,25 @@ export {
 export { rankOf, isPunitive, needsBotPermission } from "./rank.js";
 export { modLogEmbed, type ModLogSink } from "./mod-log.js";
 export {
+  burstReached,
+  defaultRules as defaultAntiRaidRules,
+  describeRules as describeAntiRaidRules,
+  evaluateJoin,
+  parseAntiRaid,
+  simulateRaid,
+  ALLOW_JOIN,
+  ANTIRAID_SETTING_KEY,
+  DEFAULT_ANTIRAID,
+  RAID_JOIN_ACTIONS,
+  type AntiRaidRules,
+  type JoinContext,
+  type JoinDecision,
+  type RaidJoinAction,
+  type RaidSimulation,
+  type SimulatedJoin,
+  type SimulatedOutcome,
+} from "./antiraid.js";
+export {
   counterRequestsFor,
   evaluateAutomod,
   parseAutomod,
