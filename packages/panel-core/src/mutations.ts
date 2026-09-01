@@ -618,6 +618,18 @@ const MAX_MILESTONE_REWARD = 1_000_000;
  * stable — a guild renames the `name` beside it instead.
  */
 const TICKET_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
+/**
+ * Category keys, however, are matched case-insensitively.
+ *
+ * The five categories the platform seeds at install carry the upper-case names
+ * the old `TicketCategory` enum used — `SUPPORT`, `REPORT`, `APPEAL`,
+ * `APPLICATION`, `OTHER` — so a lower-case-only rule here rejects the
+ * platform's own rows: an admin could not put a seeded category on a panel,
+ * disable it, or delete it, and the panel blamed their input for it. New keys
+ * are still lower-cased on the way in by the editor; this rule exists so the
+ * data that already exists remains addressable.
+ */
+const TICKET_CATEGORY_KEY = /^[A-Za-z0-9]+(?:[.:-][A-Za-z0-9]+)*$/;
 const TICKET_NAME_MAX = 80;
 /** Discord truncates a select-menu option description at 100 characters. */
 const TICKET_DESCRIPTION_MAX = 100;
@@ -1504,8 +1516,8 @@ export class PanelMutations {
       const body = input as Record<string, unknown>;
 
       const key = body["key"];
-      if (typeof key !== "string" || !TICKET_KEY.test(key)) {
-        return invalid("key must be lowercase words joined by - . or :");
+      if (typeof key !== "string" || !TICKET_CATEGORY_KEY.test(key)) {
+        return invalid("key must be words joined by - . or :");
       }
       const name = body["name"];
       if (typeof name !== "string" || name.trim().length === 0 || name.length > TICKET_NAME_MAX) {
@@ -1629,7 +1641,9 @@ export class PanelMutations {
     return this.run(session, guildId, "ticket.category.remove", async () => {
       const tickets = this.d.tickets;
       if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
-      if (typeof key !== "string" || !TICKET_KEY.test(key)) return invalid("key must be a ticket category key");
+      if (typeof key !== "string" || !TICKET_CATEGORY_KEY.test(key)) {
+        return invalid("key must be a ticket category key");
+      }
 
       let removed: boolean;
       try {
@@ -1646,9 +1660,16 @@ export class PanelMutations {
   /**
    * Compose a panel, or edit one that already exists.
    *
-   * The category count decides the style Discord will accept, so it is checked
-   * here rather than at publish time: a panel that cannot be rendered should
-   * fail while the admin is looking at the form, not silently later.
+   * The upper category count decides the style Discord will accept, so it is
+   * checked here rather than at publish time: a panel that cannot be rendered
+   * should fail while the admin is looking at the form, not silently later.
+   *
+   * The lower bound is deliberately *not* checked here. A panel is named and
+   * given a channel before its categories are chosen — the create form has no
+   * category picker on it, because there is no panel to attach one to yet — so
+   * refusing an empty list made the panel impossible to create at all. Empty
+   * is a draft; `publishTicketPanel` is where it has to be answered, and that
+   * is where the refusal now lives.
    */
   async upsertTicketPanel(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
     return this.run(session, guildId, "ticket.panel.upsert", async () => {
@@ -1690,18 +1711,24 @@ export class PanelMutations {
         return invalid(`style must be one of ${PANEL_STYLES.join(", ")}`);
       }
       const categoryKeys = body["categoryKeys"];
-      if (
-        !Array.isArray(categoryKeys) ||
-        categoryKeys.length === 0 ||
-        categoryKeys.some((entry) => typeof entry !== "string" || !TICKET_KEY.test(entry))
-      ) {
-        return invalid("categoryKeys must be a non-empty list of category keys");
+      if (!Array.isArray(categoryKeys)) return invalid("categoryKeys must be a list of category keys");
+      // Each fault gets its own sentence, and a bad key is quoted back.
+      // Collapsing these into one message is what made the create form appear
+      // to reject an empty list when it was really rejecting the key format:
+      // the admin read "non-empty" and had no way to see which key was at
+      // fault, because the message never named one.
+      const badKey = categoryKeys.find(
+        (entry) => typeof entry !== "string" || !TICKET_CATEGORY_KEY.test(entry),
+      );
+      if (badKey !== undefined) {
+        return invalid(`"${String(badKey)}" is not a category key`);
       }
       // Order is content, not presentation — the buttons appear in the order
       // given — so duplicates are rejected rather than deduped behind the
       // admin's back, which would silently reorder what they typed.
       const keys = categoryKeys as readonly string[];
-      if (new Set(keys).size !== keys.length) return invalid("categoryKeys must not repeat a category");
+      const repeated = keys.find((key, at) => keys.indexOf(key) !== at);
+      if (repeated !== undefined) return invalid(`"${repeated}" is on this panel twice`);
       const cap = style === "BUTTONS" ? MAX_PANEL_BUTTON_CATEGORIES : MAX_PANEL_SELECT_CATEGORIES;
       if (keys.length > cap) {
         // Discord's caps, stated as Discord's: five buttons to a row, 25
@@ -1769,6 +1796,21 @@ export class PanelMutations {
       const panel = panels.find((row) => row.id === id);
       if (panel === undefined) return invalid("no such panel");
       if (panel.channelId === null) return invalid("give the panel a channel before publishing it");
+      // The other half of the draft/publish split described on
+      // `upsertTicketPanel`. A panel with nothing enabled on it renders to a
+      // message with no controls, which Discord accepts and no member can use,
+      // so it is refused here — with the reason, while an admin is reading.
+      const categories = await tickets.listCategories(guildId);
+      const enabled = panel.categoryKeys.filter((key) =>
+        categories.some((row) => row.key === key && row.enabled),
+      );
+      if (enabled.length === 0) {
+        return invalid(
+          panel.categoryKeys.length === 0
+            ? "add a category to the panel before publishing it"
+            : "every category on this panel is disabled or deleted",
+        );
+      }
 
       try {
         await effects.publishPanel(guildId, id, actorDiscordId);

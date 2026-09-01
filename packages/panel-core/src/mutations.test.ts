@@ -243,7 +243,36 @@ function ticketRecorder(recorded: Recorded, removed = true): TicketConfigService
       recorded.calls.push({ method: "saveTicketSettings", args: [guildId, input] });
       return { ...settings, ...input, guildId, updatedAt: "2026-08-14T12:00:00.000Z" };
     },
-    async listCategories() { return []; },
+    // Two live categories and one switched off, so the publish check has both
+    // answers to give. `SUPPORT` carries the upper-case key the platform seeds
+    // at install, which is exactly the shape the panel used to reject.
+    async listCategories(guildId) {
+      const base = {
+        guildId,
+        description: "",
+        emoji: null,
+        channelNameTemplate: "ticket-{num}",
+        parentChannelId: null,
+        staffRoleIds: [],
+        requiredRoleIds: [],
+        pingRoleIds: [],
+        openingMessage: "",
+        image: null,
+        claiming: true,
+        cooldownSeconds: null,
+        memberLimit: 1,
+        totalLimit: 50,
+        slowModeSeconds: null,
+        requireTopic: false,
+        questions: [],
+      } as const;
+      return [
+        { ...base, id: "c1", key: "support", name: "Support", position: 0, enabled: true },
+        { ...base, id: "c2", key: "appeal", name: "Appeal", position: 1, enabled: true },
+        { ...base, id: "c3", key: "SUPPORT", name: "Seeded support", position: 2, enabled: true },
+        { ...base, id: "c4", key: "retired", name: "Retired", position: 3, enabled: false },
+      ];
+    },
     async upsertCategory(guildId, input) {
       recorded.calls.push({ method: "upsertTicketCategory", args: [guildId, input] });
       return { ...input, id: "c1", guildId };
@@ -282,6 +311,37 @@ function ticketRecorder(recorded: Recorded, removed = true): TicketConfigService
           thumbnail: null,
           style: "SELECT",
           categoryKeys: ["appeal"],
+          updatedAt: null,
+        },
+        // Everything this one offers is switched off, so it would render to a
+        // message with no controls on it.
+        {
+          id: "p3",
+          guildId,
+          name: "Retired",
+          channelId: "123456789012345678",
+          messageId: null,
+          title: "Nothing here",
+          description: null,
+          image: null,
+          thumbnail: null,
+          style: "BUTTONS",
+          categoryKeys: ["retired"],
+          updatedAt: null,
+        },
+        // A freshly created draft: named, given a channel, no categories yet.
+        {
+          id: "p4",
+          guildId,
+          name: "Draft",
+          channelId: "123456789012345678",
+          messageId: null,
+          title: "Draft",
+          description: null,
+          image: null,
+          thumbnail: null,
+          style: "BUTTONS",
+          categoryKeys: [],
           updatedAt: null,
         },
       ];
@@ -1741,7 +1801,7 @@ test("a category that could never be opened is refused before it reaches the sto
   const { mutations, recorded } = make();
 
   const cases: Record<string, unknown>[] = [
-    { key: "Staff App" },                       // keys are lowercase and typable
+    { key: "Staff App" },                       // a space is not a key separator
     { key: "" },
     { name: "   " },
     { name: "x".repeat(81) },
@@ -1817,7 +1877,8 @@ test("a panel is held to the shape Discord will actually render", async () => {
     { name: "" },
     { channelId: "here" },
     { style: "DROPDOWN" },
-    { categoryKeys: [] },                                     // a panel with nothing on it
+    { categoryKeys: "support" },                              // a list, not one key
+    { categoryKeys: ["not a key"] },
     { categoryKeys: ["support", "support"] },                 // order is content; no silent dedupe
     // Six buttons will not fit a Discord action row.
     { style: "BUTTONS", categoryKeys: ["a", "b", "c", "d", "e", "f"] },
@@ -1858,6 +1919,63 @@ test("publishing a panel with no channel is refused rather than reported as post
   assert.equal(unrouted.error?.kind, "INVALID_INPUT");
   const missing = await mutations.publishTicketPanel(session(), "g1", "p9");
   assert.equal(missing.error?.kind, "INVALID_INPUT");
+  assert.equal(recorded.calls.length, 1);
+});
+
+test("the categories the platform seeds are addressable, upper case and all", async () => {
+  // The five seeded keys are the old enum's names — SUPPORT, REPORT, APPEAL,
+  // APPLICATION, OTHER. A lower-case-only rule made every one of them
+  // unreachable from the panel: an admin could not put a seeded category on a
+  // panel, disable it, or delete it, and the refusal blamed their input.
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.upsertTicketCategory(session(), "g1", categoryBody({ key: "SUPPORT" }))).ok, true);
+  assert.equal((await mutations.removeTicketCategory(session(), "g1", "APPLICATION")).ok, true);
+  assert.equal(
+    (await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: ["SUPPORT", "appeal"] }))).ok,
+    true,
+  );
+  assert.equal(recorded.calls.length, 3);
+});
+
+test("a bad category key is quoted back rather than reported as an empty list", async () => {
+  // One message for three faults is what made the create form look like it was
+  // rejecting an empty list when it was rejecting a key format, with no way to
+  // see which key was at fault.
+  const { mutations } = make();
+
+  const notAList = await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: "support" }));
+  assert.match(String(notAList.error?.detail), /list of category keys/);
+
+  const badKey = await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: ["support", "no way"] }));
+  assert.match(String(badKey.error?.detail), /"no way" is not a category key/);
+
+  const twice = await mutations.upsertTicketPanel(
+    session(),
+    "g1",
+    panelBody({ categoryKeys: ["support", "support"] }),
+  );
+  assert.match(String(twice.error?.detail), /"support" is on this panel twice/);
+});
+
+test("a panel is created empty and answers for it at publish, not at save", async () => {
+  // The create form has no category picker on it — there is no panel to attach
+  // one to yet — so refusing an empty list on save made a panel impossible to
+  // create at all. Empty is a draft; publishing one is what gets refused.
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: [] }))).ok, true);
+  assert.deepEqual((recorded.calls[0]?.args[1] as { categoryKeys: readonly string[] }).categoryKeys, []);
+
+  const draft = await mutations.publishTicketPanel(session(), "g1", "p4");
+  assert.equal(draft.error?.kind, "INVALID_INPUT");
+  assert.match(String(draft.error?.detail), /add a category/);
+
+  // Distinct from the draft: categories were chosen, and then switched off.
+  const allOff = await mutations.publishTicketPanel(session(), "g1", "p3");
+  assert.equal(allOff.error?.kind, "INVALID_INPUT");
+  assert.match(String(allOff.error?.detail), /disabled or deleted/);
+
   assert.equal(recorded.calls.length, 1);
 });
 

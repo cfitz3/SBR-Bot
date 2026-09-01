@@ -867,6 +867,105 @@ export function multiPickerField(opts: MultiPickerOptions): HTMLElement {
   );
 }
 
+export interface OptionChipsOptions {
+  readonly label: string;
+  readonly hint?: string;
+  /** The chosen values, in the order they should appear. */
+  readonly values: readonly string[];
+  /** Every value that may be chosen, as `[value, label]`. */
+  readonly options: readonly (readonly [string, string])[];
+  /** The prompt shown on the closed dropdown, e.g. "Add a category…". */
+  readonly addLabel: string;
+  /** What to say when nothing has been chosen yet. */
+  readonly emptyLabel: string;
+  readonly save: (values: readonly string[]) => Promise<WriteResult>;
+}
+
+/**
+ * Chips over a dropdown of a *known* list — the sibling of `multiPickerField`
+ * for values that are not Discord ids.
+ *
+ * The distinction matters: the picker above queries the guild directory and
+ * validates typed input as a snowflake, so pointing it at something like ticket
+ * category keys offers the operator the wrong list and then refuses everything
+ * they choose from it. Here the caller supplies the options, so there is
+ * nothing to type, nothing to look up, and nothing invalid to choose.
+ *
+ * Order is preserved as chosen, and removing then re-adding a chip moves it to
+ * the end — which is the only reordering gesture the control needs, because the
+ * lists it holds are short.
+ */
+export function optionChipsField(opts: OptionChipsOptions): HTMLElement {
+  const slot = statusSlot();
+  const id = nextId("chips");
+  const labels = new Map(opts.options.map(([value, label]) => [value, label]));
+  let selected: string[] = [...opts.values];
+
+  const chips = h("div", { class: "picker-chips" });
+  const empty = h("p", { class: "muted" }, opts.emptyLabel);
+  const select = h("select", { class: "field-input", id }) as HTMLSelectElement;
+
+  function draw(): void {
+    chips.replaceChildren(
+      ...selected.map((value) =>
+        h("span", { class: "picker-chip" },
+          // A value with no label is a row that was deleted underneath the
+          // panel; showing the raw key is more useful than hiding it, because
+          // the key is what the operator has to remove.
+          h("span", { class: "picker-chip-label" }, labels.get(value) ?? value),
+          h("button", {
+            class: "picker-chip-remove",
+            type: "button",
+            "aria-label": t("chipRemove").replace("{label}", labels.get(value) ?? value),
+            onclick: () => void commit(selected.filter((entry) => entry !== value)),
+          }, "×"),
+        ),
+      ),
+    );
+    chips.hidden = selected.length === 0;
+    empty.hidden = selected.length > 0;
+
+    const remaining = opts.options.filter(([value]) => !selected.includes(value));
+    select.replaceChildren(
+      h("option", { value: "" }, opts.addLabel),
+      ...remaining.map(([value, label]) => h("option", { value }, label)),
+    );
+    select.value = "";
+    // Nothing left to add is a state, not a failure: the control greys out
+    // rather than offering a dropdown holding only its own placeholder.
+    select.disabled = remaining.length === 0;
+  }
+
+  async function commit(next: readonly string[]): Promise<void> {
+    const previous = selected;
+    selected = [...next];
+    draw();
+    if (!(await attempt(slot, () => opts.save(selected)))) {
+      selected = previous;
+      draw();
+    }
+  }
+
+  select.addEventListener("change", () => {
+    const value = select.value;
+    if (value === "") return;
+    void commit([...selected, value]);
+  });
+
+  draw();
+
+  return h(
+    "div",
+    { class: "field" },
+    h("label", { class: "field-label", for: id }, opts.label),
+    chips,
+    empty,
+    h("div", { class: "field-row" }, select),
+    opts.hint ? h("p", { class: "field-hint" }, opts.hint) : null,
+    slot.el,
+  );
+}
+
 export interface IdChooserOptions {
   readonly guildId: string;
   readonly kind: PickerKind;

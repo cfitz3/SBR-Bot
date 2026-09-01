@@ -1429,12 +1429,19 @@ export const DEFAULT_PANEL = {
     styleButtons: "Buttons",
     styleSelect: "Select menu",
     panelCategoriesLabel: "Categories",
-    panelCategoriesHint: "Which categories this panel offers, in the order they appear.",
+    panelCategoriesHint:
+      "Which categories this panel offers, in the order they appear. Remove and re-add one to move it to the end.",
+    panelCategoriesAdd: "Add a category…",
+    panelCategoriesEmpty: "None yet. A panel needs at least one before it can be published.",
+    /** Marks a category that exists but is switched off, in the panel picker. */
+    categoryOff: "(disabled)",
     publish: "Publish",
     publishConfirm: "Confirm publish",
     createPanel: "Add panel",
     createPanelNamePlaceholder: "e.g. Support desk",
     createPanelTitlePlaceholder: "e.g. Need a hand?",
+    createPanelNote:
+      "Add the panel first, then open it to choose its channel and categories.",
 
     // ── tags ──
     tagsNote:

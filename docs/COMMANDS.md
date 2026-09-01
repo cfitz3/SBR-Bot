@@ -287,6 +287,19 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 
 What a member may open is configuration, not a command: the ticket menu (`TicketTypeConfig`) and the panel that advertises it (`TicketPanelConfig`) are edited on the panel's admin-only **Tickets** page. The bot reads that menu — see COMMAND_INVENTORY.md §2.8 for the member-facing `/ticket`. A guild that configures nothing offers the five built-in types, which are the fixed `TicketCategory` values.
 
+**Why the member-facing `/ticket` was kept.** The overhaul planned to retire it
+once the ticket panel reached parity, on the standing rule that no command goes
+before its replacement does. The panel reaches parity on three of the four
+things `/ticket` does — opening (a panel button, which additionally asks the
+category's questions and posts its opening message, neither of which the slash
+path ever did), closing (the channel's own close control, and staff closing from
+the panel's Tickets page), and category management. It does **not** reach parity
+on the fourth: a panel has to be *published* before any of it exists, nothing
+seeds one at install, and a guild that has not published one would be left with
+no way to open a ticket at all. `/ticket` is therefore the guaranteed entry
+point and stays. This mirrors `/lfg`, which the same rule kept in a different
+shape rather than removed.
+
 ---
 
 ## 15. Admin Bot — Server Safety & Audit
