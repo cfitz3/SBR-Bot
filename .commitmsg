@@ -1,0 +1,93 @@
+Ship the lists a guild should not have to write itself
+
+Every guild that installs this platform writes the same first twenty filter
+rules by hand: free-Nitro scams, gift-card bait, IP-logger domains, unsolicited
+invites. Doing that one `/wordlist-add` at a time — five slash options per rule,
+"added" as the only reply — is how a server ends up with three near-miss
+variants of one scam pattern and a gap where the fourth should be.
+
+Packaged lists, layered rather than seeded.
+
+`packages/moderation/src/wordlist-packs.ts` ships three: Scam bait, Risky links
+and Hypixel risk. The last is the one that justifies the mechanism at all — a
+general-purpose Discord filter list knows nothing about account selling, coins
+for PayPal or named cheat clients, and those are the messages a SkyBlock guild
+most needs caught, not because they are offensive but because a guild whose
+chat carries them attracts Hypixel's attention.
+
+Every pack is off until an admin turns it on: installing this platform changes
+nothing about what a guild filters. And a pack is layered *under* the guild's
+own rules rather than copied into them, so enabling one adds no rows, a release
+that fixes a pattern fixes it for everyone who had the pack on, and switching it
+off returns the guild's own list untouched. Seeding rows at install would make a
+pack unfixable the moment a scam changed shape, because by then it is a thousand
+guilds' data.
+
+Risky links flags rather than blocks throughout, except the IP loggers. A
+shortener is not proof of anything, and a filter that silently eats every bit.ly
+teaches members the server is broken.
+
+No packaged slur list, and that is the decision, not an omission.
+
+Which words a community treats as a slur is specific to its language, its region
+and its membership. A list written here would be simultaneously too aggressive
+for some guilds and full of holes for others, and every guild that enabled it
+would stop looking — which is worse than shipping nothing. Import is how a guild
+brings the list its own moderators agree on. The reasoning is in the module doc
+so the next person to add one reads it first.
+
+Suppression is per rule, which is what "extending a packaged list" means.
+
+A guild that wants Risky links but posts bit.ly links internally should not have
+to choose between a rule that fires on its own staff and losing the IP loggers
+too. Muting `links:shortener` keeps the rest, and the mute outlives switching the
+pack off and on again — a guild that already decided against a rule should not
+silently get it back a week later.
+
+One evaluator, not two.
+
+`packRules` emits the same `WordlistRuleDTO` a typed rule is, and
+`WordlistServiceImpl.list` resolves packs into its answer, so the automod runner,
+`/filter-test` and the panel all see one list. `WordlistFilterImpl` in the bridge
+resolves them into its own cache for the same reason: a guild that switches on
+the Hypixel pack means it for guild chat above all, since that is where account
+selling actually gets typed. A filter that behaved differently depending on where
+a rule came from would be a second engine to keep in step.
+
+Both reads fail toward the guild's own rules. A settings hiccup that turned every
+enabled pack off at once, silently, is the failure worth engineering against —
+and in the relay it would be cached that way for a full TTL.
+
+Only the panel tells the two apart, and only so `update` and `remove` can decline
+a row this repository owns rather than offering a button that cannot work.
+
+JSON import, validated whole.
+
+Up to 200 rules, pasted or dropped in as a file. Every row is checked before any
+row is written, so a bad regex at line ninety rejects the file rather than
+leaving eighty-nine rules and a question about which ones landed. Rows that
+already exist are skipped rather than refused — an import is usually the second
+import, and failing on the overlap would make the feature useless for its one
+job. The file picker fills the box rather than posting: seeing what you are about
+to add is the entire safeguard on a bulk write. The 200 ceiling is not storage,
+it is the number past which nobody has read what they are uploading.
+
+`/wordlist`, `/wordlist-add` and `/wordlist-remove` are retired.
+
+`enabled: false`, so they leave Discord's registry on the next deploy instead of
+sitting in the picker answering with an error. The handlers stay and stay under
+test. Parity was confirmed before the flag went on, which is why the removal and
+the panel work are one slice: the Filter section already had create, edit, delete
+and list, and now has the two things the commands could never do. The admin
+transport test grew the same both-halves assertion the bridge already had — that
+a retired command is absent from the payload, not merely present and erroring.
+
+Audit trails still count rows without reproducing patterns. The wordlist is the
+one piece of guild config whose contents *are* the scam URLs and slurs it exists
+to catch, and a trail that reproduces every one of them is a second copy of the
+thing nobody wanted written down.
+
+Gates: tsc -b clean, client build clean, 2291 tests pass, embeds 0 errors,
+brand layer clean.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

@@ -57,6 +57,7 @@ import type {
   XpSourcePolicyDTO,
   WordAction,
   WordlistError,
+  NewWordlistRule,
   WordlistRuleUpdate,
   WordlistService,
   WordMatchType,
@@ -70,7 +71,11 @@ import {
   describeAntiRaidRules,
   ESCALATION_SETTING_KEY,
   evaluateAutomod,
+  findPack,
+  packRules,
   parseAntiRaid,
+  validatePattern,
+  WORDLIST_PACKS_SETTING_KEY,
   RAID_JOIN_ACTIONS,
   simulateRaid,
   MAX_GAME_MUTE_SECONDS,
@@ -85,6 +90,7 @@ import {
   type AutomodTriggerKind,
   type AntiRaidRules,
   type EscalationAction,
+  type PackSelection,
   type RaidJoinAction,
   type SimulatedJoin,
   type RelayDiscordAction,
@@ -202,6 +208,11 @@ export const MUTATION_TIERS = {
    */
   "wordlist.upsert": "ADMIN",
   "wordlist.delete": "ADMIN",
+  // Enabling a pack changes what the filter does to every member at once, and
+  // a bulk import can add two hundred rules in one press. Both are the same
+  // authority as writing a rule by hand, held at the same level.
+  "wordlist.packs.save": "ADMIN",
+  "wordlist.import": "ADMIN",
   "moderation.defaults": "ADMIN",
   /**
    * The Discord→in-game punishment mapping. Admin because a row here turns a
@@ -708,6 +719,15 @@ const WORDLIST_NOTE_MAX = 500;
 const MAX_WORD_SEVERITY = 10;
 const WORD_MATCH_TYPES: readonly WordMatchType[] = ["EXACT", "SUBSTRING", "REGEX", "WILDCARD"];
 const WORD_ACTIONS: readonly WordAction[] = ["FLAG", "REPLACE", "BLOCK", "SHADOW_MUTE"];
+/**
+ * The ceiling on one import.
+ *
+ * Not a storage limit — it is the number past which nobody has read what they
+ * are uploading. An import of five hundred patterns from a list found online is
+ * how a guild ends up filtering a word its own members use, discovering it a
+ * week later, and having no idea which of five hundred rows did it.
+ */
+const MAX_IMPORT_RULES = 200;
 
 /** A ladder longer than this is a sign somebody is editing it by mistake. */
 const MAX_ESCALATION_RUNGS = 10;
@@ -2021,6 +2041,182 @@ export class PanelMutations {
       } catch (error) {
         return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
       }
+    });
+  }
+
+  /**
+   * Turn packaged lists on or off, and mute individual rules inside them.
+   *
+   * The whole selection is sent every time rather than one toggle at a time.
+   * The alternative is a per-pack endpoint that leaves the panel able to send
+   * "suppress this rule" for a pack that is off, which is a state nobody can
+   * see and nobody meant.
+   *
+   * Suppressions are kept for packs that are off, deliberately. A guild that
+   * switches Risky links off for a week and back on again should not silently
+   * get the bit.ly rule it had already decided against; the mute it typed
+   * outlives the toggle.
+   */
+  async saveWordlistPacks(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.packs.save", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const rawEnabled = body["enabled"];
+      if (!Array.isArray(rawEnabled)) return invalid("enabled must be an array of pack ids");
+      const enabled: string[] = [];
+      for (const id of rawEnabled) {
+        if (typeof id !== "string" || findPack(id) === null) {
+          return invalid(`no packaged list is called "${String(id)}"`);
+        }
+        if (!enabled.includes(id)) enabled.push(id);
+      }
+
+      const rawSuppressed = body["suppressed"] ?? [];
+      if (!Array.isArray(rawSuppressed)) return invalid("suppressed must be an array of pack rule keys");
+      const suppressed: string[] = [];
+      for (const key of rawSuppressed) {
+        if (typeof key !== "string") return invalid("suppressed entries must be strings");
+        const [packId, ruleKey] = key.split(":");
+        const pack = packId === undefined ? null : findPack(packId);
+        // Checked against the catalogue so a stale panel cannot write a mute
+        // for a rule that no longer exists, which would read as a mystery
+        // forever after: the rule is gone, the mute is not.
+        if (pack === null || ruleKey === undefined || !pack.rules.some((r) => r.key === ruleKey)) {
+          return invalid(`no packaged rule is called "${key}"`);
+        }
+        if (!suppressed.includes(key)) suppressed.push(key);
+      }
+
+      const selection: PackSelection = { enabled, suppressed };
+      const result = await this.d.config.setSetting(guildId, WORDLIST_PACKS_SETTING_KEY, selection);
+      if (!result.ok) return { error: { kind: "SERVICE_ERROR", detail: describe(result.error) } };
+      const active = packRules(guildId, selection).length;
+      const listWord = enabled.length === 1 ? "list" : "lists";
+      const ruleWord = active === 1 ? "rule" : "rules";
+      return {
+        result: { ok: true, rulesInForce: active },
+        change: { enabled, suppressed, rulesInForce: active },
+        note: `${enabled.length === 0 ? "No" : String(enabled.length)} packaged ${listWord} on, adding ${active} ${ruleWord}.`,
+      };
+    });
+  }
+
+  /**
+   * Add many rules at once, from a JSON array a guild pasted or uploaded.
+   *
+   * Every row is validated before any row is written, so a file with a bad
+   * regex at line ninety is rejected whole rather than leaving the guild with
+   * eighty-nine rules and a question about which ones landed. Rows that already
+   * exist are skipped rather than refused: an import is usually the second
+   * import, and failing on the overlap would make the feature useless for the
+   * one job it has.
+   *
+   * The reply says what happened to every row. An import that quietly discards
+   * half its input is worse than one that refuses, because the operator walks
+   * away believing the list is in force.
+   */
+  async importWordlist(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.import", async (actorDiscordId) => {
+      const wordlist = this.d.wordlist;
+      if (wordlist === undefined) return unavailable("The chat filter is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      let rows: unknown;
+      const raw = body["rules"];
+      if (typeof raw === "string") {
+        // Accepting text as well as an array is what lets the page offer a
+        // paste box and a file picker over one endpoint. The parse failure is
+        // reported here, where the operator can see which it was.
+        try {
+          rows = JSON.parse(raw);
+        } catch {
+          return invalid("that is not valid JSON");
+        }
+      } else {
+        rows = raw;
+      }
+      if (!Array.isArray(rows)) return invalid("rules must be a JSON array");
+      if (rows.length === 0) return invalid("the file contains no rules");
+      if (rows.length > MAX_IMPORT_RULES) {
+        return invalid(`an import may carry at most ${MAX_IMPORT_RULES} rules; this one has ${rows.length}`);
+      }
+
+      const parsed: NewWordlistRule[] = [];
+      for (const [index, row] of rows.entries()) {
+        const at = `rule ${index + 1}`;
+        if (typeof row !== "object" || row === null || Array.isArray(row)) {
+          return invalid(`${at} is not an object`);
+        }
+        const r = row as Record<string, unknown>;
+
+        const pattern = r["pattern"];
+        if (typeof pattern !== "string" || pattern.trim().length === 0 || pattern.length > WORDLIST_PATTERN_MAX) {
+          return invalid(`${at}: pattern must be 1-${WORDLIST_PATTERN_MAX} characters`);
+        }
+        const matchType = (r["matchType"] ?? "SUBSTRING") as WordMatchType;
+        if (!WORD_MATCH_TYPES.includes(matchType)) {
+          return invalid(`${at}: matchType must be one of ${WORD_MATCH_TYPES.join(", ")}`);
+        }
+        const action = (r["action"] ?? "FLAG") as WordAction;
+        if (!WORD_ACTIONS.includes(action)) {
+          return invalid(`${at}: action must be one of ${WORD_ACTIONS.join(", ")}`);
+        }
+        const severityRaw = r["severity"] ?? 1;
+        if (typeof severityRaw !== "number" || !Number.isInteger(severityRaw) || severityRaw < 1 || severityRaw > 10) {
+          return invalid(`${at}: severity must be a whole number from 1 to 10`);
+        }
+        // Compiled here rather than left for the service, so a bad regex is
+        // named by its line number instead of arriving as rule 90 of 90.
+        const bad = validatePattern(pattern, matchType);
+        if (bad !== null) return invalid(`${at}: ${bad}`);
+
+        const note = r["note"];
+        if (note !== undefined && note !== null && typeof note !== "string") {
+          return invalid(`${at}: note must be text`);
+        }
+        parsed.push({
+          guildId,
+          pattern,
+          matchType,
+          action,
+          severity: severityRaw,
+          addedByDiscordId: actorDiscordId,
+          note: (note ?? null) as string | null,
+        });
+      }
+
+      let added = 0;
+      let skipped = 0;
+      try {
+        for (const rule of parsed) {
+          const result = await wordlist.add(rule);
+          if (result.ok) {
+            added += 1;
+            continue;
+          }
+          // A duplicate is the expected case on a re-import, not a failure.
+          // Anything else stops the run: the file is wrong in a way the rest of
+          // it is likely to repeat, and half an import is the worst outcome.
+          if (result.error.kind === "DUPLICATE") {
+            skipped += 1;
+            continue;
+          }
+          return { error: wordlistRefusal(result.error) };
+        }
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+
+      // Patterns stay out of the trail, for the reason `upsertWordlistRule`
+      // gives: the wordlist is the one setting whose contents are the thing it
+      // exists to catch.
+      return {
+        result: { ok: true, added, skipped },
+        change: { added, skipped, submitted: parsed.length },
+        note: `${added} added, ${skipped} already present.`,
+      };
     });
   }
 

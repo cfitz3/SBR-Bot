@@ -122,6 +122,20 @@ export {
   type Matcher,
   type WordlistServiceDeps,
 } from "./wordlist.js";
+export {
+  findPack,
+  isPackRuleId,
+  packRuleId,
+  packRules,
+  parsePackSelection,
+  resolveWordlist,
+  NO_PACKS,
+  WORDLIST_PACKS,
+  WORDLIST_PACKS_SETTING_KEY,
+  type PackRule,
+  type PackSelection,
+  type WordlistPack,
+} from "./wordlist-packs.js";
 export type {
   AutomodCounterStore,
   AutomodPolicySource,
@@ -141,6 +155,7 @@ export type {
   NewActionRecord,
   NewWordlistRecord,
   SafetyStateStore,
+  WordlistPackSource,
   WordlistRepository,
 } from "./ports.js";
 export type { ModerationMetrics } from "./metrics.js";

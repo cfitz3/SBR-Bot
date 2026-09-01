@@ -1466,6 +1466,38 @@ a.guild-switch:hover {
   font-size: 14px;
 }
 
+/*
+ * A packaged rule, inside the list under its pack's switch.
+ *
+ * Built on `.roster-list` rather than as a new list: it is the same thing — a
+ * column of short rows inside a card — and the pattern and its note need to
+ * wrap the same way an IGN does. Only the muted state and the pattern's
+ * monospace are new.
+ */
+.pack-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* A muted rule stays legible: it is still the guild's configuration, and
+   hiding it would make "why is this not firing" unanswerable from the page. */
+.pack-rule-muted {
+  opacity: 0.55;
+}
+
+.pack-pattern {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* The file picker is not a text box, but it sits in the same column as one. */
+.pack-file {
+  padding: var(--space-2);
+}
+
 .roster-list li {
   overflow-wrap: anywhere;
 }

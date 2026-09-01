@@ -2102,6 +2102,138 @@ test("the audit records which rule changed and how, but never the pattern", asyn
   assert.equal(JSON.stringify(recorded.audits).includes("a slur"), false);
 });
 
+test("packaged lists are stored as one selection, checked against the catalogue", async () => {
+  const { mutations, recorded } = make();
+
+  const saved = await mutations.saveWordlistPacks(session(), "g1", {
+    enabled: ["links", "links", "scams"],
+    suppressed: ["links:shortener"],
+  });
+  assert.equal(saved.ok, true);
+  const call = recorded.calls[0];
+  assert.equal(call?.method, "setSetting");
+  assert.deepEqual(call?.args, [
+    "g1",
+    "moderation.wordlist-packs",
+    // Deduplicated: the panel sends checkbox state, and a page rendered twice
+    // should not be able to double a pack.
+    { enabled: ["links", "scams"], suppressed: ["links:shortener"] },
+  ]);
+});
+
+test("a pack or a mute that does not exist is refused rather than stored", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.saveWordlistPacks(session(), "g1", { enabled: ["nope"] })).ok, false);
+  assert.equal((await mutations.saveWordlistPacks(session(), "g1", { enabled: "scams" })).ok, false);
+  // The rule key is real, but not in that pack.
+  assert.equal(
+    (await mutations.saveWordlistPacks(session(), "g1", { enabled: [], suppressed: ["scams:shortener"] })).ok,
+    false,
+  );
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("turning every pack off is a decision, and is stored as one", async () => {
+  const { mutations, recorded } = make();
+
+  const cleared = await mutations.saveWordlistPacks(session(), "g1", { enabled: [] });
+  assert.equal(cleared.ok, true);
+  assert.deepEqual(recorded.calls[0]?.args[2], { enabled: [], suppressed: [] });
+});
+
+test("only an admin decides what the packaged lists do", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.saveWordlistPacks(session(), "g1", { enabled: [] })).access.allowed, false);
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: [] })).access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+const importRow = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  pattern: "free nitro",
+  matchType: "SUBSTRING",
+  action: "BLOCK",
+  severity: 3,
+  ...over,
+});
+
+test("an import adds every row it was given, and says how many", async () => {
+  const { mutations, recorded } = make();
+
+  const done = await mutations.importWordlist(session(), "g1", {
+    rules: [importRow(), importRow({ pattern: "gift card" })],
+  });
+  assert.equal(done.ok, true);
+  assert.equal(recorded.calls.length, 2);
+  assert.equal(recorded.calls[0]?.method, "addWordlistRule");
+  assert.deepEqual(recorded.audits[0]?.change, { added: 2, skipped: 0, submitted: 2 });
+});
+
+test("an import takes JSON as text, because that is what a file is", async () => {
+  const { mutations, recorded } = make();
+
+  const done = await mutations.importWordlist(session(), "g1", {
+    rules: JSON.stringify([importRow()]),
+  });
+  assert.equal(done.ok, true);
+  assert.equal(recorded.calls.length, 1);
+
+  const broken = await mutations.importWordlist(session(), "g1", { rules: "{not json" });
+  assert.equal(broken.ok, false);
+});
+
+test("rows fall back to sensible defaults rather than demanding every field", async () => {
+  const { mutations, recorded } = make();
+
+  await mutations.importWordlist(session(), "g1", { rules: [{ pattern: "just a word" }] });
+  const input = recorded.calls[0]?.args[0] as Record<string, unknown>;
+  assert.equal(input["matchType"], "SUBSTRING");
+  assert.equal(input["action"], "FLAG");
+  assert.equal(input["severity"], 1);
+});
+
+test("a bad row stops the whole import and is named by its position", async () => {
+  // Half an import is the worst outcome: the operator believes the list is in
+  // force and has no way to tell which rows landed.
+  const { mutations, recorded } = make();
+
+  const refused = await mutations.importWordlist(session(), "g1", {
+    rules: [importRow(), importRow({ pattern: "([unclosed", matchType: "REGEX" })],
+  });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error?.detail ?? ""), /rule 2/);
+  // Nothing was written, including the row that was fine.
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("an import refuses what nobody has read", async () => {
+  const { mutations } = make();
+
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: [] })).ok, false);
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: {} })).ok, false);
+  const huge = Array.from({ length: 201 }, (_, i) => importRow({ pattern: `p${String(i)}` }));
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: huge })).ok, false);
+});
+
+test("re-importing the same file skips what is already there instead of failing", async () => {
+  const { mutations, recorded } = make({ wordlistRefusal: { kind: "DUPLICATE" } });
+
+  const again = await mutations.importWordlist(session(), "g1", {
+    rules: [importRow(), importRow({ pattern: "gift card" })],
+  });
+  assert.equal(again.ok, true);
+  assert.deepEqual(recorded.audits[0]?.change, { added: 0, skipped: 2, submitted: 2 });
+});
+
+test("the import trail counts rows without reproducing their patterns", async () => {
+  const { mutations, recorded } = make();
+
+  await mutations.importWordlist(session(), "g1", { rules: [importRow({ pattern: "a slur" })] });
+  assert.equal(recorded.audits[0]?.mutation, "wordlist.import");
+  assert.equal(JSON.stringify(recorded.audits).includes("a slur"), false);
+});
+
 test("an omitted note leaves the one a staffer typed into /wordlist-add alone", async () => {
   // The DTO doesn't carry the note, so the panel has never seen it. If omitted
   // meant "clear", every edit from this page would quietly delete it.

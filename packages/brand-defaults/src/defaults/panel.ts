@@ -1246,8 +1246,20 @@ export const DEFAULT_PANEL = {
       "Rules run on every message the bridge relays, in severity order — the harshest verdict among the matches is the one applied. Test a phrase against the live set with /filter-test before saving it.",
     cardEscalation: "Repeat warnings",
     cardRelaySync: "In-game punishment sync",
+    cardPacks: "Packaged lists",
+    cardImport: "Import rules",
     cardCreate: "Add a rule",
     cardRules: "Rules",
+    packsIntro:
+      "Lists this platform maintains. Every one is off until you switch it on, and each rule inside can be muted without losing the rest. Slur lists are deliberately not packaged — bring your own with Import.",
+    packRuleOn: "In force",
+    importIntro:
+      "A JSON array of rules. Each needs a pattern; matchType, action and severity default to SUBSTRING, FLAG and 1. Rules already present are skipped, and a file with a bad rule is rejected whole. Up to 200 at a time.",
+    importLabel: "Rules to import",
+    importFileLabel: "Choose a JSON file",
+    importPlaceholder: '[{ "pattern": "free nitro", "matchType": "SUBSTRING", "action": "BLOCK", "severity": 5 }]',
+    importLoaded: "File loaded. Check it, then import.",
+    importRun: "Import",
     /** What each verdict does to a message, in the relay's terms. */
     action: {
       FLAG: "Relayed as written, and recorded for staff to look at.",

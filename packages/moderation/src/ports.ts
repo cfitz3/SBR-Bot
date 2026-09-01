@@ -2,6 +2,7 @@
  * Ports for the moderation core. Implemented over @sbr/db (audit tables) and
  * @sbr/redis (enforcement mirror) at wiring time; faked in tests.
  */
+import type { PackSelection } from "./wordlist-packs.js";
 import type {
   AntiRaidStateDTO,
   EnforcementStatus,
@@ -166,6 +167,18 @@ export interface NewWordlistRecord {
 }
 
 /** Port: wordlist persistence, implemented by `@sbr/db`. */
+/**
+ * Port: which packaged lists a guild has switched on.
+ *
+ * Separate from `WordlistRepository` because it is a setting rather than a
+ * table, and optional on every consumer: a deployment that never wires it sees
+ * exactly the guild's own rules, which is what every deployment saw before
+ * packs existed.
+ */
+export interface WordlistPackSource {
+  selection(guildId: string): Promise<PackSelection>;
+}
+
 export interface WordlistRepository {
   list(guildId: string): Promise<readonly WordlistRuleDTO[]>;
   add(input: NewWordlistRecord): Promise<WordlistRuleDTO>;

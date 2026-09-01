@@ -1207,6 +1207,18 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       description: "List the chat-filter rules",
       minRole: "MODERATOR",
       handler: wordlist,
+      // Retired: the Moderation page's Filter section does everything these
+      // three did and the things they could not. `/wordlist` printed a list
+      // with no way to change a row; `/wordlist-add` asked for a pattern, a
+      // match type, an action, a severity and a note across five slash options
+      // and gave nothing back but "added"; and neither could reach a packaged
+      // list or import a file. Parity was checked before this flag went on:
+      // create, edit, delete and list are all on the panel, which is why the
+      // removal and the pack work ship in the same slice (P-03).
+      //
+      // The handler stays. A deployment that wants the command back is a
+      // one-line change, and the dispatcher tests still exercise it.
+      enabled: false,
     },
     {
       name: "wordlist-add",
@@ -1240,6 +1252,18 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       ],
       minRole: "OFFICER",
       handler: wordlistAdd,
+      // Retired: the Moderation page's Filter section does everything these
+      // three did and the things they could not. `/wordlist` printed a list
+      // with no way to change a row; `/wordlist-add` asked for a pattern, a
+      // match type, an action, a severity and a note across five slash options
+      // and gave nothing back but "added"; and neither could reach a packaged
+      // list or import a file. Parity was checked before this flag went on:
+      // create, edit, delete and list are all on the panel, which is why the
+      // removal and the pack work ship in the same slice (P-03).
+      //
+      // The handler stays. A deployment that wants the command back is a
+      // one-line change, and the dispatcher tests still exercise it.
+      enabled: false,
     },
     {
       name: "wordlist-remove",
@@ -1249,6 +1273,18 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       ],
       minRole: "OFFICER",
       handler: wordlistRemove,
+      // Retired: the Moderation page's Filter section does everything these
+      // three did and the things they could not. `/wordlist` printed a list
+      // with no way to change a row; `/wordlist-add` asked for a pattern, a
+      // match type, an action, a severity and a note across five slash options
+      // and gave nothing back but "added"; and neither could reach a packaged
+      // list or import a file. Parity was checked before this flag went on:
+      // create, edit, delete and list are all on the panel, which is why the
+      // removal and the pack work ship in the same slice (P-03).
+      //
+      // The handler stays. A deployment that wants the command back is a
+      // one-line change, and the dispatcher tests still exercise it.
+      enabled: false,
       // Officers remove rules by pattern far more often than by id, so offer
       // both and let them pick the one they recognise.
       autocomplete: async (focused, ctx, deps) => {

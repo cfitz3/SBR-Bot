@@ -741,6 +741,10 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.upsertWordlistRule(session, guildId, b));
       case "wordlist.delete":
         return sendMutation(res, await m.deleteWordlistRule(session, guildId, b["id"]));
+      case "wordlist.packs.save":
+        return sendMutation(res, await m.saveWordlistPacks(session, guildId, b));
+      case "wordlist.import":
+        return sendMutation(res, await m.importWordlist(session, guildId, b));
       case "moderation.defaults":
         return sendMutation(res, await m.setModerationDefaults(session, guildId, b));
       case "moderation.relay-sync":

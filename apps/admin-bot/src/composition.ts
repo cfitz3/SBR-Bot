@@ -29,6 +29,8 @@ import {
   RELAY_SYNC_SETTING_KEY,
   SafetyServiceImpl,
   WordlistServiceImpl,
+  parsePackSelection,
+  WORDLIST_PACKS_SETTING_KEY,
   type DiscordEnforcer,
   type ModLogSink,
   type AntiRaidRules,
@@ -383,7 +385,14 @@ export async function createAdminApp(): Promise<AdminApp> {
     logger: log,
   });
   const safety = new SafetyServiceImpl({ store: adapters.safety, effects, logger: log });
-  const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
+  // Packaged lists are a setting, so the source is the config repository the
+  // rest of the app already reads settings through.
+  const wordlistPacks = {
+    async selection(guildId: string) {
+      return parsePackSelection(await guildConfigRepository.getSetting(guildId, WORDLIST_PACKS_SETTING_KEY));
+    },
+  };
+  const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, packs: wordlistPacks, logger: log });
 
   /**
    * What the raid gate is allowed to do, assembled from the services that

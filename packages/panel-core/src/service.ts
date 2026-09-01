@@ -15,20 +15,26 @@ import {
   type MemberRole,
 } from "@sbr/shared-types";
 import {
+  isPackRuleId,
   parseAntiRaid,
   parseAutomod,
   parseEscalationPolicy,
+  parsePackSelection,
   parseRelaySync,
   punishmentState,
   ANTIRAID_SETTING_KEY,
   AUTOMOD_SETTING_KEY,
   ESCALATION_SETTING_KEY,
   RELAY_SYNC_SETTING_KEY,
+  WORDLIST_PACKS,
+  WORDLIST_PACKS_SETTING_KEY,
   type AntiRaidRules,
   type AutomodPolicy,
   type EscalationPolicy,
+  type PackSelection,
   type PunishmentState,
   type RelaySyncPolicy,
+  type WordlistPack,
 } from "@sbr/moderation";
 import type {
   AuditQuery,
@@ -186,7 +192,21 @@ export interface ModerationActionVM extends ModerationActionDTO {
 export interface WordlistVM {
   /** False when the deployment runs without the filter service wired. */
   readonly installed: boolean;
+  /**
+   * The rules this guild typed. Packaged rules are deliberately not in here:
+   * they are not rows, nothing can edit or delete them, and a list that mixed
+   * the two would offer buttons that cannot work.
+   */
   readonly rules: readonly WordlistRuleDTO[];
+  /** Which packaged lists are on, and which of their rules the guild muted. */
+  readonly packs: PackSelection;
+  /**
+   * Every pack the release ships, sent as data rather than duplicated in the
+   * client. The panel's browser half has no bundler and so cannot import this
+   * module; shipping the catalogue through the view model is what keeps the
+   * list on screen and the list in force the same list.
+   */
+  readonly packCatalogue: readonly WordlistPack[];
   /** Resolved, not raw: built-in rungs layered under whatever the guild stored. */
   readonly escalation: EscalationPolicy;
   /**
@@ -1539,16 +1559,23 @@ export class PanelService {
     const wordlist = this.d.wordlist;
     // The escalation policy is readable either way: it is a setting, not a
     // service, and a deployment without the filter still escalates warnings.
-    const [storedEscalation, storedRelay] = await Promise.all([
+    const [storedEscalation, storedRelay, storedPacks] = await Promise.all([
       this.d.config.getSetting<unknown>(guildId, ESCALATION_SETTING_KEY),
       this.d.config.getSetting<unknown>(guildId, RELAY_SYNC_SETTING_KEY),
+      this.d.config.getSetting<unknown>(guildId, WORDLIST_PACKS_SETTING_KEY),
     ]);
     const escalation = parseEscalationPolicy(storedEscalation);
     const relaySync = parseRelaySync(storedRelay);
-    if (wordlist === undefined) return { installed: false, rules: [], escalation, relaySync };
+    const packs = parsePackSelection(storedPacks);
+    const base = { escalation, relaySync, packs, packCatalogue: WORDLIST_PACKS };
+    if (wordlist === undefined) return { installed: false, rules: [], ...base };
 
     const rules = await wordlist.list(guildId);
-    return { installed: true, rules: rules.ok ? rules.value : [], escalation, relaySync };
+    // `list` resolves packs into its answer, which is right for the relay and
+    // wrong for a page of edit forms. Splitting them back out here keeps one
+    // resolution rule in the service instead of a second one on the panel.
+    const own = rules.ok ? rules.value.filter((r) => !isPackRuleId(r.id)) : [];
+    return { installed: true, rules: own, ...base };
   }
 
   /**
