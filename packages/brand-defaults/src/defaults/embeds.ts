@@ -102,6 +102,15 @@ export const DEFAULT_EMBEDS = {
     channel: "Channel",
     source: "Source",
     attachments: "Attachments",
+
+    // Join notices. Four names for four questions a reviewer asks in order:
+    // what are they like, what did we find, what do we already know about them,
+    // and how long do I have. Each holds several facts, because a reviewer
+    // reads a notice once and decides — not a card of eleven one-word fields.
+    account: "Account",
+    findings: "Findings",
+    history: "History",
+    window: "Window",
   },
 
   /**
@@ -474,6 +483,40 @@ export const DEFAULT_EMBEDS = {
     goalAchievedBody: "{ign} set out for {target} {metric} — and got there.",
     /** Per-day movement, e.g. `+2.4/day`. */
     perDay: "{n}/day",
+
+    /* ── join notices ── */
+    /**
+     * The title says what happened, the headline says what was decided and how
+     * confident the platform is about it. Staff scan a channel of these, so the
+     * first word has to separate "do something" from "for the record".
+     */
+    joinReview: "Join request — needs a decision",
+    joinAccepted: "Join request — accepted",
+    joinDenied: "Join request — denied",
+    joinJoined: "Joined the guild",
+    joinUnscreened: "Join request — not screened",
+    /** `{n}` is the risk score out of 100. */
+    joinRisk: "Held for staff. Risk {n}/100.",
+    joinRiskAccepted: "Accepted automatically. Risk {n}/100.",
+    joinRiskDenied: "Refused automatically. Risk {n}/100.",
+    joinRiskJoined: "Recorded for the guild's own reference. Risk {n}/100.",
+    joinNoScreening: "The account could not be looked up, so nothing was checked. Decide from what you know.",
+    joinNothingFound: "Nothing flagged.",
+    /** `{at}` is a Discord relative timestamp, rendered by each reader's client. */
+    joinExpires: "Closes {at}",
+    joinExpiresNote: "After that they can only be invited.",
+    /** `{n}` attempts inside the policy's repeat window. */
+    joinAttempts: "{n} in the recent window",
+    joinScammerListing: "Scammer listing: {reason}",
+    joinTrouble: "Screening had trouble: {detail}",
+    joinFooterPending: "Accept and Deny act on the request, not on this message.",
+    /** Field labels inside the consolidated join-notice fields. */
+    joinProfile: "Profile",
+    joinCurrentGuild: "Currently in",
+    joinLinked: "Linked Discord",
+    joinPriorRemoval: "Previous removal",
+    joinAttemptsLabel: "Attempts",
+    joinDeadline: "Decide by",
   },
 };
 

@@ -14,6 +14,7 @@
     { "path": "../commands-bridge" },
     { "path": "../commands-admin" },
     { "path": "../triggers" },
+    { "path": "../screening" },
     { "path": "../../brand" }
   ]
 }

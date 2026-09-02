@@ -64,6 +64,7 @@ import {
   renderWhoisEmbed,
 } from "@sbr/commands-bridge";
 import { renderTriggerPostEmbed } from "@sbr/triggers";
+import { renderJoinNoticeEmbed } from "@sbr/screening";
 import type {
   BazaarQuoteDTO,
   DungeonsDTO,
@@ -604,6 +605,46 @@ export const GALLERY: readonly GalleryCard[] = [
   card("filter-test-clear", "The same command on text that trips none.", renderFilterTestEmbed, f.FILTER_TEST_CLEAR),
   card("safety-on", "`/safety` with a lockdown and anti-raid both live.", renderSafetyStatusEmbed, f.SAFETY_ON),
   card("safety-off", "Nothing in force — the ordinary state.", renderSafetyStatusEmbed, f.SAFETY_OFF),
+  card("join-review", "A join request held for staff, from somebody who has asked before.", renderJoinNoticeEmbed, {
+    kind: "REVIEW",
+    ign: IGN,
+    uuid: f.SCREENING_REVIEW.uuid,
+    screening: f.SCREENING_REVIEW,
+    deadlineAt: f.NOW + 4 * 60_000,
+    seenAt: f.NOW - 60_000,
+  }),
+  card("join-flagged", "The notice that must not be missed: listed, and removed here before.", renderJoinNoticeEmbed, {
+    kind: "REVIEW",
+    ign: IGN,
+    uuid: f.SCREENING_FLAGGED.uuid,
+    screening: f.SCREENING_FLAGGED,
+    deadlineAt: f.NOW + 90_000,
+    seenAt: f.NOW - 3 * 60_000,
+  }),
+  card("join-accepted", "Admitted by policy — a record, with no window and no buttons.", renderJoinNoticeEmbed, {
+    kind: "ACCEPTED",
+    ign: IGN,
+    uuid: f.SCREENING_CLEAR.uuid,
+    screening: f.SCREENING_CLEAR,
+    deadlineAt: null,
+    seenAt: f.NOW - 60_000,
+  }),
+  card("join-degraded", "Screening itself failed; the card still says so rather than reading clean.", renderJoinNoticeEmbed, {
+    kind: "REVIEW",
+    ign: IGN,
+    uuid: f.SCREENING_BROKEN.uuid,
+    screening: f.SCREENING_BROKEN,
+    deadlineAt: f.NOW + 4 * 60_000,
+    seenAt: f.NOW,
+  }),
+  card("join-unscreened", "The account could not be resolved at all — a name, a reason and a clock.", renderJoinNoticeEmbed, {
+    kind: "UNSCREENED",
+    ign: IGN,
+    uuid: null,
+    screening: null,
+    deadlineAt: f.NOW + 4 * 60_000,
+    seenAt: f.NOW,
+  }),
   card("application", "One application under review.", renderApplicationEmbed, f.APPLICATION),
   card(
     "application-list",

@@ -1,12 +1,18 @@
 /**
- * Rendering a screening for humans.
+ * Turning a screening into words.
  *
- * Two audiences, one source of truth. Staff get the full picture in Discord;
- * the applicant, if anything is said to them in guild chat at all, gets a line
- * that does not read as an accusation and does not leak the guild's thresholds.
+ * Two audiences, one source of truth. Staff get the full picture in Discord —
+ * `card.ts` lays these words out as the notice they actually read; the
+ * applicant, if anything is said to them in guild chat at all, gets a line that
+ * does not read as an accusation and does not leak the guild's thresholds.
  *
  * Reason codes never reach either surface verbatim. `BELOW_CATACOMBS` is a
  * database value; "catacombs below the guild requirement" is a sentence.
+ *
+ * The staff *report* that used to live here — the same facts as a block of
+ * plain text — is gone rather than kept beside the card. Two renderers of one
+ * screening is how the two surfaces end up disagreeing about what was found,
+ * and nothing was reading the text one once the notice became an embed.
  */
 import { riskWeight } from "./policy.js";
 import type { Screening, ScreeningReason } from "./types.js";
@@ -39,43 +45,6 @@ export function formatCoins(coins: bigint | null): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`;
   if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
   return String(n);
-}
-
-function stat(value: number | null, digits = 1): string {
-  return value === null ? "unknown" : value.toFixed(digits);
-}
-
-/** The stat block, one line, for a Discord field or a log entry. */
-export function statLine(screening: Screening): string {
-  const s = screening.stats;
-  return [
-    `SB ${stat(s.skyblockLevel, 0)}`,
-    `SA ${stat(s.skillAverage)}`,
-    `Cata ${stat(s.catacombsLevel)}`,
-    `Weight ${stat(s.senitherWeight, 0)}`,
-    `NW ${formatCoins(s.networth)}`,
-  ].join(" · ");
-}
-
-/**
- * The staff report. Plain text rather than an embed so the same string works in
- * a Discord message, a log line, and a test assertion; the caller wraps it.
- */
-export function staffReport(screening: Screening): string {
-  const lines: string[] = [];
-  lines.push(`${screening.ign} — ${screening.verdict} (risk ${screening.riskScore}/100)`);
-  lines.push(statLine(screening));
-  if (screening.stats.currentGuild) lines.push(`Currently in: ${screening.stats.currentGuild}`);
-  if (screening.discordId) lines.push(`Linked Discord: <@${screening.discordId}>`);
-  if (screening.history.priorExpulsion && screening.history.expulsionReason) {
-    lines.push(`Previous removal: ${screening.history.expulsionReason}`);
-  }
-  if (screening.scammer.status === "FLAGGED" && screening.scammer.reason) {
-    lines.push(`Scammer listing: ${screening.scammer.reason}`);
-  }
-  for (const line of reasonLines(screening.reasons)) lines.push(`• ${line}`);
-  if (screening.error) lines.push(`Screening had trouble: ${screening.error}`);
-  return lines.join("\n");
 }
 
 /**
