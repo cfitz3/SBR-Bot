@@ -101,7 +101,8 @@ export async function renderMilestones(host: HTMLElement, guildId: string): Prom
     return replace(host, errorState(result.message, () => void renderMilestones(host, guildId)));
   }
 
-  const { installed, definitions, holders } = result.data;
+  const { installed, definitions, holders, progressionMetrics, metricCatalog, maxProgressionMetrics } =
+    result.data;
   if (!installed) {
     return replace(
       host,
@@ -130,6 +131,10 @@ export async function renderMilestones(host: HTMLElement, guildId: string): Prom
         "p",
         { class: "page-note" },
         t("note"),
+      ),
+      card(
+        t("offeredTitle"),
+        chartedForm(guildId, progressionMetrics, metricCatalog, maxProgressionMetrics),
       ),
       card(t("cardAdd"), createForm(guildId, reload)),
       ...groupCards(guildId, definitions, holders, reload),
@@ -349,6 +354,88 @@ function holderText(community: boolean, held: number | null): string {
   if (community) return t("holdersUnrecorded");
   if (held === null || held === 0) return t("holdersNone");
   return t("holders").replace("{n}", held.toLocaleString());
+}
+
+/**
+ * Which metrics /progression offers to chart.
+ *
+ * It sits on this page rather than one of its own because it is the same
+ * question the definitions below ask — which of the tracked numbers this guild
+ * cares about — and splitting the two would let a guild recognise a fairy-souls
+ * milestone while being unable to chart fairy souls.
+ *
+ * Unlike every other control here it saves as a unit, hence the plain boxes
+ * rather than switches: the set is one value, the cap is on the set, and "at
+ * least one" is a rule about the set. Writing each tick separately would mean
+ * refusing the flip that empties the menu, which reads as a broken checkbox
+ * rather than as the rule it is.
+ */
+function chartedForm(
+  guildId: string,
+  chosen: readonly string[],
+  catalog: readonly string[],
+  limit: number,
+): HTMLElement {
+  const status = statusSlot();
+  const picked = new Set<string>(chosen);
+  const count = h("p", { class: "field-hint" });
+
+  const draw = (): void => {
+    count.textContent = t("offeredCount")
+      .replace("{n}", String(picked.size))
+      .replace("{limit}", String(limit));
+  };
+
+  const boxes = catalog.map((metric) => {
+    const box = h("input", {
+      class: "switch-input",
+      type: "checkbox",
+      ...(picked.has(metric) ? { checked: true } : {}),
+    }) as HTMLInputElement;
+    box.addEventListener("change", () => {
+      // The cap is Discord’s, not ours: a select menu of more than this many
+      // options is a rejected payload, so the tick is refused at the box rather
+      // than at the save.
+      if (box.checked && picked.size >= limit) {
+        box.checked = false;
+        status.set("error", t("offeredFull").replace("{limit}", String(limit)));
+        return;
+      }
+      if (box.checked) picked.add(metric);
+      else picked.delete(metric);
+      draw();
+    });
+    return h("label", { class: "switch-check" }, box, h("span", {}, metricLabel(metric)));
+  });
+
+  draw();
+
+  const save = actionButton({
+    label: t("offeredSave"),
+    tone: "primary",
+    status,
+    run: async () => {
+      // Mirrors the strict validator rather than leaving it to explain itself:
+      // the server refuses the empty set by the same rule, but only after a
+      // round trip that reads as a save having failed.
+      if (picked.size === 0) return { kind: "error", message: t("offeredEmpty") };
+      // Catalog order, not click order: the menu the member sees is this list,
+      // and it should not depend on which box staff happened to tick first.
+      return postAction(guildId, "progression.metrics", {
+        metrics: catalog.filter((metric) => picked.has(metric)),
+      });
+    },
+  });
+
+  return h(
+    "div",
+    { class: "field" },
+    h("p", { class: "field-hint" }, t("offeredNote")),
+    h("div", { class: "field-row metric-grid" }, ...boxes),
+    count,
+    h("div", { class: "field-row" }, save),
+    status.el,
+  );
 }
 
 /**

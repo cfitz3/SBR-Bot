@@ -23,6 +23,7 @@ import type {
   RaidSensitivity,
   RSVPState,
   SkyblockGameMode,
+  SnapshotMilestoneMetric,
   TicketStatus,
   WordAction,
   WordMatchType,
@@ -971,7 +972,38 @@ export interface SnapshotMetricsDTO {
   readonly slayerBlaze?: number | null;
   readonly slayerVampire?: number | null;
   readonly bestiaryMilestone?: number | null;
+  readonly skillFarming?: number | null;
+  readonly skillMining?: number | null;
+  readonly skillCombat?: number | null;
+  readonly skillForaging?: number | null;
+  readonly skillFishing?: number | null;
+  readonly skillEnchanting?: number | null;
+  readonly skillAlchemy?: number | null;
+  readonly skillTaming?: number | null;
+  readonly skillHunting?: number | null;
+  readonly skillCarpentry?: number | null;
+  readonly fairySouls?: number | null;
+  readonly museumDonations?: number | null;
+  readonly petScore?: number | null;
+  readonly minionSlots?: number | null;
+  readonly essence?: number | null;
 }
+
+/**
+ * One freshly-read value for every metric the tracker stores.
+ *
+ * The difference from `SnapshotMetricsDTO` is direction: that one is a row read
+ * back out of the database, where a metric can be absent because the row predates
+ * it. This is a reading taken now, so every metric in the catalog is present —
+ * `null` where the profile did not expose it, never missing. Deriving both from
+ * `SnapshotMilestoneMetric` is what keeps "what we can store" and "what we
+ * actually capture" from drifting apart, which is exactly what happened while the
+ * capture list was hand-written in the workers app.
+ */
+export type TrackedReadingDTO = Readonly<Record<SnapshotMilestoneMetric, number | null>> & {
+  /** The profile the reading came from, so the caller need not resolve it twice. */
+  readonly profileId: string;
+};
 
 /**
  * One reading of every metric this platform counts about a member itself.
@@ -1058,7 +1090,18 @@ export interface AchievementsDTO {
  * the four tracks a member is offered to chart, because it is frozen at v1 and
  * a month spent on a skill it does not score reads as a flat line.
  */
-export type ProgressMetric = "skyblockLevel" | "networth" | "skillAverage" | "catacombsLevel";
+/**
+ * Anything a member can chart or aim a goal at.
+ *
+ * This used to be four hand-picked tracks while everything else in the catalog
+ * was detected-only. The split never survived contact with the question people
+ * actually ask — "is my Mining going anywhere?" is the same question as "is my
+ * networth going anywhere", and answering one and not the other was an
+ * implementation detail leaking into the product. Every metric a snapshot
+ * records is now a metric a member can watch; which ones the card *offers* is a
+ * guild setting rather than a type.
+ */
+export type ProgressMetric = SnapshotMilestoneMetric;
 
 export interface ProgressPointDTO {
   /** ISO-8601 of the moment the reading was taken. */

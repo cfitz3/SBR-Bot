@@ -104,6 +104,17 @@ export async function createWorkerContext(): Promise<WorkerContext> {
     profiles,
     networth: new NetworthServiceImpl({ engine, logger: log }),
     repo: progressionRepository,
+    // Museum donations, for the snapshot capture. Wired here and nowhere else:
+    // it is a second per-player endpoint family with its own hourly claim, and
+    // spending it once a day on a capture that charts the number is worth it in
+    // a way that spending it on an interactive lookup is not. An outage or a
+    // hidden museum yields null, which records as "not seen" rather than zero.
+    museum: {
+      async museum(profileId) {
+        const read = await hypixel.getMuseum(profileId);
+        return read.ok ? read.value.data : null;
+      },
+    },
     logger: log,
   });
 

@@ -27,6 +27,7 @@ import {
   type Result,
   type SkillsDTO,
   type SlayersDTO,
+  type TrackedReadingDTO,
   type ProgressionRepository,
   type MilestoneDefinitionReader,
   type SavedSnapshotDTO,
@@ -37,11 +38,19 @@ import type { NetworthService } from "@sbr/pricing";
 import type { Logger } from "@sbr/observability";
 import type {
   CommunityMetricsSource,
+  MuseumProvider,
   ProfileProvider,
   SkyblockProfileData,
   UpgradePriceSource,
 } from "./ports.js";
 import { bestiaryMilestone, parseDungeons, parseSkills, parseSlayers, skyblockLevel } from "./skyblock/parse.js";
+import {
+  essenceTotal,
+  fairySouls,
+  minionSlots,
+  museumDonations,
+  petScore,
+} from "./skyblock/metrics.js";
 import { senitherWeight } from "./skyblock/weight.js";
 import { buildAchievements } from "./achievements.js";
 import { analyseAccessories, CATALOG_NOTE, type AccessoryReport, type CatalogEntry } from "./skyblock/accessories.js";
@@ -73,6 +82,12 @@ export interface ProgressionServiceDeps {
    * unmeasured rather than as zero — see `COMMUNITY_MILESTONE_METRICS`.
    */
   readonly community?: CommunityMetricsSource;
+  /**
+   * Optional: the museum endpoint, for the donation count. Without it that one
+   * reading is absent rather than zero — see `MuseumProvider` for why spending
+   * a second per-player call is a wiring decision rather than a metric-list one.
+   */
+  readonly museum?: MuseumProvider;
   /** Optional: without it, `/nextupgrade` suggestions arrive without price tags. */
   readonly prices?: UpgradePriceSource;
   /**
@@ -199,6 +214,7 @@ export class ProgressionServiceImpl implements ProgressionService {
   private readonly repo: ProgressionRepository | undefined;
   private readonly definitions: MilestoneDefinitionReader | undefined;
   private readonly community: CommunityMetricsSource | undefined;
+  private readonly museum: MuseumProvider | undefined;
   private readonly prices: UpgradePriceSource | undefined;
   private readonly goals: GoalRepository | undefined;
   private readonly log: Logger;
@@ -209,6 +225,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     this.repo = deps.repo;
     this.definitions = deps.definitions;
     this.community = deps.community;
+    this.museum = deps.museum;
     this.prices = deps.prices;
     this.goals = deps.goals;
     this.log = deps.logger.child({ service: "progression" });
@@ -279,6 +296,90 @@ export class ProgressionServiceImpl implements ProgressionService {
     return ok(buildAchievements(definitions, earned, snapshot, { configured, community }));
   }
 
+  /**
+   * Every metric the tracker records, in one reading.
+   *
+   * The snapshot worker used to assemble this by hand from four service calls,
+   * which meant the list of what a snapshot contains lived in the workers app
+   * while the list of what a snapshot *is* lived in shared-types. They drifted:
+   * a metric could be declared, offered on the panel, aimed at with a goal, and
+   * never once captured, and nothing would fail to compile. It lives here now,
+   * beside the parsers that produce it.
+   *
+   * Everything except networth and the museum comes off the one cached profile
+   * read, so the widened catalog costs no extra upstream call. Networth needs a
+   * priced pass; the museum is its own endpoint and is skipped entirely when no
+   * provider is wired.
+   */
+  async getTrackedMetrics(
+    uuid: string,
+    profileId?: string,
+  ): Promise<HypixelResult<TrackedReadingDTO>> {
+    const result = await this.resolve(uuid, profileId);
+    if (!result.ok) return err(result.error);
+
+    const profile = result.value.data;
+    const member = profile.rawMember;
+    const skills = parseSkills(member);
+    const slayers = parseSlayers(member);
+    const dungeons = parseDungeons(member);
+
+    // Both are absorbed rather than propagated: a failed valuation or an
+    // unreadable museum costs those readings and leaves the other two dozen
+    // intact. A capture that failed wholesale because one number was missing
+    // would lose the week's history over a rate limit.
+    const [networth, museum] = await Promise.all([
+      this.getNetworth(uuid, profile.profileId).catch(() => null),
+      this.museum?.museum(profile.profileId).catch(() => null) ?? Promise.resolve(null),
+    ]);
+
+    const skillLevel = (name: string): number | null =>
+      skills.skills.find((sk) => sk.name === name)?.level ?? null;
+    const classLevel = (name: string): number | null =>
+      dungeons.classes.find((c) => c.name === name)?.level ?? null;
+    const slayerXpOf = (boss: string): number | null =>
+      slayers.bosses.find((b) => b.boss === boss)?.experience ?? null;
+
+    return ok(
+      reEnvelope(result.value, {
+        profileId: profile.profileId,
+        skyblockLevel: skyblockLevel(member),
+        networth: networth?.ok === true ? networth.value.data.total : null,
+        skillAverage: skills.average,
+        catacombsLevel: dungeons.catacombsLevel,
+        slayerXp: slayers.totalExperience,
+        senitherWeight: senitherWeight(skills, slayers, dungeons),
+        bestiaryMilestone: bestiaryMilestone(member),
+        classHealer: classLevel("healer"),
+        classMage: classLevel("mage"),
+        classBerserk: classLevel("berserk"),
+        classArcher: classLevel("archer"),
+        classTank: classLevel("tank"),
+        slayerZombie: slayerXpOf("zombie"),
+        slayerSpider: slayerXpOf("spider"),
+        slayerWolf: slayerXpOf("wolf"),
+        slayerEnderman: slayerXpOf("enderman"),
+        slayerBlaze: slayerXpOf("blaze"),
+        slayerVampire: slayerXpOf("vampire"),
+        skillFarming: skillLevel("Farming"),
+        skillMining: skillLevel("Mining"),
+        skillCombat: skillLevel("Combat"),
+        skillForaging: skillLevel("Foraging"),
+        skillFishing: skillLevel("Fishing"),
+        skillEnchanting: skillLevel("Enchanting"),
+        skillAlchemy: skillLevel("Alchemy"),
+        skillTaming: skillLevel("Taming"),
+        skillHunting: skillLevel("Hunting"),
+        skillCarpentry: skillLevel("Carpentry"),
+        fairySouls: fairySouls(member),
+        museumDonations: museumDonations(museum, uuid),
+        petScore: petScore(member),
+        minionSlots: minionSlots(member),
+        essence: essenceTotal(member),
+      }),
+    );
+  }
+
   async getProgress(
     uuid: string,
     metric: ProgressMetric,
@@ -291,7 +392,10 @@ export class ProgressionServiceImpl implements ProgressionService {
     const rows = await this.repo.listSnapshots(uuid, since);
     if (rows.length === 0) return ok(empty);
 
-    const points = rows.map((r) => ({ date: r.capturedAt, label: r.label, value: r[metric] }));
+    // `?? null` rather than the raw reading: a marker saved before this metric
+    // existed omits the key entirely, and an absent point and an unmeasured one
+    // are the same thing to a chart — a gap, not a zero.
+    const points = rows.map((r) => ({ date: r.capturedAt, label: r.label, value: r[metric] ?? null }));
     const { change, perDay } = paceOf(points);
 
     return ok({ metric, rangeDays, points, change, perDay });
@@ -390,7 +494,7 @@ export class ProgressionServiceImpl implements ProgressionService {
     ]);
 
     return rows.map((r) => {
-      const pace = paceOf(history.map((h) => ({ date: h.capturedAt, value: h[r.metric] })));
+      const pace = paceOf(history.map((h) => ({ date: h.capturedAt, value: h[r.metric] ?? null })));
       return toGoalView(r, latest?.[r.metric] ?? null, pace.perDay);
     });
   }

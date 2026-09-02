@@ -226,6 +226,13 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       range: "Days to look back (default 30)",
     },
   },
+  progression: {
+    description: "Your progress over time, your goals, and the markers behind both",
+    option: {
+      metric: "Which number to chart — the card's menu lists what this server offers",
+      range: "Days to look back (default 30)",
+    },
+  },
   snapshot: {
     description: "Save your current stats so /progress can chart the change",
     option: {

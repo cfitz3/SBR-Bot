@@ -149,6 +149,14 @@ export function goalSpecs(): CommandSpec[] {
         },
       ],
       cooldownMs: 10_000,
+      // Retired: merged into /progression, which shows a goal beside the chart of
+      // the metric it aims at. A target read on its own, away from the trend
+      // feeding it, was a number with nothing to judge it by; and setting one is
+      // now a button on the card a member is already looking at rather than a
+      // three-option command they have to recall. The spec stays so the handler
+      // stays compiled and tested; this flag is what deregisters the command
+      // from Discord and from the in-game router.
+      enabled: false,
       // Linked-only in guild chat: every branch of this reads or writes the
       // caller's own progression, which an unlinked player does not have.
       inGame: "linked",

@@ -41,7 +41,7 @@ export const progressionRepository: ProgressionRepository = {
    * The member's own saved markers inside the window, oldest first.
    *
    * `USER_SAVED` only, and that filter is the whole point rather than a detail:
-   * this is the series `/progress` and `/goal` chart, and it may only contain
+   * this is the series `/progression` charts, and it may only contain
    * readings a member asked for. Event boundaries live in the same table and are
    * deliberately excluded — a member should not find a chart of themselves
    * appearing because they RSVP'd to something.
@@ -61,6 +61,9 @@ export const progressionRepository: ProgressionRepository = {
         networth: true,
         skillAverage: true,
         catacombsLevel: true,
+        slayerXp: true,
+        senitherWeight: true,
+        metrics: true,
       },
     });
     return rows.map((r) => ({
@@ -70,6 +73,12 @@ export const progressionRepository: ProgressionRepository = {
       networth: toNumber(r.networth),
       skillAverage: r.skillAverage,
       catacombsLevel: r.catacombsLevel,
+      slayerXp: toNumber(r.slayerXp),
+      senitherWeight: r.senitherWeight,
+      // Same rule as `latestSnapshot`: the widened readings ride in JSON and are
+      // spread last, so a marker saved before a metric existed omits it rather
+      // than claiming a null we never measured.
+      ...unpackJsonMetrics(r.metrics),
     }));
   },
 

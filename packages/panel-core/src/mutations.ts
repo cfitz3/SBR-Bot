@@ -103,9 +103,11 @@ import {
   DEFAULT_CAPABILITY_FLOOR,
   MAX_COOLDOWN_SECONDS,
   ROLES,
+  PROGRESSION_SETTING_KEY,
   ROLE_POLICY_SETTING_KEY,
   normalizeRank,
   parseRolePolicy,
+  validateProgressionPolicy,
   validateRolePolicy,
   type RolePolicy,
 } from "@sbr/guild-config";
@@ -161,6 +163,13 @@ export const MUTATION_TIERS = {
    */
   "milestone.upsert": "ADMIN",
   "milestone.remove": "ADMIN",
+  /**
+   * Which metrics `/progression` puts on its menu. Moderator rather than admin:
+   * it grants nothing and pays nothing — the tracker records every metric
+   * either way — so this is a decision about what the guild wants to look at,
+   * which is the same weight as pinning a leaderboard category.
+   */
+  "progression.metrics": "MODERATOR",
   /**
    * The ticket menu and the panels advertising it. Admin because a category
    * names the staff roles pulled into a ticket and the Discord category it
@@ -1407,6 +1416,40 @@ export class PanelMutations {
       // built-in default, and "there is nothing of yours to remove" is the
       // state the caller wanted to reach.
       return { result: { ok: true }, change: { key, removed } };
+    });
+  }
+
+  /**
+   * Choose which metrics `/progression` offers here.
+   *
+   * Deliberately not routed through the free-form `config.setting` write, even
+   * though it lands in the same store: that one is opaque by design, and a
+   * mistyped metric would be accepted, silently dropped by the tolerant reader,
+   * and reported to the admin as saved. The strict validator refuses it here
+   * instead, which is the whole reason the policy module has two readers.
+   *
+   * An empty list is refused rather than stored: it would leave the command
+   * with an empty menu, and "we offer nothing" is far more likely a half-done
+   * edit than an intention. Clearing back to the platform defaults is what
+   * sending the default set does.
+   */
+  async saveProgressionMetrics(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "progression.metrics", async () => {
+      const body = asBody(input);
+      if (body === null) return invalid("body must be an object");
+
+      const next = { metrics: body["metrics"] };
+      const complaint = validateProgressionPolicy(next);
+      if (complaint !== null) return invalid(complaint);
+
+      const result = await this.d.config.setSetting(guildId, PROGRESSION_SETTING_KEY, next);
+      // The count, not the list: the audit trail records that somebody narrowed
+      // what the command offers, and the page shows what to.
+      return { result, change: { metrics: (next.metrics as readonly unknown[]).length } };
     });
   }
 

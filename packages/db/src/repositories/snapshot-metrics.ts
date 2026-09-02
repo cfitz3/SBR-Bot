@@ -4,7 +4,8 @@
  * `ProfileSnapshot` has a column each for the six original metrics — they are
  * charted, ordered by, and compared in SQL, and a JSON path would make all
  * three awkward. The widened catalog (per-class dungeon levels, per-boss slayer
- * XP, the bestiary milestone) is only ever read whole, for one account, so it
+ * XP, per-skill levels, the bestiary milestone, and the collections — souls,
+ * museum, pets, minions, essence) is only ever read whole, for one account, so it
  * rides in the `metrics` JSON column instead. That is a deliberate trade: a
  * metric that turns out to be a bad idea costs a deploy to remove rather than a
  * migration, and adding the next one costs nothing at all.
@@ -39,6 +40,21 @@ export const JSON_METRICS = [
   "slayerBlaze",
   "slayerVampire",
   "bestiaryMilestone",
+  "skillFarming",
+  "skillMining",
+  "skillCombat",
+  "skillForaging",
+  "skillFishing",
+  "skillEnchanting",
+  "skillAlchemy",
+  "skillTaming",
+  "skillHunting",
+  "skillCarpentry",
+  "fairySouls",
+  "museumDonations",
+  "petScore",
+  "minionSlots",
+  "essence",
 ] as const;
 
 export type JsonMetric = (typeof JSON_METRICS)[number];
@@ -93,8 +109,8 @@ export function unpackJsonMetrics(value: unknown): Partial<Record<JsonMetric, nu
  * one object, for `ProfileCurrent.previousMetrics`.
  *
  * The displaced reading has no columns to live in, so it is stored whole. That
- * is why `previousMetrics` carries all eighteen while `metrics` carries only
- * the twelve without columns: they answer different questions. `metrics` is the
+ * is why `previousMetrics` carries the whole catalog while `metrics` carries
+ * only the readings without columns: they answer different questions. `metrics` is the
  * overflow of a row that has columns; `previousMetrics` is a row that does not.
  */
 export function packAllMetrics(

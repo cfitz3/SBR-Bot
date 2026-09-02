@@ -55,3 +55,26 @@ export interface ProfileProvider {
 export interface CommunityMetricsSource {
   forAccount(guildId: string, minecraftUuid: string): Promise<CommunityMetricsDTO | null>;
 }
+
+/**
+ * Port: a profile's museum contents, for the donation count.
+ *
+ * Separate from `ProfileProvider` because it is a separate upstream endpoint
+ * with its own per-player claim and its own 12-hour cache — reading a member's
+ * profile does not read their museum, and pretending otherwise in the port
+ * would hide a second request behind a method that looks like one.
+ *
+ * Optional at wiring time. Without it the museum reading is simply absent,
+ * which is the honest state: nobody looked. That also makes spending the extra
+ * call an explicit wiring decision rather than something a metric list turns on
+ * by accident.
+ */
+export interface MuseumProvider {
+  /** Null when the museum is unreadable — an outage, or the member hid it. */
+  museum(profileId: string): Promise<MuseumRead | null>;
+}
+
+/** Just enough of a museum response to count what has been donated. */
+export interface MuseumRead {
+  readonly members: Readonly<Record<string, unknown>>;
+}

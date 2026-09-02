@@ -81,6 +81,8 @@ export const DEFAULT_EMBEDS = {
     mostValuable: "Most valuable",
     pace: "Pace",
     target: "Target",
+    trend: "Trend",
+    goal: "Goal",
   },
 
   /**
@@ -119,6 +121,8 @@ export const DEFAULT_EMBEDS = {
     snapshots: "Snaps",
     pace: "Pace",
     target: "Goal",
+    trend: "Trend",
+    goal: "Goal",
   },
 
   /**
@@ -177,6 +181,25 @@ export const DEFAULT_EMBEDS = {
     slayerBlaze: "Inferno XP",
     slayerVampire: "Riftstalker XP",
     bestiaryMilestone: "bestiary milestone",
+    // Per-skill levels. "mining level", not "skill mining" — the same rule as
+    // the dungeon classes above, and for the same reason.
+    skillFarming: "farming level",
+    skillMining: "mining level",
+    skillCombat: "combat level",
+    skillForaging: "foraging level",
+    skillFishing: "fishing level",
+    skillEnchanting: "enchanting level",
+    skillAlchemy: "alchemy level",
+    skillTaming: "taming level",
+    skillHunting: "hunting level",
+    skillCarpentry: "carpentry level",
+    // Collections. Plural nouns, because these land in sentences as counts
+    // ("gained 12 fairy souls") rather than as levels.
+    fairySouls: "fairy souls",
+    museumDonations: "museum donations",
+    petScore: "pet score",
+    minionSlots: "minion slots",
+    essence: "essence",
   },
 
   /**
@@ -309,14 +332,14 @@ export const DEFAULT_EMBEDS = {
      * keeps one current reading per member, and a chart is built from markers
      * they save (docs/HYPIXEL_COMPLIANCE.md §1).
      */
-    noSnapshots: "No saved snapshots in the last {n} days. Run /snapshot to pin where you are now.",
-    oneSnapshot: "Only one saved snapshot — run /snapshot again later and this will show the change.",
+    noSnapshots: "No markers in the last {n} days. Save one to set a starting point.",
+    oneSnapshot: "One marker so far. Save another later and this shows the change between them.",
 
     /* ── saved snapshots ── */
     /** `{n}` saved, `{limit}` the cap. */
-    snapshotSaved: "Saved. You're holding {n} of {limit} — /progress charts them.",
+    snapshotSaved: "Marker saved — {n} of {limit}.",
     /** `{n}` is the label they gave it. */
-    snapshotSavedNamed: 'Saved as "{name}". You\'re holding {n} of {limit} — /progress charts them.',
+    snapshotSavedNamed: 'Marker saved as "{name}" — {n} of {limit}.',
     snapshotUnchanged:
       "You've already saved this reading. Your numbers refresh about once an hour — try again after the next one.",
     snapshotNoReading:
@@ -330,7 +353,7 @@ export const DEFAULT_EMBEDS = {
     standingFooter: "XP is totalled a few times a day — today's activity may not be in yet.",
 
     /* ── goals ── */
-    noGoals: "No goals yet. Set one with /goal set.",
+    noGoals: "No goals set.",
     goalSet: "Tracking your {metric} to {target}.",
     goalCleared: "Cleared your {metric} goal.",
     goalNotSet: "You had no {metric} goal to clear.",
@@ -340,6 +363,17 @@ export const DEFAULT_EMBEDS = {
     goalEta: "~{n}d",
     goalDone: "done",
     goalsFooter: "Projections are recent pace extended, not a promise.",
+
+    /* ── /progression ── */
+    /** The empty state, before a member has saved anything at all. */
+    progressionUntracked:
+      "No history yet. Save a marker to fix where you are now; the chart starts at the second one.",
+    /** `{metric}` is the phrase, not the key — "no networth goal". */
+    progressionNoGoal: "No {metric} goal set.",
+    /** The one static note on the card. */
+    progressionFooter: "Markers are yours — nothing is charted that you did not save.",
+    /** A guild that has narrowed the offered set to nothing sees this, not an empty menu. */
+    progressionNoMetrics: "No metrics are switched on here. Check /health.",
     /** The announcement when a goal is reached. Second person: it is their post. */
     goalAchievedTitle: "Goal reached",
     goalAchievedBody: "{ign} set out for {target} {metric} — and got there.",

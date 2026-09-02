@@ -28,6 +28,7 @@ export { progressionRepository } from "./repositories/progression.js";
 export { goalRepository } from "./repositories/goals.js";
 export {
   rankResolver,
+  staffGuildFinder,
   rolePolicyReader,
   guildRepository,
   workerJobLogSink,

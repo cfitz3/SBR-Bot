@@ -4,7 +4,7 @@ Design for `apps/web-panel` — the Discord-OAuth control suite that configures 
 
 **Core principles**
 - **Discord OAuth is the only login.** No local passwords.
-- **You only see guilds you can manage** (Discord `MANAGE_GUILD`) *and* where our platform has a `Guild` record.
+- **You only see guilds you can manage** — either Discord `MANAGE_GUILD` over a server the platform has a `Guild` record for, or moderator rank or above on that guild here. See `docs/PANEL_SECURITY.md` for the whole model.
 - **Depth of configuration follows the bot.** If a bot isn't present / lacks permissions in a guild, the panel shows what it can and gates the rest behind a clear "bot not installed / missing permission" state — it never lets you configure something the bot can't enforce.
 - **The panel commands, it doesn't bypass.** Writes go through the same domain services the bots use; changes propagate via Redis cache invalidation + pub/sub so bots pick them up without redeploy.
 
@@ -77,7 +77,7 @@ Writes live in `PanelMutations` (`panel-core/src/mutations.ts`), a sibling of `P
 - **Rate limit** is per user and per mutation on `cd:web:{mutation}:{discordId}` — a guard against a stuck key or a double-clicked toggle, not a quota.
 - **Audit.** Every authorized attempt is captured as `CommandUsage(surface=WEB_PANEL)`, failures included, so a burst of refused writes is visible. Config changes additionally go through a `ConfigAuditSink`; they are *not* written as `ModerationAction`s, whose `type` enum describes actions taken on a person. Today the sink emits a typed analytics event; the port is what makes a durable `ConfigAudit` table a wiring change later.
 
-Available now: `config.channel`, `config.setting`, `config.screening`, `config.role-mapping`, `config.feature`, `config.recruitment`, `config.hypixel`, `xp.source`, `xp.adjust`, `xp.suggest`, `milestone.upsert`, `milestone.remove`, `ticket.type.upsert`, `ticket.type.remove`, `ticket.panel.save`, `wordlist.upsert`, `wordlist.delete`, `moderation.defaults`, `moderation.relay-sync`, `automod.test`, `automod.rule.upsert`, `automod.rule.remove`, `automod.enable`, `config.cooldowns`, `roles.binding`, `roles.rank`, `roles.capability`, `roles.command`, `roles.exception`, `roles.exception.remove`, `health.run-job`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.update`, `event.complete`, `event.attendance`, `event.board.publish`, `event.cancel`, `member.role`, `member.unlink`.
+Available now: `config.channel`, `config.setting`, `config.screening`, `config.role-mapping`, `config.feature`, `config.recruitment`, `config.hypixel`, `xp.source`, `xp.adjust`, `xp.suggest`, `milestone.upsert`, `milestone.remove`, `progression.metrics`, `ticket.type.upsert`, `ticket.type.remove`, `ticket.panel.save`, `wordlist.upsert`, `wordlist.delete`, `moderation.defaults`, `moderation.relay-sync`, `automod.test`, `automod.rule.upsert`, `automod.rule.remove`, `automod.enable`, `config.cooldowns`, `roles.binding`, `roles.rank`, `roles.capability`, `roles.command`, `roles.exception`, `roles.exception.remove`, `health.run-job`, `bridge.suspend`, `moderation.action`, `application.decide`, `ticket.close`, `event.create`, `event.update`, `event.complete`, `event.attendance`, `event.board.publish`, `event.cancel`, `member.role`, `member.unlink`.
 
 `config.recruitment` and `application.decide` are the two with **no control on any page**, and stay because the JSON API is independently usable (§0) and because removing a mutation is a contract break where removing a tab is not. Nothing in the UI calls them since Recruitment went away (§3.7).
 
@@ -125,7 +125,7 @@ Almost every config field used to be a Discord snowflake the operator copied out
 5. Sessions are short-lived with sliding renewal; refresh tokens rotate. `/logout` revokes the session and clears the cookie.
 
 ### Guild visibility
-- **Manageable set** = guilds where the user's Discord permissions include `MANAGE_GUILD` **∩** guilds that have a `Guild` row in our DB.
+- **Manageable set** = the union of two routes: guilds where the user's Discord permissions include `MANAGE_GUILD` **∩** guilds with a `Guild` row in our DB, plus guilds where their *derived* platform role reaches `PANEL_ACCESS_FLOOR` (`MODERATOR`). The Discord-authority half is kept separately as `discordManagedGuildIds`, so a decision that genuinely turns on Discord's authority asks `managesInDiscord()` rather than the wider set.
 - The guild list is cached in the session (short TTL) and re-validated on entering guild-scoped pages, so a revoked Discord permission can't linger.
 - **Bot presence** is resolved per guild: `INSTALLED` (bot in server + healthy), `MISSING_PERMISSIONS` (present but lacking required Discord perms), `NOT_INSTALLED` (offer invite link). This drives what each page enables.
 
@@ -341,6 +341,26 @@ Moving it out is what let it gain the two read-only lists it now carries. An adm
 - **Tier, icon and hidden are editable here.** They already existed on `MilestoneDefinitionDTO` and were carried by the mutation; the page simply never exposed them. Tier is presentation only, the icon is capped at four characters counted as code points (so one emoji is one), and hidden means members see only that an unnamed achievement exists until they earn it — the reveal is the reward.
 - **"Held by N" comes from `MilestoneDefinitionService.countHolders`**, an optional method: a page that lists what the guild recognises is worth having without a count beside each row and is not worth losing over one, so the read is absorbed to `{}` on failure and the port stays optional for callers that do not implement it. The count groups `Milestone` rows on `(metric, thresholdValue)` rather than joining on `definitionId`, because a milestone detected against a built-in default carries no definition id — a join would report the twenty-odd defaults as held by nobody, which is exactly backwards.
 - **Community definitions read differently, and say so.** `COMMUNITY_MILESTONE_METRICS` (events attended, event podiums, days in the guild, guild XP) are counted by this platform rather than read from Hypixel, so they are recognised from the standing the moment the number is reached — retroactively, for members already past it — and never announced. Their families carry a note saying that, their holder badge reads "Not counted" rather than "Nobody yet" (there are no recorded crossings to count), and the "Announced" switch is omitted rather than shown-and-ignored: a control that saves happily and does nothing is worse than no control.
+- **Charted metrics — what `/progression` offers.** A card above the definitions
+  picks which of `SNAPSHOT_MILESTONE_METRICS` appear in the metric menu on the
+  member-facing `/progression` card. It lives on this page rather than one of its
+  own because it is the same question the definitions ask — which of the tracked
+  numbers this guild cares about — and splitting the two would let a guild
+  recognise a fairy-souls milestone while being unable to chart fairy souls.
+  It is the only control here that saves as a unit, hence plain boxes and a Save
+  button rather than switches: the set is one value, the cap of 25 is Discord's
+  limit on a select menu, and "at least one" is a rule about the set — writing
+  each tick separately would mean refusing the flip that empties the menu, which
+  reads as a broken checkbox rather than as the rule it is. Narrowing it changes
+  nothing about what is recorded: the tracker keeps every metric either way, and
+  a reading not taken is history that cannot be recovered later.
+- **`progression.metrics` is its own mutation, not `config.setting`.** The generic
+  setting write is deliberately opaque about value shape, so a mistyped metric
+  would be stored, silently dropped by the tolerant reader, and reported as
+  saved. The typed mutation runs `validateProgressionPolicy` — which is the whole
+  reason the policy module has a strict writer beside its tolerant reader — and
+  its audit entry records the count rather than the list, because the list is the
+  setting and the audit is a record of the change.
 - **Access:** Admin+.
 
 ### 3.18 Leaderboard — standings, read-only
@@ -375,10 +395,9 @@ page without controls, not for no page.
   Categories derived at read time say so instead.
 - **Access: MEMBER** — the only page at that tier, because it holds nothing
   above what the guild already reads in Discord. **This does not currently widen
-  reach**: gate one still requires the guild to be in the session's manageable
-  set, which is built from Discord `MANAGE_GUILD`, so in practice the same
-  people reach it as reach everything else. The tier is declared honestly so the
-  page is already correct the day a member-scoped session exists.
+  reach**: gate one admits nobody below `PANEL_ACCESS_FLOOR` (`MODERATOR`), so
+  in practice the same people reach it as reach everything else. The tier is
+  declared honestly so the page is already correct the day the floor moves.
 
 **The weekly digest.** The `leaderboard` channel slot is consumed by a
 `leaderboard-post` worker job (Sundays, 18:23 local to the worker), which offers
@@ -552,7 +571,7 @@ Stickies (`/sticky`) have **no panel surface**; they are managed from Discord.
 ## 6. Summary of Access-Control Rules
 
 1. **Login only via Discord OAuth**; sessions in Redis, tokens encrypted, sliding expiry + refresh rotation.
-2. **Guild visibility = Discord `MANAGE_GUILD` ∩ platform `Guild` record**, re-validated on entry.
+2. **Guild visibility = (Discord `MANAGE_GUILD` ∩ platform `Guild` record) ∪ (platform role ≥ `MODERATOR`)**, resolved at login and re-checked on entry. Full write-up in `docs/PANEL_SECURITY.md`.
 3. **Every guild-scoped action authorized server-side** against `GuildMember.role`; UI gating is cosmetic only.
 4. **Role tiers:** Staff (mod/tickets/read analytics) < Officer (events/bridge/unlink) < Admin/Owner (settings — config, mapping, flags, screening, XP — plus health/milestones/ticket config/chat filter + escalation). Officer gates mutations only; no whole page turns on it since Recruitment went away (§3.7). Note the split: working a ticket is Staff, but *configuring which tickets exist* is Admin, because a type names roles and channels. The filter sits at the same tier for the same kind of reason: a rule blocks or shadow-mutes at relay time and a ladder rung mutes or bans off a count, both with nobody in the loop.
 5. **Rank hierarchy** enforced on actions targeting people.

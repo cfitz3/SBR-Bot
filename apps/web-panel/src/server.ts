@@ -354,7 +354,7 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     if (ingestDebug) {
       const session = await loadSession(req);
       if (!session) return send(res, 401, { error: "not_authenticated" });
-      if (!(await app.canReadIngestDebug(session.discordId, session.manageableGuildIds))) {
+      if (!(await app.canReadIngestDebug(session))) {
         return send(res, 403, { error: "forbidden" });
       }
       const limitParam = Number(url.searchParams.get("limit") ?? "50");
@@ -373,7 +373,7 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     if (path === "/debug/ingest") {
       const session = await loadSession(req);
       if (!session) return send(res, 401, { error: "not_authenticated" });
-      if (!(await app.canReadIngestDebug(session.discordId, session.manageableGuildIds))) {
+      if (!(await app.canReadIngestDebug(session))) {
         return send(res, 403, { error: "forbidden" });
       }
       return send(res, 200, { sessions: app.ingest.sessionCount(), members: app.ingest.members() });
@@ -610,8 +610,9 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     }
     const guilds = guildsRes.json as Array<{ id?: unknown; permissions?: unknown }>;
 
-    // Manageable = MANAGE_GUILD ∩ platform Guild records; store internal ids.
-    const manageableGuildIds: string[] = [];
+    // Gate one's set, in internal Guild.ids. Two independent routes in:
+    // Discord says you manage the server, or the platform records you as staff.
+    const discordManagedGuildIds: string[] = [];
     // Counted alongside, because an empty result has three different causes and
     // the selector renders all of them as "no guilds to show": Discord returned
     // nothing (the `guilds` scope was never granted), nothing passed the
@@ -625,9 +626,23 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
       if (!canManageGuild(g.permissions)) continue;
       manageableCount += 1;
       const internalId = await app.resolveGuild(g.id);
-      if (internalId) manageableGuildIds.push(internalId);
+      if (internalId) discordManagedGuildIds.push(internalId);
       else unmatched.push(g.id);
     }
+
+    // The second route. A moderator without Manage Server in Discord used to
+    // sign in successfully and then find every guild missing from the selector,
+    // which reads as "the platform doesn't know my server" — the one message
+    // that sends someone to re-invite a bot that is already there.
+    //
+    // Failing open here would hand the panel to everyone Discord lists; failing
+    // closed leaves the user exactly where they were before, so a lookup that
+    // throws is logged and counts as no staff guilds.
+    const staffGuildIds = await app.staffGuildIds(me.id).catch((error: unknown) => {
+      app.log.error("panel login could not resolve staff guilds", { discordId: me.id, error });
+      return [] as readonly string[];
+    });
+    const manageableGuildIds = [...new Set([...discordManagedGuildIds, ...staffGuildIds])];
 
     // Info, not debug: this is the one place Discord authority and platform
     // records have to agree, and when they disagree the user is locked out of a
@@ -638,7 +653,9 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
       discordId: me.id,
       returnedByDiscord: guilds.length,
       passedPermissionGate: manageableCount,
-      matchedPlatformGuild: manageableGuildIds.length,
+      matchedPlatformGuild: discordManagedGuildIds.length,
+      staffRoleGuilds: staffGuildIds.length,
+      addressable: manageableGuildIds.length,
       unmatchedDiscordGuildIds: unmatched.slice(0, 10),
     });
 
@@ -646,7 +663,7 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
     // Minted with the session and stored beside it, so a write is checked
     // against the server's copy rather than against the cookie it arrived with.
     const csrfToken = randomUUID();
-    const session: PanelSession = { discordId: me.id, manageableGuildIds, csrfToken };
+    const session: PanelSession = { discordId: me.id, manageableGuildIds, discordManagedGuildIds, csrfToken };
     await setJson(ctx.keys.session(sessionId), session, SESSION_TTL_S);
 
     redirect(res, "/", [
@@ -702,6 +719,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.applySuggestedXpPolicy(session, guildId));
       case "milestone.upsert":
         return sendMutation(res, await m.upsertMilestone(session, guildId, b));
+      case "progression.metrics":
+        return sendMutation(res, await m.saveProgressionMetrics(session, guildId, b));
       case "milestone.remove":
         return sendMutation(res, await m.removeMilestone(session, guildId, b["key"]));
       case "ticket.settings.save":

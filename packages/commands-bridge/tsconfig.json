@@ -10,6 +10,7 @@
     { "path": "../shared-types" },
     { "path": "../embed-kit" },
     { "path": "../playtime" },
+    { "path": "../guild-config" },
     { "path": "../tickets" },
     { "path": "../observability" },
     { "path": "../../brand" },

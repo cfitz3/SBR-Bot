@@ -20,6 +20,7 @@
     "@sbr/brand": "*",
     "@sbr/embed-kit": "*",
     "@sbr/playtime": "*",
+    "@sbr/guild-config": "*",
     "@sbr/observability": "*",
     "@sbr/shared-types": "*",
     "@sbr/tickets": "*"

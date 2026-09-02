@@ -22,6 +22,7 @@ import {
   SNAPSHOT_MILESTONE_METRICS,
   type AchievementTier,
   type MilestoneMetric as SharedMilestoneMetric,
+  type SnapshotMilestoneMetric as SharedSnapshotMetric,
 } from "@sbr/shared-types";
 
 export interface TrackedAccount {
@@ -34,33 +35,32 @@ export interface TrackedAccount {
 }
 
 /** The metrics a snapshot records. Absent data is null, never zero. */
-export interface SnapshotMetrics {
-  /** Fractional SkyBlock Level. The headline metric (Part III decision 1). */
-  readonly skyblockLevel: number | null;
-  readonly networth: number | null;
-  readonly skillAverage: number | null;
-  readonly catacombsLevel: number | null;
-  readonly slayerXp: number | null;
-  readonly senitherWeight: number | null;
-  /**
-   * The widened catalog. Optional because a capture from before they existed
-   * carries none of them, and because they ride in the snapshot's `metrics`
-   * JSON column rather than in columns of their own — a metric that turns out
-   * to be a bad idea should cost a deploy, not a migration.
-   */
-  readonly classHealer?: number | null;
-  readonly classMage?: number | null;
-  readonly classBerserk?: number | null;
-  readonly classArcher?: number | null;
-  readonly classTank?: number | null;
-  readonly slayerZombie?: number | null;
-  readonly slayerSpider?: number | null;
-  readonly slayerWolf?: number | null;
-  readonly slayerEnderman?: number | null;
-  readonly slayerBlaze?: number | null;
-  readonly slayerVampire?: number | null;
-  readonly bestiaryMilestone?: number | null;
-}
+/**
+ * The six with columns of their own on `ProfileSnapshot`. They are charted,
+ * ordered by and compared in SQL, which a JSON path would make awkward.
+ */
+export type CoreSnapshotMetric =
+  | "skyblockLevel"
+  | "networth"
+  | "skillAverage"
+  | "catacombsLevel"
+  | "slayerXp"
+  | "senitherWeight";
+
+/**
+ * Derived from the shared catalog rather than restated here.
+ *
+ * This was a hand-written list of every metric, which meant adding one to the
+ * catalog compiled cleanly and then silently never got captured. Now the six
+ * column-backed readings are required, everything else the catalog knows about
+ * is optional, and a new metric appears here the moment it is declared.
+ *
+ * Optional rather than nullable for the widened set: a capture from before a
+ * metric existed genuinely does not carry it, and `undefined` says that, where
+ * a `null` invented at read time would claim we looked and saw nothing.
+ */
+export type SnapshotMetrics = Readonly<Record<CoreSnapshotMetric, number | null>> &
+  Partial<Readonly<Record<Exclude<SharedSnapshotMetric, CoreSnapshotMetric>, number | null>>>;
 
 /**
  * One refreshed reading, as `profile-refresh` writes it.

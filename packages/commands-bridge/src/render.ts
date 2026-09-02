@@ -1065,7 +1065,7 @@ export function renderAdviceEmbed(
 }
 
 /** Metric values read very differently: coins want `2.00b`, a level wants `40`. */
-function formatMetric(metric: string, value: number): string {
+export function formatMetric(metric: string, value: number): string {
   if (metric === "networth" || metric === "slayerXp") return formatCoins(value);
   if (metric === "senitherWeight") return formatNumber(Math.round(value));
   return formatLevel(value);

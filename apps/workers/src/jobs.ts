@@ -317,53 +317,19 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
    * subtly different from the progression charts.
    */
   const captureProfile = async (account: TrackedAccount) => {
-    const profileId = account.profileId ?? undefined;
-    // The profile summary already carries SkyBlock Level, skill average,
-    // catacombs level, Senither weight and the bestiary milestone — the numbers
-    // `/stats` prints. Networth needs a second call because it requires a priced
-    // pass; dungeons and slayers need one because the per-class and per-boss
-    // breakdowns are not on the summary. All four reads hit the same cached
-    // profile fetch, so this is one upstream call, not four.
-    const [summary, networth, dungeons, slayers] = await Promise.all([
-      ctx.progression.getProfileSummary(account.uuid, profileId),
-      ctx.progression.getNetworth(account.uuid, profileId),
-      ctx.progression.getDungeons(account.uuid, profileId),
-      ctx.progression.getSlayers(account.uuid, profileId),
-    ]);
+    // One call, one definition. This used to assemble the metrics object from
+    // four service reads here, which meant the list of what a snapshot contains
+    // lived in this file while the list of what a snapshot *is* lived in the
+    // catalog — and a metric could be added, offered on the panel and aimed at
+    // with a goal without ever being captured. `getTrackedMetrics` owns the
+    // assembly now, beside the parsers that produce it.
+    const reading = await ctx.progression.getTrackedMetrics(account.uuid, account.profileId ?? undefined);
     // No readable profile at all means there is nothing to snapshot;
     // individual metrics that failed simply record as unknown.
-    if (!summary.ok) return null;
+    if (!reading.ok) return null;
 
-    // Absent rather than zero, always: a member whose dungeon read failed has
-    // not been demoted to Healer 0, and a threshold must never fire off a gap.
-    const classLevel = (name: string): number | null =>
-      dungeons.ok ? (dungeons.value.data.classes.find((c) => c.name === name)?.level ?? null) : null;
-    const slayerXpOf = (boss: string): number | null =>
-      slayers.ok ? (slayers.value.data.bosses.find((b) => b.boss === boss)?.experience ?? null) : null;
-
-    return {
-      profileId: summary.value.data.profileId,
-      metrics: {
-        skyblockLevel: summary.value.data.skyblockLevel,
-        networth: networth.ok ? networth.value.data.total : null,
-        skillAverage: summary.value.data.skillAverage,
-        catacombsLevel: summary.value.data.catacombsLevel,
-        slayerXp: summary.value.data.slayerXp,
-        senitherWeight: summary.value.data.senitherWeight,
-        bestiaryMilestone: summary.value.data.bestiaryMilestone,
-        classHealer: classLevel("healer"),
-        classMage: classLevel("mage"),
-        classBerserk: classLevel("berserk"),
-        classArcher: classLevel("archer"),
-        classTank: classLevel("tank"),
-        slayerZombie: slayerXpOf("zombie"),
-        slayerSpider: slayerXpOf("spider"),
-        slayerWolf: slayerXpOf("wolf"),
-        slayerEnderman: slayerXpOf("enderman"),
-        slayerBlaze: slayerXpOf("blaze"),
-        slayerVampire: slayerXpOf("vampire"),
-      },
-    };
+    const { profileId, ...metrics } = reading.value.data;
+    return { profileId, metrics };
   };
 
   const snapshot: JobDefinition<number> = {
