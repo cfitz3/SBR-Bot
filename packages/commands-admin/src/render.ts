@@ -3,6 +3,7 @@
  * phrasing for each way a Discord effect can refuse.
  */
 import type {
+  ActionRowView,
   ApplicationDTO,
   EmbedFieldView,
   EmbedView,
@@ -16,6 +17,7 @@ import type {
   WordlistRuleDTO,
 } from "@sbr/shared-types";
 import { padInlineRow } from "@sbr/shared-types";
+import { card, facts, field } from "@sbr/embed-kit";
 import { describeState, punishmentState } from "@sbr/moderation";
 import {
   formatRemaining,
@@ -117,45 +119,227 @@ export function renderInfractionPages(
 }
 
 /**
- * `/audit`.
+ * `/audit` — the moderation log, as an answer rather than a scroll.
+ *
+ * What it replaced: ten fields per page, each field *name* built out of data —
+ * `BAN (expired) · 3 days ago` — with the member, the actor and the reason
+ * crushed into the value. Field names are labels; putting the record in them
+ * means Discord renders the whole log in bold and the reader's eye has nothing
+ * to anchor on. It also meant the only way to find a case was to read every
+ * page until it went past.
+ *
+ * So the shape is now overview first, detail on click. The overview answers the
+ * questions staff actually open `/audit` with — how much happened, how much of
+ * it is still being enforced, what kind, and who has been busy — and the select
+ * menu underneath it takes any one of the matching cases straight to its card.
+ * A case id stops being a prerequisite for looking a case up.
  *
  * The state comes from `punishmentState` rather than the `active` column, so a
  * mute that ran its time out reads "expired" instead of "lifted" — the column
- * cannot tell those apart, and a staffer reading the log to see whether
- * somebody was let off early needs to.
+ * cannot tell those apart, and a staffer reading the log to see whether somebody
+ * was let off early needs to.
+ */
+
+/** Discord's own cap on a select menu. Not a taste decision. */
+export const CASE_SELECT_LIMIT = 25;
+
+/** How many actors the overview names before it stops being an overview. */
+const TOP_ACTORS = 3;
+
+/** The component namespace `/audit`'s case menu routes on. */
+export const CASE_SELECT_NAMESPACE = "case";
+
+function countBy<T>(rows: readonly T[], key: (row: T) => string | null): readonly (readonly [string, number])[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const k = key(row);
+    if (k === null) continue;
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+/**
+ * The first card `/audit` returns: what the filters matched, in aggregate.
+ *
+ * `rows` is the page of results, which may be a truncated view of a longer log —
+ * every number here is therefore explicitly about the matched window rather than
+ * about all of history, because a total that quietly means "the first hundred"
+ * is worse than no total.
+ */
+export function renderAuditOverviewEmbed(
+  rows: readonly ModerationActionDTO[],
+  options: {
+    readonly truncated?: boolean;
+    readonly now?: Date;
+    readonly rangeLabel?: string;
+    /** A caveat about the query itself — an unreadable date option, today. */
+    readonly notice?: string;
+  } = {},
+): EmbedView {
+  const now = options.now ?? new Date();
+  const inForce = rows.filter((r) => {
+    const state = punishmentState(r, now);
+    return state === "ACTIVE";
+  }).length;
+
+  const byType = countBy(rows, (r) => r.type);
+  const byActor = countBy(rows, (r) => r.actorDiscordId);
+  const newest = rows[0];
+  const oldest = rows[rows.length - 1];
+
+  return card({
+    tone: "INFO",
+    title: "Audit log",
+    // The headline carries the count, because the count is the answer to the
+    // question that was asked. "and there are more" is not a footnote: a
+    // truncated log that says nothing reads as a complete one.
+    // The notice rides in the headline rather than in the reply text above the
+    // card, because `replyOptions` drops the text when an embed is present — a
+    // warning put there would be silently discarded, which is the exact failure
+    // it exists to prevent.
+    headline: [
+      options.truncated
+        ? `Newest ${rows.length} of more than that. Narrow the filters to see further back.`
+        : `${rows.length} action${rows.length === 1 ? "" : "s"} match.`,
+      options.notice,
+    ]
+      .filter((line): line is string => !!line)
+      .join("\n"),
+    fields: [
+      field(
+        "Scope",
+        facts([
+          { label: "Range", value: options.rangeLabel ?? "All time" },
+          { label: "Still in force", value: inForce === 0 ? "None" : String(inForce) },
+          ...(newest && oldest
+            ? [
+                { label: "Newest", value: relativeTs(newest.createdAt) },
+                { label: "Oldest", value: relativeTs(oldest.createdAt) },
+              ]
+            : []),
+        ]),
+      ),
+      field(
+        "By type",
+        byType.map(([type, n]) => `**${type}** ${n}`).join("\n"),
+        true,
+      ),
+      field(
+        "Busiest staff",
+        byActor
+          .slice(0, TOP_ACTORS)
+          .map(([id, n]) => `${actorMention(id)} — ${n}`)
+          .join("\n"),
+        true,
+      ),
+    ],
+    // Not the send time: the newest matched action is what dates this view, and
+    // it is the same instant whether the reply comes back now or is scrolled
+    // back to tomorrow.
+    ...(newest ? { timestamp: newest.createdAt } : {}),
+  });
+}
+
+/**
+ * A mention, unless the actor is one of the platform's own sentinels.
+ *
+ * `automod`, `expiry` and `discord` are not snowflakes, and rendering them as
+ * `<@expiry>` produces the literal broken text rather than a name.
+ */
+function actorMention(actorDiscordId: string): string {
+  return /^\d+$/.test(actorDiscordId) ? `<@${actorDiscordId}>` : actorDiscordId;
+}
+
+/**
+ * The menu that turns the overview into a lookup.
+ *
+ * All the state is in the option values — a case id, which is exactly the thing
+ * the handler needs — so the menu keeps working after a restart, like every
+ * other persistent control on the platform. Twenty-five is Discord's cap; a
+ * result set longer than that is a sign the filters want narrowing, which the
+ * placeholder says.
+ */
+export function renderCaseSelectRow(
+  rows: readonly ModerationActionDTO[],
+  options: { readonly now?: Date } = {},
+): readonly ActionRowView[] {
+  const now = options.now ?? new Date();
+  const shown = rows.slice(0, CASE_SELECT_LIMIT);
+  if (shown.length === 0) return [];
+  return [
+    {
+      buttons: [],
+      select: {
+        customId: CASE_SELECT_NAMESPACE,
+        placeholder:
+          rows.length > CASE_SELECT_LIMIT
+            ? `Open a case — newest ${CASE_SELECT_LIMIT} of ${rows.length}`
+            : "Open a case",
+        options: shown.map((r) => {
+          const state = punishmentState(r, now);
+          const suffix = state === "MOMENTARY" || state === "ACTIVE" ? "" : ` (${describeState(state)})`;
+          const target = r.targetDiscordId ?? "unlinked";
+          return {
+            label: `${r.type}${suffix} · ${r.id}`.slice(0, 100),
+            value: r.id,
+            // The description is where the reader recognises the case: who it
+            // was about and why. Truncated hard, because Discord rejects the
+            // whole menu over one long reason rather than trimming it.
+            description: `${target} — ${r.reason ?? "no reason recorded"}`.slice(0, 100),
+          };
+        }),
+      },
+    },
+  ];
+}
+
+/**
+ * The full listing, for the reader who wants to read rather than search.
+ *
+ * Five rows a page rather than ten, and each row is one field whose *name* is a
+ * label — the case id — with the record in the value where Discord will render
+ * it as prose. That is the whole difference from the version this replaces: the
+ * data is no longer the label.
  */
 export function renderAuditPages(
   rows: readonly ModerationActionDTO[],
   options: { readonly truncated?: boolean; readonly now?: Date } = {},
 ): readonly EmbedView[] {
   const now = options.now ?? new Date();
-  const heading = options.truncated
-    ? `Audit log — newest ${rows.length}, and there are more`
-    : `Audit log — ${rows.length} action${rows.length === 1 ? "" : "s"}`;
-  return paginate(rows, 10, (slice, i, total) => ({
-    title: heading,
-    // Silence would read as "that is all there was", which is the one thing a
-    // truncated log must not imply.
-    ...(options.truncated ? { description: "Narrow the filters to see further back." } : {}),
-    fields: slice.map((r) => {
-      const target = r.targetDiscordId ? `<@${r.targetDiscordId}>` : "—";
-      const state = punishmentState(r, now);
-      const label = state === "MOMENTARY" || state === "ACTIVE" ? "" : ` (${describeState(state)})`;
-      const expiry =
-        r.expiresAt === null
-          ? ""
-          : state === "ACTIVE"
-            ? ` · until ${relativeTs(r.expiresAt)}`
-            : ` · ended ${relativeTs(r.expiresAt)}`;
-      return {
-        name: `${r.type}${label} · ${relativeTs(r.createdAt)}`,
-        value: `${target} by <@${r.actorDiscordId}> — ${r.reason}${expiry}`,
-        inline: false,
-      };
+  return paginate(rows, 5, (slice, i, total) =>
+    card({
+      tone: "INFO",
+      title: "Audit log",
+      headline: options.truncated
+        ? `Newest ${rows.length} of more than that. Narrow the filters to see further back.`
+        : `${rows.length} action${rows.length === 1 ? "" : "s"} match.`,
+      fields: slice.map((r) => {
+        const target = r.targetDiscordId ? `<@${r.targetDiscordId}>` : "an unlinked member";
+        const state = punishmentState(r, now);
+        return field(
+          `Case ${r.id}`,
+          facts([
+            {
+              label: r.type,
+              value:
+                state === "MOMENTARY" || state === "ACTIVE"
+                  ? relativeTs(r.createdAt)
+                  : `${relativeTs(r.createdAt)} — ${describeState(state)}`,
+            },
+            { label: "Member", value: target },
+            { label: "Staff", value: actorMention(r.actorDiscordId) },
+            { label: "Reason", value: r.reason },
+            ...(r.expiresAt !== null
+              ? [{ label: state === "ACTIVE" ? "Expires" : "Ended", value: relativeTs(r.expiresAt) }]
+              : []),
+          ]),
+        );
+      }),
+      footer: pageFooter(i, total),
+      ...(slice[0] ? { timestamp: slice[0].createdAt } : {}),
     }),
-    footer: pageFooter(i, total),
-    color: "INFO",
-  }));
+  );
 }
 
 export function renderWordlistEmbed(rules: readonly WordlistRuleDTO[]): EmbedView {

@@ -917,3 +917,35 @@ something the expiry sweep believes it owns.
 **Not verified against a live guild.** Both halves cross a real gateway and a real audit
 log. The observer's settle window in particular is a guess calibrated against Discord's
 documented behaviour, not against measurements from this deployment.
+
+---
+
+# Fifth pass — the log you could not search
+
+Not a defect this time, and worth saying so: nothing in `/audit` was wrong. It
+recorded everything, it filtered on actor, target, type and recency, and it
+paged. It was still, in practice, unusable for the thing staff open it to do —
+find one case — because the only route to a case was to scroll until it went
+past, and the only other route was `/case <id>` for an id nobody had written
+down.
+
+Three changes, none of which touch what is recorded:
+
+1. **Overview first.** Page one answers the question the command was typed to
+   ask — how much, how much still in force, what kind, who — and the entries
+   follow. The counts are explicitly about the matched window, because a total
+   that quietly means "the first hundred" is worse than no total.
+2. **A menu of the matching cases**, dispatched back through `/case` rather than
+   reading the row directly, so the role gate and the guild's policy floor are
+   the ones already written rather than a second copy.
+3. **`from` and `to`.** `days` answers "recently"; a date range answers "that
+   weekend in March". Both ends read as whole days, and a date the parser cannot
+   read is named in the reply rather than silently dropped — an unapplied filter
+   that says nothing returns a result set that looks like an answer.
+
+The cards themselves moved onto the shared card layer while they were open. The
+listing had the record in its field *names*, which Discord renders in bold; the
+mod-log card had a hand-built footer and no timestamp at all, so a case `/case`
+pulled up months later carried no date. Both are now `card()` calls, and the
+mod-log card is dated by the action's own `createdAt` rather than by when the
+message happened to be sent.

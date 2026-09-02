@@ -561,12 +561,26 @@ test("audit with no matches says so rather than showing an empty embed", async (
   assert.equal(r.embed, undefined);
 });
 
-test("audit paginates past Discord's field cap", async () => {
+test("audit leads with the overview and puts the listing behind it", async () => {
+  // Page one is the answer — how much, how much still in force, what kind, who.
+  // The entries are a page away for the reader who wants to read rather than
+  // search, which is the minority of the times this command is typed.
   const rows = Array.from({ length: 23 }, (_, i) => action({ id: `a${i}` }));
   const mod = moderation({ async listActions() { return ok(rows); } });
   const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
-  assert.equal(r.pages?.length, 3);
+  assert.equal(r.pages?.length, 1 + 5, "one overview, then the listing at five a page");
   assert.equal(r.embed, r.pages?.[0]);
+  assert.match(r.pages?.[0]?.description ?? "", /23 actions match/);
+});
+
+test("audit offers the matching cases as a menu, so an id is never a prerequisite", async () => {
+  const rows = [action({ id: "a1" }), action({ id: "a2" })];
+  const mod = moderation({ async listActions() { return ok(rows); } });
+  const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
+  assert.deepEqual(
+    r.components?.[0]?.select?.options.map((o) => o.value),
+    ["a1", "a2"],
+  );
 });
 
 test("audit passes its filters straight through", async () => {
@@ -582,23 +596,50 @@ test("audit passes its filters straight through", async () => {
   assert.equal(q.sinceDays, 7);
 });
 
+test("a date range is a whole day at each end, which is what the typist meant", async () => {
+  // `to:2026-03-14` that excluded the 14th would be a surprise every time, and
+  // the surprise is silent: the case they were looking for is simply not there.
+  let seen: AuditQuery | null = null;
+  const mod = moderation({ async listActions(q) { seen = q; return ok([]); } });
+  await make({ moderation: mod }).dispatch(
+    "audit",
+    ctx({ args: recordArgs({ from: "2026-03-01", to: "2026-03-14" }) }),
+  );
+  const q = seen as unknown as AuditQuery;
+  assert.equal(q.since, "2026-03-01T00:00:00.000Z");
+  assert.equal(q.until, "2026-03-14T23:59:59.999Z");
+});
+
+test("a date the parser cannot read is named rather than silently ignored", async () => {
+  // An unapplied filter that says nothing produces a result set that looks like
+  // an answer, which is worse than an error.
+  let seen: AuditQuery | null = null;
+  const mod = moderation({
+    async listActions(q) { seen = q; return ok([action()]); },
+  });
+  const r = await make({ moderation: mod }).dispatch(
+    "audit",
+    ctx({ args: recordArgs({ from: "last tuesday" }) }),
+  );
+  assert.equal((seen as unknown as AuditQuery).since, null);
+  assert.match(r.pages?.[0]?.description ?? "", /Couldn't read `from`/);
+});
+
 test("audit says so when the log runs past the page limit, rather than stopping silently", async () => {
   // 101 rows: the handler asks for one more than it shows precisely to tell
   // "a hundred entries" apart from "at least a hundred entries".
   const rows = Array.from({ length: 101 }, (_, i) => action({ id: `a${i}` }));
   const mod = moderation({ async listActions() { return ok(rows); } });
   const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
-  assert.match(r.text, /100\+ action/);
-  assert.match(r.pages?.[0]?.title ?? "", /there are more/);
-  assert.equal(r.pages?.length, 10, "the extra row is dropped, not rendered");
+  assert.match(r.pages?.[0]?.description ?? "", /Newest 100 of more than that/);
+  assert.equal(r.pages?.length, 1 + 20, "the extra row is dropped, not rendered");
 });
 
 test("audit shows exactly the page limit without claiming there is more", async () => {
   const rows = Array.from({ length: 100 }, (_, i) => action({ id: `a${i}` }));
   const mod = moderation({ async listActions() { return ok(rows); } });
   const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
-  assert.match(r.text, /^100 action/);
-  assert.doesNotMatch(r.pages?.[0]?.title ?? "", /more/);
+  assert.match(r.pages?.[0]?.description ?? "", /^100 actions match\./);
 });
 
 test("audit in_force asks the store for live punishments and says so when there are none", async () => {
@@ -619,9 +660,10 @@ test("an expired mute reads as expired, not as one a staffer lifted", async () =
   ];
   const mod = moderation({ async listActions() { return ok(rows); } });
   const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
-  const names = (r.pages?.[0]?.fields ?? []).map((f) => f.name);
-  assert.match(names[0] ?? "", /\(expired\)/);
-  assert.match(names[1] ?? "", /\(lifted\)/);
+  const listing = r.pages?.[1]?.fields ?? [];
+  assert.deepEqual(listing.map((f) => f.name), ["Case gone", "Case early"]);
+  assert.match(listing[0]?.value ?? "", /expired/);
+  assert.match(listing[1]?.value ?? "", /lifted/);
 });
 
 test("/case renders the one row the id names", async () => {

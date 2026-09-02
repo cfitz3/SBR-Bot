@@ -10,6 +10,7 @@
     { "path": "../shared-types" },
     { "path": "../embed-kit" },
     { "path": "../observability" },
+    { "path": "../embed-kit" },
     { "path": "../moderation" },
     { "path": "../screening" },
     { "path": "../../brand" }

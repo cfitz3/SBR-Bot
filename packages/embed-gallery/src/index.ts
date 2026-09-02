@@ -16,6 +16,7 @@
 import {
   renderApplicationEmbed,
   renderApplicationListEmbed,
+  renderAuditOverviewEmbed,
   renderAuditPages,
   renderFilterTestEmbed,
   renderInfractionPages,
@@ -600,6 +601,28 @@ export const GALLERY: readonly GalleryCard[] = [
     f.INFRACTIONS,
   ),
   ...paged("infractions-clean", "A member with nothing on record.", renderInfractionPages, "100000000000000009", []),
+  card(
+    "audit-overview",
+    "`/audit` page one — what the filters matched, before any of it is read.",
+    renderAuditOverviewEmbed,
+    f.AUDIT,
+    { now: new Date(f.NOW), rangeLabel: "last 30 days" },
+  ),
+  card(
+    "audit-overview-truncated",
+    "The same overview when the log runs past the page, with an unreadable date option named.",
+    renderAuditOverviewEmbed,
+    f.AUDIT,
+    {
+      now: new Date(f.NOW),
+      truncated: true,
+      rangeLabel: "2026-03-01 → 2026-03-31",
+      notice: "⚠️ Couldn't read `to` as a date (use YYYY-MM-DD); that filter was ignored.",
+    },
+  ),
+  card("audit-overview-single", "One match — the singular the plural would have got wrong.", renderAuditOverviewEmbed, f.AUDIT.slice(0, 1), {
+    now: new Date(f.NOW),
+  }),
   ...paged("audit", "`/audit` — recent staff actions, one against an unlinked target.", renderAuditPages, f.AUDIT, {
     now: new Date(f.NOW),
   }),

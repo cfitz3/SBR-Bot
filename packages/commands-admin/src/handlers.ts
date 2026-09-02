@@ -32,7 +32,9 @@ import {
   renderAdmit,
   renderApplicationEmbed,
   renderApplicationListEmbed,
+  renderAuditOverviewEmbed,
   renderAuditPages,
+  renderCaseSelectRow,
   renderEffectError,
   renderEnforcement,
   renderFilterTestEmbed,
@@ -272,14 +274,56 @@ const infractions: AdminHandler = async (ctx, deps) => {
  */
 const AUDIT_PAGE_LIMIT = 100;
 
+/**
+ * A date option, as a day rather than an instant.
+ *
+ * Staff type `2026-03-14`, and they mean the whole of that day. So `from` is
+ * read as its first moment and `to` as its last — `to:2026-03-14` including
+ * everything that happened on the 14th is the only reading that is not a
+ * surprise. An unparseable value becomes `null` and the filter is simply not
+ * applied, which the reply then says: silently returning an empty log for a
+ * typo would read as "nothing happened".
+ */
+function parseDayOption(raw: string | null, end: boolean): string | null {
+  const text = raw?.trim();
+  if (!text) return null;
+  const ms = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(text) ? `${text}T${end ? "23:59:59.999" : "00:00:00.000"}Z` : text);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+/** What the overview's Range line says, given whichever bounds were supplied. */
+function rangeLabel(days: number | null, since: string | null, until: string | null): string {
+  const day = (iso: string): string => iso.slice(0, 10);
+  if (since && until) return `${day(since)} → ${day(until)}`;
+  if (since) return `since ${day(since)}`;
+  if (until) return `up to ${day(until)}`;
+  if (days) return `last ${days} day${days === 1 ? "" : "s"}`;
+  return "All time";
+}
+
 const audit: AdminHandler = async (ctx, deps) => {
   const inForceOnly = ctx.args.getBoolean("in_force") ?? false;
+  const days = ctx.args.getNumber("days");
+  const rawFrom = ctx.args.getString("from");
+  const rawTo = ctx.args.getString("to");
+  const since = parseDayOption(rawFrom, false);
+  const until = parseDayOption(rawTo, true);
+  // Named rather than swallowed. A date the parser could not read is the one
+  // case where an empty result would be actively misleading, so say which
+  // option was dropped before the numbers are read as fact.
+  const ignored = [
+    ...(rawFrom && since === null ? ["from"] : []),
+    ...(rawTo && until === null ? ["to"] : []),
+  ];
+
   const result = await deps.moderation.listActions({
     guildId: ctx.guildId,
     actorDiscordId: ctx.args.getUser("actor"),
     targetDiscordId: ctx.args.getUser("target"),
     type: (ctx.args.getString("type") as ModActionType | null) ?? null,
-    sinceDays: ctx.args.getNumber("days"),
+    sinceDays: days,
+    since,
+    until,
     inForceOnly,
     limit: AUDIT_PAGE_LIMIT + 1,
   });
@@ -287,21 +331,41 @@ const audit: AdminHandler = async (ctx, deps) => {
   if (result.value.length === 0) {
     return {
       ephemeral: true,
-      text: inForceOnly
-        ? "Nothing is being enforced right now."
-        : "No moderation actions match those filters.",
+      text:
+        (inForceOnly
+          ? "Nothing is being enforced right now."
+          : "No moderation actions match those filters.") + unreadable(ignored),
     };
   }
 
   const truncated = result.value.length > AUDIT_PAGE_LIMIT;
   const rows = truncated ? result.value.slice(0, AUDIT_PAGE_LIMIT) : result.value;
-  const count = truncated ? `${rows.length}+ action(s)` : `${rows.length} action(s)`;
+  const label = rangeLabel(days, since, until);
+  // Overview first, then the listing, as one paginated set: the reader who
+  // wanted a number has it in the reply, and the reader who wanted the entries
+  // is one page away. The case menu rides alongside both — `respond` appends
+  // the pager to whatever components the reply carries — so a case can be
+  // opened from any page.
   return {
     ephemeral: true,
-    text: inForceOnly ? `${count} still in force.` : `${count}.`,
-    ...paged(renderAuditPages(rows, { truncated })),
+    text: unreadable(ignored).trim(),
+    ...paged([
+      renderAuditOverviewEmbed(rows, {
+        truncated,
+        rangeLabel: inForceOnly ? `${label} · in force` : label,
+        notice: unreadable(ignored).trim(),
+      }),
+      ...renderAuditPages(rows, { truncated }),
+    ]),
+    components: renderCaseSelectRow(rows),
   };
 };
+
+function unreadable(ignored: readonly string[]): string {
+  return ignored.length === 0
+    ? ""
+    : `\n⚠️ Couldn't read \`${ignored.join("` and `")}\` as a date (use YYYY-MM-DD); that filter was ignored.`;
+}
 
 /**
  * `/case <id>` — one action, by the id every reply already quotes.
@@ -1104,6 +1168,8 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
         { name: "target", description: "Filter by the member acted on", type: "user" },
         { name: "type", description: "Filter by action type", type: "string", choices: MOD_ACTION_CHOICES },
         { name: "days", description: "Look back this many days", type: "integer", minValue: 1, maxValue: 365 },
+        { name: "from", description: "Earliest date, YYYY-MM-DD", type: "string" },
+        { name: "to", description: "Latest date, YYYY-MM-DD", type: "string" },
         {
           name: "in_force",
           description: "Only punishments still being enforced right now",

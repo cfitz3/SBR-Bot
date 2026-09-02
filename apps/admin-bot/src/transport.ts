@@ -14,7 +14,9 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { buildAdminRegistry } from "@sbr/commands-admin";
-import { ComponentRouter, interactionArgs, respond, toSlashCommands } from "@sbr/discord-kit";
+import { ComponentRouter, interactionArgs, replyOptions, respond, toSlashCommands } from "@sbr/discord-kit";
+import { CASE_SELECT_NAMESPACE } from "@sbr/commands-admin";
+import { recordArgs } from "@sbr/shared-types";
 import { attachDiscordModObserver } from "./discord-mod-observer.js";
 import { attachMemberObserver } from "./member-observer.js";
 import type { AdminApp } from "./composition.js";
@@ -69,6 +71,43 @@ export function createInteractionHandler(app: AdminApp) {
   };
 }
 
+/**
+ * The case menu under `/audit`, routed back through the dispatcher.
+ *
+ * Deliberately *not* a second path to the same data. The value picked is a case
+ * id and the thing that renders a case id is `/case`, so this synthesises the
+ * arguments `/case` would have received and dispatches it — which means the
+ * per-guild policy floor, the actor's role check and the handler itself are the
+ * same ones a typed `/case` goes through. A menu that read the case out of the
+ * service directly would be a permission check nobody remembered to write.
+ *
+ * The id lives in the option value rather than in the customId, so the menu is
+ * stateless in the way every persistent control here is: the reply rendered
+ * before a restart still routes afterwards.
+ */
+export function attachCaseSelect(components: ComponentRouter, app: AdminApp): void {
+  components.register(CASE_SELECT_NAMESPACE, async (interaction) => {
+    if (!interaction.isStringSelectMenu() || !interaction.guildId) return;
+    const internalGuildId = await app.resolveGuild(interaction.guildId);
+    if (!internalGuildId) {
+      await interaction.reply({ content: "This server isn't set up on the platform.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const id = interaction.values[0];
+    if (!id) return;
+    const reply = await app.dispatcher.dispatch("case", {
+      guildId: internalGuildId,
+      actorId: interaction.user.id,
+      channelId: interaction.channelId,
+      args: recordArgs({ id }),
+    });
+    // Always a fresh ephemeral reply rather than an edit: the overview the menu
+    // hangs off is worth keeping on screen, and more than one staffer can be
+    // reading the same `/audit` output.
+    await interaction.reply({ ...replyOptions({ ...reply, ephemeral: true }) });
+  });
+}
+
 /** How long to wait for the gateway to report ready before giving up. */
 const READY_TIMEOUT_MS = 30_000;
 
@@ -107,6 +146,8 @@ export async function startAdminGateway(
     onError: (namespace, error) => app.log.error("component handler threw", { namespace, error: String(error) }),
   });
 
+  attachCaseSelect(components, app);
+
   // Joins and leaves go straight onto the bus; nothing is rendered here.
   attachMemberObserver(client, {
     resolveGuild: (id) => app.resolveGuild(id),
@@ -130,7 +171,10 @@ export async function startAdminGateway(
       void handle(i).catch((e: unknown) => app.log.error("interaction failed", { error: String(e) }));
     } else if (i.isAutocomplete()) {
       void complete(i).catch((e: unknown) => app.log.error("autocomplete failed", { error: String(e) }));
-    } else if (i.isButton()) {
+    } else if (i.isButton() || i.isStringSelectMenu()) {
+      // Selects route the same way buttons do — the `/audit` case menu is a
+      // persistent control with its state in the option values, and routing
+      // only buttons meant it silently did nothing.
       void components.handle(i).catch((e: unknown) => app.log.error("component failed", { error: String(e) }));
     }
   });
