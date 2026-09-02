@@ -389,6 +389,46 @@ export const DEFAULT_EMBEDS = {
     goalDone: "done",
     goalsFooter: "Projections are recent pace extended, not a promise.",
 
+    /* ── /help ── */
+    helpTitle: "Member commands",
+    /** The first line a member who has not linked reads. It is the next step, not a description. */
+    helpUnlinked: "Start with `/link <your IGN>`. Nothing below knows who you are until you do.",
+    /** `{ign}` — once linked, the headline stops nagging and confirms instead. */
+    helpLinked: "Linked as **{ign}**. Everything below is yours.",
+    /** `{n}` — a category too long to print in full. */
+    helpMore: "and {n} more",
+    helpFooter: "Every command here is ephemeral unless it posts for the guild.",
+    /** The six groups, in the order a new member meets them. */
+    helpCategory: {
+      ACCOUNT: "Your account",
+      PROGRESS: "Your numbers",
+      MARKET: "The market",
+      GUILD: "The guild",
+      EVENTS: "Events",
+      EXTRAS: "Everything else",
+    },
+    helpLinkButton: "How do I link?",
+    helpLinkTitle: "Linking your account",
+    /**
+     * The built-in steps. A guild may add its own words underneath but never
+     * replace these: a member whose client will not play the recording still
+     * needs to be able to read what to do.
+     */
+    helpLinkSteps:
+      "1. In-game, open the SkyBlock menu → **Social Media** → **Discord**.\n" +
+      "2. Set it to your Discord username.\n" +
+      "3. Back in Discord, run `/link <your IGN>`.",
+    /** `{ign}` — a new link. */
+    linkDone: "Linked to **{ign}**.",
+    /**
+     * `{ign}` — `/link` with no argument, which re-runs the check against the
+     * account already on file. A different sentence from `linkDone` because it
+     * is a different fact: saying "linked" to somebody repairing a link reads
+     * as though it had come undone.
+     */
+    linkConfirmed: "Still linked as **{ign}** — the check passed.",
+    helpLinkFooter: "The check reads your Hypixel social field live — nothing is stored from it.",
+
     /* ── /progression ── */
     /** The empty state, before a member has saved anything at all. */
     progressionUntracked:

@@ -78,6 +78,7 @@ import {
   CAPABILITIES,
   COOLDOWN_SETTING_KEY,
   DEFAULT_CAPABILITY_FLOOR,
+  LINK_HELP_SETTING_KEY,
   ROLES,
   MAX_OFFERED_METRICS,
   PROGRESSION_SETTING_KEY,
@@ -87,8 +88,10 @@ import {
   commandFloor,
   parseCooldowns,
   parseRoleBindings,
+  parseLinkHelp,
   parseRolePolicy,
   type CooldownPolicy,
+  type LinkHelpPolicy,
 } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import { authorize, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
@@ -479,6 +482,12 @@ export interface SettingsVM {
    */
   readonly channels: Readonly<Record<string, string | null>>;
   readonly features: Readonly<Record<string, boolean>>;
+  /**
+   * The linking walkthrough `/help` shows when a member presses "How do I
+   * link?". Always populated: an unconfigured guild reads back nulls, which is
+   * what the command falls back on — the platform's written steps and no image.
+   */
+  readonly linkHelp: LinkHelpPolicy;
 }
 
 /**
@@ -1250,10 +1259,11 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const [config, policy, cards] = await Promise.all([
+    const [config, policy, cards, linkHelp] = await Promise.all([
       this.d.config.get(guildId),
       this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
       this.d.reads.listGuildCards([guildId]),
+      this.d.config.getSetting<unknown>(guildId, LINK_HELP_SETTING_KEY).catch(() => null),
     ]);
 
     const cfg = config.ok ? config.value : null;
@@ -1273,6 +1283,9 @@ export class PanelService {
           CONFIG_CHANNEL_SLOTS.map((slot) => [slot, cfg?.channels[slot] ?? null] as const),
         ),
         features: cfg?.features ?? {},
+        // Same tolerant parser `/help` reads through, so an image the command
+        // would refuse to render shows here as absent rather than as saved.
+        linkHelp: parseLinkHelp(linkHelp),
       },
     };
   }

@@ -562,3 +562,25 @@ export const RaidSensitivity = {
   HIGH: "HIGH",
 } as const;
 export type RaidSensitivity = (typeof RaidSensitivity)[keyof typeof RaidSensitivity];
+
+/**
+ * How `/help` groups the member surface.
+ *
+ * Six buckets rather than one per feature area, because the list is a card and
+ * a card has room for six fields before it stops being scannable. They are
+ * declared in the order a new member meets them: link first, then their own
+ * numbers, then the things that need neither.
+ *
+ * Here rather than beside `/help` because the panel names them too — the
+ * command docs group by the same key, and a second list would drift into a
+ * heading nothing sorts under.
+ */
+export const HELP_CATEGORIES = [
+  "ACCOUNT",
+  "PROGRESS",
+  "MARKET",
+  "GUILD",
+  "EVENTS",
+  "EXTRAS",
+] as const;
+export type HelpCategory = (typeof HELP_CATEGORIES)[number];

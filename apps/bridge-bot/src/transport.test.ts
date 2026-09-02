@@ -54,10 +54,13 @@ test("every registered command has a handler behind it, and every retired one is
   for (const name of retired) assert.ok(!names.includes(name), `${name} is still registered`);
 });
 
-test("link publishes its required ign option", () => {
+// The IGN is optional since `/verify` folded into this command: with one, the
+// call links; without one, it re-checks the account already on file. The option
+// still has to be published, or the linking half is unreachable.
+test("link publishes its ign option, and does not require it", () => {
   const link = (buildCommands() as { name: string; options?: { name: string; required?: boolean }[] }[]).find(
     (c) => c.name === "link",
   );
   assert.ok(link);
-  assert.deepEqual(link.options?.map((o) => [o.name, o.required]), [["ign", true]]);
+  assert.deepEqual(link.options?.map((o) => [o.name, o.required]), [["ign", false]]);
 });

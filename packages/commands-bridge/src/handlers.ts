@@ -28,6 +28,7 @@ import { levelAlertSpecs } from "./handlers-levels.js";
 import { goalSpecs } from "./handlers-goals.js";
 import { snapshotSpecs } from "./handlers-snapshot.js";
 import { progressionSpecs } from "./progression.js";
+import { buildHelp } from "./help.js";
 import { reminderSpecs } from "./handlers-remind.js";
 import { tagSpecs } from "./handlers-tags.js";
 import { funSpecs } from "./fun.js";
@@ -86,18 +87,20 @@ async function resolveTarget(
   return { uuid: linked.value.minecraftUuid, ign: linked.value.ign };
 }
 
-const help: CommandHandler = async () => ({
-  ephemeral: true,
-  text: [
-    "Account: /link /verify /unlink /me /profile /setprofile",
-    "Stats: /stats /skills /slayers /dungeons /networth /milestones",
-    "Market: /price /bazaar /lowestbin /auctions",
-    "Guild: /online /leaderboard",
-    "Events: /events /create-event /rsvp /attendance",
-    "Groups: /perm",
-    "Help: /ticket /help",
-  ].join("\n"),
-});
+/**
+ * The registry, for the one command that has to read it.
+ *
+ * Memoised because the specs are static and `/help` is the cheapest command on
+ * the surface — rebuilding fifty-odd of them per press would be the most
+ * expensive thing it does. Built lazily rather than at module load so this is
+ * not a cycle: `buildBridgeRegistry` is defined below and closes over nothing
+ * that is not already initialised by the time a member types anything.
+ */
+let memoisedRegistry: readonly CommandSpec[] | null = null;
+const allSpecs = (): readonly CommandSpec[] =>
+  (memoisedRegistry ??= [...buildBridgeRegistry().values()]);
+
+const help: CommandHandler = async (ctx, deps) => buildHelp(allSpecs(), ctx.userId, deps);
 
 /**
  * Hypixel's social field holds a Discord *username*, so the verifier needs the
@@ -110,13 +113,35 @@ function linkActor(ctx: CommandContext): LinkActor {
     : { discordId: ctx.userId, username: ctx.username };
 }
 
+/**
+ * `/link`, which now also repairs.
+ *
+ * `/verify` was the same call with a different verb: re-run the social check,
+ * either against a named IGN or against the account already on file. Two names
+ * for one action is one name too many at the exact moment a member is most
+ * confused — the whole reason `/verify` existed was that linking had failed,
+ * and "the command you just ran did not work, try this other one" is not a
+ * repair path anybody finds. Omitting the IGN re-checks what is on file, which
+ * is what `/verify` did with no argument.
+ */
 const link: CommandHandler = async (ctx, deps) => {
-  const ign = ctx.args.getString("ign");
-  if (!ign) return { ephemeral: true, text: "Usage: /link <ign>" };
+  const named = ctx.args.getString("ign");
+  let ign = named;
+  if (!ign) {
+    const linked = await deps.identity.resolveByDiscordId(ctx.userId);
+    if (!linked.ok || linked.value === null) {
+      return { ephemeral: true, text: copy.embed.card.helpLinkSteps };
+    }
+    ign = linked.value.ign;
+  }
 
   const result = await deps.identity.linkByIgn(linkActor(ctx), ign);
   if (!result.ok) return { ephemeral: true, text: renderLinkError(result.error) };
-  return { ephemeral: true, text: `Linked to ${result.value.ign}. ✅` };
+  // Re-checking an account already on file is a confirmation, not a new link,
+  // and saying "linked" to somebody repairing one reads as though it had come
+  // undone.
+  const template = named ? copy.embed.card.linkDone : copy.embed.card.linkConfirmed;
+  return { ephemeral: true, text: template.replace("{ign}", result.value.ign) };
 };
 
 /**
@@ -688,6 +713,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
   const specs: CommandSpec[] = [
     {
       name: "help",
+      category: "ACCOUNT",
       description: "List member commands",
       cooldownMs: 3_000,
       inGame: true,
@@ -695,34 +721,46 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "link",
+      category: "ACCOUNT",
       description: "Link your Minecraft account (your Hypixel Discord social must match)",
-      options: [
-        { name: "ign", description: "Your Minecraft username", type: "string", required: true },
-      ],
+      // Optional since `/verify` folded in: no IGN re-checks the account on
+      // file, which is the repair path.
+      options: [{ name: "ign", description: "Your Minecraft username", type: "string" }],
       cooldownMs: 10_000,
       handler: link,
     },
     {
       name: "verify",
+      category: "ACCOUNT",
       description: "Re-run the Hypixel social check to confirm or repair your link",
       options: [{ name: "ign", description: "Minecraft username", type: "string" }],
       cooldownMs: 10_000,
+      // Retired: folded into `/link`, which now re-checks the account on file
+      // when called without an IGN. Two commands for one call was one too many
+      // at the moment a member is most confused — `/verify` existed because
+      // `/link` had failed, and pointing a stuck member at a second command is
+      // not a repair path anybody finds. The handler stays compiled and tested;
+      // this flag is what deregisters it from Discord.
+      enabled: false,
       handler: verify,
     },
     {
       name: "unlink",
+      category: "ACCOUNT",
       description: "Remove your linked Minecraft account",
       cooldownMs: 10_000,
       handler: unlink,
     },
     {
       name: "me",
+      category: "ACCOUNT",
       description: "Show your own profile summary",
       cooldownMs: 10_000,
       handler: me,
     },
     {
       name: "leaderboard",
+      category: "GUILD",
       description: "Guild rankings — wealth, tenure, skills, activity and XP",
       options: [
         {
@@ -761,6 +799,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "profile",
+      category: "ACCOUNT",
       description: "View a player's Skyblock profiles",
       options: TARGET_OPTIONS,
       cooldownMs: 10_000,
@@ -769,6 +808,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "setprofile",
+      category: "ACCOUNT",
       description: "Choose which Skyblock profile your lookups use",
       options: [
         {
@@ -785,6 +825,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "stats",
+      category: "PROGRESS",
       description: "Broad stat overview for a player",
       options: TARGET_OPTIONS,
       capability: "RUN_COMMAND",
@@ -799,6 +840,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "skills",
+      category: "PROGRESS",
       description: "Skill levels and XP to next",
       options: [
         ...TARGET_OPTIONS,
@@ -811,6 +853,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "slayers",
+      category: "PROGRESS",
       description: "Slayer XP, tiers and per-tier boss kills",
       options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
       capability: "RUN_COMMAND",
@@ -825,6 +868,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       // permanent instead of temporary. The spec stays so the in-game alias
       // table and the tests that cover the notice keep something to point at.
       name: "slayer",
+      category: "PROGRESS",
       description: "Deprecated — use /slayers",
       options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
       capability: "RUN_COMMAND",
@@ -836,6 +880,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "dungeons",
+      category: "PROGRESS",
       description: "Catacombs level, classes and floor bests",
       options: TARGET_OPTIONS,
       capability: "RUN_COMMAND",
@@ -845,6 +890,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "networth",
+      category: "PROGRESS",
       description: "Networth estimate with a category breakdown",
       options: TARGET_OPTIONS,
       capability: "RUN_COMMAND",
@@ -854,6 +900,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "online",
+      category: "GUILD",
       description: "Who's online in the guild right now",
       // Long compared with the other lookups: every invocation costs the bridge
       // account a `/g online`, and Hypixel rate-limits commands from a single
@@ -866,6 +913,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "milestones",
+      category: "PROGRESS",
       description: "Thresholds a player has crossed",
       options: [TARGET_OPTIONS[0]!],
       cooldownMs: 15_000,
@@ -873,6 +921,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "progress",
+      category: "PROGRESS",
       description: "Your progression over time",
       options: [
         {
@@ -907,6 +956,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "missing",
+      category: "PROGRESS",
       description: "Notable accessories a player is missing or could upgrade",
       options: TARGET_OPTIONS,
       capability: "RUN_COMMAND",
@@ -922,6 +972,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "nextupgrade",
+      category: "PROGRESS",
       description: "The highest-value upgrade to buy next",
       options: [
         ...TARGET_OPTIONS,
@@ -953,6 +1004,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "whatnext",
+      category: "PROGRESS",
       description: "Suggested next steps for a player's progression",
       options: [
         ...TARGET_OPTIONS,
@@ -983,6 +1035,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "price",
+      category: "MARKET",
       description: "What an item costs, what is moving, and what it has been doing",
       options: [ITEM_OPTION],
       cooldownMs: 5_000,
@@ -996,6 +1049,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     // stays readable, and `!bz` still routes to the card.
     {
       name: "bazaar",
+      category: "MARKET",
       description: "Bazaar order book for an item",
       options: [ITEM_OPTION],
       cooldownMs: 5_000,
@@ -1008,6 +1062,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     // other was always the misleading half.
     {
       name: "lowestbin",
+      category: "MARKET",
       description: "Cheapest buy-it-now listing for an item",
       options: [ITEM_OPTION],
       cooldownMs: 5_000,
@@ -1021,6 +1076,7 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     // *player* has up — so the option is dropped rather than the command.
     {
       name: "auctions",
+      category: "MARKET",
       description: "A player's own auction listings",
       options: [TARGET_OPTIONS[0]!],
       cooldownMs: 15_000,

@@ -78,6 +78,7 @@ export function levelAlertSpecs(): CommandSpec[] {
   return [
     {
       name: "levelalerts",
+      category: "EXTRAS",
       description: "Turn your own level-up announcements on or off",
       options: [
         {

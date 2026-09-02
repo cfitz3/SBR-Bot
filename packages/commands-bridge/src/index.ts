@@ -43,6 +43,17 @@ export { communityButtonReplies, parseRsvpState } from "./handlers-community.js"
 export { healthSpecs, renderHealthEmbed } from "./handlers-health.js";
 export { infoSpecs, renderServerInfoEmbed, renderWhoisEmbed, type WhoisExtras } from "./handlers-info.js";
 export {
+  HELP_NAMESPACE,
+  buildHelp,
+  buildLinkHelp,
+  groupCommands,
+  helpButtonReplies,
+  helpComponents,
+  renderHelpEmbed,
+  renderLinkHelpEmbed,
+  type HelpInput,
+} from "./help.js";
+export {
   PROGRESSION_NAMESPACE,
   RANGES,
   buildProgression,

@@ -41,6 +41,7 @@ export function tagSpecs(): CommandSpec[] {
   return [
     {
       name: "tag",
+      category: "EXTRAS",
       description: "Post one of this server's canned replies",
       options: [
         {

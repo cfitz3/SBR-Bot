@@ -284,6 +284,7 @@ export function infoSpecs(): CommandSpec[] {
   return [
     {
       name: "whois",
+      category: "EXTRAS",
       description: "Who a member is here — Discord account, roles, link and standing",
       options: [
         {
@@ -306,6 +307,7 @@ export function infoSpecs(): CommandSpec[] {
     },
     {
       name: "serverinfo",
+      category: "EXTRAS",
       description: "This Discord server at a glance",
       cooldownMs: 10_000,
       handler: serverinfo,

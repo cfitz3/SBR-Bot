@@ -101,12 +101,14 @@ import {
   CAPABILITIES,
   COOLDOWN_SETTING_KEY,
   DEFAULT_CAPABILITY_FLOOR,
+  LINK_HELP_SETTING_KEY,
   MAX_COOLDOWN_SECONDS,
   ROLES,
   PROGRESSION_SETTING_KEY,
   ROLE_POLICY_SETTING_KEY,
   normalizeRank,
   parseRolePolicy,
+  validateLinkHelp,
   validateProgressionPolicy,
   validateRolePolicy,
   type RolePolicy,
@@ -170,6 +172,13 @@ export const MUTATION_TIERS = {
    * which is the same weight as pinning a leaderboard category.
    */
   "progression.metrics": "MODERATOR",
+  /**
+   * The linking walkthrough behind /help's button. Moderator for the same
+   * reason as the metric menu — it is guild-facing wording, not a grant — but
+   * it does put an image URL in front of every new member, so the validator is
+   * strict about the scheme rather than trusting the tier alone.
+   */
+  "help.link": "MODERATOR",
   /**
    * The ticket menu and the panels advertising it. Admin because a category
    * names the staff roles pulled into a ticket and the Discord category it
@@ -1450,6 +1459,35 @@ export class PanelMutations {
       // The count, not the list: the audit trail records that somebody narrowed
       // what the command offers, and the page shows what to.
       return { result, change: { metrics: (next.metrics as readonly unknown[]).length } };
+    });
+  }
+
+  /**
+   * The linking walkthrough the `/help` button shows.
+   *
+   * Its own mutation rather than `config.setting` because the image is
+   * rendered, not displayed as text: a link that is not `https:` either fails
+   * to load or is a way to point every new member's client at an arbitrary
+   * host. That check belongs in a validator the write path cannot skip.
+   *
+   * Both halves are optional and independent. A guild with a recording and no
+   * words gets the platform's steps under it; a guild with words and no
+   * recording gets its own paragraph and no broken image frame.
+   */
+  async saveLinkHelp(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "help.link", async () => {
+      const body = asBody(input);
+      if (body === null) return invalid("body must be an object");
+
+      const next = { image: body["image"] ?? null, body: body["body"] ?? null };
+      const complaint = validateLinkHelp(next);
+      if (complaint !== null) return invalid(complaint);
+
+      const result = await this.d.config.setSetting(guildId, LINK_HELP_SETTING_KEY, next);
+      // Whether each half is set, not what it says: the audit trail should show
+      // that somebody replaced the walkthrough without copying its prose into a
+      // log nobody reads.
+      return { result, change: { image: next.image !== null, body: next.body !== null } };
     });
   }
 

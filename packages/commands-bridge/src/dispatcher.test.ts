@@ -623,7 +623,16 @@ test("cooldown blocks a rapid second invocation", async () => {
 
 test("link success confirms the IGN", async () => {
   const r = await makeDispatcher().dispatch("link", ctx({ args: recordArgs({ ign: "Aria" }) }));
-  assert.match(r.text, /Linked to Aria/);
+  assert.equal(r.text, copy.embed.card.linkDone.replace("{ign}", "Aria"));
+});
+
+// `/verify` was a second command for the case where the first one had not
+// worked, which is not a repair path anybody finds. Running `/link` with no IGN
+// now re-checks the account on file, and says so in different words: a member
+// confirming a link should not be told it was just created.
+test("link with no IGN re-checks the account on file", async () => {
+  const r = await makeDispatcher().dispatch("link", ctx());
+  assert.equal(r.text, copy.embed.card.linkConfirmed.replace("{ign}", "Aria"));
 });
 
 test("link surfaces SOCIAL_UNSET guidance", async () => {

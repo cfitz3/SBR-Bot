@@ -59,6 +59,7 @@ export function snapshotSpecs(): CommandSpec[] {
   return [
     {
       name: "snapshot",
+      category: "PROGRESS",
       description: "Save your current stats so /progress can chart the change",
       options: [
         {

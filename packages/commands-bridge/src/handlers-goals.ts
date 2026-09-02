@@ -119,6 +119,7 @@ export function goalSpecs(): CommandSpec[] {
   return [
     {
       name: "goal",
+      category: "PROGRESS",
       description: "Set a progression target and track how it's going",
       options: [
         {

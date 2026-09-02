@@ -10,14 +10,17 @@
  * Role bindings used to be a card here. They moved to Permissions, which owns
  * the whole question of what a level *is* — one page writes them, in one shape.
  */
+import { MAX_LINK_HELP_BODY, type LinkHelpPolicy } from "@sbr/guild-config";
 import type { SettingsVM } from "@sbr/panel-core";
 import type { ScreeningPolicyView } from "@sbr/screening";
 import { loadPage, postAction, type WriteResult } from "../api.js";
 import { card, deniedState, errorState, pageTitle, spinner } from "../components.js";
 import { scope } from "../copy.js";
 import {
+  actionButton,
   channelPicker,
   fieldGroup,
+  statusSlot,
   textField,
   toggleField,
   validateWhole,
@@ -29,6 +32,80 @@ const t = scope("settings");
 
 /** Mirrors the mutation layer's `FEATURE_NAME`; see forms.ts on why both exist. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
+
+/**
+ * What the "How do I link?" button under `/help` shows.
+ *
+ * Linking is where new members get stuck, and the reason is a Hypixel setting
+ * three menus deep that no amount of embed prose explains as well as a
+ * recording of somebody doing it. This is where a guild puts theirs.
+ *
+ * The two halves save together rather than one field at a time, because the
+ * validator judges them together and each half is a partial answer: a guild
+ * swapping a recording usually rewords the note under it in the same sitting,
+ * and two writes would leave the button briefly showing a caption for a video
+ * it no longer has. Empty means "unset" in both — the command falls back to the
+ * platform's written steps, which is why neither is required.
+ */
+function linkHelpForm(guildId: string, current: LinkHelpPolicy): HTMLElement {
+  const status = statusSlot();
+  const image = h("input", {
+    class: "control",
+    type: "url",
+    value: current.image ?? "",
+    placeholder: t("linkHelpImagePlaceholder"),
+    "aria-label": t("linkHelpImageLabel"),
+  }) as HTMLInputElement;
+  const body = h("textarea", {
+    class: "control control-area",
+    rows: 4,
+    maxlength: MAX_LINK_HELP_BODY,
+    "aria-label": t("linkHelpBodyLabel"),
+    placeholder: t("linkHelpBodyPlaceholder"),
+  }) as unknown as HTMLTextAreaElement;
+  body.value = current.body ?? "";
+
+  const save = actionButton({
+    label: t("linkHelpSave"),
+    tone: "primary",
+    status,
+    run: async () => {
+      const url = image.value.trim();
+      // Checked here as well as on the server so a mistyped link costs a glance
+      // rather than a round trip; the server's copy is the one that protects
+      // members from a rendered http image.
+      if (url !== "" && !url.startsWith("https://")) {
+        return { kind: "error", message: t("linkHelpImageError") };
+      }
+      const text = body.value.trim();
+      return postAction(guildId, "help.link", {
+        image: url === "" ? null : url,
+        body: text === "" ? null : text,
+      });
+    },
+  });
+
+  return h(
+    "div",
+    { class: "fields" },
+    h(
+      "div",
+      { class: "field" },
+      h("label", { class: "field-label" }, t("linkHelpImageLabel")),
+      image,
+      h("p", { class: "field-hint" }, t("linkHelpImageHint")),
+    ),
+    h(
+      "div",
+      { class: "field" },
+      h("label", { class: "field-label" }, t("linkHelpBodyLabel")),
+      body,
+      h("p", { class: "field-hint" }, t("linkHelpBodyHint")),
+    ),
+    h("div", { class: "field-row" }, save),
+    status.el,
+  );
+}
 
 export async function renderSettings(host: HTMLElement, guildId: string): Promise<void> {
   replace(host, spinner("settings"));
@@ -207,6 +284,7 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
       card(t("cardChannels"), channels),
       card(t("cardFeatures"), features),
       card(t("cardScreening"), screening),
+      card(t("cardLinkHelp"), linkHelpForm(guildId, result.data.linkHelp)),
     ),
   );
 }
