@@ -30,6 +30,7 @@
     "@sbr/roles": "*",
     "@sbr/screening": "*",
     "@sbr/shared-types": "*",
+    "@sbr/triggers": "*",
     "@sbr/xp": "*"
   }
 }

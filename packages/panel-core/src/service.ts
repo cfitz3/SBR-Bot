@@ -500,6 +500,7 @@ export interface SettingsVM {
    * the page never shows a board that is not actually running.
    */
   readonly triggers: readonly TriggerRule[];
+  /**
    * The role `/lfg` pings, if one is set and stored as an id.
    *
    * A setting rather than a slot, so it is read explicitly rather than falling

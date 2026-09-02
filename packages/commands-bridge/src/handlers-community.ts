@@ -30,7 +30,6 @@ import {
   renderTicketListEmbed,
   rsvpButtons,
 } from "./render-community.js";
-import { copy } from "@sbr/brand";
 
 const E = copy.error;
 

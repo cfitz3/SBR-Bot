@@ -25,6 +25,7 @@
     { "path": "../../packages/redis" },
     { "path": "../../packages/roles" },
     { "path": "../../packages/shared-types" },
+    { "path": "../../packages/triggers" },
     { "path": "../../packages/xp" }
   ]
 }

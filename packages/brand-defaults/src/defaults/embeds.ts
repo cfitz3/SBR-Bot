@@ -134,7 +134,6 @@ export const DEFAULT_EMBEDS = {
     // what are they like, what did we find, what do we already know about them,
     // and how long do I have. Each holds several facts, because a reviewer
     // reads a notice once and decides — not a card of eleven one-word fields.
-    account: "Account",
     findings: "Findings",
     history: "History",
     window: "Window",
@@ -142,7 +141,6 @@ export const DEFAULT_EMBEDS = {
     /** The roster itself: one line per seat, never one field per seat. */
     party: "Party",
     seats: "Seats",
-    owner: "Owner",
     notes: "Notes",
     /** The perms a guild has, as lines inside one field. */
     perms: "Perms",

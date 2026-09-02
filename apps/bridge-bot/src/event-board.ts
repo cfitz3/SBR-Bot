@@ -28,7 +28,6 @@ import { copy } from "@sbr/brand";
 import { isEventMetric } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import type { ActionRowView, EmbedView } from "@sbr/shared-types";
-import { copy } from "@sbr/brand";
 
 const E = copy.error;
 

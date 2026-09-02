@@ -36,9 +36,6 @@ const F = copy.embed.field;
 /** Discord renders more roles than this as a wall; the count carries the rest. */
 const MAX_ROLES_SHOWN = 12;
 
-const C = copy.embed.card;
-const F = copy.embed.field;
-
 /** Thousands separators everywhere: these are counts people compare. */
 const count = (n: number): string => n.toLocaleString("en-US");
 

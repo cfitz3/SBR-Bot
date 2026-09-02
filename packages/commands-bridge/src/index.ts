@@ -28,8 +28,6 @@ export {
   renderLeaderboardEmbed,
   renderLinkError,
   renderNetworth,
-  renderPriceEmbed,
-  renderNetworthEmbed,
   renderProfileEmbed,
   renderProfileListEmbed,
   renderProgressEmbed,

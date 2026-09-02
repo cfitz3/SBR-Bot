@@ -23,6 +23,7 @@
     { "path": "../../packages/discord-kit" },
     { "path": "../../packages/moderation" },
     { "path": "../../packages/observability" },
+    { "path": "../../packages/playtime" },
     { "path": "../../packages/pricing" },
     { "path": "../../packages/progression" },
     { "path": "../../packages/redis" },

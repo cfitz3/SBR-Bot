@@ -44,8 +44,6 @@ import {
   renderLinkError,
   renderAchievementsEmbed,
   renderNetworth,
-  renderPriceEmbed,
-  renderNetworthEmbed,
   renderProfileEmbed,
   renderProfileListEmbed,
   renderProgressEmbed,
@@ -860,23 +858,6 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       cooldownMs: 15_000,
       inGame: true,
       handler: slayer,
-    },
-    {
-      // The release it was kept for has passed. It has been answering with the
-      // "now /slayers" notice since the rename, which is long enough for the
-      // habit to have moved; leaving it registered forever makes the deprecation
-      // permanent instead of temporary. The spec stays so the in-game alias
-      // table and the tests that cover the notice keep something to point at.
-      name: "slayer",
-      category: "PROGRESS",
-      description: "Deprecated — use /slayers",
-      options: [...TARGET_OPTIONS, SLAYER_BOSS_OPTION],
-      capability: "RUN_COMMAND",
-      cooldownMs: 15_000,
-      inGame: true,
-      enabled: false,
-      handler: slayer,
-      deprecatedBy: "slayers",
     },
     {
       name: "dungeons",

@@ -300,12 +300,6 @@ export const PROGRESS: ProgressSeriesDTO = {
   ],
 };
 
-/**
- * The uuid behind the gallery's player, so the author row and thumbnail render
- * the same way they do in production rather than falling back to a blank head.
- */
-export const UUID = "6d3b1f2a4c8e4a1b9f0d2e5c7a8b9c01";
-
 /** Two goals in different shapes: one moving, one that has stalled. */
 export const GOALS: GoalDTO[] = [
   {

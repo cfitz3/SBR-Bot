@@ -76,6 +76,7 @@ export function healthSpecs(): CommandSpec[] {
   return [
     {
       name: "health",
+      category: "EXTRAS",
       description: "Whether the bot, guild chat and Hypixel are answering",
       options: [],
       // Deliberately public and ungated. Every error message points here, so a

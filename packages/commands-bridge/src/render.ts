@@ -16,7 +16,6 @@ import {
   type CardSpec,
 } from "@sbr/embed-kit";
 import { describeAge, padInlineRow, staleness, tierRank } from "@sbr/shared-types";
-import { card, field } from "@sbr/embed-kit";
 import { describePlaytime } from "@sbr/playtime";
 import type {
   LivePlaytimeDTO,
