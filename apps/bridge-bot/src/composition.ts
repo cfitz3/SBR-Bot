@@ -37,6 +37,7 @@ import {
   activitySink,
   podiumRepository,
   pingDb,
+  playSessionSink,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { fetchHttp, HypixelClient, hypixelCheck, type SkyblockProfileDTO } from "@sbr/hypixel";
@@ -102,6 +103,7 @@ import {
   type DiscordDirectory,
   type GoalRepository,
   type GuildRosterSource,
+  type PlaytimeSource,
   type LevelUpAnnouncerPort,
   type MilestoneAnnouncerPort,
   type ReminderPort,
@@ -115,6 +117,7 @@ import { ProfileNetworthCalculator } from "skyhelper-networth";
 import { BridgeGuardImpl, FloodControlImpl, WordlistFilterImpl } from "./adapters.js";
 import { applicantStatsSource, skykingsScammerLookup } from "./screening.js";
 import { createBridgeEnforcer } from "./enforcement-effector.js";
+import type { PlaySessionSink } from "@sbr/playtime";
 import type { TicketGateway } from "./tickets.js";
 import type { RoleMenuGateway } from "./role-menus.js";
 import type { StickyKeeper } from "./sticky.js";
@@ -162,6 +165,12 @@ export interface BridgeApp {
   readonly milestones: MilestoneAnnouncerPort;
   /** The level-up queue, exposed for the same reason as `milestones`. */
   readonly levelUps: LevelUpAnnouncerPort;
+  /**
+   * Where closed play sessions go. Optional so a deployment without a database
+   * still measures playtime for `/online` — the tracker is in memory and the
+   * live card needs nothing else; only the history is lost.
+   */
+  readonly playSessions?: PlaySessionSink;
   /** The reminder store, exposed so the sweeper can be handed a fake. */
   readonly reminders: ReminderPort;
   /** The goal store, exposed so the watcher can be handed a fake. */
@@ -211,6 +220,15 @@ export interface BridgeApp {
    * reports that honestly rather than showing an empty guild.
    */
   setRosterSource(source: GuildRosterSource | null): void;
+  /**
+   * Hand the composition the live playtime tracker, once the Mineflayer session
+   * exists.
+   *
+   * Late-bound like the roster, and unset means nobody is playing rather than a
+   * frozen list: a card that keeps counting up through an outage is a lie the
+   * reader has no way to catch.
+   */
+  setPlaytimeSource(source: PlaytimeSource | null): void;
   /**
    * Hand the composition a live view of the two sockets, for the heartbeat.
    *
@@ -535,6 +553,16 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
   };
 
+  // Same indirection as the roster, and for the same reason: the tracker lives
+  // in the transport, which is built from this object. A bridge that is down
+  // reports nobody playing rather than stale sessions.
+  let livePlaytime: PlaytimeSource | null = null;
+  const playtime: PlaytimeSource = {
+    async playing() {
+      return livePlaytime === null ? [] : livePlaytime.playing();
+    },
+  };
+
   let liveTickets: TicketGateway | null = null;
   let liveEventBoard: EventBoardGateway | null = null;
   let liveDigest: LeaderboardDigest | null = null;
@@ -633,6 +661,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     community,
     perms,
     roster,
+    playtime,
     config: guildConfig,
     analytics,
     xp,
@@ -953,6 +982,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     handlerDeps,
     milestones: milestoneAnnouncementRepository,
     levelUps: xpLevelUpAnnouncementRepository,
+    playSessions: playSessionSink,
     reminders: reminderRepository,
     goals: goalRepository,
     async goalValue(minecraftUuid: string, metric: ProgressMetric) {
@@ -1005,6 +1035,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     },
     setRosterSource(source) {
       liveRoster = source;
+    },
+    setPlaytimeSource(source) {
+      livePlaytime = source;
     },
     setStatusSource(source) {
       liveStatus = source;

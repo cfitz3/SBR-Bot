@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { acceptCommand, denyCommand, inviteCommand, parseJoinEvent } from "./join.js";
+import { acceptCommand, denyCommand, inviteCommand, parseJoinEvent, parsePresenceEvent } from "./join.js";
 
 test("a plain request is read", () => {
   assert.deepEqual(parseJoinEvent("Steve has requested to join the Guild!"), { kind: "REQUEST", ign: "Steve" });
@@ -123,4 +123,22 @@ test("an underscore name is captured whole", () => {
 test("the deny and invite commands name the player", () => {
   assert.equal(denyCommand("Steve"), "/guild deny Steve");
   assert.equal(inviteCommand("Steve"), "/guild invite Steve");
+});
+
+test("a login and a logout are read as presence, from the same line join ignores", () => {
+  assert.deepEqual(parsePresenceEvent("§2Guild > §aSteve §ejoined."), { ign: "Steve", kind: "ONLINE" });
+  assert.deepEqual(parsePresenceEvent("§2Guild > §aSteve §eleft."), { ign: "Steve", kind: "OFFLINE" });
+});
+
+test("presence and membership stay separate readings of the same chat", () => {
+  // The pair that motivated the shared pattern: one of these is a member
+  // joining the guild, the other is a member logging in, and reading either as
+  // the other is a visible, wrong announcement.
+  assert.equal(parsePresenceEvent("[MVP+] Steve joined the guild!"), null);
+  assert.equal(parseJoinEvent("Guild > Steve joined."), null);
+});
+
+test("somebody talking is never a presence notice", () => {
+  assert.equal(parsePresenceEvent("Guild > Steve: joined."), null);
+  assert.equal(parsePresenceEvent("Guild > Steve: left."), null);
 });

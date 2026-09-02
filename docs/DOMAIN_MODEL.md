@@ -834,7 +834,7 @@ computes XP.
 |-------|-------|
 | `guildId`, `discordId`, `day` | unique together; `day` is `DATE`, UTC |
 | `discordMessages`, `guildChatMessages`, `commandsUsed` | counters |
-| `presenceSamples` | `/g online` hits — a playtime *proxy*; presence is sampled, never measured |
+| `presenceSamples` | `/g online` hits — a playtime *proxy*. Superseded by `PlaySession`, which measures. Kept because every historical XP award was computed from it |
 
 Indexed on (`guildId`, `day`).
 **Relationships:** N—1 `Guild`.

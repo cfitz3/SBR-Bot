@@ -21,6 +21,7 @@
     { "path": "packages/tickets" },
     { "path": "packages/community" },
     { "path": "packages/perms" },
+    { "path": "packages/playtime" },
     { "path": "packages/xp" },
     { "path": "packages/leaderboards" },
     { "path": "packages/guild-config" },

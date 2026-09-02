@@ -286,7 +286,22 @@ export const GALLERY: readonly GalleryCard[] = [
   card("auctions-empty", "No listings at all.", renderAuctionsEmbed, IGN, f.live(f.AUCTIONS_EMPTY), f.NOW),
 
   // ── Guild ─────────────────────────────────────────────────────────────────
-  card("roster", "`/online` — the in-game roster by rank.", renderRosterEmbed, f.ROSTER, f.NOW),
+  card(
+    "roster",
+    "`/online` — the roster by rank, with how long each member has been playing.",
+    renderRosterEmbed,
+    f.ROSTER,
+    f.PLAYING,
+    f.NOW,
+  ),
+  card(
+    "roster-no-playtime",
+    "The same roster before the tracker has seen anybody arrive.",
+    renderRosterEmbed,
+    f.ROSTER,
+    [],
+    f.NOW,
+  ),
   card("userinfo", "`/userinfo` — a member with more roles than fit.", renderUserInfoEmbed, f.DISCORD_USER),
   card(
     "userinfo-outsider",

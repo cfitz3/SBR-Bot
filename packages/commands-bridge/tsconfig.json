@@ -9,6 +9,7 @@
   "references": [
     { "path": "../shared-types" },
     { "path": "../embed-kit" },
+    { "path": "../playtime" },
     { "path": "../tickets" },
     { "path": "../observability" },
     { "path": "../../brand" }

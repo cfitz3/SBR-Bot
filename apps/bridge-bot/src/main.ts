@@ -38,6 +38,7 @@ async function main(): Promise<void> {
   // Only meaningful with an in-game session; without one `/online` should keep
   // saying "no bridge here" rather than waiting out a request that can't be sent.
   if (mc) app.setRosterSource(handles.roster);
+  if (mc) app.setPlaytimeSource(handles.playtime);
   app.setStatusSource(() => ({ ...handles.status() }));
 
   // The ticket control API. Started here rather than inside `startBridge`

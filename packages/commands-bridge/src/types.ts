@@ -17,6 +17,7 @@ import type {
   EmbedView,
   GuildConfigService,
   GuildRosterSource,
+  PlaytimeSource,
   IdentityService,
   LeaderboardService,
   LFGPostDTO,
@@ -97,6 +98,13 @@ export interface HandlerDeps {
    * handler deps and have no bridge to ask.
    */
   readonly roster?: GuildRosterSource;
+  /**
+   * How long the members on that roster have been playing. Optional separately
+   * from `roster`: it is the same bridge process, but the tracker is empty for
+   * the first minutes after a restart, and a roster with no durations on it is
+   * still the answer to the question that was asked.
+   */
+  readonly playtime?: PlaytimeSource;
   readonly config: GuildConfigService;
   readonly analytics: AnalyticsService;
   /**
