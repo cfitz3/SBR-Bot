@@ -94,9 +94,8 @@ erroring.
 | Command | Options | CD | Cap | Purpose | Output |
 |---|---|---|---|---|---|
 | `/stats` | `player?` `profile?` | 15s | ✔ | Broad overview — one profile fetch backs four parallel reads | Stats embed; text `{ign}: SA 45.3, cata 42, nw 8.2b` |
-| `/skills` | `player?` `profile?` `skill?` | 15s | ✔ | Skill levels and XP to next, or one skill. Twelve skills including Hunting; capped skills are marked `✦` and counted in the header | Skills embed; text `{ign}: skill average N` |
-| `/slayers` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and per-tier boss kills. Naming one boss switches to its full tier breakdown | Slayers embed; text `{ign}: N slayer xp` |
-| `/slayer` | as `/slayers` | 15s | ✔ | **Deprecated alias.** Answers identically, with `` `/slayer` is now `/slayers`. `` in front. Remove after one release | as `/slayers` |
+| `/skills` | `player?` `profile?` `skill?` | 15s | ✔ | Twelve skills as two lists — the ones the average counts, then the cosmetic ones — plus the uncapped skill closest to its next level. Naming one skill gets that skill in full, with a bar. Capped skills carry the shared marker and are counted in the headline | Skills embed; text `{ign}: skill average N` |
+| `/slayers` | `player?` `profile?` `boss?` (6 choices) | 15s | ✔ | Slayer XP, tiers and per-tier boss kills — every boss carries its own tier breakdown, running to the boss's ceiling rather than to the highest tier killed. Naming one boss narrows to it | Slayers embed; text `{ign}: N slayer xp` |
 | `/dungeons` | `player?` `profile?` | 15s | ✔ | Catacombs level and progress to the next, class levels and average, completions per floor (`F…` normal, `M…` master), fastest S+ | Dungeons embed; text `{ign}: catacombs N` |
 | `/networth` | `player?` `profile?` | 15s | ✔ | Networth estimate; six largest categories with their share of the total and their three most valuable items | Networth embed; text `{ign}: {total}` |
 | `/milestones` | `player?` | 15s | — | Guild achievements + standing: earned (top 5) and closest unearned (top 5) w/ progress | Achievements embed; text `{ign}: N/M achievements · next: {label}` |
@@ -239,7 +238,7 @@ identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 
 **Aliases:** `nw`→networth, `bz`→bazaar, `lbin`/`lb`→lowestbin, `s`→stats,
 `weight`→stats (the stats one-liner already ends in the Senither figure),
-`sk`→skills, `sl`→slayer, `dungs`/`cata`→dungeons, `run`→runs, `event`→events,
+`sk`→skills, `sl`→slayers, `dungs`/`cata`→dungeons, `run`→runs, `event`→events,
 `h`/`commands`→help.
 
 ---

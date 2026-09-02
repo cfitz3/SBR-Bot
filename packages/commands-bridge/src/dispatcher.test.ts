@@ -755,16 +755,47 @@ test("a lookup for an unknown IGN says so", async () => {
   assert.match(r.text, /No Minecraft account called "Nobody"/);
 });
 
-test("skills lists every skill and can filter to one", async () => {
+test("skills is two lists and a nudge, not one field per skill", async () => {
+  // Twelve inline fields is twice the budget and, on a phone, a two-column
+  // block where every second cell is a label.
   const all = await makeDispatcher().dispatch("skills", ctx());
-  assert.equal((all.embed?.fields ?? []).length, 2);
+  assert.deepEqual((all.embed?.fields ?? []).map((f) => f.name), ["Skills", "Closest to next"]);
+  assert.equal(all.embed?.fields?.[0]?.value, "Mining **50**/60\nCombat **35**/60");
+  assert.equal(all.embed?.fields?.[1]?.value, "Combat **36** — 500 xp to go");
+  // The identity moved off the title, which is now free to say what the card is.
+  assert.equal(all.embed?.title, "Skills");
+  assert.equal(all.embed?.author?.name, "Aria");
+});
 
+test("asking for one skill gets that skill in full, bar included", async () => {
   const one = await makeDispatcher().dispatch(
     "skills",
     ctx({ args: recordArgs({ skill: "mining" }) }),
   );
-  assert.equal((one.embed?.fields ?? []).length, 1);
-  assert.equal(one.embed?.fields?.[0]?.name, "Mining");
+  assert.deepEqual((one.embed?.fields ?? []).map((f) => f.name), ["Mining", "Progress"]);
+  assert.match(one.embed?.fields?.[0]?.value ?? "", /\*\*50\*\*\/60 · 4,300,000 xp to level 51/);
+});
+
+test("the cap marker comes from the shared predicate, so a corrected cap moves it", async () => {
+  // Hunting was checked against 50 when it stops at 25: a maxed hunter showed
+  // 25/50 and could never be marked. Both halves are one table entry now.
+  const capped = progression({
+    async getSkills() {
+      return live<SkillsDTO>({
+        skills: [
+          { name: "Hunting", level: 25, maxLevel: 25, experience: 4_600_000, xpToNext: null, progress: 1 },
+          { name: "Foraging", level: 58, maxLevel: 60, experience: 98_200_000, xpToNext: 6_400_000, progress: 0.3 },
+        ],
+        average: 41.5,
+        apiDisabled: false,
+      });
+    },
+  });
+  const r = await makeDispatcher({ progression: capped }).dispatch("skills", ctx());
+  const lines = (r.embed?.fields?.[0]?.value ?? "").split("\n");
+  assert.match(lines[0] ?? "", /Hunting \*\*25\*\*\/25 ./, "at its real cap, so marked");
+  assert.match(lines[1] ?? "", /^Foraging \*\*58\*\*\/60$/, "58 of 60 is not maxed, and carries no mark");
+  assert.match(r.embed?.description ?? "", /\*\*1\/2\*\* at cap/);
 });
 
 test("a hidden skill reads as hidden, never as zero", async () => {
@@ -778,7 +809,12 @@ test("a hidden skill reads as hidden, never as zero", async () => {
     },
   });
   const r = await makeDispatcher({ progression: off }).dispatch("skills", ctx());
-  assert.equal(r.embed?.fields?.[0]?.value, "hidden");
+  assert.equal(r.embed?.fields?.[0]?.value, "Mining —");
+  const named = await makeDispatcher({ progression: off }).dispatch(
+    "skills",
+    ctx({ args: recordArgs({ skill: "mining" }) }),
+  );
+  assert.match(named.embed?.fields?.[0]?.value ?? "", /Hidden/);
 });
 
 test("a skills-API-off profile says so instead of showing an empty table", async () => {
@@ -789,28 +825,45 @@ test("a skills-API-off profile says so instead of showing an empty table", async
   assert.match(r.embed?.description ?? "", /skill API is turned off/);
 });
 
-test("slayers shows tier out of max", async () => {
+test("slayers shows tier out of max, and the kills behind it, without being asked", async () => {
+  // The per-tier split used to be behind naming a boss, so the question people
+  // actually have — "have I ever done a T5?" — needed a second command they had
+  // no reason to know about.
   const r = await makeDispatcher().dispatch("slayers", ctx());
-  assert.match(r.embed?.fields?.[0]?.value ?? "", /Tier 8\/9/);
   assert.equal(r.embed?.fields?.[0]?.name, "Zombie");
+  assert.match(r.embed?.fields?.[0]?.value ?? "", /Tier \*\*8\*\*\/9 · 400,000 xp · 120 kills/);
+  assert.match(r.embed?.fields?.[0]?.value ?? "", /T1 0 · T2 0 · T3 0 · T4 0 · T5 120/);
+  assert.match(r.embed?.description ?? "", /highest Zombie \*\*8\*\*/);
 });
 
-test("naming one boss gets the per-tier kill breakdown, zeroes included", async () => {
+test("the tier list runs to the boss's ceiling, not to the highest tier killed", async () => {
+  // Stopping at the highest kill made the list end wherever the player had got
+  // to, so the tiers ahead of them were the ones missing.
+  const early = progression({
+    async getSlayers() {
+      return live<SlayersDTO>({
+        bosses: [{ boss: "enderman", experience: 900, tier: 1, maxTier: 4, kills: { "1": 3 } }],
+        totalExperience: 900,
+      });
+    },
+  });
+  const r = await makeDispatcher({ progression: early }).dispatch("slayers", ctx());
+  assert.match(r.embed?.fields?.[0]?.value ?? "", /T1 3 · T2 0 · T3 0 · T4 0$/);
+});
+
+test("naming one boss narrows to it", async () => {
   const r = await makeDispatcher().dispatch(
     "slayers",
     ctx({ args: recordArgs({ boss: "zombie" }) }),
   );
-  const value = r.embed?.fields?.[0]?.value ?? "";
-  assert.match(value, /T5 120/);
-  // Tiers below the highest are listed at zero rather than skipped.
-  assert.match(value, /T1 0 · T2 0 · T3 0 · T4 0 · T5 120/);
+  assert.equal((r.embed?.fields ?? []).length, 1);
+  assert.equal(r.embed?.fields?.[0]?.name, "Zombie");
 });
 
-test("/slayer still answers, prefixed with its new name", async () => {
-  const r = await makeDispatcher().dispatch("slayer", ctx());
-  assert.match(r.text, /`\/slayer` is now `\/slayers`/);
-  // Still a real answer, not just a redirect.
-  assert.match(r.embed?.fields?.[0]?.value ?? "", /Tier 8\/9/);
+test("the deprecated /slayer alias is gone from the registry, not just silenced", async () => {
+  // A release has passed. Leaving the spec registered with a dead handler would
+  // keep it in Discord's picker, which is where members find commands.
+  assert.equal(buildBridgeRegistry().get("slayer"), undefined);
 });
 
 test("dungeons reports the fastest S+ as a duration", async () => {

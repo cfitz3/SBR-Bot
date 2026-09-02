@@ -2,7 +2,8 @@
  * User-facing rendering. Maps typed fallback states to honest messages and
  * formats networth respecting exact-vs-estimate and staleness.
  */
-import { copy } from "@sbr/brand";
+import { copy, theme } from "@sbr/brand";
+import { capMarker, card, field, isCapped, player, progressLine, type CardSpec } from "@sbr/embed-kit";
 import { describeAge, padInlineRow, staleness, tierRank } from "@sbr/shared-types";
 import { card, field } from "@sbr/embed-kit";
 import { describePlaytime } from "@sbr/playtime";
@@ -38,6 +39,7 @@ import type {
   GoalDTO,
   ProgressPointDTO,
   ProgressSeriesDTO,
+  SkillDTO,
   SkillsDTO,
   SlayersDTO,
   XpSource,
@@ -223,6 +225,43 @@ function statEmbed<T>(
   return { title, ...body(result.value.data), ...freshnessOf(result.value) };
 }
 
+/**
+ * `statEmbed`, rebuilt on the card layer.
+ *
+ * Same job — unwrap a `HypixelResult`, render the failure honestly, route the
+ * envelope's freshness into the timestamp — but the body returns a `CardSpec`
+ * body rather than a raw embed, so identity lands in the author row and the
+ * title is free to be the noun. The old one stays until every card that uses it
+ * has moved; two of them have.
+ */
+function statCard<T>(
+  noun: string,
+  subject: ReturnType<typeof player>,
+  result: HypixelResult<T>,
+  body: (data: T) => Omit<CardSpec, "title" | "subject" | "freshness">,
+): EmbedView {
+  const title = sentenceCase(noun);
+  if (!result.ok) {
+    return card({
+      title,
+      subject,
+      headline: renderFailure(result.error.state),
+      tone: result.error.state === "RATE_LIMITED" ? "WARNING" : "NEUTRAL",
+    });
+  }
+  return card({ title, subject, ...body(result.value.data), freshness: staleness(result.value) });
+}
+
+/**
+ * The card nouns are lowercase because they were written to sit inside
+ * `{subject} — {noun}`. On a card whose subject has moved to the author row the
+ * noun *is* the title, and a lowercase title reads as a mistake. Capitalising
+ * here keeps one vocabulary rather than a second, title-cased copy of it.
+ */
+function sentenceCase(text: string): string {
+  return text.slice(0, 1).toUpperCase() + text.slice(1);
+}
+
 function weightText(weight: number | null): string {
   return weight === null ? "—" : formatNumber(Math.round(weight));
 }
@@ -271,48 +310,110 @@ export function renderProfileListEmbed(
   });
 }
 
+/**
+ * Skills, twelve of them, as three fields instead of twelve.
+ *
+ * Twelve inline fields is twice the field budget and, on a phone, a two-column
+ * block where every second cell is a label. The reading is the same twelve
+ * numbers; the grouping is what the game already uses — the skills that count
+ * toward the average, and the cosmetic ones that do not — so the card answers
+ * "why is my average that" without the reader doing the exclusion by hand.
+ *
+ * Asking for one skill still gets one skill, in full, with its bar.
+ */
 export function renderSkillsEmbed(
   ign: string,
   result: HypixelResult<SkillsDTO>,
   only?: string,
+  uuid?: string | null,
 ): EmbedView {
-  return statEmbed(cardTitle(ign, "skills"), result, (s) => {
+  const subject = player(ign, uuid);
+  return statCard(C.noun.skills, subject, result, (s) => {
     if (s.apiDisabled) {
-      return {
-        description: C.skillsOff,
-        color: "NEUTRAL",
-      };
+      return { tone: "NEUTRAL", headline: C.skillsOff };
     }
     const wanted = only?.toLowerCase();
     const shown = wanted ? s.skills.filter((k) => k.name.toLowerCase() === wanted) : s.skills;
     if (shown.length === 0) {
-      return { description: C.noSuchSkill.replace("{name}", only ?? ""), color: "NEUTRAL" };
+      return { tone: "NEUTRAL", headline: C.noSuchSkill.replace("{name}", only ?? "") };
     }
+
     // Counted against the readable skills only: "3 maxed" out of a set half of
     // which is hidden would overstate what we can actually see.
     const readable = s.skills.filter((k) => k.level !== null);
-    const capped = readable.filter((k) => k.level !== null && k.level >= k.maxLevel);
+    const capped = readable.filter((k) => isCapped(k.level, k.maxLevel));
+    const headline =
+      `Skill average **${formatLevel(s.average)}**` +
+      (readable.length > 0 ? ` · **${capped.length}/${readable.length}** at cap` : "");
+
+    // One skill asked for by name gets the full reading, bar included. It is
+    // the only case where there is room for one, and the only case where the
+    // question was about that skill rather than about the spread.
+    if (wanted && shown.length === 1) {
+      const k = shown[0]!;
+      return {
+        tone: "SUCCESS",
+        headline,
+        fields: [
+          field(k.name, skillDetail(k)),
+          k.progress === null ? null : field(F.progress, progressLine(k.progress)),
+        ],
+      };
+    }
+
+    const counted = shown.filter((k) => !COSMETIC_SKILLS.has(k.name));
+    const cosmetic = shown.filter((k) => COSMETIC_SKILLS.has(k.name));
     return {
-      description:
-        `Skill average **${formatLevel(s.average)}**` +
-        (readable.length > 0 ? ` · **${capped.length}/${readable.length}** at cap` : ""),
-      fields: shown.map((k) => ({
-        // The cap belongs next to the level: a 50 means something different in
-        // Alchemy (capped) than in Combat (ten levels to go), and the caps now
-        // differ per skill and move between updates.
-        name: k.level !== null && k.level >= k.maxLevel ? `${k.name} ✦` : k.name,
-        // A hidden skill says so rather than showing a plausible-looking 0.
-        value:
-          k.level === null
-            ? "hidden"
-            : k.xpToNext === null
-              ? `${k.level}/${k.maxLevel} (max)`
-              : `${k.level}/${k.maxLevel} · ${formatNumber(Math.round(k.xpToNext))} xp to go`,
-        inline: true,
-      })),
-      color: "SUCCESS",
+      tone: "SUCCESS",
+      headline,
+      fields: [
+        field(F.skills, counted.map(skillLine).join("\n")),
+        field(F.cosmeticSkills, cosmetic.map(skillLine).join("\n")),
+        // The one number the list cannot show: which skill is closest to its
+        // next level, which is the one worth an hour tonight.
+        field(F.closest, closestToNext(shown)),
+      ],
     };
   });
+}
+
+/**
+ * Named here rather than imported from `@sbr/progression`: the exclusion is a
+ * fact about how the game displays skills, the renderer is the display, and the
+ * parser's copy of the set is about arithmetic. Both are allowed to be right.
+ */
+const COSMETIC_SKILLS = new Set(["Carpentry", "Runecrafting", "Social"]);
+
+/** `Farming 60 ✦` — level, cap, and the one shared marker when they meet. */
+function skillLine(k: SkillDTO): string {
+  if (k.level === null) return `${k.name} ${theme.embed.style.unknown}`;
+  const mark = capMarker(k.level, k.maxLevel);
+  return `${k.name} **${k.level}**/${k.maxLevel}${mark === "" ? "" : ` ${mark}`}`;
+}
+
+/** The single-skill reading: level, cap, and how far the next one is. */
+function skillDetail(k: SkillDTO): string {
+  if (k.level === null) return C.skillHidden;
+  const at = `**${k.level}**/${k.maxLevel}`;
+  if (k.xpToNext === null) return `${at} — at cap`;
+  return `${at} · ${formatNumber(Math.round(k.xpToNext))} xp to level ${k.level + 1}`;
+}
+
+/**
+ * The readable, uncapped skill with the least XP left.
+ *
+ * Skills with a hidden level are not candidates — an unknown remaining XP is
+ * not a small one — and neither are capped ones, where "0 to go" is true and
+ * useless.
+ */
+function closestToNext(skills: readonly SkillDTO[]): string {
+  const candidates = skills.filter(
+    (k): k is SkillDTO & { xpToNext: number } =>
+      k.level !== null && k.xpToNext !== null && !isCapped(k.level, k.maxLevel),
+  );
+  if (candidates.length === 0) return "";
+  const best = candidates.reduce((a, b) => (b.xpToNext < a.xpToNext ? b : a));
+  return `${best.name} **${(best.level ?? 0) + 1}** — ${formatNumber(Math.round(best.xpToNext))} xp to go`;
 }
 
 function totalKills(kills: Readonly<Record<string, number>>): number {
@@ -325,48 +426,63 @@ function totalKills(kills: Readonly<Record<string, number>>): number {
  * Tiers with no kills are listed as 0 rather than omitted: a gap in the list
  * would read as a tier that does not exist, and "you have never killed a T5" is
  * exactly the thing someone reads a slayer breakdown to find out.
+ *
+ * The upper bound is the boss's own `maxTier` rather than the highest tier with
+ * a recorded kill. Stopping at the highest kill made the list end wherever the
+ * player had got to, so the tiers ahead of them — the ones the breakdown exists
+ * to show — were the ones missing.
  */
-function tierBreakdown(kills: Readonly<Record<string, number>>): string {
-  const tiers = Object.keys(kills)
-    .map(Number)
-    .filter((n) => Number.isFinite(n));
-  const highest = tiers.length > 0 ? Math.max(...tiers) : 0;
-  if (highest === 0) return C.noKills;
+function tierBreakdown(kills: Readonly<Record<string, number>>, maxTier: number): string {
   const parts: string[] = [];
-  for (let tier = 1; tier <= highest; tier += 1) {
+  for (let tier = 1; tier <= Math.max(1, maxTier); tier += 1) {
     parts.push(`T${tier} ${formatNumber(kills[String(tier)] ?? 0)}`);
   }
   return parts.join(" · ");
 }
 
+function bossName(boss: string): string {
+  return `${boss.slice(0, 1).toUpperCase()}${boss.slice(1)}`;
+}
+
+/**
+ * Slayers, with the kills that a level alone does not report.
+ *
+ * The overview used to print `Tier 7/9 · 1,234,567 xp · 4,010 kills` per boss
+ * and put the per-tier split behind asking for one boss by name — so the
+ * question people actually have ("have I ever done a T5?") needed a second
+ * command they had no reason to know about. Every boss now carries its own
+ * breakdown; five short rows of five numbers is a list, not a wall.
+ */
 export function renderSlayersEmbed(
   ign: string,
   result: HypixelResult<SlayersDTO>,
   only?: string,
+  uuid?: string | null,
 ): EmbedView {
-  return statEmbed(cardTitle(ign, "slayers"), result, (s) => {
+  const subject = player(ign, uuid);
+  return statCard(C.noun.slayers, subject, result, (s) => {
     const wanted = only?.toLowerCase();
     const shown = wanted ? s.bosses.filter((b) => b.boss === wanted) : s.bosses;
     if (shown.length === 0) {
       return {
-        description: wanted ? C.noSlayerDataFor.replace("{boss}", only ?? "") : C.noSlayerData,
-        color: "NEUTRAL",
+        tone: "NEUTRAL",
+        headline: wanted ? C.noSlayerDataFor.replace("{boss}", only ?? "") : C.noSlayerData,
       };
     }
-    // One boss gets the full per-tier breakdown; the overview stays compact,
-    // because five bosses x five tiers does not fit in an embed anyone reads.
-    const detailed = shown.length === 1;
+    const highest = shown.reduce((a, b) => (b.tier > a.tier ? b : a));
     return {
-      description: `Total slayer xp **${formatNumber(s.totalExperience)}**`,
-      fields: shown.map((b) => ({
-        name: `${b.boss.slice(0, 1).toUpperCase()}${b.boss.slice(1)}`,
-        value:
-          `Tier ${b.tier}/${b.maxTier} · ${formatNumber(b.experience)} xp` +
-          (detailed ? `
-${tierBreakdown(b.kills)}` : ` · ${formatNumber(totalKills(b.kills))} kills`),
-        inline: !detailed,
-      })),
-      color: "SUCCESS",
+      tone: "SUCCESS",
+      headline:
+        `Total slayer xp **${formatNumber(s.totalExperience)}**` +
+        ` · highest ${bossName(highest.boss)} **${highest.tier}**`,
+      fields: shown.map((b) =>
+        field(
+          `${bossName(b.boss)}${capMarker(b.tier, b.maxTier) === "" ? "" : ` ${capMarker(b.tier, b.maxTier)}`}`,
+          `Tier **${b.tier}**/${b.maxTier} · ${formatNumber(b.experience)} xp · ${formatNumber(
+            totalKills(b.kills),
+          )} kills\n${tierBreakdown(b.kills, b.maxTier)}`,
+        ),
+      ),
     };
   });
 }

@@ -12,6 +12,7 @@
     { "path": "../playtime" },
     { "path": "../tickets" },
     { "path": "../observability" },
-    { "path": "../../brand" }
+    { "path": "../../brand" },
+    { "path": "../embed-kit" }
   ]
 }

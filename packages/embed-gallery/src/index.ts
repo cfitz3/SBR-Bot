@@ -82,6 +82,8 @@ export interface GalleryCard {
 }
 
 const IGN = "Aria";
+/** A real-shaped uuid, so the author head and thumbnail render rather than fall back. */
+const UUID = "4d9a51f6a1b7482c9e0b1d3c5f7a9b2e";
 
 /** One card from one renderer. The arguments are checked against its signature. */
 function card<A extends readonly unknown[]>(
@@ -138,11 +140,52 @@ export const GALLERY: readonly GalleryCard[] = [
     IGN,
     f.failed("RATE_LIMITED"),
   ),
-  card("skills", "`/skills` — every skill, with one unreadable.", renderSkillsEmbed, IGN, f.live(f.SKILLS)),
-  card("skills-one", "`/skills skill:combat` — the filtered form.", renderSkillsEmbed, IGN, f.live(f.SKILLS), "combat"),
-  card("skills-api-off", "The skill API is off: unknown, stated as unknown.", renderSkillsEmbed, IGN, f.live(f.SKILLS_OFF)),
-  card("slayers", "`/slayers` — all five bosses, one never started.", renderSlayersEmbed, IGN, f.live(f.SLAYERS)),
-  card("slayers-one", "`/slayers boss:zombie`.", renderSlayersEmbed, IGN, f.live(f.SLAYERS), "zombie"),
+  card(
+    "skills",
+    "`/skills` — ten skills as two lists, one hidden, both corrected caps in view.",
+    renderSkillsEmbed,
+    IGN,
+    f.live(f.SKILLS),
+    undefined,
+    UUID,
+  ),
+  card(
+    "skills-one",
+    "`/skills skill:combat` — the filtered form, which is the only one with room for a bar.",
+    renderSkillsEmbed,
+    IGN,
+    f.live(f.SKILLS),
+    "combat",
+    UUID,
+  ),
+  card(
+    "skills-one-hidden",
+    "One skill asked for by name that this profile does not expose.",
+    renderSkillsEmbed,
+    IGN,
+    f.live(f.SKILLS),
+    "alchemy",
+    UUID,
+  ),
+  card(
+    "skills-api-off",
+    "The skill API is off: unknown, stated as unknown.",
+    renderSkillsEmbed,
+    IGN,
+    f.live(f.SKILLS_OFF),
+    undefined,
+    UUID,
+  ),
+  card(
+    "slayers",
+    "`/slayers` — every boss carries its own per-tier kills, including the one never started.",
+    renderSlayersEmbed,
+    IGN,
+    f.live(f.SLAYERS),
+    undefined,
+    UUID,
+  ),
+  card("slayers-one", "`/slayers boss:zombie`.", renderSlayersEmbed, IGN, f.live(f.SLAYERS), "zombie", UUID),
   card("dungeons", "`/dungeons` — classes, floors and master floors.", renderDungeonsEmbed, IGN, f.live(f.DUNGEONS)),
   card(
     "dungeons-unplayed",
