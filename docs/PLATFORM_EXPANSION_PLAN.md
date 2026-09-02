@@ -479,7 +479,7 @@ model TicketTypeConfig {
 | `/slayer` → `/slayers` | Renamed with `/slayer` kept as a deprecated alias for one release; per-tier boss kill breakdown. *Shipped.* |
 | `/skills` | New skills + current caps, capped-skill markers. *Shipped.* |
 | `/dungeons` | Boss completions per floor, cata progress to next level, class averages. *Shipped.* |
-| `/networth` | Category breakdown + top N items per category. *Shipped.* |
+| `/networth` | Category breakdown + top N items per category. *Shipped; the itemisation now lives behind a category dropdown rather than under each column.* |
 | `/auctions` | Split into active / expired / unclaimed with claim value total. *Shipped.* |
 | `/milestones` | Definition-driven, shows earned + next-up with progress. |
 | `/ticket` | Reads `TicketTypeConfig` instead of the hard-coded category list: a new autocompleted `type:` option over the guild's own menu, with `category:` kept as a deprecated alias mapping onto the five built-in keys. *Shipped.* |
