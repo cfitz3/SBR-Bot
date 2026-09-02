@@ -36,6 +36,7 @@ import type {
   EventPodiumDTO,
   LeaderboardPageDTO,
   LeaderboardPositionDTO,
+  LinkedIdentityDTO,
   LFGPostDTO,
   LowestBinDTO,
   MemberRecordDTO,
@@ -58,6 +59,12 @@ import type {
 
 /** The clock every fixture is written against, so the cards are reproducible. */
 export const NOW = Date.parse("2026-08-13T18:00:00.000Z");
+
+/** The gallery player’s uuid — what `player()` draws the head and render from. */
+export const UUID = "4d9a51f6a1b7482c9e0b1d3c5f7a9b2e";
+
+/** The same instant as a `Date`, for renderers that take one. */
+export const NOW_DATE = new Date(NOW);
 
 /** A fresh read. */
 export function live<T>(data: T): HypixelResult<T> {
@@ -1049,7 +1056,7 @@ export const MILESTONE_UNLINKED: PendingMilestoneDTO = {
 };
 
 /**
- * `/userinfo` on a long-standing member: a nickname, a boost, and more roles
+ * `/whois` on a long-standing member: a nickname, a boost, and more roles
  * than the card lists, which is where the "+N more" tail comes from.
  */
 export const DISCORD_USER: DiscordUserInfo = {
@@ -1066,6 +1073,16 @@ export const DISCORD_USER: DiscordUserInfo = {
     roleIds: Array.from({ length: 15 }, (_, i) => `70000000000000000${String(i)}`),
     timedOutUntil: null,
   },
+};
+
+/** The link behind `DISCORD_USER`, for the `/whois` card's link row. */
+export const LINKED: LinkedIdentityDTO = {
+  discordId: "900000000000000001",
+  minecraftUuid: "4d9a51f6a1b7482c9e0b1d3c5f7a9b2e",
+  ign: "Aria",
+  status: "VERIFIED",
+  primary: true,
+  verifiedAt: iso(-400 * 24 * 3600_000),
 };
 
 /** Somebody Discord knows and this server does not — a different card, not a blank one. */

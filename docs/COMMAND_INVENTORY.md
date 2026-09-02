@@ -144,13 +144,15 @@ the newest. The four snapshot-backed boards are keyed by Minecraft uuid, so an
 unlinked caller gets the board but no "you are here" line. Full rules in
 `COMMANDS.md` §19.
 
-`/standing` is keyed by **Discord id, not IGN** — XP is attributed to a person
-on the platform, so an unlinked speaker has no standing to report. Three answers
-are kept apart on purpose: XP not wired here says *"Guild XP isn't switched on
-here."* (never "0", which would be a different and untrue claim), a member with
-no ledger rows gets the encouraging empty state, and everyone else gets the
-embed. Someone else's standing stays ephemeral because printing a member's rank
-into a channel on request invites exactly the comparison nobody asked for.
+Standing is a **section of `/me`**, not a command of its own (`COMMANDS.md`
+§18). It is keyed by **Discord id, not IGN** — XP is attributed to a person on
+the platform, so an unlinked speaker has none to report. Three answers are kept
+apart on purpose: XP not wired here leaves the section off the card entirely, a
+member with no ledger rows is told so in words (never "0", which would be a
+different and untrue claim), and everyone else gets the breakdown. Someone
+else's standing is one line on the private half of `/whois`, because printing a
+member's rank into a channel on request invites exactly the comparison nobody
+asked for.
 
 `/online` is Discord-only by design — in-game the answer is `/g online`, which
 costs the bridge account nothing. The 30s cooldown and the transport's shared

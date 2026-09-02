@@ -47,6 +47,18 @@ export const DEFAULT_EMBEDS = {
     /** The uncapped skill with the least XP left — the one worth an hour tonight. */
     closest: "Closest to next",
     catacombs: "Catacombs",
+    /* ── /whois and /serverinfo ── */
+    account: "Account",
+    thisServer: "This server",
+    /** The Hypixel half of the member card, consolidated. */
+    skyblock: "SkyBlock",
+    events: "Events",
+    roles: "Roles",
+    link: "Link",
+    counts: "Counts",
+    boosts: "Boosts",
+    owner: "Owner",
+    created: "Created",
     classAverage: "Class average",
     selected: "Selected",
     weight: "Weight",
@@ -256,6 +268,19 @@ export const DEFAULT_EMBEDS = {
       "Couldn't read this profile's talisman bag — the inventory API is off, so ownership is unknown.",
     nobodyRanked: "Nobody is ranked here yet.",
     nobodyOnline: "Nobody is online right now.",
+
+    /* ── /whois and /serverinfo ── */
+    /** What the card is; the author row says who it is about. */
+    whois: "Discord profile",
+    /** `/me`. Says what the card is; the author row says whose it is. */
+    memberCard: "Member card",
+    noGateway: "That one needs Discord — I can't see the server from here.",
+    noSuchAccount: "Discord has no account with that id.",
+    serverUnreadable: "I can't see this server right now. Try again shortly.",
+    noRoles: "None",
+    /** Names the way out. A member reading this can fix it in one command. */
+    notLinked: "Not linked — /link <ign>.",
+    unknownOwner: "Unknown",
     noXpYet: "Nothing yet.",
     achievementsOff: "Achievements aren't switched on here.",
     achievementsNone: "This guild hasn't set up any achievements yet.",

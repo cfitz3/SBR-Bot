@@ -802,7 +802,7 @@ applying a delta, precisely so a missed or double-counted event cannot survive.
 |-------|-------|
 | `guildId`, `discordId` | unique together |
 | `totalXp`, `level` | level is the closed-form inverse of the triangular curve |
-| `bySource` | JSON per-source totals, denormalized so one row answers all of `/standing` |
+| `bySource` | JSON per-source totals, denormalized so one row answers the whole standing section of `/me` |
 | `tenureDays`, `lastAwardAt` | |
 
 Indexed on (`guildId`, `totalXp`) — the leaderboard's ordering.

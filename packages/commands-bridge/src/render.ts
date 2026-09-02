@@ -3,7 +3,18 @@
  * formats networth respecting exact-vs-estimate and staleness.
  */
 import { copy, theme } from "@sbr/brand";
-import { capMarker, card, field, isCapped, player, progressLine, type CardSpec } from "@sbr/embed-kit";
+import {
+  capMarker,
+  card,
+  facts,
+  field,
+  inlineFacts,
+  isCapped,
+  player,
+  progressBar,
+  progressLine,
+  type CardSpec,
+} from "@sbr/embed-kit";
 import { describeAge, padInlineRow, staleness, tierRank } from "@sbr/shared-types";
 import { card, field } from "@sbr/embed-kit";
 import { describePlaytime } from "@sbr/playtime";
@@ -504,7 +515,7 @@ export function renderDungeonsEmbed(ign: string, result: HypixelResult<DungeonsD
     if (d.catacombsProgress !== null && d.catacombsXpToNext !== null) {
       fields.push({
         name: F.progress,
-        value: `${progressBar(d.catacombsProgress)}\n${formatNumber(d.catacombsXpToNext)} XP to next level`,
+        value: `${progressLine(d.catacombsProgress)}\n${formatNumber(d.catacombsXpToNext)} XP to next level`,
         inline: false,
       });
     }
@@ -630,6 +641,14 @@ export function renderStatsEmbed(
  * `null`s in a row is one where the next `null` lands in the wrong slot.
  */
 export interface ProfileCardInput {
+  /**
+   * The member’s uuid, for the head icon and the render.
+   *
+   * Optional because a card without a face is still worth sending, and the one
+   * caller that has the uuid — `/me`, which resolved the link to get here — is
+   * not the only one that may ever build this.
+   */
+  readonly uuid?: string | null;
   readonly profile: HypixelResult<ProfileSummaryDTO>;
   readonly slayers: HypixelResult<SlayersDTO>;
   readonly dungeons: HypixelResult<DungeonsDTO>;
@@ -673,7 +692,7 @@ export function renderProfileCardEmbed(ign: string, input: ProfileCardInput): Em
   const nw =
     input.networth.ok && input.networth.value.data.total !== null
       ? `${formatCoins(input.networth.value.data.total)}${input.networth.value.data.exact ? "" : "+"}`
-      : "—";
+      : null;
 
   const headline = input.profile.ok
     ? `**SkyBlock Level ${formatLevel(input.profile.value.data.skyblockLevel)}** · Profile **${profileLabel(
@@ -681,55 +700,41 @@ export function renderProfileCardEmbed(ign: string, input: ProfileCardInput): Em
       )}**`
     : renderFailure(input.profile.error.state);
 
-  const hypixelRow: CardField[] = [
-    { name: F.skillAverage, value: formatLevel(p === null ? null : p.skillAverage), inline: true },
-    {
-      name: F.catacombs,
-      value: formatLevel(input.dungeons.ok ? input.dungeons.value.data.catacombsLevel : null),
-      inline: true,
-    },
-    { name: F.weight, value: p === null ? "—" : weightText(p.senitherWeight), inline: true },
-    { name: F.networth, value: nw, inline: true },
-    {
-      name: F.slayerXp,
-      value: input.slayers.ok ? formatNumber(input.slayers.value.data.totalExperience) : "—",
-      inline: true,
-    },
-  ];
+  // Five one-word numbers were five inline fields. On a phone they wrapped into
+  // a ragged block that spent two thirds of its height on labels, and they
+  // pushed the sections that are actually about this guild below the fold. As
+  // one field they read as what they are: a list.
+  const hypixel = facts([
+    { label: F.skillAverage, value: p === null ? null : formatLevel(p.skillAverage) },
+    { label: F.catacombs, value: input.dungeons.ok ? formatLevel(input.dungeons.value.data.catacombsLevel) : null },
+    { label: F.weight, value: p === null ? null : weightText(p.senitherWeight) },
+    { label: F.networth, value: nw },
+    { label: F.slayerXp, value: input.slayers.ok ? formatNumber(input.slayers.value.data.totalExperience) : null },
+  ]);
 
-  const standing = input.standing ?? null;
-  const standingRow: CardField[] =
-    standing === null
-      ? []
-      : [
-          {
-            name: F.guildStanding,
-            value: `Level ${standing.level} · ${formatNumber(standing.totalXp)} XP${
-              standing.rank === null ? "" : ` · #${standing.rank}`
-            }`,
-            inline: true,
-          },
-          {
-            name: F.tenure,
-            value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
-            inline: true,
-          },
-        ];
+  const standing = standingField(input.standing ?? null);
 
-  const sections = [
-    achievementField(input.achievements ?? null),
-    podiumField(input.podium ?? null),
-    positionsField(input.positions ?? null),
-    input.record === undefined || input.record === null ? null : renderMemberRecordField(input.record),
-  ].filter((field): field is CardField => field !== null);
-
-  return {
-    title: `${ign} — profile`,
-    description: headline,
-    fields: [...padInlineRow([...hypixelRow, ...standingRow]), ...sections],
-    ...(input.profile.ok ? freshnessOf(input.profile.value) : {}),
-    color: input.profile.ok ? "INFO" : "NEUTRAL",
-  };
+  return card({
+    // The title says what the card is. Who it is about is the author row, which
+    // is where identity belongs and where the head icon can sit next to it.
+    title: C.memberCard,
+    subject: player(ign, input.uuid ?? null),
+    headline,
+    fields: [
+      field(F.skyblock, hypixel, true),
+      standing,
+      achievementField(input.achievements ?? null),
+      podiumField(input.podium ?? null),
+      positionsField(input.positions ?? null),
+      input.record === undefined || input.record === null ? null : renderMemberRecordField(input.record),
+    ],
+    // The standing caveat only when standing is on the card, and only in the
+    // footer — it is the one note here that does not decay, which is the whole
+    // rule for what a footer may hold.
+    ...(standing === null ? {} : { footer: C.standingFooter }),
+    ...(input.profile.ok ? { freshness: staleness(input.profile.value) } : {}),
+    tone: input.profile.ok ? "INFO" : "NEUTRAL",
+  });
 }
 
 /**
@@ -792,7 +797,7 @@ function podiumField(data: EventPodiumDTO | null): CardField | null {
     return `${medal} **${placing.eventTitle}** — ${metricLabel(placing.metric)}${when}`;
   });
 
-  return { name: "Events", value: [`${tally}${attended}`, ...recent].join("\n"), inline: false };
+  return { name: F.events, value: [`${tally}${attended}`, ...recent].join("\n"), inline: false };
 }
 
 /**
@@ -885,64 +890,63 @@ export function renderMemberRecordField(
   return { name: F.yourRecord, value: lines.join("\n"), inline: false };
 }
 
-// ── Standing (COMMANDS.md §18) ──────────────────────────────────────────────
+// ── Standing, as a section of the member card (COMMANDS.md §18) ────────────
 
-/** How each XP source is named to a member — the member's word, not the enum's. */
+/** How each XP source is named to a member — the member’s word, not the enum’s. */
 const XP_SOURCE_LABELS: Readonly<Record<XpSource, string>> = copy.embed.xpSource;
 
-/** `▰▰▰▱▱▱▱▱▱▱`. Built from the DTO's own numbers so this file needs no engine. */
-function xpProgressBar(intoLevel: number, levelSpan: number, width = 10): string {
-  const ratio = levelSpan <= 0 ? 0 : intoLevel / levelSpan;
-  const filled = Math.max(0, Math.min(width, Math.round(ratio * width)));
-  return "▰".repeat(filled) + "▱".repeat(width - filled);
-}
-
 /**
- * `/standing` — level, progress, and where the XP came from.
+ * Guild standing as one field: level, progress, position, and where it came from.
  *
- * The breakdown lists only sources that actually paid, and always states the
- * total it adds up to. A member who disagrees with their standing should be able
- * to point at the line they think is wrong, which is the whole reason the ledger
- * carries raw values in the first place.
+ * This was `/standing`, a whole card of its own. It never had a card’s worth of
+ * content — four small facts and a breakdown that is usually two lines — and it
+ * asked a member to run a second command to see numbers that belong beside the
+ * ones `/me` was already showing them. Folded in here it costs four lines and
+ * saves a round trip.
+ *
+ * The breakdown survives the fold intact, because it is the part that mattered:
+ * it lists only sources that actually paid and always states the total they add
+ * up to, so a member who disagrees with their standing can point at the line
+ * they think is wrong. That is the whole reason the ledger keeps raw values.
+ *
+ * Sources are collapsed onto one line rather than one per line. `/standing`
+ * printed them stacked because it had a card to fill; inside a card that has
+ * five other sections, five stacked lines would push the record off the fold.
  */
-export function renderStandingEmbed(name: string, standing: XpStandingDTO): EmbedView {
+function standingField(standing: XpStandingDTO | null): CardField | null {
+  if (standing === null) return null;
+
   const earned = (Object.entries(standing.bySource) as Array<[XpSource, number]>)
     .filter(([, amount]) => amount !== 0)
-    .sort((a, b) => b[1] - a[1]);
+    .sort((a, b) => b[1] - a[1])
+    .map(([source, amount]) => `${XP_SOURCE_LABELS[source]} ${formatNumber(amount)}`);
 
-  const breakdown =
-    earned.length === 0
-      ? C.noXpYet
-      : earned.map(([source, amount]) => `${XP_SOURCE_LABELS[source]} — ${formatNumber(amount)}`).join("\n");
-
-  const bar = xpProgressBar(standing.intoLevel, standing.levelSpan);
+  // The bar is the shared one from the card layer. There were two ten-wide bars
+  // in this codebase meaning the same thing, and a member could meet both in a
+  // minute; the glyphs now come from the theme.
+  const ratio = standing.levelSpan <= 0 ? 0 : standing.intoLevel / standing.levelSpan;
   const toNext = Math.max(0, standing.levelSpan - standing.intoLevel);
 
-  return {
-    title: cardTitle(name, "standing"),
-    description: `**Level ${standing.level}** · ${formatNumber(standing.totalXp)} XP\n${bar} ${formatNumber(
-      standing.intoLevel,
-    )}/${formatNumber(standing.levelSpan)} · ${formatNumber(toNext)} to level ${standing.level + 1}`,
-    fields: [
-      { name: F.rank, value: standing.rank === null ? "—" : `#${standing.rank}`, inline: true },
+  const lines = [
+    `**Level ${String(standing.level)}** · ${formatNumber(standing.totalXp)} XP${
+      standing.rank === null ? "" : ` · #${String(standing.rank)}`
+    }`,
+    `${progressBar(ratio)} ${formatNumber(standing.intoLevel)}/${formatNumber(
+      standing.levelSpan,
+    )} · ${formatNumber(toNext)} to level ${String(standing.level + 1)}`,
+    inlineFacts([
+      { label: F.tenure, value: standing.tenureDays === 0 ? null : `${formatNumber(standing.tenureDays)} days` },
       {
-        name: F.tenure,
-        value: standing.tenureDays === 0 ? "—" : `${formatNumber(standing.tenureDays)} days`,
-        inline: true,
+        label: F.lastEarned,
+        value: standing.lastAwardAt === null ? null : describeAge(standing.lastAwardAt.toISOString()),
       },
-      {
-        name: F.lastEarned,
-        value: standing.lastAwardAt === null ? "—" : describeAge(standing.lastAwardAt.toISOString()),
-        inline: true,
-      },
-      { name: F.whereFrom, value: breakdown, inline: false },
-    ],
-    // Not a staleness footer: standing is recomputed on a cadence rather than
-    // fetched, so what a member needs to know is that today is still counting,
-    // not how old some upstream read was.
-    footer: C.standingFooter,
-    color: "INFO",
-  };
+    ]),
+    // Named rather than left bare: a row of numbers with no label reads as part
+    // of the progress line above it.
+    earned.length === 0 ? `${F.whereFrom}: ${C.noXpYet}` : `${F.whereFrom}: ${earned.join(" · ")}`,
+  ];
+
+  return { name: F.guildStanding, value: lines.join("\n"), inline: false };
 }
 
 // ── Leaderboards (COMMANDS.md §19) ──────────────────────────────────────────
@@ -1131,12 +1135,6 @@ function formatMetric(metric: string, value: number): string {
   return formatLevel(value);
 }
 
-/** A ten-cell bar. Text, not an image: the in-game surface has to read it too. */
-function progressBar(fraction: number): string {
-  const filled = Math.round(Math.max(0, Math.min(1, fraction)) * 10);
-  return `${"█".repeat(filled)}${"░".repeat(10 - filled)} ${Math.round(fraction * 100)}%`;
-}
-
 /**
  * The badge for a tier. Editorial weight in one character, because a field name
  * has no room for the word and a member reading twelve earned achievements
@@ -1240,7 +1238,7 @@ export function renderAchievementsEmbed(ign: string, data: AchievementsDTO): Emb
         ? // No snapshot for this metric yet — say so instead of drawing an empty
           // bar, which would read as "0%" and imply a measurement we don't have.
           `${formatMetric(a.metric, a.threshold)} · not measured yet`
-        : `${progressBar(a.progress)} — ${formatMetric(a.metric, a.current ?? 0)} / ${formatMetric(a.metric, a.threshold)}`,
+        : `${progressLine(a.progress)} — ${formatMetric(a.metric, a.current ?? 0)} / ${formatMetric(a.metric, a.threshold)}`,
     inline: false,
   }));
 
@@ -1366,7 +1364,7 @@ export function renderGoalAchievedEmbed(ign: string, metric: string, target: num
 function goalLine(goal: GoalDTO): string {
   const target = formatMetric(goal.metric, goal.target);
   const current = goal.current === null ? "—" : formatMetric(goal.metric, goal.current);
-  const bar = goal.progress === null ? "" : `${progressBar(goal.progress)} `;
+  const bar = goal.progress === null ? "" : `${progressLine(goal.progress)} `;
   const eta =
     goal.achievedAt !== null
       ? C.goalDone

@@ -31,7 +31,7 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 | F13b | **Playtime tracking** | Sessions opened on a bridge-observed join and closed on the leave, debounced so a lobby hop is one session, persisted as `PlaySession` rows. |
 | F14 | **Join screening & auto-accept** | Every `/g join` request is screened against the scammer list, the applicant's stats and this guild's own history, recorded, reported to staff, and — if the guild opts in — accepted automatically. |
 | F15 | **Greeting** | Welcome, farewell and guild-join messages, rendered from a guild-configured template and spoken by this bot because a member is addressed by the bot they interact with (§6D). |
-| F16 | **Member conveniences** | `/userinfo`, `/serverinfo`, `/avatar`, `/remind` + `/reminders`, `/tag`, `/levelalerts`, plus level-up announcements, autoresponders and sticky messages (§6D). |
+| F16 | **Member conveniences** | `/whois`, `/serverinfo`, `/remind` + `/reminders`, `/tag`, `/levelalerts`, plus level-up announcements, autoresponders and sticky messages (§6D). |
 | F17 | **Self-service role menus** | The message, the buttons and the interaction handler are this bot's; the grant itself is an admin-bot effector call (§6D). |
 
 ---
@@ -52,7 +52,7 @@ Prefix commands (prefix + enabled set from `GuildConfig`). **Read-only / low-ris
 | `!price <item>` `!bz <item>` `!lbin <item>` | market lookups | `RUN_COMMAND` | Cache (worker) |
 | `!weight <ign?>` | Senither/farming weight | `RUN_COMMAND` | Cache→Live |
 | `!help` | condensed catalog | Public | Static |
-| `!8ball` `!roll` `!coinflip` `!rps` `!guildquote` `!rank` `!cringe` | fun (`COMMANDS.md` §20) | Public | None (Redis counter for `!cringe`) |
+| `!8ball` `!roll` `!coinflip` `!rps` `!guildquote` `!cringe` | fun (`COMMANDS.md` §20) | Public | None (Redis counter for `!cringe`) |
 
 **The fun commands never echo what somebody typed**, which is a bridge concern
 rather than a taste one: this bot speaks with the guild's voice in guild chat, so

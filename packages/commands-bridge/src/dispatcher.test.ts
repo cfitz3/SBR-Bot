@@ -1009,7 +1009,9 @@ test("unlink removes the caller's account", async () => {
 test("me is ephemeral and never accepts another player", async () => {
   const r = await makeDispatcher().dispatch("me", ctx({ args: recordArgs({ player: "Zed" }) }));
   assert.equal(r.ephemeral, true);
-  assert.match(r.embed?.title ?? "", /Aria — profile/);
+  // Identity is the author row now, not the title — the title says what the
+  // card is, which frees it from having to say who it is about as well.
+  assert.equal(r.embed?.author?.name, "Aria");
 });
 
 test("usage is captured for each dispatch", async () => {
@@ -1859,53 +1861,57 @@ function xpService(over: Partial<XpService> = {}): XpService {
   };
 }
 
-test("standing shows the level, the rank and where the XP came from", async () => {
-  const r = await makeDispatcher({ xp: xpService() }).dispatch("standing", ctx());
-  assert.match(r.embed?.description ?? "", /Level 4/);
-  assert.equal(r.embed?.fields?.find((f) => f.name === "Rank")?.value, "#3");
+test("the member card carries the standing breakdown /standing used to be a card for", async () => {
+  const r = await makeDispatcher({ xp: xpService() }).dispatch("me", ctx());
+  const standing = r.embed?.fields?.find((f) => f.name === "Guild standing")?.value ?? "";
 
-  const breakdown = r.embed?.fields?.find((f) => f.name === "Where it came from")?.value ?? "";
+  assert.match(standing, /\*\*Level 4\*\* · 1,250 XP · #3/);
+  assert.match(standing, /250\/500 · 250 to level 5/);
+  assert.match(standing, /Tenure 61 days/);
+
   // Highest-paying source first, and a source that paid nothing is left out
   // entirely rather than listed as a zero.
-  assert.match(breakdown, /^Guild XP — 900/);
-  assert.doesNotMatch(breakdown, /Events/);
+  assert.match(standing, /Where it came from: Guild XP 900/);
+  assert.doesNotMatch(standing, /Events/);
   // A deduction is still shown — hiding it would make the total unexplainable.
-  assert.match(breakdown, /Staff adjustment — -50/);
+  assert.match(standing, /Staff adjustment -50/);
 });
 
-test("standing is public for yourself and ephemeral for someone else", async () => {
-  const mine = await makeDispatcher({ xp: xpService() }).dispatch("standing", ctx());
-  assert.equal(mine.ephemeral, false);
-
-  const theirs = await makeDispatcher({ xp: xpService() }).dispatch(
-    "standing",
-    ctx({ args: recordArgs({ member: "222222222222222222" }) }),
-  );
-  assert.equal(theirs.ephemeral, true);
+test("the standing caveat is a footer, and only when standing is on the card", async () => {
+  // It is the one note here that does not decay, which is the rule for what a
+  // footer may hold. A card with no standing on it has nothing to caveat.
+  const withStanding = await makeDispatcher({ xp: xpService() }).dispatch("me", ctx());
+  assert.match(withStanding.embed?.footer ?? "", /totalled a few times a day/);
+  const without = await makeDispatcher().dispatch("me", ctx());
+  assert.doesNotMatch(without.embed?.footer ?? "", /totalled a few times a day/);
 });
 
-test("standing says XP is off rather than reporting a zero", async () => {
-  const r = await makeDispatcher().dispatch("standing", ctx());
-  assert.match(r.text, /isn't switched on/);
-  assert.equal(r.embed, undefined);
-});
-
-test("a member who has earned nothing is told how to start, not shown a zero", async () => {
+test("a member who has earned nothing has no standing section rather than a row of zeroes", async () => {
   const none = xpService({ async standing() { return null; } });
-  const r = await makeDispatcher({ xp: none }).dispatch("standing", ctx());
-  assert.match(r.text, /haven't earned any guild XP yet/);
+  const r = await makeDispatcher({ xp: none }).dispatch("me", ctx());
+  assert.equal(r.embed?.fields?.find((f) => f.name === "Guild standing"), undefined);
 });
 
-test("me folds guild standing into the stats card", async () => {
-  const r = await makeDispatcher({ xp: xpService() }).dispatch("me", ctx());
-  assert.equal(r.embed?.fields?.find((f) => f.name === "Guild standing")?.value, "Level 4 · 1,250 XP · #3");
-  assert.equal(r.embed?.fields?.find((f) => f.name === "Tenure")?.value, "61 days");
-});
+test("standing and rank both stop reaching Discord, by the two different routes", () => {
+  // `/standing` is deleted: everything it printed is on `/me` now, and asking
+  // for somebody else’s is `/whois`, which is why this removal ships after that
+  // command exists and not before. Nothing of it is left to turn back on.
+  //
+  // `/rank` is withdrawn instead. The joke is fine and the handler still
+  // compiles; it was the word that was wrong. `enabled: false` is the
+  // difference between the two, and both are absent from what is registered.
+  const registry = buildBridgeRegistry();
+  assert.equal(registry.get("standing"), undefined);
+  assert.equal(registry.get("rank")?.enabled, false);
 
+  const registrable = [...registry.values()].filter((s) => s.enabled !== false).map((s) => s.name);
+  assert.equal(registrable.includes("standing"), false);
+  assert.equal(registrable.includes("rank"), false);
+});
 test("me still renders when the XP lookup fails", async () => {
   const broken = xpService({ async standing() { throw new Error("db down"); } });
   const r = await makeDispatcher({ xp: broken }).dispatch("me", ctx());
-  assert.match(r.embed?.title ?? "", /Aria/);
+  assert.equal(r.embed?.author?.name, "Aria");
   assert.equal(r.embed?.fields?.find((f) => f.name === "Guild standing"), undefined);
 });
 
@@ -1943,7 +1949,7 @@ test("me still renders when the record lookup fails", async () => {
     },
   };
   const r = await makeDispatcher({ record: broken }).dispatch("me", ctx());
-  assert.match(r.embed?.title ?? "", /Aria/);
+  assert.equal(r.embed?.author?.name, "Aria");
   assert.equal(r.embed?.fields?.find((f) => f.name === "Your record"), undefined);
 });
 

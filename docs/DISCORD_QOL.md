@@ -263,9 +263,8 @@ All member-facing, all on SBR Bot.
 
 | Command | What it does | Notes |
 | --- | --- | --- |
-| `/userinfo [member]` | Discord account details | Public |
+| `/whois [member] [public]` | Who a member is here, in one card | Ephemeral unless `public:true`; standing and your record are private-only |
 | `/serverinfo` | The server at a glance | 10s cooldown |
-| `/avatar [member]` | Full-size avatar | Public |
 | `/levelalerts [on\|off]` | Your own level-up announcements | Blank shows where you stand |
 | `/remind <when> <about>` | A reminder to yourself | `30m`, `2h30m`, `1w2d` |
 | `/reminders [cancel:<id>]` | Your pending reminders | Ephemeral |
@@ -366,9 +365,10 @@ There is no panel surface for stickies yet; they are managed through `/sticky`.
 
 ### Not built, and why
 
-- **`/rank`** — already exists as a joke command (`packages/commands-bridge/src/fun.ts`),
-  and `/me` plus `/standing` already deliver level, XP and record. A third
-  spelling of the same answer is not a feature.
+- **`/rank`** — a levelling command was never built, and the joke one that
+  shared the name is now withdrawn (`COMMANDS.md` §20). `/me` delivers level,
+  XP and record on one card; a third spelling of the same answer is not a
+  feature.
 - **Starboard** — deferred: needs `GuildMessageReactions` on the shared
   member-facing token and a reaction hot path.
 - **Birthdays** — deferred: storing a date of birth for minors is a privacy

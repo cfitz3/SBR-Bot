@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { copy } from "@sbr/brand";
 import type { HypixelFailureState, LinkError, ProfileSummaryDTO, HypixelResult } from "@sbr/shared-types";
-import { renderFailure, renderLinkError, renderProfileEmbed, renderStandingEmbed } from "./render.js";
+import { renderFailure, renderLinkError, renderProfileCardEmbed, renderProfileEmbed } from "./render.js";
 
 const FAILURES: readonly HypixelFailureState[] = [
   "NOT_LINKED",
@@ -20,6 +20,8 @@ const FAILURES: readonly HypixelFailureState[] = [
   "API_DISABLED",
 ];
 
+/** An unreadable Hypixel half, for the sections of a card that do not need one. */
+const failed = <T,>(): HypixelResult<T> => ({ ok: false, error: { state: "RATE_LIMITED" } });
 const LINK_ERRORS: readonly LinkError["kind"][] = [
   "IGN_NOT_FOUND",
   "SOCIAL_UNSET",
@@ -80,23 +82,33 @@ test("field names come from the shared vocabulary, so three cards cannot disagre
   assert.ok(names.includes(copy.embed.field.catacombs));
 });
 
-test("the standing card names XP sources in the member's words and footers from the key", () => {
-  const view = renderStandingEmbed("Notch", {
-    discordId: "1",
-    totalXp: 1200,
-    level: 12,
-    intoLevel: 40,
-    levelSpan: 100,
-    bySource: { GEXP: 900, MANUAL: 300 },
-    tenureDays: 90,
-    lastAwardAt: null,
-    rank: 3,
+test("the standing section names XP sources in the member's words and footers from the key", () => {
+  // The breakdown was the point of `/standing` and is the reason it survives
+  // the fold into `/me` rather than being summarised away: a member who thinks
+  // their standing is wrong has to be able to point at the line they mean.
+  const view = renderProfileCardEmbed("Notch", {
+    profile: failed(),
+    slayers: failed(),
+    dungeons: failed(),
+    networth: failed(),
+    standing: {
+      discordId: "1",
+      totalXp: 1200,
+      level: 12,
+      intoLevel: 40,
+      levelSpan: 100,
+      bySource: { GEXP: 900, MANUAL: 300 },
+      tenureDays: 90,
+      lastAwardAt: null,
+      rank: 3,
+    },
   });
 
-  const breakdown = (view.fields ?? []).find((f) => f.name === copy.embed.field.whereFrom);
-  assert.ok(breakdown, "the breakdown field is the point of the card");
-  assert.ok(breakdown.value.includes(copy.embed.xpSource.GEXP));
+  const standing = (view.fields ?? []).find((f) => f.name === copy.embed.field.guildStanding);
+  assert.ok(standing, "the standing section is on the member card");
+  assert.ok(standing.value.includes(copy.embed.field.whereFrom));
+  assert.ok(standing.value.includes(copy.embed.xpSource.GEXP));
   // The one that matters most: an adjustment must never read as something earned.
-  assert.ok(breakdown.value.includes(copy.embed.xpSource.MANUAL));
+  assert.ok(standing.value.includes(copy.embed.xpSource.MANUAL));
   assert.equal(view.footer, copy.embed.card.standingFooter);
 });

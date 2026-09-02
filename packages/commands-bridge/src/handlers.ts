@@ -45,7 +45,6 @@ import {
   renderRosterEmbed,
   renderSkillsEmbed,
   renderSlayersEmbed,
-  renderStandingEmbed,
   renderProfileCardEmbed,
   renderStatsEmbed,
   formatCoins,
@@ -228,6 +227,7 @@ const me: CommandHandler = async (ctx, deps) => {
     ephemeral: true,
     text: `${linked.value.ign}: ${renderNetworth(nw)}`,
     embed: renderProfileCardEmbed(linked.value.ign, {
+      uuid,
       profile: summary,
       slayers,
       dungeons,
@@ -239,43 +239,6 @@ const me: CommandHandler = async (ctx, deps) => {
       positions,
     }),
   };
-};
-
-/**
- * `/standing` — guild XP, level and where it came from.
- *
- * Keyed by Discord id, not by IGN, because that is what XP is attributed to: a
- * member is a person on the platform, and an unlinked IGN has no standing to
- * report (see the ledger's attribution rule in DOMAIN_MODEL.md §XP).
- */
-const standing: CommandHandler = async (ctx, deps) => {
-  if (deps.xp === undefined) {
-    // Says "off", not "zero". A member reading a 0 would reasonably conclude
-    // they had earned nothing, which is a different and untrue claim.
-    return { ephemeral: true, text: "Guild XP isn't switched on here." };
-  }
-
-  const targetId = ctx.args.getUser("member") ?? ctx.userId;
-  const self = targetId === ctx.userId;
-
-  const found = await deps.xp.standing(ctx.guildId, targetId);
-  const linked = await deps.identity.resolveByDiscordId(targetId);
-  const name = linked.ok && linked.value !== null ? linked.value.ign : self ? "You" : "That member";
-
-  if (found === null) {
-    return {
-      ephemeral: true,
-      text: self
-        ? "You haven't earned any guild XP yet — chat, run commands, or show up in guild for a day and it'll start counting."
-        : `${name} hasn't earned any guild XP yet.`,
-    };
-  }
-
-  const embed = renderStandingEmbed(name, found);
-  // Someone else's standing stays ephemeral: it is theirs to publish, and a
-  // command that prints a member's rank into a channel on request invites
-  // exactly the comparison nobody asked for.
-  return { ephemeral: !self, text: flattenEmbed(embed), embed };
 };
 
 /**
@@ -753,27 +716,6 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
       description: "Show your own profile summary",
       cooldownMs: 10_000,
       handler: me,
-    },
-    {
-      name: "standing",
-      description: "Your guild XP, level and where it came from",
-      options: [
-        {
-          name: "member",
-          description: "Whose standing to show (defaults to you)",
-          type: "user",
-          // Discord-only: guild chat can prove which *player* is speaking but
-          // not which Discord account they mean by a name, and standing is
-          // attributed to the latter.
-          inGamePositional: false,
-        },
-      ],
-      cooldownMs: 10_000,
-      // Reachable in guild chat, but only for a linked speaker — the surface
-      // resolves the IGN to a Discord id before the handler runs, which is
-      // exactly the identity standing is keyed by.
-      inGame: "linked",
-      handler: standing,
     },
     {
       name: "leaderboard",

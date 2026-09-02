@@ -54,12 +54,11 @@ import {
   renderServerInfoEmbed,
   renderSkillsEmbed,
   renderSlayersEmbed,
-  renderStandingEmbed,
   renderProfileCardEmbed,
   renderStatsEmbed,
   renderTicketEmbed,
   renderTicketListEmbed,
-  renderUserInfoEmbed,
+  renderWhoisEmbed,
 } from "@sbr/commands-bridge";
 import type {
   DungeonsDTO,
@@ -79,6 +78,14 @@ export interface GalleryCard {
   /** The renderer's own function name, so coverage is measured, not asserted. */
   readonly renderer: string;
   readonly view: EmbedView;
+  /**
+   * House-style rules this card breaks on purpose, by id.
+   *
+   * Per card, never per run: a waiver is a statement about one card, and one
+   * switched off run-wide stops the check catching every other card that
+   * breaks it by accident.
+   */
+  readonly ignore?: readonly string[];
 }
 
 const IGN = "Aria";
@@ -93,6 +100,11 @@ function card<A extends readonly unknown[]>(
   ...args: A
 ): GalleryCard {
   return { name, about, renderer: render.name, view: render(...args) };
+}
+
+/** A card that breaks a named rule for a reason, with the reason next to it. */
+function except(base: GalleryCard, ...rules: readonly string[]): GalleryCard {
+  return { ...base, ignore: rules };
 }
 
 /**
@@ -215,7 +227,7 @@ export const GALLERY: readonly GalleryCard[] = [
   ),
   card(
     "profile-card",
-    "`/me` — the member's own card, every section present.",
+    "`/me` — the member's own card, every section present, standing among them.",
     renderProfileCardEmbed,
     IGN,
     {
@@ -223,6 +235,7 @@ export const GALLERY: readonly GalleryCard[] = [
       slayers: f.live(f.SLAYERS),
       dungeons: f.live(f.DUNGEONS),
       networth: f.live(f.NETWORTH),
+      uuid: f.UUID,
       standing: f.STANDING,
       record: f.MEMBER_RECORD,
       achievements: f.ACHIEVEMENTS,
@@ -240,6 +253,8 @@ export const GALLERY: readonly GalleryCard[] = [
       slayers: f.live(f.SLAYERS),
       dungeons: f.live(f.DUNGEONS_UNPLAYED),
       networth: f.live(f.NETWORTH),
+      // No uuid here on purpose: the author row has to read as a name when the
+      // caller never resolved a head, and this is the card that shows it.
       achievements: f.ACHIEVEMENTS_OFF,
       podium: f.PODIUM_NO_MEDALS,
     },
@@ -254,6 +269,7 @@ export const GALLERY: readonly GalleryCard[] = [
       slayers: f.failed<SlayersDTO>("RATE_LIMITED"),
       dungeons: f.failed<DungeonsDTO>("RATE_LIMITED"),
       networth: f.failed<NetworthDTO>("RATE_LIMITED"),
+      uuid: f.UUID,
       standing: f.STANDING,
       record: f.MEMBER_RECORD_CLEAN,
       achievements: f.ACHIEVEMENTS,
@@ -361,14 +377,6 @@ export const GALLERY: readonly GalleryCard[] = [
   ),
   card("health-down", "The relay is gone; the bot answering is not.", renderHealthEmbed, f.STATUS_DOWN),
   card("serverinfo", "`/serverinfo` — the server at a glance.", renderServerInfoEmbed, f.DISCORD_GUILD),
-  card("standing", "`/xp` — a member's guild XP and where it came from.", renderStandingEmbed, IGN, f.STANDING),
-  card(
-    "standing-new",
-    "A member who has earned nothing yet, and is unranked rather than last.",
-    renderStandingEmbed,
-    "Nettle",
-    f.STANDING_NEW,
-  ),
   card(
     "leaderboard",
     "`/leaderboard` — ties, a mention label and a pinned viewer row.",

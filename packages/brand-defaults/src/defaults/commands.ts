@@ -232,6 +232,7 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       label: 'What to call it — "before dungeon grind"',
     },
   },
+  /** Retired — see `fun.ts`. The keys stay with the spec that stays. */
   rank: {
     description: "Your entirely unofficial vibe rank",
     option: {
@@ -283,12 +284,6 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
       player: "Minecraft username (defaults to you)",
       profile: "Skyblock profile name",
       boss: "Narrow to one boss (every boss shows its tier breakdown either way)",
-    },
-  },
-  standing: {
-    description: "Your guild XP, level and where it came from",
-    option: {
-      member: "Whose standing to show (defaults to you)",
     },
   },
   stats: {
@@ -399,15 +394,14 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
     description: "Turn your own level-up announcements on or off",
     option: { state: "Leave it blank to see where you stand" },
   },
-  userinfo: {
-    description: "Discord account details for a member",
-    option: { member: "Whose card to show (defaults to you)" },
+  whois: {
+    description: "Who a member is here — Discord account, roles, link and standing",
+    option: {
+      member: "Whose card to show (defaults to you)",
+      public: "Post it in the channel. Standing and your record are left off a public card",
+    },
   },
   serverinfo: { description: "This Discord server at a glance" },
-  avatar: {
-    description: "Someone's Discord avatar, full size",
-    option: { member: "Whose card to show (defaults to you)" },
-  },
   rolemenu: {
     description: "Post a self-service role menu, or list the ones this server has",
     option: {

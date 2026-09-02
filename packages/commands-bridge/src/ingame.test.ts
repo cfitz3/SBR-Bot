@@ -355,14 +355,14 @@ test("the real registry exposes only lookups in-game, and every write requires a
   assert.deepEqual(names, [
     // Fun (§19). They read nothing about anybody and write nothing anybody is
     // accountable for, so they widen the surface by exactly one joke each.
-    "8ball", "coinflip", "cringe", "rank", "roll", "rps",
+    "8ball", "coinflip", "cringe", "roll", "rps",
     // The one diagnostic. Reachable here precisely because guild chat is where
     // a member stands when the relay is the thing that is broken, and it needs
     // no link: it reports on the platform, not on the caller.
     "health",
     // Lookups (§17).
     "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
-    "networth", "perm", "price", "profile", "skills", "slayers", "standing",
+    "networth", "perm", "price", "profile", "skills", "slayers",
     // Progression (§17, Part IV). All three are the caller's own numbers, which
     // is why all three are "linked" below rather than open to any name typed in
     // chat. `/snapshot` is the only write of the three, and it writes a row
@@ -373,11 +373,8 @@ test("the real registry exposes only lookups in-game, and every write requires a
   // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
   // than in the `true` set because its read actions share one command with its
   // writes, and the weaker of the two requirements would govern the pair.
-  // `/standing` writes nothing, but it is `"linked"` all the same: XP is
-  // attributed to a Discord account, and an IGN that resolves to none has no
-  // standing to report — the link *is* the lookup key, not a permission.
   assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), [
-    "goal", "perm", "progress", "snapshot", "standing",
+    "goal", "perm", "progress", "snapshot",
   ].sort());
 
   // And the identity commands stay Discord-only: `/link` in guild chat would

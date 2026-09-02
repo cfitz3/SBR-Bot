@@ -273,9 +273,9 @@ export interface BridgeApp {
   setSticky(keeper: StickyKeeper | null): void;
   readonly sticky: StickyKeeper | null;
   /**
-   * What the bot can see of the Discord server, for `/userinfo`, `/serverinfo`
-   * and `/avatar`. Late-bound like the rest; until it is set those three
-   * commands report that they cannot answer rather than answering emptily.
+   * What the bot can see of the Discord server, for `/whois` and
+   * `/serverinfo`. Late-bound like the rest; until it is set both commands
+   * report that they cannot answer rather than answering emptily.
    */
   setDiscordDirectory(directory: DiscordDirectory | null): void;
   /**
