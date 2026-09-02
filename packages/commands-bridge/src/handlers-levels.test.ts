@@ -4,6 +4,7 @@ import { noArgs, recordArgs } from "@sbr/shared-types";
 import type { CommandArgs } from "@sbr/shared-types";
 import { LEVEL_OPT_OUT_KEY, levelAlertSpecs, readLevelOptOuts } from "./handlers-levels.js";
 import type { CommandContext, HandlerDeps } from "./types.js";
+import { copy } from "@sbr/brand";
 
 const GUILD = "guild-1";
 const CALLER = "111";
@@ -76,7 +77,7 @@ test("a failed save is reported rather than silently claimed", async () => {
   const s = store([], false);
   const reply = await run(recordArgs({ state: "off" }), s);
 
-  assert.match(reply.text, /save that just now/);
+  assert.equal(reply.text, copy.error.generic.saveFailed);
 });
 
 test("an unreadable setting reads as nobody opted out, not as an error", async () => {

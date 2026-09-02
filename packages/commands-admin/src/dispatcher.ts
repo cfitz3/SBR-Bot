@@ -4,6 +4,7 @@
  * guards are enforced here and (authoritatively) in the ModerationService.
  */
 import { copy } from "@sbr/brand";
+import { failureReply } from "@sbr/embed-kit";
 import { rankOf } from "@sbr/moderation";
 import { isUpstreamUnavailable, type MemberRole } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
@@ -113,10 +114,11 @@ export class AdminDispatcher {
       });
       // "Nothing was changed" is a claim, so keep the two cases apart: an
       // unreachable lookup never got as far as writing anything either way.
-      return {
-        ephemeral: true,
-        text: isUpstreamUnavailable(error) ? E.generic.upstreamDown : E.command.adminFailed,
-      };
+      // Same button as the member bot's — a staff command that throws is the
+      // same kind of news, and routing it anywhere else would mean two
+      // reporting paths and one of them going unread.
+      if (isUpstreamUnavailable(error)) return failureReply("UPSTREAM");
+      return { ...failureReply("BUG"), text: E.command.adminFailed };
     }
   }
 }

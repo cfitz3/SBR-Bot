@@ -183,9 +183,9 @@ export const DEFAULT_PANEL = {
    * `{n}`, `{code}`, `{status}` and `{detail}` are substituted by `api.ts`.
    */
   request: {
-    unreachable: "Couldn't reach the panel server.",
+    unreachable: "The panel server did not answer.",
     notFound: "That page doesn't exist.",
-    serverError: "The panel server hit an error. Try again in a moment.",
+    serverError: "The panel server hit an error. The Health page shows whether it is still failing.",
     failedWithCode: "Request failed ({code}).",
     failedWithStatus: "Request failed (HTTP {status}).",
     oauthMissing: "Discord login isn't configured on this deployment.",

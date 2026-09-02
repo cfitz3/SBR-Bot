@@ -23,7 +23,30 @@ export const SEED_CATEGORIES: readonly SeedCategory[] = [
   { key: "APPEAL", name: "Appeal", description: "Appeal a mute, kick or ban.", position: 2 },
   { key: "APPLICATION", name: "Application", description: "Apply to the guild or to the staff team.", position: 3 },
   { key: "OTHER", name: "Other", description: "Anything that does not fit the rest.", position: 4 },
+  { key: "BUG", name: "Bug report", description: "Something on the platform is broken.", position: 5 },
 ];
+
+/**
+ * Categories a guild may dress up but may not remove or switch off.
+ *
+ * `BUG` is the only one, and it is the only one for a reason worth stating:
+ * every user-facing error the platform prints now ends by pointing at `/health`
+ * and offering a button that opens a ticket here. A guild that deleted or
+ * disabled this category would not lose a menu entry, it would break that
+ * button for every member — and it would do so silently, at the exact moment
+ * something else is already failing.
+ *
+ * "Permanent" is deliberately narrow. Name, emoji, description, staff roles,
+ * parent channel, questions, limits and position are all still the guild's, so
+ * this constrains the two operations that would break the button and nothing
+ * else. Enforced in `@sbr/db`, which both the panel and the admin bot write
+ * through, rather than in each of them.
+ */
+export const PERMANENT_CATEGORY_KEYS: readonly string[] = ["BUG"];
+
+export function isPermanentCategory(key: string): boolean {
+  return PERMANENT_CATEGORY_KEYS.includes(key);
+}
 
 /** Discord's own caps, which the editor and the panel builder both respect. */
 export const CATEGORY_LIMITS = {

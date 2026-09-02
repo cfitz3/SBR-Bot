@@ -9,6 +9,7 @@
   "references": [
     { "path": "../shared-types" },
     { "path": "../embed-kit" },
+    { "path": "../tickets" },
     { "path": "../discord-kit" },
     { "path": "../commands-bridge" },
     { "path": "../commands-admin" },

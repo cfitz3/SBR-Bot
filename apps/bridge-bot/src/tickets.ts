@@ -60,6 +60,9 @@ import type {
   TicketPanelDTO,
   TicketSettingsDTO,
 } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 // ── ports ────────────────────────────────────────────────────────────────────
 
@@ -307,7 +310,7 @@ export class TicketGateway {
       // Un-record first: a stored id that points at nothing would make every
       // future publish try the edit path and fail the same way.
       await this.d.tickets.recordPanelMessage(guildId, panelId, panel.channelId, null).catch(() => {});
-      return { ok: false, problem: "NOT_POSTED", detail: "I couldn't post in that channel — check my permissions there" };
+      return { ok: false, problem: "NOT_POSTED", detail: E.discord.cannotPost };
     }
     await this.d.tickets.recordPanelMessage(guildId, panelId, panel.channelId, messageId);
     return { ok: true, channelId: panel.channelId, messageId, edited: false };
@@ -376,7 +379,7 @@ export class TicketGateway {
     });
     if (!created.ok) {
       this.log.error("ticket row could not be written", { guildId, category: category.key });
-      return { ok: false, problem: "FAILED", detail: "I couldn't open a ticket just now — try again shortly" };
+      return { ok: false, problem: "FAILED", detail: E.generic.saveFailed };
     }
     const ticket = created.value;
 
@@ -625,7 +628,7 @@ export class TicketGateway {
       if (kind === "FORBIDDEN") {
         return { ok: false, problem: "FORBIDDEN", detail: "that isn't yours to do" };
       }
-      return { ok: false, problem: "FAILED", detail: "that didn't work — try again in a moment" };
+      return { ok: false, problem: "FAILED", detail: E.generic.unknown };
     }
     return { ok: true, ticket: result.value, note };
   }

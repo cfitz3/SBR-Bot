@@ -20,16 +20,91 @@ export const DEFAULT_ERRORS = {
   /** What the panel adds under a denial that a click cannot fix. */
   denyHint: "Ask a guild admin if you think this is wrong.",
 
-  /** Generic failures, reached from more than one surface. */
+  /**
+   * Generic failures, reached from more than one surface.
+   *
+   * The platform failures name `/health` and nothing else. "Something went
+   * wrong, try again in a moment" was a guess dressed as advice — trying again
+   * is exactly what a member does anyway, and it does not help if the reason is
+   * a database that has been down for ten minutes. `/health` answers the
+   * question the member actually has, which is whether it is them or us.
+   *
+   * The four that are not platform failures deliberately do not: a member who
+   * lacks a permission or typed a name that matched nothing has no reason to go
+   * read a status card, and sending them there would train everyone to ignore
+   * the pointer that matters.
+   */
   generic: {
-    unknown: "Something went wrong. Try again in a moment.",
-    saveFailed: "That didn't save.",
-    loadFailed: "That didn't load.",
+    unknown: "That didn't complete. Run `/health` to see whether the platform is up.",
+    saveFailed: "That didn't save. Run `/health` to see whether the platform is up.",
+    loadFailed: "That didn't load. Run `/health` to see whether the platform is up.",
     rateLimited: "Slow down a moment — try that again shortly.",
     notLinked: "Run `/link` to connect your Minecraft account first.",
     noPermission: "You don't have permission to do that.",
     notFound: "Nothing matched that.",
-    upstreamDown: "Hypixel isn't answering right now. This is on their end, not yours.",
+    upstreamDown: "Hypixel isn't answering. That's on their end — `/health` tracks it.",
+  },
+
+  /**
+   * Refusals that are about *where* the member is standing, not about a failure.
+   *
+   * Guild chat has no server, no channels and no member list, so a handful of
+   * commands genuinely cannot answer there. These say which surface does work,
+   * because the member's next move is to go and use it — and they never point at
+   * `/health`, since nothing is unhealthy.
+   */
+  surface: {
+    discordOnly: "That answer needs Discord. Run it there.",
+    needsChannel: "That needs a channel to post in. Run it from Discord.",
+    /** An optional channel argument that only defaults when there is a channel to default to. */
+    nameChannel: "Name a channel — there is none to infer here.",
+  },
+
+  /**
+   * What Discord itself refused, told as Discord's answer rather than the bot's
+   * apology.
+   *
+   * The one family of failures a guild admin can fix in under a minute and
+   * nobody else can fix at all, so they name the missing permission as the cause
+   * instead of routing to `/health`: the platform is up, and a bug report would
+   * reach the wrong people.
+   */
+  discord: {
+    missingPermission: "Discord refused that — the bot is missing a permission it needs.",
+    cannotPost: "The bot cannot post in that channel. Check its permissions there.",
+    memberMissing: "Discord doesn't show you as a member of this server.",
+  },
+
+  /**
+   * The in-game relay, absent and offline being different facts with different
+   * answers.
+   *
+   * A guild that never configured Mineflayer is not having an outage, and
+   * sending its members to a status card would be a wild goose chase. A relay
+   * that is configured and down is exactly what `/health` reports.
+   */
+  bridge: {
+    notConfigured: "Guild chat isn't set up on this server.",
+    offline: "Guild chat is offline, so the roster can't be read. `/health` tracks it.",
+  },
+
+  /** A duration the parser could not read. The examples are the whole message. */
+  badDuration: "Unreadable duration. Use a form like `30m`, `2h30m` or `1w`.",
+
+  /** A date or time the parser could not read. */
+  badTime: "Unreadable time.",
+
+  /**
+   * The button under a platform failure.
+   *
+   * Appearance only. There is no key here that removes the button, because the
+   * button is the platform's own reporting path: a guild that switched it off
+   * would keep every bug to itself without deciding to.
+   */
+  report: {
+    button: "Report a bug",
+    /** Empty for no emoji, which is a real choice rather than a missing value. */
+    emoji: "",
   },
 
   /**
@@ -47,7 +122,7 @@ export const DEFAULT_ERRORS = {
   hypixel: {
     NOT_LINKED: "You're not linked yet — use /link <ign>.",
     MISSING_PROFILE: "No Skyblock profile found for that player.",
-    RATE_LIMITED: "Hypixel is rate-limiting us right now — try again in a moment.",
+    RATE_LIMITED: "Hypixel is rate-limiting the platform right now.",
     API_DISABLED: "That data is turned off in the player's Hypixel API settings.",
   },
 
@@ -61,7 +136,7 @@ export const DEFAULT_ERRORS = {
   goal: {
     UNAVAILABLE: "Goals aren't switched on for this guild yet.",
     ALREADY_THERE: "You're already at {current} — aim higher than that.",
-    BAD_TARGET: "That target isn't a number I can chase.",
+    BAD_TARGET: "That target isn't a number.",
   },
 
   /**
@@ -118,7 +193,7 @@ export const DEFAULT_ERRORS = {
      * handlers write through services that are transactional, and which the
      * bridge bot's read-heavy commands have no need to say at all.
      */
-    adminFailed: "That action failed unexpectedly — nothing was changed.",
+    adminFailed: "That action failed — nothing was changed. Run `/health` to see whether the platform is up.",
   },
 };
 

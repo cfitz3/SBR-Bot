@@ -18,6 +18,9 @@
 import { renderLeaderboardEmbed } from "@sbr/commands-bridge";
 import type { Logger } from "@sbr/observability";
 import type { EmbedView, LeaderboardCategory, LeaderboardPageDTO } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /**
  * What the digest covers, in the order it is posted.
@@ -113,7 +116,7 @@ export class LeaderboardDigest {
       return {
         ok: false,
         problem: "NOT_POSTED",
-        detail: "I couldn't post in the leaderboard channel — check my permissions there",
+        detail: E.discord.cannotPost,
       };
     }
     return { ok: true, channelId, posted };

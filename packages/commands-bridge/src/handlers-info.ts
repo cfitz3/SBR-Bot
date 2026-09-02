@@ -12,6 +12,9 @@
 import type { DiscordGuildInfo, DiscordUserInfo, EmbedView } from "@sbr/shared-types";
 import type { CommandHandler, CommandReply, CommandSpec } from "./types.js";
 import { flattenEmbed } from "@sbr/shared-types";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** Discord renders more roles than this as a wall; the count carries the rest. */
 const MAX_ROLES_SHOWN = 12;
@@ -25,7 +28,7 @@ const MAX_ROLES_SHOWN = 12;
 function noDiscord(): CommandReply {
   return {
     ephemeral: true,
-    text: "That one only works from Discord — I can't see the server from here.",
+    text: E.surface.discordOnly,
   };
 }
 
@@ -129,7 +132,7 @@ const userinfo: CommandHandler = async (ctx, deps) => {
 const serverinfo: CommandHandler = async (ctx, deps) => {
   if (deps.discord === undefined) return noDiscord();
   const info = await deps.discord.guildInfo(ctx.guildId);
-  if (info === null) return { ephemeral: true, text: "I can't see this server right now — try again shortly." };
+  if (info === null) return { ephemeral: true, text: E.generic.loadFailed };
   const embed = renderServerInfoEmbed(info);
   return { ephemeral: false, text: flattenEmbed(embed), embed };
 };

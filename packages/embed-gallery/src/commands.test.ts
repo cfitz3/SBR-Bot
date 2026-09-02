@@ -11,6 +11,8 @@ import { test } from "node:test";
 
 import { copy } from "@sbr/brand";
 import { buildAdminRegistry } from "@sbr/commands-admin";
+import { BUG_TICKET_BUTTON_ID } from "@sbr/embed-kit";
+import { isPermanentCategory, newTicketId, SEED_CATEGORIES } from "@sbr/tickets";
 import { buildBridgeRegistry } from "@sbr/commands-bridge";
 
 /** The resolved table — defaults with `brand/copy.ts` merged over it. */
@@ -73,4 +75,18 @@ test("no description exceeds what Discord will accept", () => {
       .map((o) => `${name}.${o.name}`),
   ]);
   assert.deepEqual(long, []);
+});
+
+test("the failure button opens the category that cannot be taken away", () => {
+  // `@sbr/embed-kit` writes the id out rather than importing `@sbr/tickets`,
+  // because it sits under both command packages and the gallery and a ticket
+  // dependency for one string would be the wrong trade. This is the check that
+  // makes the trade safe: renaming the namespace fails here, not in production
+  // as a button that answers "that control is no longer in use".
+  assert.equal(BUG_TICKET_BUTTON_ID, newTicketId("BUG"));
+
+  // And the category it opens is seeded everywhere and cannot be removed or
+  // disabled, which is what stops the button from being a dead end.
+  assert.ok(SEED_CATEGORIES.some((c) => c.key === "BUG"));
+  assert.ok(isPermanentCategory("BUG"));
 });

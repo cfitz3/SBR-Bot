@@ -25,6 +25,9 @@ import {
   type JoinActionResult,
   type ScreeningRecord,
 } from "@sbr/screening";
+import { copy } from "@sbr/brand";
+
+const E = copy.error;
 
 /** Discord renders `<t:…:R>` as a live relative timestamp in the reader's locale. */
 export function relativeTs(iso: string): string {
@@ -50,7 +53,7 @@ export function renderEnforcement(action: ModerationActionDTO): string {
 export function renderEffectError(error: GuildEffectError): string {
   switch (error.kind) {
     case "MISSING_PERMISSION":
-      return "I don't have the Discord permission that needs.";
+      return E.discord.missingPermission;
     case "NOT_FOUND":
       return "That user or channel no longer exists here.";
     case "FAILED":

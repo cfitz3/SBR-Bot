@@ -177,6 +177,28 @@ export const DEFAULT_EMBEDS = {
   },
 
   /**
+   * `/health` — the one card a member reads when something else went wrong.
+   *
+   * Every sentence here is written to be read by someone who is already
+   * annoyed, so none of them apologise and none of them explain. They say what
+   * is true and what to do about it.
+   */
+  health: {
+    title: "Platform status",
+    /** The field holding the rows. Not the card title repeated — a field name
+     * that echoes the heading above it is a wasted line on a phone. */
+    checks: "Checks",
+    ok: "Everything is answering.",
+    degraded: "Something is slow or partly down. Commands may take longer or return less.",
+    down: "Something is down. Commands that need it will fail until it is back.",
+    /** `{n}` is a count, never a name — see `curateStatus`. */
+    otherUnhealthy: "{n} other component(s) unhealthy.",
+    /** What to do next, when there is nothing the member can do. */
+    reportHint: "If this is still wrong in a few minutes, open a bug report.",
+    unavailable: "Status checks aren't wired up on this deployment.",
+  },
+
+  /**
    * Per-card copy: the title pattern, the nouns it takes, and the prose a card
    * prints when it has nothing to show.
    *

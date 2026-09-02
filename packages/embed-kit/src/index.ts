@@ -37,3 +37,9 @@ export {
   type StyleIssue,
   type StyleSeverity,
 } from "./style.js";
+export {
+  BUG_TICKET_BUTTON_ID,
+  failureComponents,
+  failureReply,
+  type FailureKind,
+} from "./failure.js";

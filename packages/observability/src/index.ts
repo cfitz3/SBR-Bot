@@ -19,6 +19,7 @@ export {
   type LogShipperOptions,
 } from "./shipper.js";
 export { HealthRegistry, pingCheck } from "./health.js";
+export { curateStatus, MEMBER_STATUS_ROWS } from "./status.js";
 export {
   installLifecycle,
   DEFAULT_SHUTDOWN_TIMEOUT_MS,
