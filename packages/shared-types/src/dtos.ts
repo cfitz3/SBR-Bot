@@ -336,6 +336,38 @@ export interface AuctionsDTO {
   readonly claimValue: number | null;
 }
 
+/** How far back a history series reaches. Three, because a chart needs a scale. */
+export type MarketRange = "DAY" | "WEEK" | "MONTH";
+
+/**
+ * One bucket of a price series.
+ *
+ * Every field is nullable because the upstream buckets are: a quiet hour has no
+ * trades, and a bucket with no trades has no price. Rendering that as zero would
+ * put a cliff in the chart where nothing happened.
+ */
+export interface MarketPointDTO {
+  /** ISO timestamp of the bucket start. */
+  readonly at: string;
+  readonly min: number | null;
+  readonly max: number | null;
+  readonly avg: number | null;
+  readonly volume: number | null;
+}
+
+/**
+ * A price series, as far as we could read it.
+ *
+ * `points` may be empty — a brand-new item has no past, and an item nobody has
+ * ever traded has no prices to have a past of. That is a real answer, and it is
+ * distinct from the history source being unreachable, which is reported as
+ * `null` by the service that produces this.
+ */
+export interface MarketHistoryDTO {
+  readonly itemId: string;
+  readonly range: MarketRange;
+  readonly points: readonly MarketPointDTO[];
+}
 export interface InfractionDTO {
   readonly id: string;
   readonly guildId: string;

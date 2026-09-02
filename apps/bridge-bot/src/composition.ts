@@ -67,6 +67,8 @@ import {
 } from "@sbr/moderation";
 import {
   ItemCatalog,
+  CoflnetHistory,
+  MarketHistoryServiceImpl,
   MarketServiceImpl,
   NetworthServiceImpl,
   PricingServiceImpl,
@@ -487,6 +489,26 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     catalog: new ItemCatalog({ resources: hypixel }),
     logger: log,
   });
+  // Price history is Coflnet's, not ours — a third party we do not run, wired
+  // behind its own cache and breaker so its uptime cannot reach the prices
+  // above it. `fetch` is adapted here rather than inside the client so the
+  // client stays a pure function of its transport and its tests need no network.
+  const history = new MarketHistoryServiceImpl({
+    provider: new CoflnetHistory({
+      logger: log,
+      fetch: {
+        async get(url, headers) {
+          const res = await fetch(url, { headers: { accept: "application/json", ...headers } });
+          // A body that is not JSON is a gateway page, not a series; the client
+          // reads the status first and treats an unparseable body as no data.
+          const json = await res.json().catch(() => null);
+          return { status: res.status, json };
+        },
+      },
+    }),
+    logger: log,
+  });
+
   const community = new CommunityServiceImpl({
     repo: communityRepository,
     rolesDirty: adapters.rolesDirty,
@@ -658,6 +680,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     players,
     pricing,
     market,
+    history,
     community,
     perms,
     roster,

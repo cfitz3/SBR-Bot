@@ -28,6 +28,8 @@ import {
   communityButtonReplies,
   networthCategoryReply,
   NETWORTH_NAMESPACE,
+  MARKET_NAMESPACE,
+  marketButtonReplies,
   parseRsvpState,
   progressionButtonReplies,
   readLevelOptOuts,
@@ -292,6 +294,44 @@ export function registerProgressionControls(app: BridgeApp, components: Componen
             ? progressionButtonReplies.clear(a, b, userId, guildId, deps)
             : buildProgression(userId, guildId, a ?? null, Number(b), deps));
     await interaction.editReply(cardEdit(reply)).catch(() => {});
+  });
+}
+
+/**
+ * The controls under a market card: the three windows, and the listings.
+ *
+ * Both press paths re-read rather than replaying anything cached in the id. A
+ * card is a permanent message, so a customId that carried a price would be
+ * showing a stale number with all the confidence of a live one — the id carries
+ * the item and the window, which are the only two things that do not go out of
+ * date.
+ *
+ * A window press edits the card in place; the listings open ephemerally beneath
+ * it. That difference is deliberate: the window is a change of view on what
+ * everybody in the channel is looking at, while the listings are a detail one
+ * person asked for and nobody else needs scrolled past.
+ */
+export function registerMarketButtons(app: BridgeApp, components: ComponentRouter): void {
+  components.register(MARKET_NAMESPACE, async (interaction, [action, rawRange, itemId]) => {
+    if (!itemId || (action !== "r" && action !== "l")) {
+      await interaction.reply({ content: "That button is from an older version and no longer works.", ephemeral: true });
+      return;
+    }
+
+    // `flags` is dropped on both edits: the ephemerality of a reply is fixed at
+    // defer time, and passing it again is rejected rather than ignored.
+    if (action === "l") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const reply = await marketButtonReplies.listings(itemId, app.handlerDeps);
+      const { flags: _l, ...options } = replyOptions(reply);
+      await interaction.editReply(options);
+      return;
+    }
+
+    await interaction.deferUpdate();
+    const reply = await marketButtonReplies.range(itemId, rawRange ?? "", app.handlerDeps);
+    const { flags: _r, ...options } = replyOptions(reply);
+    await interaction.editReply(options);
   });
 }
 
@@ -631,6 +671,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   registerCommunityButtons(app, components);
   registerNetworthMenu(app, components);
   registerProgressionControls(app, components);
+  registerMarketButtons(app, components);
 
   // Tickets. Built here rather than in the composition root because every one
   // of its side effects needs the live client, and registered against the same

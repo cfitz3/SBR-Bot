@@ -21,6 +21,7 @@ import type {
   IdentityService,
   LeaderboardService,
   LFGPostDTO,
+  MarketHistoryService,
   MarketService,
   MemberPodiumSource,
   MemberRecordSource,
@@ -84,8 +85,14 @@ export interface HandlerDeps {
    */
   readonly players: PlayerLookup;
   readonly pricing: PricingService;
-  /** Order book and listings — the raw market behind `/bazaar` and `/auctions`. */
+  /** Order book and listings — the live market behind `/price`. */
   readonly market: MarketService;
+  /**
+   * Price history for the chart on the market card. Optional, and allowed to
+   * answer null: it is a third party we do not run, and a card that cannot draw
+   * a chart still carries the prices somebody is about to trade on.
+   */
+  readonly history?: MarketHistoryService;
   readonly community: CommunityService;
   /**
    * Standing parties. Member-facing only — the panel deliberately has no perm

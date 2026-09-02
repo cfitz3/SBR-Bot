@@ -31,20 +31,20 @@ import { progressionSpecs } from "./progression.js";
 import { reminderSpecs } from "./handlers-remind.js";
 import { tagSpecs } from "./handlers-tags.js";
 import { funSpecs } from "./fun.js";
+import { DEFAULT_RANGE, marketReply } from "./market.js";
 import {
   renderAccessoriesEmbed,
   renderAdviceEmbed,
   renderAuctionsEmbed,
-  renderBazaarEmbed,
   renderDungeonsEmbed,
   renderFailure,
   renderLeaderboardEmbed,
   renderLeaderboardLine,
   renderLinkError,
-  renderLowestBinEmbed,
   renderAchievementsEmbed,
   renderNetworth,
   renderPriceEmbed,
+  renderNetworthEmbed,
   renderProfileEmbed,
   renderProfileListEmbed,
   renderProgressEmbed,
@@ -578,50 +578,25 @@ const ITEM_OPTION = {
   autocomplete: true,
 };
 
+/**
+ * `/price` — the market card.
+ *
+ * This used to be four commands. `/price` blended a valuation, `/bazaar` printed
+ * the order book, `/lowestbin` printed one number and `/auctions item:` listed
+ * the cheapest listings — four cards about one item, and no way to get from one
+ * to the next except by typing the next one out. They are one card with buttons
+ * now; `packages/commands-bridge/src/market.ts` explains the shape of it.
+ *
+ * The blended valuation is gone rather than moved. It averaged a bazaar price
+ * and a BIN price into a number that was neither, and the two numbers it was
+ * made of are both on the card, which is what somebody deciding whether to buy
+ * actually needs.
+ */
 const price: CommandHandler = async (ctx, deps) => {
   const itemId = await resolveItem(ctx, deps);
   if (typeof itemId !== "string") return { ephemeral: true, text: itemId.problem };
 
-  const result = await deps.pricing.getPrice(itemId);
-  return {
-    ephemeral: false,
-    text: result.ok
-      ? `${itemId}: ${result.value.data.estimatedValue === null ? "unknown" : formatCoins(result.value.data.estimatedValue)}`
-      : renderFailure(result.error.state),
-    embed: renderPriceEmbed(result),
-  };
-};
-
-const bazaar: CommandHandler = async (ctx, deps) => {
-  const itemId = await resolveItem(ctx, deps);
-  if (typeof itemId !== "string") return { ephemeral: true, text: itemId.problem };
-
-  const result = await deps.market.getBazaarQuote(itemId);
-  return {
-    ephemeral: false,
-    text: result.ok
-      ? `${itemId}: buy ${result.value.data.instantBuy === null ? "—" : formatCoins(result.value.data.instantBuy)} / sell ${result.value.data.instantSell === null ? "—" : formatCoins(result.value.data.instantSell)}`
-      : // An item that simply isn't tradeable on the bazaar is not a failure of
-        // ours, so it says so rather than reporting an outage.
-        result.error.state === "MISSING_PROFILE"
-        ? `${itemId} isn't sold on the bazaar — try /lowestbin.`
-        : renderFailure(result.error.state),
-    embed: renderBazaarEmbed(result),
-  };
-};
-
-const lowestbin: CommandHandler = async (ctx, deps) => {
-  const itemId = await resolveItem(ctx, deps);
-  if (typeof itemId !== "string") return { ephemeral: true, text: itemId.problem };
-
-  const result = await deps.market.getLowestBin(itemId);
-  return {
-    ephemeral: false,
-    text: result.ok
-      ? `${itemId}: ${result.value.data.price === null ? "no BIN listing" : formatCoins(result.value.data.price)}`
-      : renderFailure(result.error.state),
-    embed: renderLowestBinEmbed(result),
-  };
+  return marketReply(itemId, DEFAULT_RANGE, deps);
 };
 
 /**
@@ -636,25 +611,14 @@ function auctionsText(ign: string, data: AuctionsDTO): string {
 }
 
 /**
- * `/auctions` answers two questions with one command: an item's cheapest
- * listings, or a player's own. `item:` wins when both are given, because it is
- * the more specific ask.
+ * `/auctions` — what a player has up.
+ *
+ * It used to answer two questions: an item's cheapest listings, or a player's
+ * own. The first of those is now a button on the market card, next to the price
+ * it is a list of, so this is the half that remains — and it is the half a
+ * command is the right shape for, because it takes a player rather than an item.
  */
 const auctions: CommandHandler = async (ctx, deps) => {
-  if (ctx.args.getString("item")) {
-    const itemId = await resolveItem(ctx, deps);
-    if (typeof itemId !== "string") return { ephemeral: true, text: itemId.problem };
-
-    const result = await deps.market.getItemAuctions(itemId);
-    return {
-      ephemeral: false,
-      text: result.ok
-        ? `${itemId}: ${result.value.data.listings.length} listing(s)`
-        : renderFailure(result.error.state),
-      embed: renderAuctionsEmbed(itemId, result),
-    };
-  }
-
   const target = await resolveTarget(ctx, deps);
   if ("problem" in target) return { ephemeral: true, text: target.problem };
 
@@ -1019,41 +983,48 @@ export function buildBridgeRegistry(): Map<string, CommandSpec> {
     },
     {
       name: "price",
-      description: "Blended market value for an item",
+      description: "What an item costs, what is moving, and what it has been doing",
       options: [ITEM_OPTION],
       cooldownMs: 5_000,
       inGame: true,
       handler: price,
       autocomplete: itemAutocomplete,
     },
+    // Retired into `/price`, which shows the whole order book — instant buy,
+    // instant sell, spread and both volumes — rather than the subset this
+    // printed. Deregistered rather than deleted so the shape of what was here
+    // stays readable, and `!bz` still routes to the card.
     {
       name: "bazaar",
       description: "Bazaar order book for an item",
       options: [ITEM_OPTION],
       cooldownMs: 5_000,
-      inGame: true,
-      handler: bazaar,
+      enabled: false,
+      handler: price,
       autocomplete: itemAutocomplete,
     },
+    // Retired into `/price` for the same reason: the lowest BIN and the number
+    // of listings behind it are both on the card, and one number without the
+    // other was always the misleading half.
     {
       name: "lowestbin",
       description: "Cheapest buy-it-now listing for an item",
       options: [ITEM_OPTION],
       cooldownMs: 5_000,
-      inGame: true,
-      handler: lowestbin,
+      enabled: false,
+      handler: price,
       autocomplete: itemAutocomplete,
     },
+    // Narrowed, not removed: `item:` is gone because the cheapest listings are a
+    // button on the market card, which is where somebody looking at a price
+    // wants them. What is left is the question the card cannot answer — what a
+    // *player* has up — so the option is dropped rather than the command.
     {
       name: "auctions",
-      description: "Active auctions for an item, or a player's own listings",
-      options: [
-        { ...ITEM_OPTION, required: false },
-        TARGET_OPTIONS[0]!,
-      ],
+      description: "A player's own auction listings",
+      options: [TARGET_OPTIONS[0]!],
       cooldownMs: 15_000,
       handler: auctions,
-      autocomplete: itemAutocomplete,
     },
     ...communitySpecs(),
     ...healthSpecs(),

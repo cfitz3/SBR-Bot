@@ -242,7 +242,7 @@ policy's own:
   player: `market.ts` (`BIN_STALE_AFTER_MS`, 10 min) and `catalog.ts`
   (`REFRESH_MS`, 1 h) are keyed by item, never by who asked.
 
-Market commands (`/price`, `/bazaar`, `/lowestbin`, `/auctions`, `/mayor`) read
+Market commands (`/price`, `/auctions`, `/mayor`) read
 worker-populated Redis keys only and never trigger a sweep themselves.
 
 Guild reads are one request per guild per six hours (`guild-scan`, cron

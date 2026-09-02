@@ -13,6 +13,14 @@ export {
 export { summariseNetworth } from "./skyhelper.js";
 export { splitAuctions } from "./auctions.js";
 export { MarketServiceImpl, type MarketServiceDeps } from "./market.js";
+export {
+  MarketHistoryServiceImpl,
+  BREAKER_COOLDOWN_MS,
+  BREAKER_THRESHOLD,
+  HISTORY_TTL_MS,
+  type MarketHistoryServiceDeps,
+} from "./history.js";
+export { CoflnetHistory, COFLNET_BASE_URL, parseCoflnetTime, type CoflnetHistoryDeps } from "./coflnet.js";
 export { ItemCatalog, type ItemCatalogDeps } from "./catalog.js";
 export type {
   PriceSource,
@@ -29,4 +37,9 @@ export type {
   BinListing,
   PlayerAuctionProvider,
   ItemResourceProvider,
+  HistoryCache,
+  HistoryHttp,
+  HistoryPoint,
+  PriceHistoryProvider,
 } from "./ports.js";
+export { InMemoryHistoryCache } from "./ports.js";

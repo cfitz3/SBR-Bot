@@ -40,6 +40,8 @@ import type {
   LinkedIdentityDTO,
   LockdownStateDTO,
   LowestBinDTO,
+  MarketHistoryDTO,
+  MarketRange,
   MemberRecordDTO,
   MemberSummaryDTO,
   GoalDTO,
@@ -558,6 +560,22 @@ export interface MarketService {
   resolveItemId(query: string): Promise<string | null>;
 }
 
+/**
+ * Price history (packages/pricing, Coflnet-backed).
+ *
+ * Separate from `MarketService` because the sourcing rule is different in a way
+ * that has to stay visible at the call site. `MarketService` answers from our
+ * own Hypixel-backed caches, which are rate-gated and which networth valuation
+ * also depends on. History comes from a third party we do not run, so it has
+ * its own cache and its own breaker, and it is allowed to simply not answer.
+ *
+ * `null` means "no history right now" — cold cache, open breaker, unknown item.
+ * Never an empty series standing in for an outage: a flat chart and a missing
+ * chart say opposite things about an item.
+ */
+export interface MarketHistoryService {
+  history(itemId: string, range: MarketRange): Promise<MarketHistoryDTO | null>;
+}
 /** Input to apply a moderation action; the service computes expiry/active/surfaces. */
 export interface ApplyActionInput {
   readonly guildId: string;

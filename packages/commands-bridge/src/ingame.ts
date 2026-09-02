@@ -49,9 +49,14 @@ export const INGAME_MAX_CHARS = GAME_CHAT_LIMIT - "/gc ".length;
  */
 const ALIASES: Readonly<Record<string, string>> = {
   nw: "networth",
-  bz: "bazaar",
-  lbin: "lowestbin",
-  lb: "lowestbin",
+  // `/bazaar` and `/lowestbin` folded into the one market card, so their
+  // shorthands point at it rather than dying with the commands. Somebody who has
+  // typed `!bz` for two years should get an answer, not a lecture about a merge.
+  bazaar: "price",
+  lowestbin: "price",
+  bz: "price",
+  lbin: "price",
+  lb: "price",
   weight: "stats",
   // Not `lb` — that has meant `lowestbin` since long before the boards existed,
   // and quietly repointing a live shorthand is worse than having no shorthand.

@@ -32,8 +32,14 @@ test("parses a command and its positional tokens", () => {
 
 test("resolves the documented short aliases", () => {
   assert.equal(parseInGameCommand("!nw")?.name, "networth");
-  assert.equal(parseInGameCommand("!bz gold")?.name, "bazaar");
-  assert.equal(parseInGameCommand("!lbin hyperion")?.name, "lowestbin");
+});
+
+test("the market shorthands outlived the commands they were short for", () => {
+  // `/bazaar` and `/lowestbin` folded into the market card. Somebody who has
+  // typed `!bz` for two years gets a price, not a lecture about a merge.
+  for (const line of ["!bz gold", "!lbin hyperion", "!lb hyperion", "!bazaar gold", "!lowestbin gold"]) {
+    assert.equal(parseInGameCommand(line)?.name, "price", line);
+  }
 });
 
 test("ordinary chat, bare prefixes and punctuation are not commands", () => {
@@ -361,7 +367,10 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // no link: it reports on the platform, not on the caller.
     "health",
     // Lookups (§17).
-    "bazaar", "dungeons", "events", "help", "leaderboard", "lowestbin",
+    // `bazaar` and `lowestbin` are gone from this list because they are gone
+    // from the registry: their shorthands now resolve to `price`, which is the
+    // one card that answers what both of them asked.
+    "dungeons", "events", "help", "leaderboard",
     "networth", "perm", "price", "profile", "skills", "slayers",
     // Progression (§17, Part IV). One command now, where there were three:
     // `/progression` charts, shows the goal for the charted metric, and saves

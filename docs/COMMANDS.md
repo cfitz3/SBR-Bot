@@ -110,10 +110,10 @@ part a chat line can carry.
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/price` | Best estimated value of an item | Public | `item` (autocomplete), `qty?` | Embed: bazaar/AH/BIN value summary | Item unknown; no market data | Cache (`pricing`) → Live refresh |
-| `/bazaar` | Bazaar buy/sell/order data for an item | Public | `item` (autocomplete) | Embed: insta-buy/sell, order book summary | Item not on bazaar | Cache→Live (bazaar endpoint) |
-| `/lowestbin` | Lowest BIN for an item | Public | `item` (autocomplete) | Embed: lowest BIN + link | Item has no active BIN | Cache→Live (AH) |
-| `/auctions` | A player's auction standing, or an item's cheapest listings | Public | `player?` **or** `item?` | For a player: sold-but-unclaimed (with the coins waiting), expired-unsold, and active. For an item: cheapest listings | Neither/both args; none active | Cache→Live (AH) |
+| `/price` | The whole market for one item | Public | `item` (autocomplete) | One card: both books (instant buy/sell, spread, lowest BIN, listing count), what is moving, and a price chart over 24h / 7d / 30d with the current price stated against that window's average. Buttons switch the window and open the cheapest listings | Item unknown; neither book has it | Cache→Live (bazaar, BIN sweep) + Coflnet (history only) |
+| ~~`/bazaar`~~ | Retired into `/price`, which carries the whole order book rather than the half this printed. `!bz` still routes to the card | — | — | — | — | — |
+| ~~`/lowestbin`~~ | Retired into `/price`, which carries the lowest BIN *and* how many listings back it — one number without the other was always the misleading half. `!lbin`/`!lb` still route to the card | — | — | — | — | — |
+| `/auctions` | A player's auction standing | Public | `player?` | Sold-but-unclaimed (with the coins waiting), expired-unsold, and active. The `item:` half moved to the **Listings** button on the `/price` card, where it sits under the price it is a list of | None active | Cache→Live (AH) |
 
 ---
 
@@ -369,7 +369,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 **Design constraints**
 - **Prefix-based**, not slash: e.g. `!stats <ign>`, `!nw`, `!price <item>`, `!lfg <activity>`, `!help`. Prefix and enabled set come from `GuildConfig`.
 - **Output is truncated/paginated** to fit Minecraft chat (single line, ~256 char cap); rich embeds collapse to a compact one-liner (e.g. `Player — Cata 42 | SA 45.3 | NW 8.2b | SnrW 12,340`).
-- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayers, dungeons, networth, price, bazaar, lowestbin, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. The **fun** commands (§20) are in-game too: they read nothing about anybody and write nothing anybody is accountable for. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
+- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayers, dungeons, networth, price, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. The **fun** commands (§20) are in-game too: they read nothing about anybody and write nothing anybody is accountable for. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
 - **Arguments are positional**, in the spec's declared order, with the last one
   absorbing the rest of the line so multi-word values work. There is no
   `key:value` syntax, so an option only Discord should see is declared
@@ -385,7 +385,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 | In-game command | Maps to | Perms | Data |
 |-----------------|---------|-------|------|
 | `!stats`, `!skills`, `!sl`, `!dungeons`, `!nw` | `/stats` … `/networth` | `RELAY_MESSAGE`+`RUN_COMMAND` | Cache→Live |
-| `!price`, `!bz`, `!lbin` | `/price`,`/bazaar`,`/lowestbin` | Run cmd | Cache→Live |
+| `!price`, `!bz`, `!lbin`, `!lb` | `/price` — all four, since the shorthands outlived the commands they were short for | Run cmd | Cache→Live |
 | `!weight` | `progression` (Senither/farming) | Run cmd | Cache→Live |
 | `!lfg`, `!runs` | `/lfg`,`/runs` | Run cmd (linked) | DB + Cache |
 | `!perm` | `/perm` | Run cmd (linked) | DB + member cache |

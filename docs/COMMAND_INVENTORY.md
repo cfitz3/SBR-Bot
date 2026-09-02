@@ -129,10 +129,10 @@ autocomplete suggestion lands. Unknown text → `No Skyblock item matching "x".`
 
 | Command | Options | CD | Purpose | Output |
 |---|---|---|---|---|
-| `/price` | `item*` (autocomplete) | 5s | Blended market value | Price embed; text `{id}: {coins}` |
-| `/bazaar` | `item*` | 5s | Bazaar order book | Bazaar embed; text `{id}: buy X / sell Y`. An item not sold on the bazaar says so and points at `/lowestbin` rather than reporting an outage |
-| `/lowestbin` | `item*` | 5s | Cheapest BIN listing | Embed; text `{id}: {coins}` or `no BIN listing` |
-| `/auctions` | `item?` `player?` | 15s | Two questions, one command: an item's cheapest listings, or a player's own. **`item:` wins when both are given.** A player's auctions split into sold-unclaimed (with the coins waiting), expired-unsold and active; already-collected auctions are dropped | Auctions embed; text `{ign}: N active · X to claim · N expired` |
+| `/price` | `item*` (autocomplete), window via buttons | 5s | The whole market for one item: both books, volume, and a Coflnet-backed price chart over 24h / 7d / 30d, with the current price stated against that window's average. One book missing is not an outage — most items trade on exactly one. A history outage costs the chart, never the prices | Market embed (`Right now` / `Moving` / `History`) + window and **Listings** buttons; text `{item}: {coins} ({book}) · {trend}` |
+| ~~`/bazaar`~~ | — | — | **Deregistered** (`enabled: false`) into `/price`, which carries the whole order book rather than the buy half. `!bz`/`!bazaar` route to the market card | — |
+| ~~`/lowestbin`~~ | — | — | **Deregistered** (`enabled: false`) into `/price`, which carries the lowest BIN *and* the listing count behind it. `!lbin`/`!lb`/`!lowestbin` route to the market card | — |
+| `/auctions` | `player?` | 15s | A player's own auctions, split into sold-unclaimed (with the coins waiting), expired-unsold and active; already-collected auctions are dropped. The `item:` half moved to the **Listings** button on the `/price` card | Auctions embed; text `{ign}: N active · X to claim · N expired` |
 
 ### 2.5 Guild & meta
 
@@ -222,7 +222,7 @@ identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
 
 - **Allow-list is the authorization boundary.** Only specs carrying `inGame`
   are reachable: `help`, `profile`, `stats`, `skills`, `slayers`, `dungeons`,
-  `networth`, `price`, `bazaar`, `lowestbin`, `events`, `runs`, `leaderboard`
+  `networth`, `price`, `events`, `runs`, `leaderboard`
   (all `true`), and
   `lfg` and `standing` (`"linked"` — `lfg` is the only in-game write and is
   attributed to its author, and `standing` is keyed by Discord id, so both need
@@ -246,7 +246,8 @@ identity, a stricter per-IGN cooldown, and collapsing a rich reply to one line.
   flattened, and truncation cutting on a separator so a line never ends
   mid-number.
 
-**Aliases:** `nw`→networth, `bz`→bazaar, `lbin`/`lb`→lowestbin, `s`→stats,
+**Aliases:** `nw`→networth, `bz`/`lbin`/`lb`/`bazaar`/`lowestbin`→price (the
+shorthands outlived the commands they were short for), `s`→stats,
 `weight`→stats (the stats one-liner already ends in the Senither figure),
 `sk`→skills, `sl`→slayers, `dungs`/`cata`→dungeons, `run`→runs, `event`→events,
 `h`/`commands`→help.
@@ -364,7 +365,7 @@ currently has two different bars depending on the surface.
 | `/help` | Spec has `command?` for per-command help; code is a fixed list |
 | `/unlink` | Spec has `account?`; code always unlinks the one on file |
 | `/events` | Spec has `range?`; code always returns the upcoming list |
-| `/auctions` | Spec errors on neither/both args; code prefers `item:` and defaults to the caller |
+| `/auctions` | Spec and code agree on `player?` alone since the item half moved to the `/price` card |
 | `/ban` | Spec has `delete_days?`; not implemented |
 | `/kick` | Spec has `also_guild?`; not implemented |
 | `/infractions` | Spec has `page?`; code auto-pages |

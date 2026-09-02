@@ -87,7 +87,7 @@ Both are corrected. The renderers no longer compare a level to a cap themselves:
 ceiling change is one number rather than a grep.
 
 ### Market/global acquisition flow (live command)
-- Commands (`/price`, `/bazaar`, `/lowestbin`, `/auctions`, `/mayor`, `/firesales`, `/bingo`) **read pre-computed Redis keys only**. If the key is missing/expired → `STALE` (serve last-known) or `MISSING_PROFILE`-style empty state; they **never** trigger an AH sweep.
+- Commands (`/price`, `/auctions`, `/mayor`, `/firesales`, `/bingo`) **read pre-computed Redis keys only**. (`/price`'s history chart comes from Coflnet on its own port and cache, outside this layer entirely — see `docs/INTEGRATIONS.md`.) If the key is missing/expired → `STALE` (serve last-known) or `MISSING_PROFILE`-style empty state; they **never** trigger an AH sweep.
 
 ---
 
