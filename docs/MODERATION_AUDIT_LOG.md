@@ -800,3 +800,120 @@ refused pass names nobody.
 **Still unverified against a live guild.** The Hypixel API key outage recorded in the earlier audit
 is still in force, so the end-to-end check — link a member the roster already knows and watch the
 role land within seconds — has not been run.
+
+
+---
+
+# Fourth pass — the mod-log nobody could reach, and punishments placed in Discord
+
+Two complaints came in together — "moderation actions never reach modlog" and "bans and
+kicks done in Discord don't sync" — and they read like one flaky pipeline. They are two
+unrelated defects that happened to produce the same symptom: a moderation log that
+disagrees with the server.
+
+## Part 1 — The mod-log sink was never wired into the panel
+
+Finding H in the first pass built the mod-log: a pure `modLogEmbed`, a `ModLogSink` port,
+`modlog` → `staff` fallback, posted after the verdict is known so the card can say whether
+enforcement took. All of it works. It was tested, and it is wired in the admin bot and the
+bridge.
+
+It was not wired in the panel. `apps/web-panel/src/composition.ts` constructed its
+`ModerationServiceImpl` with no `modLog` and no `staffAlerts`, and `postModLog` opens with
+`if (this.modLog === null) return;` — the deliberate no-op for a guild with no channel
+bound. So every punishment issued from the panel silently skipped its card, and the panel
+is the surface most staff moderation goes through.
+
+The omission was not carelessness. The panel process holds no Discord gateway connection
+and is never going to get one; at the time that composition was written there was
+genuinely nothing there to post with, and passing a sink that could not send would have
+been worse. What was missing is the hop.
+
+**Fix, in two halves that keep the ownership split intact.**
+
+- `POST /internal/g/{guildId}/announce` on the admin bot — `{channelId, embed}`, renders
+  the `EmbedView` through the same `toEmbed` every other surface uses. The channel is
+  fetched **through the guild**, not off the client, so a caller holding the loopback token
+  cannot use one server's grant to post into another's channel. Mentions are stripped: a
+  card describing a punishment should not also ping the person it names.
+- `createChannelPoster` in `apps/web-panel/src/directory.ts`, and a `postToFirstSlot`
+  helper in the panel's composition that reads the guild's channel config and tries
+  `modlog` then `staff` — the same fallback order the other two processes use, and the
+  same best-effort posture: a card that cannot be delivered is a warning in the log, never
+  a failed punishment.
+
+The panel now supplies both `modLog` and `staffAlerts`, so an enforcement failure raised
+from the panel is also finally audible.
+
+**Why it survived this long.** A missing wire and a flaky one look identical from outside.
+Staff reported "sometimes nothing appears in modlog", which is exactly what you would see
+if the surface you happened to use that day was the panel — and exactly what a
+half-working renderer would look like too. Every layer anyone would think to check —
+`modLogEmbed`, the sink, the channel slot, the fallback — was correct.
+
+## Part 2 — Punishments placed by hand in Discord were invisible
+
+Checked alongside Part 1 on the theory that it was the same fault, and it is not. There was
+no `GuildBanAdd` or `GuildBanRemove` listener anywhere in the codebase. A staffer who
+right-clicks and bans produces: no case, no mod-log card, nothing in `/audit`, no roles
+marked dirty, and — the half that actually costs something — no `/g kick`, so the member
+carries on playing in the Minecraft guild they were just thrown out of the Discord for.
+
+That is the same gap the second pass closed in the other direction (Part 3 there: in-game
+kicks now reach Discord). This is its mirror.
+
+**Fix.** `apps/admin-bot/src/discord-mod-observer.ts`, feeding a new
+`ModerationService.recordDiscordAction`. It is a sibling of `recordExternalAction` rather
+than a reuse of it, because the two owe opposite halves: an in-game kick still needs
+performing in Discord, a Discord ban still needs performing in guild chat. So the adopted
+action skips the Discord leg — `enforce({discordAlreadyApplied: true})` — and runs the
+ordinary `relayToGame`, giving the mirror both directions from one enforcement path.
+
+Kicks are the hard case, and the reason the design is shaped the way it is. Discord has no
+kick event: it reports one as an ordinary `GuildMemberRemove`, indistinguishable from
+somebody leaving of their own accord, and the only thing that separates them is a
+`MemberKick` audit entry landing at about the same moment. That is a race by construction,
+so it is treated as one — a two-second settle, eight entries scanned, a fifteen-second
+window — and every uncertain branch resolves to recording nothing.
+
+**The bias is deliberate and asymmetric.** A missed kick is a case staff can add by hand. A
+wrongly adopted one is a case asserting something untrue about a real person, and with
+relay sync on it kicks them out of the Minecraft guild for leaving a Discord server. So an
+unreadable audit log, an entry naming somebody else, a stale entry, an entry with no
+executor, and a server this platform has no mapping for all record nothing. A ban is
+unambiguous on its own — the state changed — so it is still recorded when the audit log
+cannot be read, with the actor `discord` standing in for the name we could not see; the
+mod-log card renders that as "Taken in Discord (actor unknown)".
+
+The load-bearing check is `executorId === client.user.id`. Every ban the platform places
+goes through the same REST call a staffer's right-click does, so `GuildBanAdd` fires for
+our own enforcement too. Without that comparison, every panel-issued ban would be adopted a
+second time and post a duplicate card.
+
+**Discord timeouts are deliberately not adopted.** Discord holds and lifts them itself. A
+MUTE row the expiry sweep believed it owned would begin un-muting people this platform
+never muted.
+
+**Requires:** the `GuildModeration` intent (non-privileged, but it has to be asked for) and
+the **View Audit Log** permission. Without the permission, bans are still adopted with an
+unknown actor and kicks are not detected at all — nothing distinguishes them from a
+departure.
+
+## Part 3 — Verification
+
+`apps/admin-bot/src/discord-mod-observer.test.ts` is new, and most of it asserts that
+nothing was recorded: the platform's own ban is not adopted twice, a voluntary leave is not
+a kick, a stale entry does not explain a fresh departure, an entry for somebody else does
+not attribute, and an unmapped server is not even looked up. The positive cases cover a
+hand-placed ban carrying the staffer and reason from the audit log, an unban with a blank
+reason getting a plain one, and a ban surviving an unreadable audit log with an unknown
+actor.
+
+`packages/moderation/src/service.test.ts` gains the service half: the row is written with
+`sourceContext: "DISCORD"` and no guessed duration, Discord is not asked to ban again, the
+guild-chat leg still runs, the mod-log card is posted, and an adopted unban is not left as
+something the expiry sweep believes it owns.
+
+**Not verified against a live guild.** Both halves cross a real gateway and a real audit
+log. The observer's settle window in particular is a guess calibrated against Discord's
+documented behaviour, not against measurements from this deployment.

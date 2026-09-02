@@ -4,11 +4,12 @@
  */
 export {
   ModerationServiceImpl,
+  type DiscordActionInput,
   type ExternalActionInput,
   type ModerationServiceDeps,
 } from "./service.js";
 export { rankOf, isPunitive, needsBotPermission } from "./rank.js";
-export { modLogEmbed, type ModLogSink } from "./mod-log.js";
+export { DISCORD_ACTOR, modLogEmbed, type ModLogSink } from "./mod-log.js";
 export {
   counterRequestsFor,
   evaluateAutomod,

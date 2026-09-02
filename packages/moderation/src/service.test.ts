@@ -9,6 +9,7 @@ import type {
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { ModerationServiceImpl } from "./service.js";
+import { DISCORD_ACTOR, type ModLogSink } from "./mod-log.js";
 import type {
   BotCapabilities,
   DiscordEnforcer,
@@ -96,6 +97,7 @@ function build(over: {
   gameCommands?: GameCommandBus;
   igns?: IgnResolver;
   relaySync?: RelaySyncSource;
+  modLog?: ModLogSink;
 } = {}) {
   return new ModerationServiceImpl({
     repo: over.repoImpl ?? repo().repo,
@@ -111,6 +113,7 @@ function build(over: {
     ...(over.gameCommands ? { gameCommands: over.gameCommands } : {}),
     ...(over.igns ? { igns: over.igns } : {}),
     ...(over.relaySync ? { relaySync: over.relaySync } : {}),
+    ...(over.modLog ? { modLog: over.modLog } : {}),
     botCaps: over.botCaps ?? allowAll,
     logger: silent,
     now: () => new Date("2026-08-06T00:00:00.000Z"),
@@ -953,4 +956,108 @@ test("retrying a failed case runs the real enforcement path and restamps it", as
   assert.equal(seen.length, 1, "the retry went to the same enforcer the first attempt used");
   assert.equal(seen[0]?.id, "act-1");
   assert.equal(c.patches.at(-1)?.editedByDiscordId, "boss");
+});
+
+
+// -----------------------------------------------------------------------------
+// Punishments placed by hand in Discord.
+//
+// The mirror of the in-game path above, pointing the other way. Staff
+// right-click and ban; before this existed the platform recorded nothing, so
+// the case list, `/audit` and the mod-log all disagreed with the server they
+// claim to describe — and the guild-chat half never ran, leaving the member
+// playing in a Minecraft guild they had just been thrown out of the Discord for.
+// -----------------------------------------------------------------------------
+
+function modLogSink(): { sink: ModLogSink; posted: { guildId: string; title?: string }[] } {
+  const posted: { guildId: string; title?: string }[] = [];
+  return {
+    posted,
+    sink: {
+      async post(guildId, embed) {
+        posted.push({ guildId, ...(embed.title === undefined ? {} : { title: embed.title }) });
+      },
+    },
+  };
+}
+
+function fromDiscord(over: Record<string, unknown> = {}) {
+  return {
+    guildId: "g1",
+    type: "BAN" as const,
+    targetDiscordId: "target",
+    actorDiscordId: "actor",
+    reason: "Banned in Discord",
+    ...over,
+  };
+}
+
+test("a ban placed in Discord is written as a case from that surface", async () => {
+  const r = repo();
+  const out = await build({ repoImpl: r.repo }).recordDiscordAction(fromDiscord());
+
+  assert.equal(out.ok, true);
+  assert.equal(r.created[0]?.sourceContext, "DISCORD");
+  assert.equal(r.created[0]?.actorDiscordId, "actor");
+  assert.equal(r.created[0]?.active, true);
+  // Discord's ban list has no expiry and the audit log carries none, so the
+  // sweep is given nothing to act on rather than a guessed duration.
+  assert.equal(r.created[0]?.durationSeconds, null);
+  assert.equal(r.created[0]?.expiresAt, null);
+});
+
+test("an adopted ban is not banned all over again", async () => {
+  // It has already happened on that surface. Re-issuing it would be a
+  // privileged write on no evidence, and for a KICK the member is already gone,
+  // so the retry answers "unknown member" and only reads as success because we
+  // chose to read it that way.
+  const seen: ModActionType[] = [];
+  const discord: DiscordEnforcer = {
+    async enforce(a) { seen.push(a.type); return { ok: true }; },
+  };
+  const out = await build({ discord }).recordDiscordAction(fromDiscord());
+
+  assert.equal(out.ok, true);
+  assert.deepEqual(seen, []);
+  assert.equal(out.ok && out.value.enforcement, "CONFIRMED");
+});
+
+test("a ban placed in Discord still reaches guild chat", async () => {
+  // The half that costs something. The Discord leg is done; the Minecraft one
+  // is exactly what nobody did, and is the reason this path exists at all.
+  const b = bus();
+  const out = await build({ gameCommands: b.bus, igns: linked, relaySync: defaultRelay })
+    .recordDiscordAction(fromDiscord({ reason: "spam" }));
+
+  assert.equal(out.ok, true);
+  assert.deepEqual(b.sent, ["/g kick TargetIGN spam"]);
+  assert.equal(out.ok && out.value.enforcement, "CONFIRMED");
+});
+
+test("an adopted action posts its mod-log card like any other", async () => {
+  // The whole point of adopting it: one log that agrees with the server.
+  const m = modLogSink();
+  await build({ modLog: m.sink }).recordDiscordAction(fromDiscord());
+  assert.equal(m.posted.length, 1);
+  assert.equal(m.posted[0]?.guildId, "g1");
+});
+
+test("an adopted unban is a reversal, not something the sweep now owns", async () => {
+  const r = repo();
+  const out = await build({ repoImpl: r.repo })
+    .recordDiscordAction(fromDiscord({ type: "UNBAN", reason: "Unbanned in Discord" }));
+
+  assert.equal(out.ok, true);
+  assert.equal(r.created[0]?.active, false);
+});
+
+test("a ban whose actor Discord would not name is recorded anyway", async () => {
+  // Without View Audit Log there is nobody to credit. The ban still happened,
+  // and a case that says so with an unknown actor beats no case at all.
+  const r = repo();
+  const out = await build({ repoImpl: r.repo })
+    .recordDiscordAction(fromDiscord({ actorDiscordId: DISCORD_ACTOR }));
+
+  assert.equal(out.ok, true);
+  assert.equal(r.created[0]?.actorDiscordId, DISCORD_ACTOR);
 });

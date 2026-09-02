@@ -26,6 +26,8 @@ import {
   type Guild,
   type Role,
 } from "discord.js";
+import { toEmbed } from "@sbr/discord-kit";
+import type { EmbedView } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import {
   describeRefusal,
@@ -374,6 +376,9 @@ export class InternalApi {
         case "roles":
           sendJson(res, 200, await this.applyRoles(guild, body));
           return;
+        case "announce":
+          sendJson(res, 200, await this.announce(guild, body));
+          return;
         default:
           sendJson(res, 404, { error: "NOT_FOUND" });
           return;
@@ -512,6 +517,52 @@ export class InternalApi {
     }
     this.rosters.set(guild.id, { rows, at: Date.now() });
     return rows;
+  }
+
+/**
+   * Post a card into one of this server's channels on a caller's behalf.
+   *
+   * The panel needs this because it has no gateway: it can decide a member is
+   * banned, write the case and mirror it for the relay, and then have nothing
+   * to say about it in the guild's moderation log. That was the whole of the
+   * "moderation actions never reach modlog" bug — not a broken renderer or an
+   * unbound slot, but the one process that issues most of the actions being
+   * physically unable to post.
+   *
+   * Deliberately dumb: the caller names the channel, because the caller is the
+   * one holding the guild's channel-slot configuration and already resolves
+   * slots for its own purposes. This end renders and sends, and answers whether
+   * it landed so the caller can fall through to its next slot.
+   *
+   * Mentions are parsed off unconditionally. A moderation card names the member
+   * it is about, and a log that pings somebody every time they are warned is a
+   * log staff mute — and this route is reachable by any holder of the internal
+   * token, so the guarantee belongs here rather than in each caller.
+   */
+  private async announce(guild: Guild, body: unknown): Promise<{ ok: boolean; error?: string }> {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const channelId = str(b["channelId"]);
+    const view = b["embed"];
+    if (channelId === null) return { ok: false, error: "INVALID_CHANNEL" };
+    if (typeof view !== "object" || view === null || Array.isArray(view)) {
+      return { ok: false, error: "INVALID_EMBED" };
+    }
+
+    // Fetched through the guild rather than the client so a caller cannot use
+    // one server's token grant to post into another server's channel.
+    const channel = await guild.channels.fetch(channelId).catch(() => null);
+    if (!channel || !channel.isTextBased()) return { ok: false, error: "CHANNEL_NOT_FOUND" };
+
+    try {
+      await channel.send({ embeds: [toEmbed(view as EmbedView)], allowedMentions: { parse: [] } });
+      return { ok: true };
+    } catch (error) {
+      if (error instanceof DiscordAPIError) {
+        if (error.code === 50013 || error.code === 50001) return { ok: false, error: "MISSING_PERMISSION" };
+        return { ok: false, error: error.message };
+      }
+      return { ok: false, error: error instanceof Error ? error.message : "FAILED" };
+    }
   }
 
   /**

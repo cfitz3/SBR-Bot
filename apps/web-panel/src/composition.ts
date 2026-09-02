@@ -40,14 +40,23 @@ import {
   ModerationServiceImpl,
   RELAY_SYNC_SETTING_KEY,
   WordlistServiceImpl,
+  type ModLogSink,
+  type StaffAlertSink,
 } from "@sbr/moderation";
+import type { EmbedView } from "@sbr/shared-types";
 import { PANEL_ACCESS_FLOOR, PanelMutations, PanelService, type ConfigAuditSink, type PanelSession } from "@sbr/panel-core";
 import { XpService } from "@sbr/xp";
 import { createLogger, type Logger } from "@sbr/observability";
 import { createRedisAdapters, getRedis, RUNNABLE_JOBS, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import { createRolesInsight } from "./roles-insight.js";
-import { createBotDirectory, createDiscordEnforcer, MAX_TIMEOUT_SECONDS, type EnforceRequest } from "./directory.js";
+import {
+  createBotDirectory,
+  createChannelPoster,
+  createDiscordEnforcer,
+  MAX_TIMEOUT_SECONDS,
+  type EnforceRequest,
+} from "./directory.js";
 import { createTicketEffects } from "./ticket-effects.js";
 import { createEventEffects } from "./event-effects.js";
 import { createRoleMenuEffects } from "./role-menu-effects.js";
@@ -155,6 +164,53 @@ export async function createPanelApp(): Promise<PanelApp> {
     logger: log,
   });
 
+  /**
+   * The guild's moderation log and its staff alerts, over the loopback hop.
+   *
+   * Same contract and same slot order as the two bots': the log tries `modlog`
+   * and falls back to `staff`, the alert tries `staff` and falls back to
+   * `modlog`, ordered in each case by who needs to read it. What differs is
+   * only how the send happens — this process has no gateway, so it asks the
+   * admin bot, which is where privileged Discord writes belong anyway.
+   *
+   * Wiring these is the fix for a mod log that appeared to work intermittently.
+   * The panel is the surface most staff moderation now goes through, and it was
+   * the one process constructing a `ModerationServiceImpl` without a sink: the
+   * service dutifully called nothing after settling every action, and a guild
+   * saw automod's cards and the admin bot's and none of its own staff's. A
+   * missing wire reads exactly like a flaky one from the outside, which is why
+   * it survived so long.
+   *
+   * Both are best-effort, as everywhere: the punishment has already happened,
+   * and an unreachable bot is not a reason to un-take it.
+   */
+  const postToChannel = createChannelPoster({
+    baseUrl: config.internalApi.baseUrl,
+    token: config.internalApi.token,
+    logger: log,
+  });
+
+  async function postToFirstSlot(
+    guildId: string,
+    slots: readonly ("modlog" | "staff")[],
+    embed: EmbedView,
+  ): Promise<void> {
+    const row = await guildConfigRepository.get(guildId).catch(() => null);
+    for (const slot of slots) {
+      const channelId = row?.channels[slot] ?? null;
+      if (channelId !== null && (await postToChannel(guildId, channelId, embed))) return;
+    }
+  }
+
+  const modLog: ModLogSink = {
+    post: (guildId, embed) => postToFirstSlot(guildId, ["modlog", "staff"], embed),
+  };
+
+  const staffAlerts: StaffAlertSink = {
+    alert: (guildId, text) =>
+      postToFirstSlot(guildId, ["staff", "modlog"], { description: text, color: "WARNING" }),
+  };
+
   const moderation = new ModerationServiceImpl({
     repo: moderationRepository,
     ranks: rankResolver,
@@ -162,6 +218,8 @@ export async function createPanelApp(): Promise<PanelApp> {
     // for the reconciler's next full sweep to notice made a ban land on one
     // surface now and another later.
     rolesDirty: adapters.rolesDirty,
+    modLog,
+    staffAlerts,
     metrics,
     // The real Redis mirror, same object the admin bot uses: a mute issued from
     // the panel has to be visible to the bridge immediately, and a no-op stub

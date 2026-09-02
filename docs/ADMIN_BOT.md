@@ -255,6 +255,7 @@ The bot is the only process holding a Discord gateway cache, so it exposes that 
 | `POST /internal/g/{guildId}/enforce` | KICK / BAN / UNBAN / TIMEOUT / UNTIMEOUT, through `DiscordGuildEffects` |
 | `POST /internal/g/{guildId}/scheduled-event` | Creates **or updates** a Discord scheduled event, returns its id and URL |
 | `POST /internal/g/{guildId}/roles` | `{userId, add[], remove[], reason}` — grants and revokes, after a preflight |
+| `POST /internal/g/{guildId}/announce` | `{channelId, embed}` — renders an `EmbedView` into that channel |
 
 `{guildId}` is the **platform** guild id; the bot resolves it to the Discord snowflake itself, so the panel never has to hold both.
 
@@ -278,8 +279,62 @@ The write is **idempotent and honest**. A role the member already holds is not a
 
 **Manual step that cannot be done from code:** member listing requires the **Server Members** privileged intent, enabled by hand in the Discord developer portal for the admin-bot application (the code requests `GatewayIntentBits.GuildMembers`, but the portal switch is what makes Discord honour it). Without it the bot fails to log in — this is a deploy-time gate, not a silent degradation.
 
+**`announce` exists because the panel has no mouth.** The panel process holds no gateway connection, so a `ModerationServiceImpl` built there had no way to post a mod-log card and was constructed without a sink — which is why staff moderation done from the panel, the route most of it goes through, reached no channel at all. The fix keeps the ownership split intact: the panel decides *what* to say and *where*, the admin bot performs the privileged write. The channel is fetched **through the guild** rather than off the client, so holding the loopback token for one server cannot post into another. Mentions are stripped (`allowedMentions: {parse: []}`) — a card describing a punishment should not also ping the person it names.
+
 **Degradation is deliberate.** A panel whose bot is down, unreachable, or token-mismatched is *degraded, not broken*: each picker falls back to the raw-snowflake text field it replaced, with a Save button and the same validation as before. Directory failures are never cached, so a picker recovers on its own as soon as the bot returns.
 
+---
+
+## 7c. Punishments placed by hand in Discord
+
+Staff right-click and ban. They always have. A platform that only records what
+was typed into one of its own surfaces will always disagree with the server it
+claims to describe — no case, no mod-log card, nothing in `/audit` — and, more
+expensively, the guild-chat half never runs, so the member carries on playing in
+a Minecraft guild they were just thrown out of the Discord for.
+
+`apps/admin-bot/src/discord-mod-observer.ts` closes that. It is the mirror of the
+in-game path, pointing the other way, and it feeds
+`ModerationService.recordDiscordAction` — a sibling of `recordExternalAction`
+rather than a reuse of it, because the two owe opposite halves: an in-game kick
+still needs performing *in Discord*, a Discord ban still needs performing *in
+guild chat*.
+
+- **Bans and unbans** arrive as `GuildBanAdd` / `GuildBanRemove`. The state
+  change is unambiguous; the audit log is consulted only for *who* and *why*.
+- **Kicks have no event.** Discord reports one as an ordinary
+  `GuildMemberRemove`, identical to somebody leaving of their own accord. The
+  only thing separating the two is a `MemberKick` audit entry appearing at about
+  the same moment, which is a race by construction — so it is treated as one: a
+  two-second settle, eight entries scanned, a fifteen-second window.
+- **Discord timeouts are deliberately not adopted.** Discord holds and lifts
+  them itself; a MUTE row the expiry sweep believed it owned would start
+  un-muting people this platform never muted.
+
+**The bias is toward doing nothing.** A missed kick is a case staff can add by
+hand. A wrongly adopted one is a case asserting something untrue about a real
+person and — with relay sync on — a genuine kick out of the Minecraft guild for
+leaving a Discord server. So an unreadable audit log, an entry for somebody
+else, a stale entry, an entry with no executor, and a server this platform has
+no mapping for all resolve to *record nothing* (a ban, which is unambiguous on
+its own, is still recorded, with the actor `discord` standing in for the name we
+could not read).
+
+The load-bearing check is `executorId === client.user.id`. Every ban the platform
+places goes through the same REST call a staffer's right-click does, so
+`GuildBanAdd` fires for our own enforcement too; without that comparison every
+panel-issued ban would be adopted a second time and post a duplicate card.
+Adopted actions skip the Discord leg for the same reason —
+`enforce({discordAlreadyApplied: true})` — since re-issuing it would be a
+privileged write on no evidence, and for a KICK the member has already gone, so
+the retry answers "unknown member" and only reads as success because we chose to
+read it that way.
+
+**Requires:** the `GuildModeration` gateway intent (non-privileged, but it must
+be asked for — it is in `apps/admin-bot/src/transport.ts`) and the **View Audit
+Log** permission. Without the permission bans are still adopted, with an unknown
+actor, and kicks are not detected at all — there is nothing to distinguish them
+from a departure.
 ---
 
 ## 8. Summary

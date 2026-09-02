@@ -15,6 +15,7 @@ import {
 } from "discord.js";
 import { buildAdminRegistry } from "@sbr/commands-admin";
 import { ComponentRouter, interactionArgs, respond, toSlashCommands } from "@sbr/discord-kit";
+import { attachDiscordModObserver } from "./discord-mod-observer.js";
 import { attachMemberObserver } from "./member-observer.js";
 import type { AdminApp } from "./composition.js";
 
@@ -87,7 +88,17 @@ export async function startAdminGateway(
   // `members.fetch()` returns only the bot — the panel's member picker and the
   // Discord-side member scan both come back empty rather than erroring, so the
   // internal API logs a warning when it sees that shape.
-  const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers] });
+  // GuildModeration is what delivers ban and unban events. It is not privileged
+  // — unlike GuildMembers below — so it costs nothing but has to be asked for:
+  // without it the gateway simply never mentions that anybody was banned, and
+  // the observer attached further down would sit silent forever.
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildModeration,
+    ],
+  });
   const handle = createInteractionHandler(app);
   const complete = createAutocompleteHandler(app);
   // Buttons whose state lives in the customId, so they survive a restart
@@ -101,6 +112,14 @@ export async function startAdminGateway(
     resolveGuild: (id) => app.resolveGuild(id),
     publish: (message) => app.memberBus.publish(message),
     markRolesDirty: (guildId, ids) => app.rolesDirty.mark(guildId, ids),
+    logger: app.log,
+  });
+
+  // Punishments taken by hand in Discord, adopted into the platform so the
+  // audit, the mod log and the guild-chat side all learn about them.
+  attachDiscordModObserver(client, {
+    resolveGuild: (id) => app.resolveGuild(id),
+    record: (input) => app.recordDiscordAction(input),
     logger: app.log,
   });
 

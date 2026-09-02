@@ -25,6 +25,7 @@ import type {
   DirectorySource,
 } from "@sbr/panel-core";
 import { getJson, getRedis, setJson } from "@sbr/redis";
+import type { EmbedView } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 
 /**
@@ -54,6 +55,13 @@ interface DirectoryDeps {
 }
 
 type Resource = "channels" | "roles" | "members";
+
+/** Post a card into a channel of a guild; false when it did not land. */
+export type ChannelPoster = (
+  guildId: string,
+  channelId: string,
+  embed: EmbedView,
+) => Promise<boolean>;
 
 interface Answer<T> {
   readonly available: boolean;
@@ -219,3 +227,64 @@ export function createDiscordEnforcer(deps: DirectoryDeps): DiscordEnforcer {
 }
 
 const ENFORCE_TIMEOUT_MS = 8_000;
+
+/**
+ * Posting a card into a guild's channel, over the same loopback hop.
+ *
+ * The panel writes most of this platform's moderation history — every action
+ * from the moderation page, every case edit, every void, every manual
+ * enforcement retry — and until this existed it wrote all of it silently. The
+ * `ModerationService` has always called its `ModLogSink` after settling an
+ * action; the panel simply never passed one, because there was no way for a
+ * process without a gateway to post anything. So the channel a guild bound
+ * received the admin bot's and the bridge's cards and none of the panel's, and
+ * the gap looked from the outside like an intermittent mod log rather than a
+ * missing wire.
+ *
+ * Returns whether it landed, because the sinks that use it try `modlog` and
+ * then `staff` in order — "the channel is gone" has to be distinguishable from
+ * "sent" for that fallback to mean anything.
+ */
+export function createChannelPoster(deps: DirectoryDeps): ChannelPoster {
+  const log = deps.logger.child({ service: "channel-poster" });
+  const base = deps.baseUrl.replace(/\/+$/, "");
+
+  return async function post(guildId, channelId, embed) {
+    if (deps.token === undefined) return false;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ANNOUNCE_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${base}/internal/g/${encodeURIComponent(guildId)}/announce`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${deps.token}`, "content-type": "application/json" },
+        body: JSON.stringify({ channelId, embed }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        log.warn("announce request refused", { guildId, channelId, status: res.status });
+        return false;
+      }
+      const body = (await res.json()) as { ok?: unknown; error?: unknown };
+      if (body.ok === true) return true;
+      log.warn("announce refused by Discord", {
+        guildId,
+        channelId,
+        error: typeof body.error === "string" ? body.error : "FAILED",
+      });
+      return false;
+    } catch (error: unknown) {
+      log.warn("announce request failed", {
+        guildId,
+        channelId,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+/** A live Discord send behind the loopback hop, same budget as an enforcement. */
+const ANNOUNCE_TIMEOUT_MS = 8_000;
