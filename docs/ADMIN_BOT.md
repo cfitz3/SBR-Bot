@@ -61,7 +61,7 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 |---------|------|--------------|
 | `/set-role` | Admin | Cannot map/grant a role above the actor's own rank. |
 | `/set-channel` | Admin | Validated against guild channels. |
-| `/feature-toggle` | Admin | Per-guild flag; audited; pub/sub to bots. |
+| `/feature-toggle` | Admin | No options: the card lists every declared feature and its select menu flips one. A key outside `FEATURE_CATALOGUE` is refused. Audited; pub/sub to bots. |
 | `/set-recruitment` | Admin | Open/close + thresholds. |
 | `/wordlist-add` / `-remove` | Officer | Regex validated; recompiles filter. |
 | `/filter-test` | Staff | Dry-run, no state change. |
@@ -155,9 +155,11 @@ Two gates, both enforced **server-side** in `packages/identity`; the UI/command 
 
 ### 4.4 Governance change (traceable config)
 ```
-Admin runs /feature-toggle feature:ingame-commands state:off reason:"abuse review"
-  → GuildConfig updated → cache invalidated → pub/sub → bridge bot disables in-game cmds live
-  → audit record: actor, before(on)/after(off), reason, timestamp, source=ADMIN_BOT.
+Admin runs /feature-toggle → card of every declared feature, one switch each
+  → picks "Autoresponders" from the menu → setFeature('autoresponder', false)
+  → GuildConfig updated → cache invalidated → pub/sub → bridge bot stops answering
+  → the card is rebuilt from the row that came back, not from a local guess
+  → audit record: actor, before(on)/after(off), timestamp, source=ADMIN_BOT.
 ```
 
 ---

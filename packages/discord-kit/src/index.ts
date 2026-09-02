@@ -42,6 +42,7 @@ export {
   progressBar,
   progressLine,
   sparkline,
+  switchMark,
   VIEW_COLORS,
   type CardSpec,
   type CheckOptions,

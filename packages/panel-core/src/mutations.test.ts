@@ -704,7 +704,7 @@ test("null clears a setting; only an absent value is refused", async () => {
 test("an unauthenticated write is denied without touching the config service", async () => {
   const { mutations, recorded } = make();
 
-  const result = await mutations.setFeature(null, "g1", "lfg", true);
+  const result = await mutations.setFeature(null, "g1", "welcome", true);
 
   assert.equal(result.ok, false);
   assert.equal(result.access.allowed, false);
@@ -715,7 +715,7 @@ test("an unauthenticated write is denied without touching the config service", a
 test("a guild outside the manageable set is denied even for an OWNER", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OWNER" } });
 
-  const result = await mutations.setFeature(session({ manageableGuildIds: ["other"] }), "g1", "lfg", true);
+  const result = await mutations.setFeature(session({ manageableGuildIds: ["other"] }), "g1", "welcome", true);
 
   assert.equal(result.access.allowed, false);
   if (!result.access.allowed) assert.equal(result.access.reason, "NOT_MANAGEABLE");
@@ -725,7 +725,7 @@ test("a guild outside the manageable set is denied even for an OWNER", async () 
 test("config writes require ADMIN — an OFFICER is refused", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
 
-  const result = await mutations.setFeature(session(), "g1", "lfg", true);
+  const result = await mutations.setFeature(session(), "g1", "welcome", true);
 
   assert.equal(result.access.allowed, false);
   if (!result.access.allowed) assert.equal(result.access.reason, "INSUFFICIENT_ROLE");
@@ -749,7 +749,7 @@ test("bridge suspend sits at OFFICER, not ADMIN", async () => {
 test("the limiter is keyed per user and mutation, and a block short-circuits the write", async () => {
   const { mutations, recorded } = make({ blocked: ["cd:web:config.feature:111"] });
 
-  const result = await mutations.setFeature(session(), "g1", "lfg", true);
+  const result = await mutations.setFeature(session(), "g1", "welcome", true);
 
   assert.equal(result.ok, false);
   if (result.error) {
@@ -783,7 +783,9 @@ test("junk input is refused before the config service or the audit sees it", asy
     await mutations.setChannel(session(), "g1", "bridge", "not-a-snowflake"),
     await mutations.setRoleMapping(session(), "g1", "SUPREME", null),
     await mutations.setFeature(session(), "g1", "Feature With Spaces", true),
-    await mutations.setFeature(session(), "g1", "lfg", "yes"),
+    // Shaped like a flag, declared by nobody — the residue of the free-text box.
+    await mutations.setFeature(session(), "g1", "lfg", true),
+    await mutations.setFeature(session(), "g1", "welcome", "yes"),
     await mutations.setBridgeSuspended(session(), "g1", "true"),
     await mutations.setRecruitment(session(), "g1", { open: "yes" }),
     await mutations.setSetting(session(), "g1", "Tickets Panel", {}),
@@ -1359,7 +1361,7 @@ test("events are Officer work — a moderator is refused both halves", async () 
 test("a refusal from the config service surfaces as SERVICE_ERROR and writes no audit", async () => {
   const { mutations, recorded } = make({ result: err({ kind: "NOT_CONFIGURED" }) as Result<void> });
 
-  const result = await mutations.setFeature(session(), "g1", "lfg", true);
+  const result = await mutations.setFeature(session(), "g1", "welcome", true);
 
   assert.equal(result.ok, false);
   assert.equal(result.error?.kind, "SERVICE_ERROR");

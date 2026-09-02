@@ -168,6 +168,17 @@ export function marker(qualifies: boolean): string {
   return qualifies ? GLYPHS.marker : "";
 }
 
+/**
+ * The on/off mark, for a card listing things a guild has switched.
+ *
+ * Same reason `marker` exists: the glyph for "this is on" has to be one glyph.
+ * A features card that used 🟢 and a lockdown card that used ✅ would be two
+ * vocabularies for one idea, learned separately by every reader.
+ */
+export function switchMark(on: boolean): string {
+  return on ? GLYPHS.on : GLYPHS.off;
+}
+
 /** `marker(isCapped(...))`, which is how nearly every caller wants it. */
 export function capMarker(value: number | null | undefined, cap: number): string {
   return marker(isCapped(value, cap));

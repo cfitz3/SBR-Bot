@@ -28,6 +28,7 @@ import type {
 import { parseDurationSeconds, renderModError } from "./util.js";
 import type { JoinActionResult, JoinQueueService } from "@sbr/screening";
 import {
+  parseFeatureChoice,
   relativeTs,
   renderAdmit,
   renderApplicationEmbed,
@@ -37,6 +38,8 @@ import {
   renderCaseSelectRow,
   renderEffectError,
   renderEnforcement,
+  renderFeatureSelectRow,
+  renderFeaturesEmbed,
   renderFilterTestEmbed,
   renderInfractionPages,
   renderJoinAction,
@@ -532,15 +535,53 @@ const setChannel: AdminHandler = async (ctx, deps) => {
   };
 };
 
+/**
+ * `/feature-toggle`. No typed arguments, because the arguments were the problem.
+ *
+ * It used to take a free-text `feature` and an `enabled` boolean and write
+ * whatever it was given: nothing validated the key, nothing read the key, and
+ * the reply said "Feature `starbord` is now off" with complete confidence. What
+ * staff needed first was the list, so the list is what the command is — the card
+ * shows every flag the platform honours and its state, and the menu underneath
+ * flips one.
+ *
+ * `set` is the menu's argument and is deliberately absent from the command
+ * spec, so there is no option a staffer can type and no second route into a
+ * privileged write. The transport synthesises it when the menu fires, which
+ * keeps the role check, the policy floor and this handler on the one path a
+ * typed `/feature-toggle` already takes.
+ */
 const featureToggle: AdminHandler = async (ctx, deps) => {
-  const feature = ctx.args.getString("feature");
-  const enabled = ctx.args.getBoolean("enabled");
-  if (!feature || enabled === null) {
-    return { ephemeral: true, text: "Usage: /feature-toggle feature:<name> enabled:<true|false>" };
+  const choice = ctx.args.getString("set");
+  let notice = "";
+
+  if (choice !== null) {
+    const parsed = parseFeatureChoice(choice);
+    // The flag was retired between the message being sent and the click. Redraw
+    // with the current card rather than erroring: the staffer is holding a stale
+    // message, and what is true now is the answer to what they were trying to do.
+    if (!parsed) notice = "That feature no longer exists on this build.";
+    else {
+      const written = await deps.config.setFeature(ctx.guildId, parsed.key, parsed.enabled);
+      if (!written.ok) notice = "Couldn't save that. Check /health.";
+    }
   }
-  const result = await deps.config.setFeature(ctx.guildId, feature, enabled);
-  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
-  return { ephemeral: true, text: `Feature \`${feature}\` is now ${enabled ? "on" : "off"}.` };
+
+  // Read after writing rather than splicing the new value into the copy already
+  // in hand: the card has to show stored state, and a locally-patched one would
+  // look identical whether or not the write landed.
+  const config = await deps.config.get(ctx.guildId);
+  if (!config.ok) return { ephemeral: true, text: "Couldn't load the features. Check /health." };
+  const stored = config.value?.features ?? {};
+
+  return {
+    // The card carries everything; `replyOptions` drops the text beside an
+    // embed anyway, so anything written here would never be seen.
+    text: "",
+    ephemeral: true,
+    embed: renderFeaturesEmbed(stored, notice ? { notice } : {}),
+    components: renderFeatureSelectRow(stored),
+  };
 };
 
 /**
@@ -1331,11 +1372,8 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
     },
     {
       name: "feature-toggle",
-      description: "Turn a named feature on or off",
-      options: [
-        { name: "feature", description: "Feature key", type: "string", required: true },
-        { name: "enabled", description: "On or off", type: "boolean", required: true },
-      ],
+      description: "See and switch the platform features this guild runs",
+      options: [],
       minRole: "ADMIN",
       handler: featureToggle,
     },

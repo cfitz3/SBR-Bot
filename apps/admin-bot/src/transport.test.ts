@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildAdminRegistry } from "@sbr/commands-admin";
+import { buildAdminRegistry, FEATURE_SELECT_NAMESPACE } from "@sbr/commands-admin";
 import { ComponentRouter } from "@sbr/discord-kit";
 import type { AdminContext } from "@sbr/commands-admin";
-import { attachCaseSelect, buildCommands } from "./transport.js";
+import type { CommandArgs } from "@sbr/shared-types";
 import type { AdminApp } from "./composition.js";
+import { attachCaseSelect, attachFeatureMenu, buildCommands } from "./transport.js";
 
 interface Payload {
   name: string;
@@ -98,4 +99,40 @@ test("a menu from a server the platform does not know says so instead of dispatc
 
   assert.equal(dispatched, 0);
   assert.match(content, /isn't set up/);
+});
+
+test("the feature menu dispatches the command rather than writing the flag itself", async () => {
+  // The write is ADMIN-gated. A component handler that called setFeature would
+  // hand that gate to anyone who can see the message the menu is attached to —
+  // a hole that is invisible from the outside, because the card looks the same.
+  const dispatched: Array<{ name: string; guildId: string; actorId: string; set: string | null }> = [];
+  let updated: Record<string, unknown> | null = null;
+  const app = {
+    async resolveGuild() { return "g1"; },
+    dispatcher: {
+      async dispatch(name: string, ctx: { guildId: string; actorId: string; args: CommandArgs }) {
+        dispatched.push({ name, guildId: ctx.guildId, actorId: ctx.actorId, set: ctx.args.getString("set") });
+        return { text: "", ephemeral: true, embed: { title: "Features", color: "INFO" as const } };
+      },
+    },
+  } as unknown as AdminApp;
+
+  const router = new ComponentRouter({ onError() {} });
+  attachFeatureMenu(router, app);
+  const routed = await router.handle({
+    customId: FEATURE_SELECT_NAMESPACE,
+    guildId: "discord-guild",
+    channelId: "chan",
+    user: { id: "staffer" },
+    values: ["welcome:off"],
+    isStringSelectMenu: () => true,
+    async update(payload: Record<string, unknown>) { updated = payload; },
+  } as never);
+
+  assert.equal(routed, true);
+  assert.deepEqual(dispatched, [
+    { name: "feature-toggle", guildId: "g1", actorId: "staffer", set: "welcome:off" },
+  ]);
+  assert.ok(updated, "the card is replaced in place, not answered beside");
+  assert.equal("flags" in (updated as Record<string, unknown>), false, "update inherits visibility; naming it is rejected");
 });

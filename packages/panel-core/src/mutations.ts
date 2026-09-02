@@ -18,6 +18,7 @@ import {
   isAchievementTier,
   isConfigChannelSlot,
   isEventMetric,
+  isKnownFeature,
   isMilestoneMetric,
   isUpstreamUnavailable,
   MILESTONE_METRICS,
@@ -719,9 +720,6 @@ const MAX_ESCALATION_WARNS = 100;
 /** Matches the clamp `parseEscalationPolicy` applies when reading it back. */
 const MAX_ESCALATION_WINDOW_DAYS = 365;
 
-/** Feature flag names are keys in a config JSON blob; keep them boring. */
-const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
-
 /**
  * Admin setting keys: a dotted namespace, e.g. `tickets.panel`, `xp.weights`.
  *
@@ -1089,8 +1087,12 @@ export class PanelMutations {
     enabled: unknown,
   ): Promise<MutationResult> {
     return this.run(session, guildId, "config.feature", async () => {
-      if (typeof feature !== "string" || !FEATURE_NAME.test(feature)) {
-        return invalid("feature must be a short lowercase name");
+      // A closed list, unlike settings keys: a feature exists because some
+      // reader asks whether it is on, and a key no reader knows is a switch
+      // wired to nothing. The old shape rule accepted any lowercase word, which
+      // is how this guild came to store flags nothing has ever looked at.
+      if (typeof feature !== "string" || !isKnownFeature(feature)) {
+        return invalid("feature must be one of the platform features");
       }
       if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
 

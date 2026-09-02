@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   err,
+  FEATURE_CATALOGUE,
   ok,
   recordArgs,
   type AnalyticsService,
@@ -13,6 +14,7 @@ import {
   type GuildConfigService,
   type GuildEffectError,
   type GuildEffects,
+  type GuildRuntimeConfig,
   type IdentityService,
   type LinkedIdentityDTO,
   type LockdownStateDTO,
@@ -1084,4 +1086,89 @@ test("/tickets is not a member command", async () => {
     ctx({ args: recordArgs({ action: "list" }) }),
   );
   assert.match(r.text, /requires MODERATOR/);
+});
+
+// ── /feature-toggle ─────────────────────────────────────────────────────────
+
+const runtimeConfig = (features: Record<string, boolean>): GuildRuntimeConfig => ({
+  guildId: "g1",
+  channels: {},
+  prefixes: [],
+  timezone: "UTC",
+  applicationsOpen: true,
+  bridgeSuspended: false,
+  features,
+  roleMappings: {},
+});
+
+test("feature-toggle with nothing chosen reads the guild and offers every switch", async () => {
+  const cfg = guildConfig({ async get() { return ok(runtimeConfig({ welcome: false })); } });
+  const r = await make({ config: cfg }).dispatch("feature-toggle", ctx({ args: recordArgs({}) }));
+  assert.ok(r.embed, "the card is the surface — there is no text form of this command");
+  const options = r.components?.[0]?.select?.options ?? [];
+  assert.equal(options.length, FEATURE_CATALOGUE.length, "every declared feature is reachable");
+  assert.deepEqual(
+    options.filter((o) => o.value.startsWith("welcome:")).map((o) => o.value),
+    ["welcome:on"],
+    "the option carries where the click lands, not where it started",
+  );
+});
+
+test("a chosen switch is written and then read back, not echoed", async () => {
+  // Splicing the new value into the copy we already had would render identically
+  // whether or not the write landed. The re-read is the only honest confirmation.
+  const writes: Array<[string, boolean]> = [];
+  let stored: Record<string, boolean> = { autoresponder: true };
+  const cfg = guildConfig({
+    async get() { return ok(runtimeConfig(stored)); },
+    async setFeature(_g, key, enabled) {
+      writes.push([key, enabled]);
+      stored = { ...stored, [key]: enabled };
+      return ok(undefined);
+    },
+  });
+  const r = await make({ config: cfg }).dispatch(
+    "feature-toggle",
+    ctx({ args: recordArgs({ set: "autoresponder:off" }) }),
+  );
+  assert.deepEqual(writes, [["autoresponder", false]]);
+  assert.deepEqual(
+    (r.components?.[0]?.select?.options ?? []).filter((o) => o.value.startsWith("autoresponder:")).map((o) => o.value),
+    ["autoresponder:on"],
+    "the menu now offers the other direction, because the card was rebuilt from the row",
+  );
+});
+
+test("a key this build does not know is refused before it reaches the store", async () => {
+  let writes = 0;
+  const cfg = guildConfig({
+    async get() { return ok(runtimeConfig({})); },
+    async setFeature() { writes += 1; return ok(undefined); },
+  });
+  const r = await make({ config: cfg }).dispatch(
+    "feature-toggle",
+    ctx({ args: recordArgs({ set: "beta_ui:on" }) }),
+  );
+  assert.equal(writes, 0);
+  assert.match(r.embed?.description ?? "", /no longer exists/);
+});
+
+test("a store that refuses the write says so instead of showing the old state as new", async () => {
+  const cfg = guildConfig({
+    async get() { return ok(runtimeConfig({})); },
+    async setFeature() { return err(new Error("db down")); },
+  });
+  const r = await make({ config: cfg }).dispatch(
+    "feature-toggle",
+    ctx({ args: recordArgs({ set: "welcome:off" }) }),
+  );
+  assert.match(r.embed?.description ?? "", /\/health/);
+});
+
+test("feature-toggle takes no typed options, so the menu is the only way in", () => {
+  // `set` is deliberately absent from the spec: a second route to the write is a
+  // second place the parse can disagree with the catalogue.
+  const spec = buildAdminRegistry().get("feature-toggle");
+  assert.deepEqual(spec?.options, []);
+  assert.equal(spec?.minRole, "ADMIN");
 });

@@ -30,8 +30,10 @@ import { h, replace } from "../dom.js";
 import { channelSlotCopy } from "./channel-slots.js";
 import { triggersForm } from "./triggers.js";
 import { LFG_PING_ROLE_KEY } from "./lfg-settings.js";
+import { FEATURES } from "./enums.js";
 
 const t = scope("settings");
+
 
 /** Mirrors the mutation layer's `FEATURE_NAME`; see forms.ts on why both exist. */
 const FEATURE_NAME = /^[a-z][a-z0-9-]{1,39}$/;
@@ -170,31 +172,33 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
     }),
   );
 
-  const flagNames = Object.keys(result.data.features).sort((a, b) => a.localeCompare(b));
+  /**
+   * One toggle per declared feature, not one per key in the row.
+   *
+   * The page used to list whatever the config blob happened to hold and offer a
+   * free-text box to add more. Every one of those keys was written and then
+   * read by nobody: the switch looked identical whether or not anything on the
+   * platform honoured it. The catalogue is the list of switches that are wired
+   * to something, so it is the list the page shows — and `setFeature` refuses
+   * anything else, which is why the box is gone rather than merely validated.
+   *
+   * A key left behind by the old box is named below the switches instead of
+   * hidden: it is in the operator's own words, and silently dropping it would
+   * leave them looking for a row that is still there.
+   */
+  const stale = Object.keys(result.data.features)
+    .filter((key) => !FEATURES.some((feature) => feature.key === key))
+    .sort((a, b) => a.localeCompare(b));
   const features = fieldGroup(
-    ...flagNames.map((feature) =>
+    ...FEATURES.map((feature) =>
       toggleField({
-        label: feature,
-        checked: result.data.features[feature] === true,
-        save: (enabled) => postAction(guildId, "config.feature", { feature, enabled }),
+        label: feature.label,
+        hint: feature.description,
+        checked: result.data.features[feature.key] !== false,
+        save: (enabled) => postAction(guildId, "config.feature", { feature: feature.key, enabled }),
       }),
     ),
-    textField({
-      label: t("featureAddLabel"),
-      value: "",
-      hint: t("featureAddHint"),
-      placeholder: t("featureAddPlaceholder"),
-      validate: (raw) => (FEATURE_NAME.test(raw) ? null : t("errFeatureName")),
-      save: async (feature): Promise<WriteResult> => {
-        const written = await postAction(guildId, "config.feature", { feature, enabled: true });
-        // Re-read rather than splice a row in: the new flag has to come back
-        // from the server for the page to be showing stored state, and a
-        // locally-appended toggle would survive even if the write silently
-        // landed on a different guild's config.
-        if (written.kind === "ok") void renderSettings(host, guildId);
-        return written;
-      },
-    }),
+    stale.length === 0 ? null : h("p", { class: "field-hint" }, t("featureStale").replace("{keys}", stale.join(", "))),
   );
 
   /**

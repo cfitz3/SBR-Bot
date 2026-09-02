@@ -24,6 +24,7 @@ export {
   progressBar,
   progressLine,
   sparkline,
+  switchMark,
   type CardSpec,
   type Fact,
 } from "./card.js";

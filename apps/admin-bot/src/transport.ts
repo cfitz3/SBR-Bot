@@ -13,9 +13,8 @@ import {
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { buildAdminRegistry } from "@sbr/commands-admin";
+import { buildAdminRegistry, CASE_SELECT_NAMESPACE, FEATURE_SELECT_NAMESPACE } from "@sbr/commands-admin";
 import { ComponentRouter, interactionArgs, replyOptions, respond, toSlashCommands } from "@sbr/discord-kit";
-import { CASE_SELECT_NAMESPACE } from "@sbr/commands-admin";
 import { recordArgs } from "@sbr/shared-types";
 import { attachDiscordModObserver } from "./discord-mod-observer.js";
 import { attachMemberObserver } from "./member-observer.js";
@@ -109,6 +108,46 @@ export function attachCaseSelect(components: ComponentRouter, app: AdminApp): vo
 }
 
 /** How long to wait for the gateway to report ready before giving up. */
+/**
+ * The feature menu's click.
+ *
+ * It does not write the flag itself. It synthesises the argument the handler
+ * expects and dispatches `feature-toggle` through the ordinary path, so the
+ * actor's role check and the guild's policy floor are the same ones a typed
+ * `/feature-toggle` goes through. A component handler that wrote the config
+ * directly would be an ADMIN-gated write reachable by anyone who could see the
+ * message — which is exactly the failure that is invisible from the outside.
+ */
+export function attachFeatureMenu(components: ComponentRouter, app: AdminApp): void {
+  components.register(FEATURE_SELECT_NAMESPACE, async (interaction) => {
+    if (!interaction.isStringSelectMenu() || !interaction.guildId) return;
+    const internalGuildId = await app.resolveGuild(interaction.guildId);
+    if (!internalGuildId) {
+      await interaction.reply({
+        content: "This server isn't set up on the platform.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    const set = interaction.values[0];
+    if (!set) return;
+    const reply = await app.dispatcher.dispatch("feature-toggle", {
+      guildId: internalGuildId,
+      actorId: interaction.user.id,
+      channelId: interaction.channelId,
+      args: recordArgs({ set }),
+    });
+    // `update`, not `reply`: the card is the state of the switches, and a second
+    // copy of it below the first would leave the stale one on screen, still
+    // clickable and still describing a world that has moved.
+    //
+    // No ephemeral flag — an update inherits the original message's visibility,
+    // and naming it again is the one thing discord.js rejects here.
+    const { flags: _ephemeral, ...update } = replyOptions({ ...reply, ephemeral: true });
+    await interaction.update(update);
+  });
+}
+
 const READY_TIMEOUT_MS = 30_000;
 
 export interface AdminHandles {
@@ -147,6 +186,10 @@ export async function startAdminGateway(
   });
 
   attachCaseSelect(components, app);
+
+  // The feature card's select menu. Its state lives in the option value, so it
+  // keeps working on a message posted before the last restart.
+  attachFeatureMenu(components, app);
 
   // Joins and leaves go straight onto the bus; nothing is rendered here.
   attachMemberObserver(client, {

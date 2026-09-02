@@ -236,7 +236,7 @@ mirrored `*ChannelId` columns were backfilled into bindings and dropped in
 |-------|-------|
 | `guildId` | FK, unique |
 | `prefixes` | command prefixes |
-| `features` | JSON feature-flag map |
+| `features` | JSON map, keyed by `FEATURE_CATALOGUE` (`packages/shared-types/src/features.ts`). A key outside the catalogue is refused on write and shown as unused on read — a flag nothing reads is a switch wired to nothing. An absent key means the catalogue's default, so the row records departures from it rather than the whole state. |
 | `cooldownDefaults` | JSON |
 | `applicationsOpen` | bool |
 | `timezone` | for events |

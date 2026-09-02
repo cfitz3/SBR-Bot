@@ -13,6 +13,7 @@
     { "path": "../embed-kit" },
     { "path": "../moderation" },
     { "path": "../screening" },
+    { "path": "../embed-kit" },
     { "path": "../../brand" }
   ]
 }

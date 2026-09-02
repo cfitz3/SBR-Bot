@@ -383,7 +383,7 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/set-role` | Map a platform role → Discord role, or set a member's role | Admin | `type` (mapping/member), `role`, `target` | Confirmation | Role not found; would elevate above actor | DB (`GuildConfig`/`GuildMember`) + Cache (perms) |
 | `/set-channel` | Assign a functional channel (bridge/log/staff/etc.) | Admin | `purpose`, `channel` | Confirmation | Channel not in guild; bad type | DB (`GuildConfig`) + Cache |
-| `/feature-toggle` | Enable/disable a platform feature per guild | Admin | `feature`, `state` | Confirmation + effective flags | Unknown feature | DB (`GuildConfig.features`) + Cache |
+| `/feature-toggle` | See and switch the platform features this guild runs | Admin | — (select menu) | Card of every declared feature, one switch each | Unknown feature refused | DB (`GuildConfig.features`) + Cache |
 | `/rolemenu` | Post a self-service role menu, or list the ones this server has | Officer | `action` (list/post), `id?` (autocomplete), `channel?` | `list`: the menus and their options. `post`: confirmation that SBR Bot put it up | Unknown menu; bridge bot unreachable (the menu still exists — `list` works either way) | `GuildSetting` `roles.menus` + bridge internal API |
 | `/sticky` | Keep a message at the bottom of a channel | Officer | `action` (list/set/clear), `message?`, `channel?` (defaults to here) | `list`: channel → first line. `set`/`clear`: confirmation, and whether it was applied now or will be next time somebody talks | Over 1,000 characters; already 15 stickies; channel has no sticky to clear | `GuildSetting` `discord.sticky` + bridge internal API |
 

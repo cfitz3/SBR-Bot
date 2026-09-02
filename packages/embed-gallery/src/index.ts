@@ -18,6 +18,7 @@ import {
   renderApplicationListEmbed,
   renderAuditOverviewEmbed,
   renderAuditPages,
+  renderFeaturesEmbed,
   renderFilterTestEmbed,
   renderInfractionPages,
   renderSafetyStatusEmbed,
@@ -630,6 +631,19 @@ export const GALLERY: readonly GalleryCard[] = [
     truncated: true,
     now: new Date(f.NOW),
   }),
+  card("features", "`/feature-toggle` — every switch at its default.", renderFeaturesEmbed, f.FEATURES_DEFAULT, {
+    now: new Date(f.NOW),
+  }),
+  card("features-mixed", "Two switched off by a staffer.", renderFeaturesEmbed, f.FEATURES_MIXED, {
+    now: new Date(f.NOW),
+  }),
+  card(
+    "features-stale",
+    "Keys stored by the old free-text box that no reader has ever looked at.",
+    renderFeaturesEmbed,
+    f.FEATURES_STALE,
+    { now: new Date(f.NOW) },
+  ),
   card("wordlist", "`/wordlist` — every match type, one disabled.", renderWordlistEmbed, f.WORDLIST),
   card("wordlist-empty", "No rules configured.", renderWordlistEmbed, []),
   card("filter-test-hit", "`/filter-test` on text that trips two rules.", renderFilterTestEmbed, f.FILTER_TEST_HIT),

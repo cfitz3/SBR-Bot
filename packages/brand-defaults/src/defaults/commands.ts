@@ -468,11 +468,8 @@ export const DEFAULT_COMMANDS: Record<string, CommandCopy> = {
     },
   },
   "feature-toggle": {
-    description: "Turn a named feature on or off",
-    option: {
-      feature: "Feature key",
-      enabled: "On or off",
-    },
+    description: "See and switch the platform features this guild runs",
+    option: {},
   },
   "filter-test": {
     description: "Check what the filter would do to a message",

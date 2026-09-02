@@ -5,7 +5,9 @@ export { AdminDispatcher, type AdminDispatcherDeps } from "./dispatcher.js";
 export { buildAdminRegistry } from "./handlers.js";
 export { parseDurationSeconds, renderModError } from "./util.js";
 export {
+  FEATURE_SELECT_NAMESPACE,
   paginate,
+  parseFeatureChoice,
   relativeTs,
   renderApplicationEmbed,
   renderApplicationListEmbed,
@@ -16,6 +18,8 @@ export {
   CASE_SELECT_LIMIT,
   renderEffectError,
   renderEnforcement,
+  renderFeatureSelectRow,
+  renderFeaturesEmbed,
   renderFilterTestEmbed,
   renderInfractionPages,
   renderSafetyError,

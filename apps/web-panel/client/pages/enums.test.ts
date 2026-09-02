@@ -22,6 +22,7 @@ import {
   EVENT_POLL_CHOICES as PLATFORM_EVENT_POLL_CHOICES,
   EVENT_POLL_MAX_MINUTES as PLATFORM_EVENT_POLL_MAX,
   EVENT_POLL_MIN_MINUTES as PLATFORM_EVENT_POLL_MIN,
+  FEATURE_CATALOGUE as PLATFORM_FEATURES,
   MILESTONE_METRICS as PLATFORM_MILESTONE_METRICS,
   MilestoneType as PlatformMilestoneType,
   TAG_SCOPES as PLATFORM_TAG_SCOPES,
@@ -40,6 +41,7 @@ import {
   EVENT_POLL_CHOICES,
   EVENT_POLL_MAX_MINUTES,
   EVENT_POLL_MIN_MINUTES,
+  FEATURES,
   MILESTONE_METRICS,
   MilestoneType,
   TagScope,
@@ -108,4 +110,14 @@ test("the poll bounds the form enforces are the domain's own", () => {
   for (const choice of EVENT_POLL_CHOICES) {
     assert.ok(choice >= EVENT_POLL_MIN_MINUTES && choice <= EVENT_POLL_MAX_MINUTES);
   }
+});
+
+test("the feature switches the page offers are the ones the platform declares", () => {
+  // Label and description travel too: the page is the only surface that has
+  // room for the sentence saying what the switch does, and a stale one there
+  // describes behaviour the reader will not get.
+  assert.deepEqual(
+    FEATURES.map((feature) => ({ ...feature })),
+    PLATFORM_FEATURES.map(({ key, label, description }) => ({ key, label, description })),
+  );
 });
