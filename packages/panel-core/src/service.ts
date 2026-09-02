@@ -29,6 +29,7 @@ import {
   type PunishmentState,
   type RelaySyncPolicy,
 } from "@sbr/moderation";
+import { LFG_PING_ROLE_SETTING_KEY } from "@sbr/shared-types";
 import type {
   AuditQuery,
   CommunityService,
@@ -460,6 +461,9 @@ export function isDirectorySide(value: unknown): value is DirectorySide {
  * saved. One VM also means one access decision and one round trip for what is
  * one page's worth of configuration.
  */
+/** A Discord id, for reading back a setting that is supposed to hold one. */
+const SNOWFLAKE = /^\d{17,20}$/;
+
 export interface SettingsVM {
   readonly config: GuildRuntimeConfig | null;
   /**
@@ -496,6 +500,14 @@ export interface SettingsVM {
    * the page never shows a board that is not actually running.
    */
   readonly triggers: readonly TriggerRule[];
+   * The role `/lfg` pings, if one is set and stored as an id.
+   *
+   * A setting rather than a slot, so it is read explicitly rather than falling
+   * out of the config row. Anything stored that is not id-shaped reads back as
+   * null here, for the same reason the command treats it as unset: a picker
+   * showing a value the bot will not ping would be lying about the state.
+   */
+  readonly lfgPingRoleId: string | null;
 }
 
 /**
@@ -1267,12 +1279,13 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const [config, policy, cards, linkHelp, triggers] = await Promise.all([
+    const [config, policy, cards, linkHelp, triggers, lfgPingRole] = await Promise.all([
       this.d.config.get(guildId),
       this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
       this.d.reads.listGuildCards([guildId]),
       this.d.config.getSetting<unknown>(guildId, LINK_HELP_SETTING_KEY).catch(() => null),
       this.d.config.getSetting<unknown>(guildId, TRIGGERS_SETTING_KEY).catch(() => null),
+      this.d.config.getSetting<unknown>(guildId, LFG_PING_ROLE_SETTING_KEY).catch(() => null),
     ]);
 
     const cfg = config.ok ? config.value : null;
@@ -1296,6 +1309,7 @@ export class PanelService {
         // would refuse to render shows here as absent rather than as saved.
         linkHelp: parseLinkHelp(linkHelp),
         triggers: parseTriggers(triggers),
+        lfgPingRoleId: typeof lfgPingRole === "string" && SNOWFLAKE.test(lfgPingRole) ? lfgPingRole : null,
       },
     };
   }

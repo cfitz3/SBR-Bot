@@ -14,6 +14,15 @@ export {
   shapeOf,
   type ActivityShape,
 } from "./activities.js";
+export {
+  activityOf,
+  allFloors,
+  floorsFor,
+  parseFloor,
+  RUN_TYPES,
+  type DungeonFloor,
+  type LFGRunType,
+} from "./floors.js";
 export type {
   CachedGuildMember,
   GuildMemberDirectory,

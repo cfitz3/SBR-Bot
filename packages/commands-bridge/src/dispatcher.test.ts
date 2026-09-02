@@ -1323,16 +1323,21 @@ test("/attendance breaks the roster into going, maybe, waitlist and declined", a
   assert.match(r.embed?.fields?.[0]?.value ?? "", /<@111>/);
 });
 
-test("/lfg opens a run with the author already holding a slot", async () => {
-  const r = await makeDispatcher().dispatch("lfg", ctx({ args: recordArgs({ activity: "DUNGEONS", slots: "5" }) }));
-  assert.match(r.text, /1\/5/);
-  assert.equal((r.components ?? [])[0]?.buttons[0]?.customId, "run:p1:join");
+/**
+ * `/lfg` is a menu now, and what each control does is `lfg-request.test.ts`.
+ * What the dispatcher owes is the first step, with the control that answers it —
+ * and the express lane, which is the only shape guild chat can use.
+ */
+test("/lfg with no floor opens the menu rather than posting", async () => {
+  const r = await makeDispatcher().dispatch("lfg", ctx({ args: noArgs }));
+  assert.equal(r.ephemeral, true, "a member assembling a request is not news");
+  assert.equal((r.components ?? [])[0]?.select?.customId, "lfg:type");
 });
 
-test("/lfg refuses a party size the domain rejects", async () => {
-  const strict = community({ async createLfg() { return err({ kind: "INVALID_SLOTS", detail: "slots has to be a whole number from 2 to 20." }); } });
-  const r = await makeDispatcher({ community: strict }).dispatch("lfg", ctx({ args: recordArgs({ activity: "DUNGEONS", slots: "99" }) }));
-  assert.match(r.text, /whole number from 2 to 20/);
+test("/lfg in guild chat says what to type instead of sending invisible controls", async () => {
+  const r = await makeDispatcher().dispatch("lfg", ctx({ args: noArgs, surface: "INGAME" }));
+  assert.equal(r.components, undefined);
+  assert.match(r.text, /!lfg f7/);
 });
 
 test("/runs lists open posts", async () => {
@@ -1385,55 +1390,6 @@ function boardSpy(): { board: LfgBoard; published: string[]; refreshed: string[]
     },
   };
 }
-
-test("/lfg passes the perm request and headline straight through", async () => {
-  const seen: unknown[] = [];
-  const spy = community({
-    async createLfg(input) { seen.push(input); return ok({ ...aPost, title: input.title ?? null }); },
-  });
-  await makeDispatcher({ community: spy }).dispatch(
-    "lfg",
-    ctx({ args: recordArgs({ activity: "DUNGEONS", title: "F7 carries", perm: "true" }) }),
-  );
-  assert.deepEqual(
-    (seen[0] as { perm?: unknown; title?: unknown }).perm,
-    true,
-    "perm:true has to reach the service — the roster is filled there, not here",
-  );
-  assert.equal((seen[0] as { title?: unknown }).title, "F7 carries");
-});
-
-test("a named perm wins over perm:true", async () => {
-  const seen: unknown[] = [];
-  const spy = community({ async createLfg(input) { seen.push(input); return ok(aPost); } });
-  await makeDispatcher({ community: spy }).dispatch(
-    "lfg",
-    ctx({ args: recordArgs({ activity: "DUNGEONS", perm: "true", permname: "Alts" }) }),
-  );
-  assert.equal((seen[0] as { perm?: unknown }).perm, "Alts");
-});
-
-test("a perm that doesn't exist is explained rather than silently ignored", async () => {
-  const missing = community({
-    async createLfg() { return err({ kind: "NO_SUCH_PERM", detail: 'You have no perm called "Ghost".' }); },
-  });
-  const r = await makeDispatcher({ community: missing }).dispatch(
-    "lfg",
-    ctx({ args: recordArgs({ activity: "DUNGEONS", permname: "Ghost" }) }),
-  );
-  assert.equal(r.ephemeral, true);
-  assert.match(r.text, /no perm called "Ghost"/);
-});
-
-test("a new run is published to the board as well as answered in place", async () => {
-  const spy = boardSpy();
-  const r = await makeDispatcher({ lfgBoard: spy.board }).dispatch(
-    "lfg",
-    ctx({ args: recordArgs({ activity: "DUNGEONS" }) }),
-  );
-  assert.equal(r.ephemeral, false);
-  assert.deepEqual(spy.published, ["p1"]);
-});
 
 test("joining refreshes the published post, so the roster people read is current", async () => {
   const spy = boardSpy();
@@ -1908,7 +1864,6 @@ const RETIRED = [
   "missing",
   "nextupgrade",
   "whatnext",
-  "lfg",
   "runs",
   "joinrun",
   "leaverun",

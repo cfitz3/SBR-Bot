@@ -837,6 +837,7 @@ export const CONFIG_CHANNEL_SLOTS = [
   "modlog",
   "welcome",
   "levels",
+  "lfg",
 ] as const;
 
 export type ConfigChannelSlot = (typeof CONFIG_CHANNEL_SLOTS)[number];
@@ -859,7 +860,20 @@ export const CONFIG_CHANNEL_SLOT_LABELS: Readonly<Record<ConfigChannelSlot, stri
   leaderboard: "Leaderboards",
   modlog: "Moderation log",
   levels: "Level-up announcements",
+  lfg: "Looking for group",
 };
+
+/**
+ * The role `/lfg` pings when a request is posted, as a Discord role id.
+ *
+ * Here rather than with the command that reads it, because two packages need
+ * the same string and neither should depend on the other: the bridge bot writes
+ * the ping, the panel offers the picker, and a key spelled twice is a key that
+ * eventually differs. A setting rather than a role *mapping* because it confers
+ * nothing — the platform never grants or checks it, it only mentions it — and
+ * unset is a valid answer, meaning the post goes out unpinged.
+ */
+export const LFG_PING_ROLE_SETTING_KEY = "lfg.pingRole";
 
 export interface GuildRuntimeConfig {
   readonly guildId: string;

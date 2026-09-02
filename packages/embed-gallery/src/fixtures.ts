@@ -11,7 +11,7 @@
  * because a gallery built only from tidy data proves the renderers work on data
  * we never see.
  */
-import type { CommandSpec, EventCardView, EventReminderView } from "@sbr/commands-bridge";
+import type { CommandSpec, EventCardView, EventReminderView, LfgRequestView } from "@sbr/commands-bridge";
 import type { LinkHelpPolicy } from "@sbr/guild-config";
 import { NO_HISTORY, UNREADABLE_STATS, type ApplicantStats, type Screening } from "@sbr/screening";
 import type { TriggerPostView } from "@sbr/triggers";
@@ -1050,6 +1050,35 @@ export const PERMS: readonly PermGroupDTO[] = [
   PERM,
   { ...PERM, id: "perm-2", name: "Kuudra alts", activity: "KUUDRA", isDefault: false, notes: null, status: "DISBANDED" },
 ];
+
+/**
+ * A `/lfg` request with everything known: the requester's numbers read, and two
+ * classes actually asked for.
+ */
+export const LFG_REQUEST: LfgRequestView = {
+  ign: "Aria",
+  uuid: "u1",
+  discordId: "100000000000000001",
+  floor: { code: "M7", type: "MASTER", label: "Master Mode 7" },
+  classes: ["healer", "tank"],
+  catacombsLevel: 48,
+  plays: { role: "mage", level: 44 },
+  requestedAt: iso(-2 * 60_000),
+};
+
+/**
+ * The same request with nothing else known — an unlinked-looking profile whose
+ * dungeon read failed, and no class asked for. Three of the four fields drop
+ * out, which is what the card is meant to do rather than print "unknown" twice.
+ */
+export const LFG_REQUEST_BARE: LfgRequestView = {
+  ...LFG_REQUEST,
+  uuid: null,
+  floor: { code: "K3", type: "KUUDRA", label: "Kuudra — Burning" },
+  classes: [],
+  catacombsLevel: null,
+  plays: null,
+};
 
 export const TICKET: TicketDTO = {
   id: "tkt-1",

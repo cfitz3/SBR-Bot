@@ -124,6 +124,12 @@ export interface HandlerDeps {
    */
   readonly lfgBoard?: LfgBoard;
   /**
+   * Where `/lfg` posts land. Optional for the same reason as `lfgBoard`: only a
+   * surface with a Discord client can post one, and a deployment without it
+   * tells the member the post did not go out rather than pretending it did.
+   */
+  readonly lfgAnnouncer?: LfgAnnouncer;
+  /**
    * XP and standing. Optional so a deployment can run with XP switched off
    * entirely — `/standing` then says so rather than reporting zero, which reads
    * as "you have earned nothing" and is a different claim.
@@ -219,6 +225,33 @@ export interface LfgBoard {
   publish(post: LFGPostDTO): Promise<void>;
   /** Re-render the post where it was published. A no-op for an unpublished post. */
   refresh(post: LFGPostDTO): Promise<void>;
+}
+
+/**
+ * Posts one `/lfg` request into the guild's looking-for-group channel.
+ *
+ * Narrower than `LfgBoard` on purpose: there is no message to remember and
+ * nothing to refresh, because a request is an announcement rather than a record.
+ * The channel and the ping role are decided offline in `lfg-request.ts` and
+ * arrive resolved, so this port makes no configuration decisions of its own —
+ * all it owns is the send, and the mention allowance that goes with it.
+ *
+ * Returns whether the post landed. False rather than throwing: the caller has a
+ * sentence for "couldn't post that" and no use for a stack trace.
+ */
+export interface LfgAnnouncer {
+  announce(input: {
+    readonly channelId: string;
+    /** Message content. Carries the role mention, or is empty when there is none. */
+    readonly text: string;
+    readonly embed: EmbedView;
+    /**
+     * The only role this message may mention. Null means it may mention none —
+     * which is the default everywhere else on the platform, and the reason this
+     * is passed explicitly rather than inferred from the text.
+     */
+    readonly pingRoleId: string | null;
+  }): Promise<boolean>;
 }
 
 export type CommandHandler = (ctx: CommandContext, deps: HandlerDeps) => Promise<CommandReply>;

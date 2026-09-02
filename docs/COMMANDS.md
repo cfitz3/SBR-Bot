@@ -18,7 +18,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 > ### Retired commands
 >
-> Twenty-two commands are flagged `enabled: false` and are **absent from Discord's
+> Twenty-four commands are flagged `enabled: false` and are **absent from Discord's
 > command list**, from `/help`, and from guild chat. They are not deleted: the
 > handlers stay compiled and under test, and turning one back on is a one-line
 > change. Sections 1, 2, 4, 6 and 20 below still describe them, because what they
@@ -39,11 +39,13 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 >   advice reads a live auction house the platform no longer keeps warm, so its
 >   suggestions were confident and stale. A confidently wrong upgrade
 >   recommendation is worse than none.
-> - **§6, looking-for-group** — `/lfg`, `/runs`, `/joinrun`, `/leaverun`,
->   `/editrun`, `/closerun`, the `run:` buttons, the `!run` alias and the `lfg`
->   channel slot. Parties get formed in guild chat; the board went stale faster
->   than anyone closed a post. `/perm` stays: the party lists it keeps are
->   useful on their own, and `LFGPost` / `LFGActivity` rows are untouched.
+> - **§6, the run board** — `/runs`, `/joinrun`, `/leaverun`, `/editrun`,
+>   `/closerun`, the `run:` buttons and the `!run` alias. Parties get formed in
+>   guild chat; the board went stale faster than anyone closed a post. `/perm`
+>   stays: the party lists it keeps are useful on their own, and `LFGPost` /
+>   `LFGActivity` rows are untouched. `/lfg` stays too, in a different shape —
+>   it announces a request rather than opening a post, so there is nothing left
+>   to go stale (below).
 > - **§20, `/cringe`** — retired outright rather than replaced. It is the only
 >   fun command aimed at a named person, and a public counter of how cringe
 >   somebody is has no version that ages well in a guild that later has to
@@ -167,7 +169,7 @@ part a chat line can carry.
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/lfg` | Create a looking-for-group post | Linked | `activity`, `slots?`, `title?`, `details?`, `perm?`, `permname?` | Public LFG embed w/ join / leave / close buttons | Cooldown; too many open posts; no such perm | DB (`LFGPost`) + Cache (`lfg:open:*` TTL) |
+| `/lfg` | Ask the guild for a group | Linked | `floor?` (skips the menu) | Ephemeral menu → one public card in the `lfg` channel, with the configured role pinged | Not linked; no `lfg` channel set; no such floor; the send failed | Hypixel (dungeons, best-effort) + `GuildConfig` |
 | `/runs` | List open runs/LFG posts | Public | `activity?` | List of open `LFGPost`s | None open | Cache (`lfg:open:*`) → DB |
 | `/joinrun` | Join an open run | Linked | `run_id` | Updated party roster; DM/ping | Run full/closed; already joined | DB + Cache (slot update) |
 | `/leaverun` | Leave a run you joined | Linked | `run_id` | Updated roster | Not in run; run closed | DB + Cache |
@@ -176,31 +178,48 @@ part a chat line can carry.
 | `/rsvp` | RSVP to a scheduled event | Public | `event_id`, `state` (going/maybe/no) | Updated RSVP + counts | Event full→waitlist; event past | DB (`EventRSVP`) |
 | `/perm` | Standing parties — the group you always run with | Linked | — (opens the console; every action is a component) | Console: the guild's parties, paged, with a menu to open one; a party card is the roster in one field with cata and class levels | Name taken; not the owner; perm full; role not valid for the activity; already/not on the roster; not linked (taking a seat) | DB (`PermGroup`, `PermMember`) + `GuildMemberCache` and `ProfileCurrent` for enrichment |
 
-### `/lfg` — runs
+### `/lfg` — asking for a group
 
-A post is a row; the message is a view of it. Every button carries the post id
-in its `customId` (`run:<postId>:join|leave|close`), so the board survives a
-restart and nothing ever has to look a post up by the message it was sent as.
+Two menus and a button. **What are you running** → **which floor** → **which
+classes are you short of**, then *Post*, and one card lands in the guild's `lfg`
+channel with the configured role pinged.
 
-- **Perm autofill.** `perm:true` brings the author's default perm for that
-  activity; `permname:F7 core` names one, and wins over `perm:true` when both are
-  given. Seats are taken in roster order until the party is full, the author is
-  never duplicated, and seats with no linked Discord account are skipped — there
-  is nobody to mention. A missing *default* is not an error (`perm:true` means
-  "bring my usual party if I have one"); a missing *named* perm is.
-- **Edits never kick anybody.** Shrinking `slots` below the current party is
-  refused rather than silently truncating it. Raising slots on a full post
-  reopens it, so the new seat is actually reachable.
-- **Closing is a decision, expiring is not.** A closed post names who closed it;
-  an expired one just says expired. Owner or staff (`MENTION`) may close; the
-  buttons stay visible but disabled, so the message still reads as the run it was.
-- **The board never blocks the reply.** Publishing to the configured `lfg`
-  channel and refreshing the embed absorb their own failures — a broken channel
-  binding must not turn a successful join into an error in a member's face.
+There is no post to join, leave, close or expire, and that is the whole design:
+a request is an announcement, so nothing about it can go stale. The people who
+answer it do so the way they already did — by replying, or by inviting.
 
-**In-game shape stays `!lfg <activity> [slots] [details]`.** Guild chat has no
-named arguments, so `title`, `perm` and `permname` are marked
-`inGamePositional: false` and take no token there.
+- **The floor decides the classes.** Catacombs and Master Mode ask for healer /
+  mage / berserk / archer / tank; Kuudra asks for tank / damage / cannoneer /
+  supplier, because its seats are jobs rather than dungeon classes. The table is
+  `packages/perms/src/floors.ts`, beside the activity shapes it maps onto.
+- **Classes are optional.** *Post* is live from the moment the floor is known,
+  and picking nothing posts as **Any class** — "I just need bodies" is one press
+  rather than a menu somebody has to work out how to skip.
+- **Only the post is public.** Every step is ephemeral: three drafts landing in
+  the channel before the real one is how a looking-for-group channel becomes
+  unreadable. Every control carries its state in its `customId`
+  (`lfg:type`, `lfg:floor`, `lfg:class:<FLOOR>`, `lfg:post:<FLOOR>:<classes>`),
+  so a menu opened before a restart still answers after one.
+- **Nothing blocks the post that is not the post.** The requester's Catacombs
+  level and current class are read from Hypixel best-effort — a rate-limited or
+  failed read costs the card a line, not the member their group. The link and
+  the channel are checked *before* that read, so somebody who cannot post does
+  not spend a request finding out.
+- **One role, named.** The ping comes from the `lfg.pingRole` setting and is the
+  only mention the message is allowed to carry, by id rather than by parsing —
+  so no field can smuggle an `@everyone` into a member-triggered post.
+
+**Configuration.** The `lfg` channel slot (panel, or `/set-channel`) says where
+cards land; unset, `/lfg` says so rather than posting where it was run.
+`lfg.pingRole` is a Discord role id; unset — or anything that is not id-shaped —
+means the card goes out unpinged.
+
+**In-game shape is `!lfg <floor>`.** Guild chat has no menus, so the floor
+argument is the express lane on both surfaces: given a floor, `/lfg` posts
+straight away with no classes named. `!lfg` with nothing after it answers with
+what to type rather than sending controls nobody can see. Floors are accepted in
+the forms people type them — `f7`, `floor 7`, `m3`, `master 3`, `k5`, `infernal`
+— but a bare `7` is refused, because it is F7 to one member and M7 to another.
 
 ### `/perm` — standing parties
 
@@ -237,8 +256,8 @@ Three properties are worth stating because they are load-bearing:
   unreachable cache renders as *nothing*, not as "left the guild".
 
 Owner-or-staff may edit or disband a perm; only the owner may mark one as their
-`/lfg` autofill default, because that is a personal preference rather than
-administration. Disbanding is a status change, never a delete — a roster is a
+default — the party they mean when they say "my party" — because that is a
+personal preference rather than administration. Disbanding is a status change, never a delete — a roster is a
 record of who ran together.
 
 **Not in the web panel, deliberately.** Who someone runs dungeons with is not
@@ -415,15 +434,16 @@ What a member may open is configuration, not a command: the ticket menu (`Ticket
 Members trigger commands from **in-game guild chat**; `packages/bridge` parses, authorizes via `BridgePermission`, executes through the same services as the slash commands, and relays a **chat-length-limited** reply back into guild chat.
 
 **Design constraints**
-- **Prefix-based**, not slash: e.g. `!stats <ign>`, `!nw`, `!price <item>`, `!lfg <activity>`, `!help`. Prefix and enabled set come from `GuildConfig`.
+- **Prefix-based**, not slash: e.g. `!stats <ign>`, `!nw`, `!price <item>`, `!lfg <floor>`, `!help`. Prefix and enabled set come from `GuildConfig`.
 - **Output is truncated/paginated** to fit Minecraft chat (single line, ~256 char cap); rich embeds collapse to a compact one-liner (e.g. `Player — Cata 42 | SA 45.3 | NW 8.2b | SnrW 12,340`).
-- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayers, dungeons, networth, price, weight, help) and lightweight LFG (`!lfg`, `!runs`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. The **fun** commands (§20) are in-game too: they read nothing about anybody and write nothing anybody is accountable for. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
+- **Read-only / low-risk subset only.** In-game commands expose the *lookup* commands (stats, skills, slayers, dungeons, networth, price, weight, help) and the two writes that are about other people rather than about data (`!lfg`, `!perm`). `!perm` requires a linked account even for its read actions, because those share one command with its writes and the weaker of the two requirements would otherwise govern the pair. The **fun** commands (§20) are in-game too: they read nothing about anybody and write nothing anybody is accountable for. **Never** exposes moderation, linking-secret, or config commands — those require Discord identity + permission tiers that can't be safely proven from guild chat alone.
 - **Arguments are positional**, in the spec's declared order, with the last one
   absorbing the rest of the line so multi-word values work. There is no
   `key:value` syntax, so an option only Discord should see is declared
   `inGamePositional: false` — otherwise adding one silently re-maps the free-text
-  argument at the end (this is why `!lfg <activity> [slots] [details]` still works
-  after `/lfg` gained `title`, `perm` and `permname`).
+  argument at the end. `/lfg`'s menu-only choices are not options at all for the
+  same reason: the only thing guild chat can say is a floor, so a floor is the
+  only option the command has.
 - **A command name may start with a digit** (`!8ball`). The name pattern exists
   to keep punctuation — `!!!`, `!?` — from being parsed as a command, and an
   unrecognised name still ends in silence, so it is no stricter than that.
@@ -435,7 +455,7 @@ Members trigger commands from **in-game guild chat**; `packages/bridge` parses, 
 | `!stats`, `!skills`, `!sl`, `!dungeons`, `!nw` | `/stats` … `/networth` | `RELAY_MESSAGE`+`RUN_COMMAND` | Cache→Live |
 | `!price`, `!bz`, `!lbin`, `!lb` | `/price` — all four, since the shorthands outlived the commands they were short for | Run cmd | Cache→Live |
 | `!weight` | `progression` (Senither/farming) | Run cmd | Cache→Live |
-| `!lfg`, `!runs` | `/lfg`,`/runs` | Run cmd (linked) | DB + Cache |
+| `!lfg` | `/lfg` | Run cmd (linked) | `GuildConfig` + Cache→Live |
 | `!perm` | `/perm` | Run cmd (linked) | DB + member cache |
 | `!help` | `/help` (condensed) | Public | Static |
 | `!health` | `/health` | Public | Registry (no Hypixel request) |

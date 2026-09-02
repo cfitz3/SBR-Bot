@@ -21,6 +21,7 @@ import {
   channelPicker,
   fieldGroup,
   statusSlot,
+  rolePicker,
   textField,
   toggleField,
   validateWhole,
@@ -28,6 +29,7 @@ import {
 import { h, replace } from "../dom.js";
 import { channelSlotCopy } from "./channel-slots.js";
 import { triggersForm } from "./triggers.js";
+import { LFG_PING_ROLE_KEY } from "./lfg-settings.js";
 
 const t = scope("settings");
 
@@ -151,6 +153,21 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
         clear: () => postAction(guildId, "config.channel", { slot, channelId: null }),
       }),
     ),
+  );
+
+  // Beside the channels, because it answers the second half of the same
+  // question: a `/lfg` request lands in the `lfg` channel and pings this role,
+  // and an admin who has just bound the one is about to look for the other.
+  const lfg = fieldGroup(
+    rolePicker({
+      label: t("lfgPingLabel"),
+      hint: t("lfgPingHint"),
+      guildId,
+      value: result.data.lfgPingRoleId ?? "",
+      placeholder: t("lfgPingUnset"),
+      save: (raw) => postAction(guildId, "config.setting", { key: LFG_PING_ROLE_KEY, value: raw }),
+      clear: () => postAction(guildId, "config.setting", { key: LFG_PING_ROLE_KEY, value: null }),
+    }),
   );
 
   const flagNames = Object.keys(result.data.features).sort((a, b) => a.localeCompare(b));
@@ -283,6 +300,7 @@ export async function renderSettings(host: HTMLElement, guildId: string): Promis
       card(t("cardGuild"), identity),
       card(t("cardBridge"), bridge),
       card(t("cardChannels"), channels),
+      card(t("cardLfg"), lfg),
       card(t("cardFeatures"), features),
       card(t("cardScreening"), screening),
       card(t("cardLinkHelp"), linkHelpForm(guildId, result.data.linkHelp)),

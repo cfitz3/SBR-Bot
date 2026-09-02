@@ -381,13 +381,17 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // it answers with the one line the card's headline carries — the buttons
     // are a Discord affordance, and the reading is not.
     "progression",
+    // The one write that is about other people (§17). It posts nothing a member
+    // did not type and reaches no data — `!lfg f7` is an announcement, and the
+    // announcement is the point of running it from the game.
+    "lfg",
   ].sort());
 
   // Anything that writes is `"linked"`, never `true`. `/perm` is here rather
   // than in the `true` set because its read actions share one command with its
   // writes, and the weaker of the two requirements would govern the pair.
   assert.deepEqual(exposed.filter((s) => s.inGame === "linked").map((s) => s.name).sort(), [
-    "perm", "progression",
+    "lfg", "perm", "progression",
   ].sort());
 
   // And the identity commands stay Discord-only: `/link` in guild chat would
