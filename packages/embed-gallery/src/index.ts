@@ -495,6 +495,27 @@ export const GALLERY: readonly GalleryCard[] = [
   ),
   card("health", "`/health` — everything answering.", renderHealthEmbed, f.STATUS_OK),
   card(
+    "serverinfo",
+    "`/serverinfo` — the server's shape, and the week the platform counted.",
+    renderServerInfoEmbed,
+    f.DISCORD_GUILD,
+    f.SERVER_WEEK,
+  ),
+  card(
+    "serverinfo-quiet",
+    "The same card on a week nobody spoke in — counted, and said so.",
+    renderServerInfoEmbed,
+    f.DISCORD_GUILD,
+    f.SERVER_WEEK_QUIET,
+  ),
+  card(
+    "serverinfo-uncounted",
+    "A deployment keeping no counters: the Discord half, and no invented week.",
+    renderServerInfoEmbed,
+    f.DISCORD_GUILD,
+    null,
+  ),
+  card(
     "health-degraded",
     "One named row slow, and one component the card is only allowed to count.",
     renderHealthEmbed,

@@ -1843,3 +1843,47 @@ export interface DiscordDirectory {
   /** Null when the bot is not in that server — a fresh install mid-restart. */
   guildInfo(guildId: string): Promise<DiscordGuildInfo | null>;
 }
+
+/** The busiest member of the week, on the counters we actually keep. */
+export interface ServerTopMemberDTO {
+  readonly discordId: string;
+  /** Their IGN when they are linked; the card falls back to a mention. */
+  readonly ign: string | null;
+  readonly discordMessages: number;
+  readonly guildChatMessages: number;
+}
+
+/**
+ * The half of `/serverinfo` Discord cannot answer.
+ *
+ * Discord knows how many accounts are in the server; it does not know how many
+ * of them this platform tracks, how many have linked a Minecraft account, or
+ * who said anything this week. Those come from `ActivityDaily` and the roster,
+ * which is why they arrive through their own port rather than through the
+ * gateway adapter.
+ */
+export interface ServerActivityDTO {
+  /** Members on our roster, not Discord's — bots and lurkers are not on it. */
+  readonly trackedMembers: number;
+  readonly linkedMembers: number;
+  /** Distinct members who sent anything at all inside the window. */
+  readonly activeMembers: number;
+  readonly discordMessages: number;
+  readonly guildChatMessages: number;
+  /** Null when nobody has said anything in the window. */
+  readonly top: ServerTopMemberDTO | null;
+  /** Days the counts cover, so the card can name its own window. */
+  readonly windowDays: number;
+}
+
+/**
+ * Guild-wide activity for `/serverinfo`. One question, read-only.
+ *
+ * Optional on the handler deps like every other database-backed port: a
+ * deployment without it still gets the Discord half of the card, which is the
+ * half that was there before this existed.
+ */
+export interface ServerActivitySource {
+  /** Null when the counters are unavailable, not zero — they are different facts. */
+  serverWeek(guildId: string): Promise<ServerActivityDTO | null>;
+}

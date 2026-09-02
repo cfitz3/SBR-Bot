@@ -90,6 +90,11 @@ export const DEFAULT_EMBEDS = {
     priceVolume: "Moving",
     priceHistory: "History",
     cheapestListings: "Cheapest listings",
+    /** `/serverinfo`: the server's shape, and the week behind it. */
+    members: "Members",
+    server: "Server",
+    messagesWeek: "Messages this week",
+    busiestWeek: "Busiest this week",
   },
 
   /**
@@ -349,6 +354,13 @@ export const DEFAULT_EMBEDS = {
     marketListings: "Listings",
     /** `{item}` is the display name. The sweep may simply not have reached it. */
     marketNoListings: "No buy-it-now listings for {item} in the last auction sweep.",
+
+    /* ── /serverinfo ── */
+    /** `{n}` is the member count Discord reports. */
+    serverHeadline: "{n} members",
+    /** Shown in place of the week's counters when nothing is wired to keep them. */
+    serverNoActivity: "Activity isn't being counted here.",
+    serverNobodyActive: "Nobody has said anything yet this week.",
     /**
      * `{n}` is the window in days.
      *

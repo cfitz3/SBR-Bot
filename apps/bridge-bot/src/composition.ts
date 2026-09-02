@@ -38,6 +38,7 @@ import {
   podiumRepository,
   pingDb,
   playSessionSink,
+  serverActivityRepository,
 } from "@sbr/db";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { fetchHttp, HypixelClient, hypixelCheck, type SkyblockProfileDTO } from "@sbr/hypixel";
@@ -698,6 +699,9 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     // renderer can put a hostname or a Prisma error in front of a member.
     status: { status: async () => curateStatus(await health.run()) },
     discord,
+    // The week behind `/serverinfo`. Read-only and guild-wide, so it needs
+    // none of the ports the member-scoped sections above are narrowed from.
+    serverActivity: serverActivityRepository,
     reminders: reminderRepository,
     tags: ticketConfigRepository,
     logger: log,

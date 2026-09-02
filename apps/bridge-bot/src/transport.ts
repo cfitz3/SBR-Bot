@@ -829,7 +829,10 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // Read-only, and the last of the late-bound ports: `/whois` and `/serverinfo`
   // are a view of Discord itself, so they can only be answered on this side of
   // the line.
-  app.setDiscordDirectory(createDiscordDirectory(discord));
+  // The resolver goes in with it: commands speak the platform's guild id, and
+  // this adapter is the only thing on the path that can turn one into a
+  // snowflake.
+  app.setDiscordDirectory(createDiscordDirectory(discord, guildRepository.resolveDiscordId));
 
   // The moderation log. Automod runs in this process, so this is the only place
   // an automatic punishment can be announced from. Mentions are parsed off: the

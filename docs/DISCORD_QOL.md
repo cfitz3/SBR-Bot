@@ -264,7 +264,7 @@ All member-facing, all on SBR Bot.
 | Command | What it does | Notes |
 | --- | --- | --- |
 | `/whois [member] [public]` | Who a member is here, in one card | Ephemeral unless `public:true`; standing and your record are private-only |
-| `/serverinfo` | The server at a glance | 10s cooldown |
+| `/serverinfo` | The server at a glance, plus the week's activity | 10s cooldown; the activity half needs the database |
 | `/levelalerts [on\|off]` | Your own level-up announcements | Blank shows where you stand |
 | `/remind <when> <about>` | A reminder to yourself | `30m`, `2h30m`, `1w2d` |
 | `/reminders [cancel:<id>]` | Your pending reminders | Ephemeral |

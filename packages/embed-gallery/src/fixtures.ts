@@ -18,6 +18,7 @@ import type {
   AuctionListingDTO,
   AchievementsDTO,
   DiscordGuildInfo,
+  ServerActivityDTO,
   PendingLevelUpDTO,
   DiscordUserInfo,
   AdviceDTO,
@@ -1153,6 +1154,33 @@ export const DISCORD_GUILD: DiscordGuildInfo = {
   emojiCount: 88,
   boostTier: 2,
   boostCount: 9,
+};
+
+/** The week behind that server: busy, with a linked member carrying it. */
+export const SERVER_WEEK: ServerActivityDTO = {
+  trackedMembers: 312,
+  linkedMembers: 274,
+  activeMembers: 96,
+  discordMessages: 4_118,
+  guildChatMessages: 962,
+  top: {
+    discordId: "900000000000000009",
+    ign: "Aria",
+    discordMessages: 412,
+    guildChatMessages: 96,
+  },
+  windowDays: 7,
+};
+
+/** The same week on a quiet server: counted, and nobody said anything. */
+export const SERVER_WEEK_QUIET: ServerActivityDTO = {
+  trackedMembers: 12,
+  linkedMembers: 4,
+  activeMembers: 0,
+  discordMessages: 0,
+  guildChatMessages: 0,
+  top: null,
+  windowDays: 7,
 };
 
 /** A single-level climb, the ordinary case. */
