@@ -119,16 +119,46 @@ export function deniedState(reason: DenyReason): HTMLElement {
   return h("div", { class: "state state-denied", role: "alert" }, body, h("p", { class: "muted" }, err().denyHint));
 }
 
+/**
+ * How a column is set, when it is not prose.
+ *
+ * - `num` — right-aligned and mono, so a column of figures is compared by where
+ *   the numbers end rather than by reading each one.
+ * - `when` — the same, quieter: a trailing timestamp dates the row without
+ *   competing with the figures it sits beside.
+ *
+ * Declared on the header rather than per cell so a column cannot end up with
+ * its label over one edge and its values against the other.
+ */
+export type ColumnAlign = "num" | "when";
+
+export interface Column {
+  readonly label: string;
+  readonly align?: ColumnAlign;
+}
+
 /** A simple data table. Cells are strings or nodes; nothing is interpreted as HTML. */
-export function table(headers: readonly string[], rows: readonly (readonly (string | HTMLElement)[])[]): HTMLElement {
+export function table(
+  headers: readonly (string | Column)[],
+  rows: readonly (readonly (string | HTMLElement)[])[],
+): HTMLElement {
+  const cols: readonly Column[] = headers.map((c) => (typeof c === "string" ? { label: c } : c));
+  const cellAttrs = (index: number): Record<string, string> => {
+    const align = cols[index]?.align;
+    return align === undefined ? {} : { class: align };
+  };
   return h(
     "div",
     { class: "table-wrap" },
     h(
       "table",
       { class: "table" },
-      h("thead", {}, h("tr", {}, ...headers.map((label) => h("th", { scope: "col" }, label)))),
-      h("tbody", {}, ...rows.map((row) => h("tr", {}, ...row.map((cell) => h("td", {}, cell))))),
+      h(
+        "thead",
+        {},
+        h("tr", {}, ...cols.map((col, i) => h("th", { scope: "col", ...cellAttrs(i) }, col.label))),
+      ),
+      h("tbody", {}, ...rows.map((row) => h("tr", {}, ...row.map((cell, i) => h("td", cellAttrs(i), cell))))),
     ),
   );
 }

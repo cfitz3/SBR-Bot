@@ -14,8 +14,8 @@ import type { DeepPartial, Theme } from "@sbr/brand-defaults";
 export const themeOverride: DeepPartial<Theme> = {
   // Example — delete or edit:
   //
-  // embed: { colors: { INFO: 0x9184d9 } },
-  // panel: { colors: { accent: "#9184d9" }, chrome: { themeColor: "#161826" } },
+  // embed: { colors: { INFO: 0xc2703d } },
+  // panel: { colors: { accent: "#c2703d" }, chrome: { themeColor: "#140f0c" } },
   //
   // The panel's *name* is a word, not a colour — it lives in `copy.ts` under
   // `panel.shell.name`, so there is only ever one place it is written down.

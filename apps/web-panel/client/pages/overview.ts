@@ -261,7 +261,7 @@ function joinsBody(rows: readonly JoinAttempt[]): HTMLElement {
     "div",
     {},
     table(
-      [t("colPlayer"), t("colScamCheck"), t("colVerdict"), t("colStats"), t("colWhen")],
+      [t("colPlayer"), t("colScamCheck"), t("colVerdict"), t("colStats"), { label: t("colWhen"), align: "when" }],
       rows.map((r) => [
         person(r.ign, r.discordId === null ? r.uuid : `${r.uuid} · ${r.discordId}`),
         scamBadge(r),

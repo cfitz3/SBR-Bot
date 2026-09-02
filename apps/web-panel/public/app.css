@@ -1,90 +1,114 @@
 /*
- * Panel styles — the Nocturne design language.
+ * Panel styles — the Operator design language.
  *
  * One stylesheet, no build step, no external origin: the server sends a CSP with
  * no 'unsafe-inline' and no third-party hosts, so webfonts and CDN icon sets are
- * off the table. Inter is named first and used when the operator happens to have
- * it installed; otherwise the system stack carries the same measurements.
+ * off the table. IBM Plex is named first and used when the operator happens to
+ * have it installed; otherwise the system stack carries the same measurements.
+ *
+ * Operator is an instrument panel. Three rules explain almost every declaration
+ * below, and a new one should be able to name which it is following:
+ *
+ *  1. **Colour means state.** The accent marks the *selected* thing and nothing
+ *     else; the three tones mark ok/warn/bad. Everything structural — every
+ *     surface, border, label and icon — is a cool grey. A decorative use of the
+ *     accent spends the one signal the design has.
+ *  2. **A hairline is the separator.** Regions are divided by a 1px line and a
+ *     surface step, never by a drop shadow, a large radius, or a gap. Grids get
+ *     their rules from `gap: 1px` over a `--color-neutral-900` ground, so the
+ *     divider *is* the gap and cannot fall out of step with the border.
+ *  3. **Mono is for machine-read text.** Numerals, IGNs, ids, timestamps, counts,
+ *     status words and small uppercase labels are mono and `tabular-nums`; prose
+ *     is sans. This is what lets a column of figures be scanned rather than read.
  *
  * Dark only. The previous stylesheet tracked the OS light/dark preference, but
- * Nocturne is a single dark palette — a light variant would be a second design,
+ * Operator is a single dark palette — a light variant would be a second design,
  * not a second theme, so `color-scheme` pins dark and form controls follow.
  */
 
 :root {
   color-scheme: dark;
 
-  /* ── Nocturne tokens ─────────────────────────────────────────────────── */
-
-  --color-bg: #161826;
-  --color-surface: #232532;
-  --color-text: #e9e9ed;
-  --color-accent: #9184d9;
-  --color-accent-2: #a7a1db;
-  --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
-
-  --color-neutral-100: #f3f5fe;
-  --color-neutral-200: #e4e7f5;
-  --color-neutral-300: #cfd3e5;
-  --color-neutral-400: #b2b6ca;
-  --color-neutral-500: #9397ab;
-  --color-neutral-600: #75798c;
-  --color-neutral-700: #595d6c;
-  --color-neutral-800: #3f424d;
-  --color-neutral-900: #292b31;
-
-  --color-accent-100: #f5f4ff;
-  --color-accent-200: #e7e5fe;
-  --color-accent-300: #d2cefd;
-  --color-accent-400: #b5abfc;
-  --color-accent-500: #968ae0;
-  --color-accent-600: #796cbf;
-  --color-accent-700: #5d5294;
-  --color-accent-800: #423a6a;
-  --color-accent-900: #2b2741;
-
-  --space-1: 2.8px;
-  --space-2: 5.6px;
-  --space-3: 8.4px;
-  --space-4: 11.2px;
-  --space-5: 16.8px;
-  --space-6: 22.4px;
-  --space-7: 33.6px;
-  --space-8: 44.8px;
-
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 14px;
-
-  --shadow-sm: 0 0 0 1px var(--color-neutral-800);
-  --shadow-md: 0 0 0 1px var(--color-neutral-700), 0 6px 18px rgb(0 0 0 / 55%);
-  --shadow-lg: 0 0 0 1px var(--color-neutral-500), 0 16px 40px rgb(0 0 0 / 65%);
-
-  /*
-   * Status hues. The design's own tone map paints "warn" in the accent, which
-   * reads fine on a mock with one warning on screen but collapses on Health and
-   * Events, where warn and accent sit in the same table and have to mean
-   * different things. Warn gets its own amber for that reason; ok/bad are the
-   * design's values unchanged.
+  /* ── Operator tokens ─────────────────────────────────────────────────────
+   *
+   * Mirrors `packages/brand-defaults/src/defaults/theme.ts`, which the panel
+   * re-serves as `/theme.css` after this file. This block is the documented
+   * fallback for a panel served without the brand layer, so the two are kept
+   * identical on purpose — `src/chrome.test.ts` asserts every token the theme
+   * emits is one this block declares.
    */
-  --tone-ok: #6fcf97;
-  --tone-warn: #e0b061;
-  --tone-bad: #e2726b;
+
+  --color-bg: #0d0f12;
+  --color-surface: #101318;
+  --color-text: #d8dee7;
+  --color-accent: #5fa8d3;
+  --color-accent-2: #8fc6e6;
+  --color-divider: #232830;
+
+  /* 100…700 are text greys, 800/900 are line greys. The jump between 700 and
+     800 is deliberate: nothing sits between "dimmest label" and "hairline". */
+  --color-neutral-100: #eef2f7;
+  --color-neutral-200: #d8dee7;
+  --color-neutral-300: #b6bfcb;
+  --color-neutral-400: #98a2b0;
+  --color-neutral-500: #7b8492;
+  --color-neutral-600: #5a6270;
+  --color-neutral-700: #4e5663;
+  --color-neutral-800: #232830;
+  --color-neutral-900: #171b21;
+
+  /* 800/900 are the two accent-tinted *surfaces* — a chip's fill and the active
+     nav row's ground — not shades you would ever set text in. */
+  --color-accent-100: #eaf4fa;
+  --color-accent-200: #cfe6f3;
+  --color-accent-300: #a8d2e9;
+  --color-accent-400: #8fc6e6;
+  --color-accent-500: #5fa8d3;
+  --color-accent-600: #4a8bb3;
+  --color-accent-700: #3a6d8c;
+  --color-accent-800: #1e2732;
+  --color-accent-900: #182029;
+
+  /* Whole pixels. The old 2.8px geometric run put hairlines on fractional
+     boundaries, and the browser rounded adjacent 1px rules to different widths —
+     a visible seam in the tile grid at exactly Operator's density. */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 22px;
+  --space-8: 32px;
+
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+
+  /* Rings, not shadows: Operator is flat. The names survive because the theme
+     contract uses them, but each is now a 1px hairline. */
+  --shadow-sm: 0 0 0 1px var(--color-neutral-800);
+  --shadow-md: 0 0 0 1px var(--color-neutral-800);
+  --shadow-lg: 0 0 0 1px var(--color-neutral-700);
+
+  --tone-ok: #4fb286;
+  --tone-warn: #d9a441;
+  --tone-bad: #d9534f;
   --tone-neutral: var(--color-neutral-500);
 
   --muted: var(--color-neutral-500);
 
-  --font-sans: Inter, "Inter var", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: "IBM Plex Sans", "IBM Plex Sans Var", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* A rule that fades out over its last 48px at each end, per the design. */
-  --rule: linear-gradient(
-    to right,
-    transparent,
-    var(--color-divider) 48px,
-    var(--color-divider) calc(100% - 48px),
-    transparent
-  );
+  /* A flat hairline. Nocturne faded this out over its last 48px at each end;
+     Operator's rules meet their container, because a rule that stops short reads
+     as a rendering fault at this density. */
+  --rule: var(--color-neutral-800);
+
+  /* The tracking on every small uppercase mono label — section eyebrows, column
+     heads, tile captions. Declared once because it appears about thirty times. */
+  --label-tracking: 0.12em;
 }
 
 * {
@@ -95,7 +119,10 @@ body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-text);
-  font: 15px/1.55 var(--font-sans);
+  /* 13px, not 15px. Operator's whole claim is that a staffer reads four queues
+     and twelve rows without scrolling, and the type scale is where that is won
+     or lost. Larger prose sizes are set per-block from here. */
+  font: 13px/1.5 var(--font-sans);
   -webkit-font-smoothing: antialiased;
   /* Sidebar beside content; the sidebar is the only sticky element. */
   display: flex;
@@ -122,46 +149,69 @@ code {
 
 .shell-side {
   flex: none;
-  width: 272px;
+  width: 206px;
   position: sticky;
   top: 0;
   height: 100vh;
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
-  padding: var(--space-6) var(--space-5);
-  /* Translucent surface over the ground, per the design. */
-  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
-  backdrop-filter: blur(18px);
+  padding: var(--space-5) var(--space-4);
+  /* Opaque, and no blur. Nocturne floated a translucent panel over the ground;
+     Operator makes the sidebar a *region* -- one surface step and one hairline,
+     which is also what stops the nav's own 1px rules smearing against a blur. */
+  background: var(--color-surface);
   border-right: 1px solid var(--color-divider);
   overflow-y: auto;
 }
 
+/* The lockup is bracketed monospace. It is text at every size and there is no
+   asset -- which is the point, because the CSP lets the panel fetch none. The
+   brackets are pseudo-elements so `index.html` stays a plain mark-plus-name and
+   the wordmark itself is still one word in `copy.panel.shell`. */
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
+  padding: 0 var(--space-2);
+  font-family: var(--font-mono);
   font-weight: 600;
-  font-size: 14.5px;
-  letter-spacing: -0.01em;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--color-neutral-100);
+}
+
+.brand::before,
+.brand::after {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.brand::before {
+  content: "[";
+}
+
+.brand::after {
+  content: "]";
 }
 
 .brand-mark {
   flex: none;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 34%, transparent);
-  color: var(--color-accent-300);
-  font-size: 14px;
-  font-weight: 650;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-800);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .brand:hover {
-  color: var(--color-accent-300);
+  color: var(--color-accent-2);
 }
 
 /* Guild switcher: the card at the top of the sidebar naming the active guild. */
@@ -169,29 +219,31 @@ code {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-4);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-neutral-900) 60%, transparent);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-900);
   box-shadow: var(--shadow-sm);
   transition: box-shadow 120ms ease;
 }
 
 a.guild-switch:hover {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 40%, transparent);
+  box-shadow: 0 0 0 1px var(--color-accent-700);
 }
 
 .guild-switch-avatar {
   flex: none;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
-  color: var(--color-accent-200);
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  width: 22px;
+  height: 22px;
+  /* Square, not a circle: a guild is a place. Operator rounds nothing that is
+     not a person, and `.avatar` -- which is one -- stays circular. */
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-800);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
 }
 
 .guild-switch-text {
@@ -202,17 +254,19 @@ a.guild-switch:hover {
 }
 
 .guild-switch-name {
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   /* Guild names run long and the sidebar is fixed-width. */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The member count / role line under the guild name -- a figure, so mono. */
 .guild-switch-role {
-  font-size: 11.5px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-600);
 }
 
 .guild-switch-caret {
@@ -230,53 +284,65 @@ a.guild-switch:hover {
 .nav-group {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  /* 1px, not a space step: rows in a group are a list, not separate cards. */
+  gap: 1px;
 }
 
 .nav-group-label {
-  padding: 0 var(--space-3) var(--space-2);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
+  padding: 0 var(--space-4) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--color-neutral-600);
+  color: var(--color-neutral-700);
 }
 
 .nav-link {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-3);
-  border-radius: var(--radius-md);
-  font-size: 13.5px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
   color: var(--color-neutral-400);
   transition: background 120ms ease, color 120ms ease;
 }
 
 .nav-link:hover {
-  background: color-mix(in srgb, var(--color-neutral-100) 6%, transparent);
+  background: var(--color-neutral-900);
   color: var(--color-text);
 }
 
+/* The active row is marked by a 2px accent bar on its leading edge over a
+   tinted ground, not by a filled pill. At this density a filled row reads as a
+   button waiting to be pressed; a bar reads as a position. It is also the only
+   accent in the sidebar, which is what makes it findable without hunting. */
 .nav-link-active {
-  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 28%, transparent);
-  color: var(--color-text);
-  font-weight: 550;
+  background: var(--color-accent-900);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+  color: var(--color-neutral-100);
+  font-weight: 500;
 }
 
-/* Icons carry no intrinsic size; the class decides it. `.icon` is the default
+/* The design badges each queue's nav row with a waiting count, and the sidebar
+   has no such number: `GuildCard` carries a name and a member count, and the
+   counts live in `OverviewCounts`, which only the Overview page fetches. Adding
+   the badge is a shell-level read on every route, not a stylesheet change, so
+   the rule is left unwritten rather than written against data that isn't there.
+
+   Icons carry no intrinsic size; the class decides it. `.icon` is the default
    for icons in the page body, `.nav-icon` the slightly larger sidebar one. */
 .icon {
   flex: none;
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
 }
 
 .nav-icon {
   flex: none;
-  width: 17px;
-  height: 17px;
+  width: 14px;
+  height: 14px;
   color: var(--color-neutral-600);
 }
 
@@ -294,33 +360,39 @@ a.guild-switch:hover {
   border-top: 1px solid var(--color-divider);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .nav-back,
 .signout {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  font-size: 13px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
   color: var(--muted);
 }
 
 .nav-back:hover,
 .signout:hover {
   color: var(--color-text);
-  background: color-mix(in srgb, var(--color-neutral-100) 6%, transparent);
+  background: var(--color-neutral-900);
 }
 
 .nav-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--color-neutral-400);
 }
 
-/* Below the sidebar's width the layout stacks and the nav becomes a wrapped
+/* The design also foots the sidebar with service lines (`bridge ● up · 21m`).
+   Same reason as the nav counts above: that state is the Health page's fetch,
+   and putting it in the shell is a polling decision rather than a visual one.
+
+   Below the sidebar's width the layout stacks and the nav becomes a wrapped
    row of links, which keeps every page reachable on a phone. */
 @media (max-width: 900px) {
   body {
@@ -369,11 +441,14 @@ a.guild-switch:hover {
 .view {
   flex: 1;
   min-width: 0;
-  padding: 52px 60px 96px;
+  /* Tighter than Nocturne's 52/60. Operator's claim is that a staffer sees a
+     whole queue without scrolling, and 60px of margin on a 1440px laptop is a
+     row and a half of table. */
+  padding: var(--space-8) var(--space-8) 72px;
 }
 
 .view > * {
-  max-width: 1100px;
+  max-width: 1180px;
 }
 
 @media (max-width: 900px) {
@@ -385,34 +460,48 @@ a.guild-switch:hover {
 /* ── page furniture ────────────────────────────────────────────────────── */
 
 .page-head {
-  margin-bottom: var(--space-7);
+  margin-bottom: var(--space-6);
 }
 
 .page-head h2 {
   margin: 0;
-  font-size: 28px;
+  /* 19px. Operator's page title is a label on an instrument, not a masthead —
+     the dense grid below it is the thing worth the reader's eye. */
+  font-size: 19px;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
+  color: var(--color-neutral-100);
+}
+
+/* The line under a page title is provenance — who you are, how old the numbers
+   are — which is machine-read text, so mono. */
+.page-head .muted {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-top: var(--space-1);
 }
 
 .muted {
   color: var(--muted);
   margin: var(--space-2) 0 0;
-  font-size: 14px;
+  font-size: 12.5px;
 }
 
 .page-note {
   margin: 0 0 var(--space-5);
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--muted);
   max-width: 76ch;
 }
 
+/* A bounded region: one hairline, one surface step, no shadow and no soft
+   corner. The head is pulled out to the card's own edges so its rule spans the
+   full width — the design's titled panel, without a second DOM element. */
 .card {
   background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  padding: 30px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
   margin-bottom: var(--space-6);
 }
 
@@ -421,29 +510,37 @@ a.guild-switch:hover {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  margin-bottom: var(--space-5);
+  margin: calc(var(--space-6) * -1) calc(var(--space-6) * -1) var(--space-6);
+  padding: var(--space-4) var(--space-6);
+  border-bottom: 1px solid var(--color-neutral-900);
 }
 
-/* The kicker: small, uppercase, wide-tracked — the design's section heading. */
+/* The kicker: small, uppercase, wide-tracked, mono — the design's panel head. */
 .card-head h3 {
   margin: 0;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--color-neutral-400);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--color-neutral-500);
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.14em;
 }
 
 .banner {
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   padding: var(--space-4) var(--space-5);
   margin-bottom: var(--space-5);
-  font-size: 14px;
+  font-size: 12.5px;
+  /* A 2px bar on the leading edge rather than a tinted box. Same grammar as the
+     active nav row and the stripe down a Discord card: the colour is a margin
+     note on the text, not a wash over it. */
+  border-left: 2px solid var(--tone-neutral);
+  background: var(--color-neutral-900);
+  color: var(--color-neutral-300);
 }
 
 .banner-warn {
-  background: color-mix(in srgb, var(--tone-warn) 12%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-warn) 34%, transparent);
+  border-left-color: var(--tone-warn);
   color: var(--tone-warn);
 }
 
@@ -456,43 +553,58 @@ a.guild-switch:hover {
 
 /* ── tiles ─────────────────────────────────────────────────────────────── */
 
+/* The hairline grid. `gap: 1px` over a dark ground makes the gap itself the
+   divider, so the rules between tiles can never fall out of step with the
+   border around them, and there is exactly one line between any two tiles no
+   matter how the grid wraps. Every grid in the panel is built this way. */
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: var(--space-5);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--color-neutral-900);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
 .tile {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-4) var(--space-5);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-neutral-900) 55%, transparent);
-  box-shadow: var(--shadow-sm);
+  padding: var(--space-5) var(--space-5);
+  background: var(--color-surface);
 }
 
 .tile-label {
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
   color: var(--color-neutral-600);
   text-transform: uppercase;
-  letter-spacing: 0.09em;
+  letter-spacing: var(--label-tracking);
 }
 
 .tile-value {
-  font-size: 27px;
+  font-size: 26px;
   font-weight: 600;
+  line-height: 1;
   letter-spacing: -0.02em;
+  color: var(--color-neutral-100);
   /* Tabular figures so a column of counts lines up on the decimal. */
   font-variant-numeric: tabular-nums;
 }
 
 .tile-note {
-  font-size: 12.5px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-600);
 }
 
-/* ── guild selector ────────────────────────────────────────────────────── */
+/* The design prints a delta beside each figure (`+2` since last week). No read
+   in `panel-core` returns a previous-period count, so there is nothing to
+   subtract; the rule waits for the query rather than the query for the rule.
+
+   ── guild selector ────────────────────────────────────────────────────── */
 
 .guild-grid {
   display: grid;
@@ -507,84 +619,88 @@ a.guild-switch:hover {
   gap: var(--space-2);
   padding: var(--space-6);
   background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 120ms ease, transform 120ms ease;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  transition: border-color 120ms ease;
 }
 
+/* No lift on hover. Operator has no z-axis: a card that rises is a card casting
+   a shadow, and the design has none. The border takes the accent instead. */
 .guild-card:hover {
-  box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
+  border-color: var(--color-accent-700);
 }
 
 /* The card's identity block is the shared `.person` mark, so a guild reads the
    same here as it does in the sidebar switcher. */
 .guild-card .person-name {
-  font-size: 16px;
-  letter-spacing: -0.01em;
+  font-size: 14px;
+  letter-spacing: 0;
 }
 
 /* ── badges ────────────────────────────────────────────────────────────── */
 
-/* Pill with a leading dot: the dot carries the tone, so the pill itself stays
-   quiet enough to sit inside a dense table row. */
+/* A dot and a word — no pill, no fill, no border.
+ *
+ * Nocturne's badge was a tinted capsule, which is legible on its own but turns a
+ * status column into a stack of coloured lozenges that out-shouts the figures
+ * beside it. Operator prints the state the way the design does: one coloured
+ * glyph and the word in the same colour, mono, at the size of a table cell. The
+ * dot survives being read by someone who cannot separate the three hues, which
+ * is why it is still there when the text is already tinted.
+ */
 .badge {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 2px 9px 2px 8px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 550;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
   white-space: nowrap;
-  background: color-mix(in srgb, var(--color-neutral-100) 7%, transparent);
-  box-shadow: inset 0 0 0 1px var(--color-divider);
-  color: var(--color-neutral-300);
+  color: var(--color-neutral-400);
 }
 
 .badge-dot {
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 999px;
   background: currentColor;
 }
 
 .badge-ok {
   color: var(--tone-ok);
-  background: color-mix(in srgb, var(--tone-ok) 12%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-ok) 30%, transparent);
 }
 
 .badge-warn {
   color: var(--tone-warn);
-  background: color-mix(in srgb, var(--tone-warn) 12%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-warn) 30%, transparent);
 }
 
 .badge-bad {
   color: var(--tone-bad);
-  background: color-mix(in srgb, var(--tone-bad) 12%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-bad) 30%, transparent);
 }
 
 .badge-neutral {
-  color: var(--color-neutral-400);
+  color: var(--color-neutral-500);
 }
 
-/* Circular initial avatar, used where a row is about a person. */
+/* Circular initial avatar, used where a row is about a person. The one round
+   thing in the design: a person is not a region. */
 .avatar {
   flex: none;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  color: var(--color-accent-200);
-  font-size: 12px;
+  background: var(--color-accent-800);
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 .person {
@@ -601,14 +717,20 @@ a.guild-switch:hover {
   gap: 1px;
 }
 
+/* An IGN or a Discord handle is an identifier, not prose — mono, so a column of
+   them is scannable and an `l` cannot be mistaken for a `1`. */
 .person-name {
-  font-weight: 550;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-neutral-200);
   overflow-wrap: anywhere;
 }
 
 .person-note {
-  font-size: 12px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-600);
   overflow-wrap: anywhere;
 }
 
@@ -628,37 +750,56 @@ a.guild-switch:hover {
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 12.5px;
 }
 
 .table th {
   text-align: left;
-  font-size: 10.5px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
+  letter-spacing: var(--label-tracking);
   color: var(--color-neutral-600);
-  padding: 0 var(--space-4) var(--space-3);
+  padding: var(--space-3) var(--space-5);
   white-space: nowrap;
+  /* The head's rule is the full divider; the body's rules are a step softer, so
+     the header reads as a different kind of boundary to a row break. */
+  border-bottom: 1px solid var(--color-divider);
 }
 
-/* Row rules are painted on the row rather than the cell so a single gradient
-   spans the full width and fades at the table's edges, not at every column
-   boundary. */
-.table thead tr,
 .table tbody tr {
-  background-image: var(--rule);
-  background-repeat: no-repeat;
-  background-size: 100% 1px;
-  background-position: bottom left;
+  border-bottom: 1px solid var(--color-neutral-900);
 }
 
 .table tbody tr:last-child {
-  background-image: none;
+  border-bottom: 0;
 }
 
 .table td {
-  padding: var(--space-4);
-  vertical-align: top;
+  padding: var(--space-3) var(--space-5);
+  vertical-align: middle;
+  /* Every figure in every table lines up on its digits without the cell having
+     to ask. Text cells are unaffected. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* A column of figures: right-aligned and mono, so magnitudes are compared by
+   where a number ends rather than by reading it. Set on the header too, so the
+   label sits over its own column. */
+.table .num,
+.table th.num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+/* Relative times in a trailing column: quieter than the figures they date. */
+.table .when {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
 }
 
 .job-cell {
@@ -697,15 +838,16 @@ a.guild-switch:hover {
 .state {
   padding: var(--space-8) var(--space-5);
   text-align: center;
+  font-size: 12.5px;
   color: var(--muted);
   background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
 }
 
 .state-error {
   color: var(--tone-bad);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-bad) 40%, transparent);
+  border-color: var(--tone-bad);
 }
 
 .state-denied p {
@@ -714,56 +856,69 @@ a.guild-switch:hover {
 
 /* ── buttons ───────────────────────────────────────────────────────────── */
 
-/* Nocturne buttons are outlined rather than filled, including the primary — the
-   accent reads as the emphasis on its own against this ground. */
+/* Operator buttons are mono and small — a control on an instrument, labelled the
+   way the readouts around it are. The default is a quiet filled chip; the
+   primary is the only *solid accent* surface in the whole panel, which is what
+   makes "the action" unambiguous on a page with a dozen controls. */
 .button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-5);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-neutral-700);
-  background: transparent;
-  color: var(--color-neutral-300);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-divider);
+  background: var(--color-neutral-900);
+  color: var(--color-neutral-400);
   font: inherit;
-  font-size: 13.5px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
   cursor: pointer;
   transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
 }
 
 .button:hover {
-  border-color: var(--color-neutral-500);
-  color: var(--color-text);
+  border-color: var(--color-neutral-700);
+  color: var(--color-neutral-200);
 }
 
 .button-primary {
-  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
-  color: var(--color-accent-300);
-  font-weight: 550;
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-bg);
+  font-weight: 600;
 }
 
 .button-primary:hover {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-  color: var(--color-accent-200);
+  background: var(--color-accent-2);
+  border-color: var(--color-accent-2);
+  color: var(--color-bg);
 }
 
 .button-danger {
-  border-color: color-mix(in srgb, var(--tone-bad) 50%, transparent);
+  background: transparent;
+  border-color: var(--tone-bad);
   color: var(--tone-bad);
 }
 
 .button-danger:hover {
   border-color: var(--tone-bad);
   color: var(--tone-bad);
+  background: var(--color-neutral-900);
 }
 
-/* Armed destructive button: filled, so a second click is clearly a commitment. */
+/* Armed destructive button: filled, so a second click is clearly a commitment.
+   Same grammar as the primary — solid means the button acts now. */
 .button-armed {
-  background: color-mix(in srgb, var(--tone-bad) 18%, transparent);
+  background: var(--tone-bad);
   border-color: var(--tone-bad);
-  color: var(--tone-bad);
+  color: var(--color-bg);
   font-weight: 600;
+}
+
+.button-armed:hover {
+  background: var(--tone-bad);
+  border-color: var(--tone-bad);
+  color: var(--color-bg);
 }
 
 .button:disabled {
@@ -774,9 +929,9 @@ a.guild-switch:hover {
 }
 
 .button:disabled:hover {
-  border-color: var(--color-neutral-700);
-  color: var(--color-neutral-300);
-  background: transparent;
+  border-color: var(--color-divider);
+  color: var(--color-neutral-400);
+  background: var(--color-neutral-900);
 }
 
 /* ── controls, analytics range pickers & export ────────────────────────── */
@@ -791,26 +946,36 @@ a.guild-switch:hover {
 
 /* Segmented filter tabs. A row of buttons rather than a <select> because the
    options are few, mutually exclusive, and worth reading at a glance — the
-   selected one is the page's current answer, not a setting tucked in a menu. */
+   selected one is the page's current answer, not a setting tucked in a menu.
+
+   One bordered strip divided by hairlines, rather than loose chips in a padded
+   trough: the segments share edges, so the control reads as one switch with a
+   position instead of as several buttons that happen to be adjacent. */
 .tabs {
   display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  background: color-mix(in srgb, var(--color-neutral-900) 70%, transparent);
-  border: 1px solid var(--color-neutral-800);
-  border-radius: var(--radius-md);
+  gap: 0;
+  padding: 0;
+  background: var(--color-neutral-900);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
 }
 
 .tab {
   font: inherit;
-  font-size: 13px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-neutral-400);
   background: transparent;
   border: 0;
-  border-radius: calc(var(--radius-md) - 2px);
-  padding: var(--space-2) var(--space-4);
+  border-radius: 0;
+  padding: var(--space-3) var(--space-5);
   cursor: pointer;
   transition: color 120ms ease, background-color 120ms ease;
+}
+
+.tab + .tab {
+  border-left: 1px solid var(--color-divider);
 }
 
 .tab:hover {
@@ -818,8 +983,9 @@ a.guild-switch:hover {
 }
 
 .tab[aria-selected="true"] {
-  color: var(--color-text);
-  background: var(--color-neutral-800);
+  color: var(--color-bg);
+  background: var(--color-accent);
+  font-weight: 600;
 }
 
 /* The leaderboard's category strip. Same segmented control as `.tabs`, but
@@ -839,12 +1005,18 @@ a.guild-switch:hover {
   align-items: baseline;
   gap: var(--space-3);
   flex-wrap: wrap;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-5);
   margin-bottom: var(--space-4);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
-  border-radius: var(--radius-md);
-  font-size: 13px;
+  /* The accent means "this row is you" — the same job it does on the active nav
+     row, marked the same way: a bar on the leading edge over a tinted ground. */
+  background: var(--color-accent-900);
+  border: 1px solid var(--color-divider);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-neutral-200);
 }
 
 .pager {
@@ -859,17 +1031,24 @@ a.guild-switch:hover {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
-  font-size: 12.5px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: var(--label-tracking);
+  color: var(--color-neutral-600);
 }
 
+/* What a staffer types into these is almost always an identifier — a channel, a
+   role, an IGN, a snowflake — so the field is mono and its box is the same
+   sharp, opaque chip as a button. */
 .control {
   font: inherit;
-  font-size: 13.5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   color: var(--color-text);
-  background: color-mix(in srgb, var(--color-neutral-900) 70%, transparent);
-  border: 1px solid var(--color-neutral-800);
-  border-radius: var(--radius-md);
+  background: var(--color-neutral-900);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
   padding: var(--space-3) var(--space-4);
   transition: border-color 120ms ease;
 }
@@ -878,8 +1057,11 @@ a.guild-switch:hover {
   border-color: var(--color-neutral-700);
 }
 
+/* Focus is the one place a *border* takes the accent: the field you are typing
+   in is the selected thing on the page. */
 .control:focus {
-  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+  border-color: var(--color-accent);
+  outline: none;
 }
 
 .control::placeholder {
@@ -893,28 +1075,30 @@ a.guild-switch:hover {
   margin-bottom: var(--space-5);
 }
 
-/* Ghost link: the design's quietest affordance, a bordered pill with no fill. */
+/* Ghost link: the design's quietest affordance, a bordered chip with no fill. */
 .export-link {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--color-neutral-800);
-  font-size: 12.5px;
-  color: var(--color-neutral-400);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-divider);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-500);
   transition: border-color 120ms ease, color 120ms ease;
 }
 
 .export-link:hover {
-  border-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
-  color: var(--color-accent-300);
+  border-color: var(--color-accent-700);
+  color: var(--color-accent);
 }
 
 .note {
   margin: var(--space-3) 0 0;
-  font-size: 12px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-neutral-600);
 }
 
 /* ── line chart ────────────────────────────────────────────────────────── */
@@ -934,10 +1118,12 @@ a.guild-switch:hover {
   stroke-width: 1;
 }
 
+/* Axis ticks are figures and dates. Mono, so the y-axis labels are the same
+   width and the chart's left edge does not shift as the data rescales. */
 .axis {
   fill: var(--color-neutral-600);
-  font-size: 11px;
-  font-family: var(--font-sans);
+  font-size: 9.5px;
+  font-family: var(--font-mono);
 }
 
 .axis-y {
@@ -965,19 +1151,24 @@ a.guild-switch:hover {
 }
 
 .legend-label {
-  color: var(--color-neutral-300);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-neutral-400);
 }
 
 .swatch {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  /* Square: a series key is not a person. */
+  border-radius: 1px;
   /* Background colour is assigned per series from the chart palette. */
   flex: none;
 }
 
 .legend-total {
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-neutral-600);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1004,9 +1195,13 @@ a.guild-switch:hover {
   overflow-wrap: anywhere;
 }
 
+/* Square ends and a flat fill. A rounded bar lies about its own length at the
+   tip, which matters when the whole point of the row is comparing lengths; the
+   gradient was decoration the accent cannot spare. */
 .bar-track {
-  background: color-mix(in srgb, var(--color-neutral-100) 7%, transparent);
-  border-radius: 999px;
+  background: var(--color-neutral-900);
+  border: 1px solid var(--color-divider);
+  border-radius: 1px;
   height: 8px;
   overflow: hidden;
 }
@@ -1014,20 +1209,22 @@ a.guild-switch:hover {
 .bar-fill {
   display: block;
   height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(to right, var(--color-accent-600), var(--color-accent));
+  border-radius: 0;
+  background: var(--color-accent);
 }
 
 .bar-value {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 12.5px;
+  font-size: 11.5px;
   color: var(--color-neutral-300);
 }
 
 .bar-note {
   grid-column: 2 / 4;
-  font-size: 12px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-neutral-600);
 }
 
 /* ── editable fields ───────────────────────────────────────────────────── */
@@ -1045,13 +1242,23 @@ a.guild-switch:hover {
 }
 
 .field-label {
-  font-size: 12.5px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--label-tracking);
+  color: var(--color-neutral-500);
 }
 
+/* Beside a switch the label is a sentence about what the switch does, not a
+   column heading, so it stays sans and sentence-cased. */
 .field-label-inline {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
   font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-neutral-200);
   /* Beside a switch the label is the click target, so it gets the pointer the
      switch itself has rather than a text cursor. */
   cursor: pointer;
@@ -1075,12 +1282,14 @@ a.guild-switch:hover {
 .field-hint {
   margin: 0;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--color-neutral-600);
   max-width: 68ch;
 }
 
+/* Saving / saved / failed — a machine talking about its own state. */
 .field-status {
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
   min-height: 1.2em;
 }
 
@@ -1153,11 +1362,11 @@ a.guild-switch:hover {
      it can never run off the bottom of a short page. */
   max-height: 264px;
   overflow-y: auto;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   /* Opaque, not translucent: this sits over other fields, and a see-through
      dropdown with text behind it is unreadable exactly when it matters. */
   background: var(--color-neutral-900);
-  box-shadow: var(--shadow-md);
+  border: 1px solid var(--color-neutral-700);
 }
 
 .picker-list[hidden] {
@@ -1170,12 +1379,16 @@ a.guild-switch:hover {
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  font-size: 13.5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   cursor: pointer;
 }
 
+/* The highlighted option is the selected thing in an open list — same mark as
+   the active nav row, so "where am I" is answered the same way everywhere. */
 .picker-option-active {
-  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+  background: var(--color-accent-900);
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
 .picker-option-label {
@@ -1184,8 +1397,8 @@ a.guild-switch:hover {
 
 .picker-option-sub {
   margin-left: auto;
-  font-size: 12px;
-  color: var(--muted);
+  font-size: 10.5px;
+  color: var(--color-neutral-600);
   /* The secondary line yields first — a long category name must not push the
      channel name it belongs to out of view. */
   overflow: hidden;
@@ -1195,8 +1408,9 @@ a.guild-switch:hover {
 
 .picker-empty {
   padding: var(--space-2) var(--space-3);
-  font-size: 12.5px;
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
 }
 
 /* Chips for multi-select pickers — the current set, above the search box. */
@@ -1216,10 +1430,12 @@ a.guild-switch:hover {
   align-items: center;
   gap: var(--space-1);
   padding: 2px var(--space-1) 2px var(--space-2);
-  border: 1px solid var(--color-neutral-700);
+  border: 1px solid var(--color-divider);
   border-radius: var(--radius-sm);
-  background: var(--color-neutral-800);
-  font-size: 12.5px;
+  background: var(--color-neutral-900);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-300);
 }
 
 .picker-chip-label {
@@ -1241,8 +1457,7 @@ a.guild-switch:hover {
 }
 
 .picker-chip-remove:hover {
-  background: color-mix(in srgb, var(--tone-bad) 24%, transparent);
-  color: var(--color-text);
+  color: var(--tone-bad);
 }
 
 .control-area {
@@ -1250,12 +1465,18 @@ a.guild-switch:hover {
   min-height: 68px;
   resize: vertical;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 12.5px;
+  line-height: 1.55;
   color: var(--color-text);
-  background: color-mix(in srgb, var(--color-neutral-900) 70%, transparent);
-  border: 1px solid var(--color-neutral-800);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-4);
+  background: var(--color-neutral-900);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+}
+
+.control-area:focus {
+  border-color: var(--color-accent);
+  outline: none;
 }
 
 /* ── switch ────────────────────────────────────────────────────────────── */
@@ -1279,32 +1500,35 @@ a.guild-switch:hover {
 
 .switch-track {
   display: block;
-  width: 40px;
-  height: 22px;
+  /* Squared, like every other control. On is a *solid* accent track — the same
+     "filled means it acts" grammar as the primary button — so an on switch is
+     legible from across the page and an off one recedes into the form. */
+  width: 34px;
+  height: 18px;
   padding: 2px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-neutral-100) 8%, transparent);
-  border: 1px solid var(--color-neutral-800);
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-900);
+  border: 1px solid var(--color-divider);
   transition: background 120ms ease, border-color 120ms ease;
 }
 
 .switch-thumb {
   display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 999px;
-  background: var(--color-neutral-400);
+  width: 12px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--color-neutral-500);
   transition: transform 120ms ease, background 120ms ease;
 }
 
 .switch-input:checked + .switch-track {
-  background: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  background: var(--color-accent);
   border-color: var(--color-accent);
 }
 
 .switch-input:checked + .switch-track .switch-thumb {
-  transform: translateX(18px);
-  background: var(--color-accent-100);
+  transform: translateX(16px);
+  background: var(--color-bg);
 }
 
 .switch-input:focus-visible + .switch-track {
@@ -1353,9 +1577,9 @@ a.guild-switch:hover {
 }
 
 .queue-item {
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
-  background: color-mix(in srgb, var(--color-neutral-900) 45%, transparent);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-900);
   padding: var(--space-5);
   display: flex;
   flex-direction: column;
@@ -1366,8 +1590,8 @@ a.guild-switch:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
-  font-size: 14px;
+  gap: var(--space-4);
+  font-size: 12.5px;
 }
 
 /* ── collapsed rows ────────────────────────────────────────────────────── */
@@ -1379,8 +1603,9 @@ a.guild-switch:hover {
  * on a page where the row's summary is the only way to see what is configured.
  */
 .collapse {
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--color-neutral-900) 45%, transparent);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-900);
   padding: var(--space-4) var(--space-5);
 }
 
@@ -1394,7 +1619,7 @@ a.guild-switch:hover {
   align-items: center;
   gap: var(--space-3);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 12.5px;
   /* The marker is the only affordance saying "there is more here", so it stays. */
   list-style-position: outside;
 }
@@ -1413,12 +1638,18 @@ a.guild-switch:hover {
   margin: 0;
   display: grid;
   grid-template-columns: minmax(120px, 22ch) 1fr;
-  gap: var(--space-1) var(--space-5);
-  font-size: 14px;
+  gap: var(--space-2) var(--space-5);
+  font-size: 12.5px;
 }
 
+/* The question is a label on the answer, so it is set as one. */
 .answers dt {
-  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: var(--label-tracking);
+  line-height: 1.9;
+  color: var(--color-neutral-600);
   overflow-wrap: anywhere;
 }
 
@@ -1450,20 +1681,28 @@ a.guild-switch:hover {
 
 .roster-col h4 {
   margin: 0 0 var(--space-3);
-  font-size: 10.5px;
-  letter-spacing: 0.09em;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-neutral-900);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
   text-transform: uppercase;
   color: var(--color-neutral-600);
 }
 
+/* A column of IGNs: mono, so the four lists read as four columns of the same
+   kind of thing rather than four paragraphs. */
 .roster-list {
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  font-size: 14px;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--color-neutral-300);
 }
 
 /*
@@ -1513,8 +1752,12 @@ a.guild-switch:hover {
 .preview-value {
   margin: var(--space-1) 0 0;
   white-space: pre-wrap;
-  font-size: 13px;
-  line-height: 1.5;
+  /* Mono, and for once not as a matter of taste: the standings this previews are
+     columns aligned by spaces, which only line up in a fixed-width face. */
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--color-neutral-300);
 }
 
 .preview-field {

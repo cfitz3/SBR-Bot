@@ -3,7 +3,15 @@
  * formats networth respecting exact-vs-estimate and staleness.
  */
 import { copy } from "@sbr/brand";
-import { describeAge, padInlineRow, stalenessFooter, tierRank } from "@sbr/shared-types";
+import {
+  FLATTEN_SEPARATOR,
+  describeAge,
+  padInlineRow,
+  rankedBlock,
+  stalenessFooter,
+  subjectLine,
+  tierRank,
+} from "@sbr/shared-types";
 import type {
   AccessoryReportDTO,
   AccessorySuggestionDTO,
@@ -25,6 +33,7 @@ import type {
   LeaderboardPageDTO,
   LeaderboardPositionDTO,
   LeaderboardValueFormat,
+  RankedRow,
   LinkError,
   LowestBinDTO,
   MemberRecordDTO,
@@ -176,7 +185,7 @@ export function renderNetworthEmbed(ign: string, result: HypixelResult<NetworthD
     ...(fields.length > 0 ? { fields: padInlineRow(fields) } : {}),
     // Missing sections are named rather than silently folded into the total.
     ...(data.missing.length > 0
-      ? { footer: `${stalenessFooter(result.value)} • hidden: ${data.missing.join(", ")}` }
+      ? { footer: `${stalenessFooter(result.value)}${FLATTEN_SEPARATOR}hidden: ${data.missing.join(", ")}` }
       : { footer: stalenessFooter(result.value) }),
     color: data.exact ? "SUCCESS" : "INFO",
   };
@@ -439,22 +448,32 @@ export function renderStatsEmbed(
       : "—";
   const recordField = record === undefined || record === null ? null : renderMemberRecordField(record);
 
+  /*
+   * The three numbers that decide whether anyone reads the rest — level, skill
+   * average, catacombs — are the *headline*, on one line under the title,
+   * rather than the first three of nine equal-weight fields. The card then has
+   * a shape: a subject, a verdict, and the supporting detail below it.
+   *
+   * The profile name moves up to the author row for the same reason. It
+   * qualifies the subject ("these are Frostbyte_'s numbers, on Blueberry") and
+   * spending the description's first line on it buried the verdict.
+   */
+  const headline = [
+    `${F.skyblockLevel} ${formatLevel(p.skyblockLevel)}`,
+    `${F.skillAverage} ${formatLevel(p.skillAverage)}`,
+    `${F.catacombs} ${formatLevel(dungeons.ok ? dungeons.value.data.catacombsLevel : null)}`,
+  ].join(FLATTEN_SEPARATOR);
+
   return {
+    author: { name: subjectLine(ign, profileLabel(p)) },
     title: cardTitle(ign, "stats"),
-    description: `Profile **${profileLabel(p)}**`,
+    description: headline,
     // Padded: how many fields this card carries depends on whether standing and
     // a staff record were available, so the row can end short in three different
     // ways and none of them is a reason to leave a field stranded.
     fields: padInlineRow([
-      { name: F.skyblockLevel, value: formatLevel(p.skyblockLevel), inline: true },
-      { name: F.skillAverage, value: formatLevel(p.skillAverage), inline: true },
-      {
-        name: F.catacombs,
-        value: formatLevel(dungeons.ok ? dungeons.value.data.catacombsLevel : null),
-        inline: true,
-      },
-      { name: F.weight, value: weightText(p.senitherWeight), inline: true },
       { name: F.networth, value: nw, inline: true },
+      { name: F.weight, value: weightText(p.senitherWeight), inline: true },
       {
         name: F.slayerXp,
         value: slayers.ok ? formatNumber(slayers.value.data.totalExperience) : "—",
@@ -827,14 +846,23 @@ function formatValue(value: number, format: LeaderboardValueFormat): string {
 }
 
 /**
- * `#1 Alice — 8.20b`. Medals for the top three because they are the only ranks
- * anyone reads at a glance; everything below is a number and reads better as
- * one.
+ * One row of the board, for `rankedBlock` to align.
+ *
+ * The rank, the name and the figure used to be joined with an em dash and set
+ * in the card's proportional face, which meant the figures landed at a
+ * different x on every line — so the one comparison a leaderboard exists to
+ * support had to be made by reading each number rather than by looking at the
+ * column. `rankedBlock` pads the columns inside a fence; medals and the
+ * viewer's marker survive that, markdown does not, which is why the name is no
+ * longer bolded here.
  */
-function leaderboardLine(entry: LeaderboardEntryDTO, format: LeaderboardValueFormat): string {
-  const medal = entry.rank === 1 ? "🥇" : entry.rank === 2 ? "🥈" : entry.rank === 3 ? "🥉" : `\`#${entry.rank}\``;
-  const name = entry.isViewer ? `**${entry.label}**` : entry.label;
-  return `${medal} ${name} — ${formatValue(entry.value, format)}`;
+function leaderboardRow(entry: LeaderboardEntryDTO, format: LeaderboardValueFormat): RankedRow {
+  return {
+    rank: entry.rank,
+    label: entry.label,
+    value: formatValue(entry.value, format),
+    ...(entry.isViewer ? { self: true } : {}),
+  };
 }
 
 /**
@@ -852,13 +880,17 @@ export function renderLeaderboardEmbed(page: LeaderboardPageDTO, now = Date.now(
   const body =
     page.entries.length === 0
       ? C.nobodyRanked
-      : page.entries.map((e) => leaderboardLine(e, spec.format)).join("\n");
+      : rankedBlock(page.entries.map((e) => leaderboardRow(e, spec.format)));
 
   // Appended rather than merged into the list: the viewer's row is an answer to
   // a different question ("where am I"), and slotting it into the top ten would
   // misrepresent the ranking.
+  // Outside the fence, not inside it: the chip around the rank is the one piece
+  // of emphasis on the card, and markdown does not survive a code block.
   const yours =
-    page.viewer === null ? "" : `\n\nYou: \`#${page.viewer.rank}\` — ${formatValue(page.viewer.value, spec.format)}`;
+    page.viewer === null
+      ? ""
+      : `\n\nYou: \`#${page.viewer.rank}\`${FLATTEN_SEPARATOR}${formatValue(page.viewer.value, spec.format)}`;
 
   const parts: string[] = [];
   if (page.pageCount > 1) parts.push(`page ${page.page}/${page.pageCount}`);
@@ -867,8 +899,13 @@ export function renderLeaderboardEmbed(page: LeaderboardPageDTO, now = Date.now(
   if (page.oldestReadingAt !== null) parts.push(`oldest reading ${describeAge(page.oldestReadingAt, now)}`);
 
   return {
+    // No author row here: `/leaderboard` is answering a question the reader just
+    // asked, so there is no subject to name that the title does not already
+    // carry. The scheduled digest arrives unasked-for and does get one.
     title: cardTitle(spec.label, "leaderboard"),
-    description: `${spec.description}\n\n${body}${yours}`,
+    // One blank line, not two: the fence is already a visible boundary, and the
+    // second break pushed the top of the board below the fold on a phone.
+    description: `${spec.description}\n${body}${yours}`,
     footer: parts.join(" · "),
     color: "INFO",
   };
@@ -956,7 +993,13 @@ export function renderAccessoriesEmbed(
   // The scope caveat rides in the footer beside the staleness note, so nobody
   // reads an empty "missing" list as "you own everything in the game".
   if (!result.ok) return embed;
-  return { ...embed, footer: `${embed.footer ?? ""} • ${result.value.data.note}`.replace(/^ • /, "") };
+  return {
+    ...embed,
+    footer: `${embed.footer ?? ""}${FLATTEN_SEPARATOR}${result.value.data.note}`.replace(
+      new RegExp(`^${FLATTEN_SEPARATOR}`),
+      "",
+    ),
+  };
 }
 
 const PRIORITY_MARK: Readonly<Record<string, string>> = { HIGH: "🔴", MEDIUM: "🟠", LOW: "🟡" };
@@ -1328,7 +1371,7 @@ export function renderAuctionsEmbed(
       const ends =
         l.endsAt === null
           ? ""
-          : ` • ends in ${formatDuration(Math.max(0, new Date(l.endsAt).getTime() - now))}`;
+          : `${FLATTEN_SEPARATOR}ends in ${formatDuration(Math.max(0, new Date(l.endsAt).getTime() - now))}`;
       return `${l.itemName ?? "Unknown item"} — ${coinsOrUnknown(l.price)}${l.bin ? " (BIN)" : " (auction)"}${ends}`;
     };
 

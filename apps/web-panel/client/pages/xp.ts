@@ -321,7 +321,7 @@ function standings(rows: readonly XpStandingDTO[], names: Readonly<Record<string
     { class: "field" },
     h("p", { class: "field-hint" }, t("standingsHint")),
     table(
-      [t("colRank"), t("colMember"), t("colLevel"), t("colXp")],
+      [t("colRank"), t("colMember"), { label: t("colLevel"), align: "num" }, { label: t("colXp"), align: "num" }],
       rows.map((row, index) => [
         // The rank the service gave, not the row's position: ties share a
         // position there, and renumbering them here would invent an order.
@@ -351,7 +351,7 @@ function history(vm: XpVM): HTMLElement {
     { class: "field" },
     h("p", { class: "field-hint" }, t("historyHint")),
     table(
-      [t("colWhen"), t("colMember"), t("colAmount"), t("colBy"), t("colReason")],
+      [t("colWhen"), t("colMember"), { label: t("colAmount"), align: "num" }, t("colBy"), t("colReason")],
       vm.recentAdjustments.map((row) => [
         // Local time, because the person reading this is asking "was that
         // today" and the answer is in their day, not in UTC's.

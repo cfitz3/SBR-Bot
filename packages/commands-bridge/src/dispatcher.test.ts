@@ -702,10 +702,15 @@ test("hidden sections are named in the footer rather than folded into the total"
 
 test("stats renders the overview card", async () => {
   const r = await makeDispatcher().dispatch("stats", ctx());
+  assert.match(r.embed?.author?.name ?? "", /^Aria/);
   assert.match(r.embed?.title ?? "", /Aria — stats/);
+  // The three levels that answer "how far along is this player" are the
+  // headline, not fields: they read as one line, and the fields below carry the
+  // figures you go looking for rather than the ones you glance at.
+  const headline = r.embed?.description ?? "";
+  assert.match(headline, /Skill average 42\.5/);
+  assert.match(headline, /Catacombs 36/);
   const fields = r.embed?.fields ?? [];
-  assert.equal(fields.find((f) => f.name === "Skill average")?.value, "42.5");
-  assert.equal(fields.find((f) => f.name === "Catacombs")?.value, "36");
   assert.match(fields.find((f) => f.name === "Networth")?.value ?? "", /8\.20b/);
 });
 
@@ -715,7 +720,7 @@ test("stats survives one section failing", async () => {
   const partial = progression({ async getSlayers() { return hypixelFailure("API_DISABLED"); } });
   const r = await makeDispatcher({ progression: partial }).dispatch("stats", ctx());
   assert.equal((r.embed?.fields ?? []).find((f) => f.name === "Slayer xp")?.value, "—");
-  assert.equal((r.embed?.fields ?? []).find((f) => f.name === "Skill average")?.value, "42.5");
+  assert.match(r.embed?.description ?? "", /Skill average 42\.5/);
 });
 
 test("a lookup for a named player resolves the IGN rather than the caller's link", async () => {

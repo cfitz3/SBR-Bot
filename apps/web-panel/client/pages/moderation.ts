@@ -479,7 +479,14 @@ function inForceBody(data: ModerationVM): HTMLElement {
     return emptyState(data.target ? "moderationInForceMember" : "moderationInForceGuild");
   }
   return table(
-    [t("colAction"), t("colMember"), t("colBy"), t("colReason"), t("colEnds"), t("colSince")],
+    [
+      t("colAction"),
+      t("colMember"),
+      t("colBy"),
+      t("colReason"),
+      t("colEnds"),
+      { label: t("colSince"), align: "when" },
+    ],
     data.inForce.map((row) => [
       h("div", { class: "job-cell" }, row.type, badge(t("badgeInForce"), "warn")),
       h("code", {}, row.targetDiscordId ?? c("dash")),
@@ -530,7 +537,7 @@ function relayBody(relay: RelayVM): HTMLElement {
     return h("div", {}, intro, head, emptyState("moderationRelay"));
   }
   return h("div", {}, intro, head, table(
-    [t("colCommand"), t("colOutcome"), t("colDetail"), t("colWhen")],
+    [t("colCommand"), t("colOutcome"), t("colDetail"), { label: t("colWhen"), align: "when" }],
     relay.commands.map((row) => [
       h("code", {}, row.command),
       badge(lookup(t("relayOutcome"), row.outcome, row.outcome), relayTone(row.outcome)),
@@ -560,7 +567,15 @@ function actionsBody(guildId: string, data: ModerationVM, rerender: () => void):
   const managed = data.actions.find((row) => row.id === state.managing) ?? null;
 
   const rows = table(
-    [t("colAction"), t("colMember"), t("colBy"), t("colReason"), t("colDuration"), t("colWhen"), t("colManage")],
+    [
+      t("colAction"),
+      t("colMember"),
+      t("colBy"),
+      t("colReason"),
+      t("colDuration"),
+      { label: t("colWhen"), align: "when" },
+      t("colManage"),
+    ],
     data.actions.map((row) => [
       // Two badges, because they answer different questions: what the case is
       // now, and whether it ever actually happened. A row that says BAN and

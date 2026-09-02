@@ -377,7 +377,7 @@ export function renderTicketListEmbed(tickets: readonly TicketDTO[]): EmbedView 
         t.claimedByDiscordId === null ? "unclaimed" : `claimed by <@${t.claimedByDiscordId}>`,
         t.channelId === null ? "no channel" : `<#${t.channelId}>`,
         relativeTs(t.createdAt),
-      ].join(" • "),
+      ].join(" · "),
       inline: false,
     })),
     footer: "Open one with /tickets action:view id:<number>.",

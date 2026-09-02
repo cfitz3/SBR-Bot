@@ -495,7 +495,7 @@ export const DEFAULT_PANEL = {
       PLATINUM: "Platinum",
     },
     /** `{metric}` and `{key}` — what this row measures and what identifies it. */
-    rowSummary: "{metric} • key {key}",
+    rowSummary: "{metric} · key {key}",
     cardAdd: "Add a milestone",
     remove: "Remove",
     removeConfirm: "Confirm remove",

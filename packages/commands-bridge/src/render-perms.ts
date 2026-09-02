@@ -49,7 +49,7 @@ export function renderPermEmbed(perm: PermGroupDTO): EmbedView {
   const embed: EmbedView = {
     title: `${perm.name} — ${perm.activity.toLowerCase()}`,
     fields: [{ name: "Owner", value: `<@${perm.ownerDiscordId}>`, inline: true }, ...fields],
-    footer: `${flags.join(" • ")} • id ${perm.id}`,
+    footer: `${flags.join(" · ")} · id ${perm.id}`,
     color: perm.status === "DISBANDED" ? "NEUTRAL" : "INFO",
   };
   return perm.notes === null ? embed : { ...embed, description: perm.notes };
@@ -64,7 +64,7 @@ export function renderPermListEmbed(perms: readonly PermGroupDTO[], mine: boolea
     title,
     fields: perms.slice(0, 10).map((p) => ({
       name: `${p.name}${p.isDefault ? " ★" : ""} — ${p.activity.toLowerCase()}`,
-      value: `<@${p.ownerDiscordId}> • ${p.members.length}/${p.capacity} • \`${p.id}\``,
+      value: `<@${p.ownerDiscordId}> · ${p.members.length}/${p.capacity} · \`${p.id}\``,
       inline: false,
     })),
     footer: "Open one with /perm info perm:<name>. ★ is your LFG autofill.",

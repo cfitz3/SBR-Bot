@@ -249,7 +249,13 @@ function membersBody(data: AnalyticsVM): HTMLElement {
   });
 
   return table(
-    [t("colMember"), t("colDiscord"), t("colGuildChat"), t("colGexp"), t("colActiveDays")],
+    [
+      t("colMember"),
+      { label: t("colDiscord"), align: "num" },
+      { label: t("colGuildChat"), align: "num" },
+      { label: t("colGexp"), align: "num" },
+      { label: t("colActiveDays"), align: "num" },
+    ],
     rows,
   );
 }

@@ -36,6 +36,7 @@ export const VIEW_COLORS: Readonly<Record<ViewColor, number>> = theme.embed.colo
 
 /** Discord's own caps. Exceeding one is a rejected message, not a style opinion. */
 export const EMBED_LIMITS = {
+  author: 256,
   title: 256,
   description: 4096,
   fields: 25,
@@ -64,6 +65,10 @@ export interface EmbedStyle {
   readonly footer: number;
   /** The separator between facts on one line: `cata 42 · sa 51.3`. */
   readonly separator: string;
+  /** The separator inside a title: `Frostbyte_ — stats`. */
+  readonly titleSeparator: string;
+  /** A subject line, not a summary — see `EmbedAuthorView`. */
+  readonly author: number;
   /** What an unknown value prints as. Never "N/A", never a silent zero. */
   readonly unknown: string;
 }
@@ -95,10 +100,32 @@ const BARE_ID = /\b\d{17,20}\b/g;
 /** Values that mean "we don't know" in some other project's dialect. */
 const PLACEHOLDERS = new Set(["n/a", "na", "null", "undefined", "tbd", "???", "-", "--"]);
 
-const SEPARATORS = [" | ", " -- ", " – "];
+/**
+ * Separators that mean what `EMBED_STYLE.separator` means, spelled some other
+ * way. `" • "` is on the list because two renderers reached for it while the
+ * checker was only looking for pipes, which is the whole argument for writing
+ * the rule down instead of trusting the next author to have read a card.
+ *
+ * `" / "` is deliberately *not* here. It reads as a separator and is one in
+ * some cards, but it is also how every fraction on a progress line is spelled
+ * (`3 / 5`, `1.2m / 5m`), and a rule that cannot tell those apart spends its
+ * credibility on false positives.
+ */
+const SEPARATORS = [" | ", " -- ", " – ", " • "];
+
+/**
+ * Two or more runs of two-plus spaces on one line: somebody has aligned columns
+ * by hand. Discord sets embed text proportionally, so that alignment only holds
+ * inside a code fence — see `rankedBlock`.
+ */
+const ALIGNED_COLUMNS = /\S {2,}\S.* {2,}\S/;
 
 function textLength(view: EmbedView): number {
-  let n = (view.title?.length ?? 0) + (view.description?.length ?? 0) + (view.footer?.length ?? 0);
+  let n =
+    (view.author?.name.length ?? 0) +
+    (view.title?.length ?? 0) +
+    (view.description?.length ?? 0) +
+    (view.footer?.length ?? 0);
   for (const f of view.fields ?? []) n += f.name.length + f.value.length;
   return n;
 }
@@ -180,6 +207,9 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
     }
   };
 
+  if (view.author !== undefined) {
+    limit("limit.author", "author", view.author.name.length, EMBED_LIMITS.author);
+  }
   if (view.title !== undefined) limit("limit.title", "title", view.title.length, EMBED_LIMITS.title);
   if (view.description !== undefined) {
     limit("limit.description", "description", view.description.length, EMBED_LIMITS.description);
@@ -230,7 +260,19 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
       detail: "every card states a tone; NEUTRAL is a choice, absence is an oversight.",
     });
   }
-  for (const url of [view.url, view.thumbnailUrl]) {
+  if (view.author !== undefined) {
+    checkText(view.author.name, "author", out);
+    if (view.author.name.length > EMBED_STYLE.author) {
+      out.push({
+        rule: "author.length",
+        severity: "warning",
+        where: "author",
+        detail: `${view.author.name.length} characters — the author row names the subject (≤${EMBED_STYLE.author}), it is not a summary.`,
+      });
+    }
+  }
+
+  for (const url of [view.url, view.thumbnailUrl, view.author?.iconUrl, view.author?.url]) {
     if (url !== undefined && !url.startsWith("https://")) {
       out.push({ rule: "url.scheme", severity: "error", where: "url", detail: `"${url}" is not https.` });
     }
@@ -244,6 +286,16 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
         severity: "warning",
         where: "title",
         detail: "a title is a label, not a sentence — drop the trailing punctuation.",
+      });
+    }
+    // `Frostbyte_ - stats` and `Frostbyte_ — stats` are one keystroke apart and
+    // read completely differently; the hyphen form is the one that slips in.
+    if (/ (?:-|--|–) /.test(view.title)) {
+      out.push({
+        rule: "title.separator",
+        severity: "warning",
+        where: "title",
+        detail: `a title joins its subject and its noun with "${EMBED_STYLE.titleSeparator}".`,
       });
     }
     const letters = view.title.replace(/[^A-Za-z]/g, "");
@@ -267,6 +319,26 @@ export function checkEmbed(view: EmbedView, options: CheckOptions = {}): readonl
         where: "description",
         detail: `${lines} lines — past ${EMBED_STYLE.descriptionLines} this belongs in fields or a second page.`,
       });
+    }
+    // Only lines outside a fence can be misaligned; inside one, alignment is the
+    // point. Fences alternate, so the parity of the count so far says where we
+    // are — which also means an unclosed fence reads as "everything after it is
+    // fenced", the same way Discord itself renders it.
+    let fenced = false;
+    for (const line of view.description.split("\n")) {
+      if (line.trimStart().startsWith("```")) {
+        fenced = !fenced;
+        continue;
+      }
+      if (!fenced && ALIGNED_COLUMNS.test(line)) {
+        out.push({
+          rule: "columns.unfenced",
+          severity: "warning",
+          where: "description",
+          detail: "columns aligned with spaces only line up in a code block — wrap the rows in ``` (see rankedBlock).",
+        });
+        break;
+      }
     }
     if (/^#{1,3} /m.test(view.description)) {
       out.push({
