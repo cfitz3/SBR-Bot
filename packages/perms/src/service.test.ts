@@ -339,6 +339,81 @@ test("snapshot stats are attached by uuid, and stay null for members without one
   );
 });
 
+/**
+ * The class level of the seat, which is the column the roster exists for.
+ *
+ * Catacombs level says how much dungeon somebody has run. It says nothing about
+ * the class they are sitting in, and these assert that the two are read
+ * separately and that neither is invented when the other is present.
+ */
+test("a seat carries the level of the class it is played as", async () => {
+  const fake = repo({}, aPerm({
+    members: [
+      seat({ ign: "Known", role: "healer", uuid: "uuid-1" }),
+      seat({ ign: "Known", role: "archer", slot: 2, uuid: "uuid-1" }),
+    ],
+  }));
+  const svc = service(fake, {
+    progress: {
+      async forUuids() {
+        return {
+          "uuid-1": {
+            catacombsLevel: 42,
+            skillAverage: 51.2,
+            classLevels: { healer: 38, archer: 12 },
+          },
+        };
+      },
+    },
+  });
+
+  const result = await svc.getPerm("g1", "perm1");
+  assert.ok(result.ok);
+  // Same player, same catacombs level, two seats, two answers — which is the
+  // whole reason this is resolved per seat rather than per member.
+  assert.deepEqual(
+    result.value.members.map((m) => [m.role, m.catacombsLevel, m.roleLevel]),
+    [["healer", 42, 38], ["archer", 42, 12]],
+  );
+});
+
+test("a role that is not a class has no level, even for a member we can read", async () => {
+  const fake = repo({}, aPerm({
+    activity: "KUUDRA",
+    members: [seat({ ign: "Known", role: "tank", uuid: "uuid-1" })],
+  }));
+  const svc = service(fake, {
+    progress: {
+      // Deliberately carries a tank level: Kuudra's tank is a job, and reading
+      // the Catacombs class of the same name onto it would be a wrong number
+      // rather than a missing one.
+      async forUuids() {
+        return { "uuid-1": { catacombsLevel: 42, skillAverage: 51.2, classLevels: { tank: 30 } } };
+      },
+    },
+  });
+
+  const result = await svc.getPerm("g1", "perm1");
+  assert.ok(result.ok);
+  assert.equal(result.value.members[0]?.roleLevel, null);
+});
+
+test("a class we have never read prints as unknown rather than as zero", async () => {
+  const fake = repo({}, aPerm({ members: [seat({ ign: "Known", role: "mage", uuid: "uuid-1" })] }));
+  const svc = service(fake, {
+    progress: {
+      async forUuids() {
+        return { "uuid-1": { catacombsLevel: 42, skillAverage: 51.2, classLevels: { healer: 38 } } };
+      },
+    },
+  });
+
+  const result = await svc.getPerm("g1", "perm1");
+  assert.ok(result.ok);
+  assert.equal(result.value.members[0]?.roleLevel, null);
+  assert.equal(result.value.members[0]?.catacombsLevel, 42);
+});
+
 test("a roster still renders when the caches behind the extra columns are down", async () => {
   const fake = repo({}, aPerm({ members: [seat({ ign: "Notch", uuid: "uuid-1" })] }));
   const svc = service(fake, {

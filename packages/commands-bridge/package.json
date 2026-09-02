@@ -22,6 +22,7 @@
     "@sbr/playtime": "*",
     "@sbr/guild-config": "*",
     "@sbr/observability": "*",
+    "@sbr/perms": "*",
     "@sbr/shared-types": "*",
     "@sbr/tickets": "*"
   }

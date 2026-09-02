@@ -30,7 +30,7 @@ import {
   type RosterChange,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
-import { capacityOf, normalizeRole, rolesFor } from "./activities.js";
+import { capacityOf, classMetricFor, normalizeRole, rolesFor } from "./activities.js";
 import type {
   GuildMemberDirectory,
   LinkDirectory,
@@ -246,6 +246,10 @@ export class PermServiceImpl implements PermService {
           inGuild: current === null || current.size === 0 ? null : current.has(m.ign.toLowerCase()),
           catacombsLevel: stats?.catacombsLevel ?? null,
           skillAverage: stats?.skillAverage ?? null,
+          // Resolved per seat rather than per member, because the answer depends
+          // on the seat: the same player moved from archer to healer is a
+          // different reading, and that is the reading the roster is for.
+          roleLevel: classLevel(row.activity, m.role, stats),
         };
       });
 
@@ -269,6 +273,23 @@ export class PermServiceImpl implements PermService {
     if (this.progress === undefined || uuids.length === 0) return {};
     return this.progress.forUuids(uuids).catch(() => ({}));
   }
+}
+
+/**
+ * The level of the class a seat is played as, when there is one to have.
+ *
+ * Every step is allowed to fail into null — a role with no class, a member with
+ * no snapshot, a class never read — because all three are ordinary and none of
+ * them should cost the roster its other columns.
+ */
+function classLevel(
+  activity: LFGActivity,
+  role: string,
+  stats: MemberProgress | undefined,
+): number | null {
+  if (classMetricFor(activity, role) === null) return null;
+  const level = stats?.classLevels?.[role.trim().toLowerCase()];
+  return typeof level === "number" && Number.isFinite(level) ? level : null;
 }
 
 /** Owner or staff. Stated once so every surface enforces the same rule. */

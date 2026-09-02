@@ -45,7 +45,7 @@ import {
   type TicketCategoryDTO,
   type XpStandingDTO,
 } from "@sbr/shared-types";
-import { copy } from "@sbr/brand";
+import { copy, theme } from "@sbr/brand";
 import { BUG_TICKET_BUTTON_ID } from "@sbr/embed-kit";
 import type { Logger } from "@sbr/observability";
 import { SEED_CATEGORIES } from "@sbr/tickets";
@@ -463,8 +463,8 @@ const aPerm: PermGroupDTO = {
   capacity: 5,
   createdAt: "2026-08-01T00:00:00.000Z",
   members: [
-    { ign: "Alpha", role: "healer", slot: 0, discordId: "111", uuid: "u-alpha", inGuild: true, catacombsLevel: 42, skillAverage: 51.25 },
-    { ign: "Beta", role: "berserk", slot: 1, discordId: null, uuid: null, inGuild: null, catacombsLevel: null, skillAverage: null },
+    { ign: "Alpha", role: "healer", slot: 0, discordId: "111", uuid: "u-alpha", inGuild: true, catacombsLevel: 42, skillAverage: 51.25, roleLevel: 38 },
+    { ign: "Beta", role: "berserk", slot: 1, discordId: null, uuid: null, inGuild: null, catacombsLevel: null, skillAverage: null, roleLevel: null },
   ],
 };
 
@@ -500,6 +500,9 @@ const analytics: AnalyticsService = { async capture() {}, async emit() {} };
 
 const allowAll: CapabilityChecker = { async can() { return true; } };
 const denyAll: CapabilityChecker = { async can() { return false; } };
+
+/** `padInlineRow`'s spacer field. Chrome, not a field a card chose to send. */
+const PAD = "​";
 
 /**
  * The registry with every retirement lifted.
@@ -1653,130 +1656,17 @@ test("closing an already-closed ticket says so", async () => {
 
 // ─────────────────────────────── Perms ───────────────────────────────
 
-test("/perm with no action shows the guild's perms", async () => {
-  const r = await makeDispatcher().dispatch("perm", ctx({ args: noArgs }));
-  assert.equal(r.embed?.title, "Guild perms");
-  assert.match(r.text, /F7 core 2\/5/);
-});
-
-test("/perm action:info renders the roster with seats, stats and mentions", async () => {
-  const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
-  const fields = r.embed?.fields ?? [];
-  assert.deepEqual(fields.map((f) => f.name), ["Owner", "healer", "berserk"]);
-  assert.match(fields[1]!.value, /Alpha \(<@111>\) — cata 42 · sa 51\.3/);
-  // Unlinked, unsnapshotted, unknown-cache seat: a bare name and nothing else.
-  assert.equal(fields[2]!.value, "Beta");
-});
-
-test("a seat is only marked as having left when the cache actually says so", async () => {
-  const gone = perms({
-    async getPerm() {
-      return ok({
-        ...aPerm,
-        members: [{ ...aPerm.members[0]!, inGuild: false }, aPerm.members[1]!],
-      });
-    },
-  });
-  const r = await makeDispatcher({ perms: gone }).dispatch("perm", ctx({ args: recordArgs({ action: "info", perm: "F7 core" }) }));
-  const fields = r.embed?.fields ?? [];
-  assert.match(fields[1]!.value, /left the guild/);
-  // `inGuild: null` is "we don't know", and must not read as an accusation.
-  assert.doesNotMatch(fields[2]!.value, /left the guild/);
-});
-
-test("/perm action:create reports the new perm and how to fill it", async () => {
-  const r = await makeDispatcher().dispatch(
-    "perm",
-    ctx({ args: recordArgs({ action: "create", name: "Kuudra core", activity: "KUUDRA" }) }),
-  );
-  assert.match(r.text, /Created "Kuudra core"/);
-  assert.match((r.embed?.fields ?? []).map((f) => f.value).join(" "), /Nobody yet/);
-});
-
-test("a name clash comes back as a sentence naming the taken name", async () => {
-  const taken = perms({ async createPerm() { return err({ kind: "NAME_TAKEN", name: "F7 core" }); } });
-  const r = await makeDispatcher({ perms: taken }).dispatch(
-    "perm",
-    ctx({ args: recordArgs({ action: "create", name: "f7 CORE" }) }),
-  );
-  assert.match(r.text, /"F7 core" is already the name/);
-  assert.equal(r.ephemeral, true);
-});
-
-test("/perm action:roster-add confirms with the new roster size", async () => {
-  const r = await makeDispatcher().dispatch(
-    "perm",
-    ctx({ args: recordArgs({ action: "roster-add", perm: "F7 core", ign: "Gamma", role: "tank" }) }),
-  );
-  assert.match(r.text, /Added Gamma — 2\/5/);
-});
-
-test("an unusable role lists the ones that would work", async () => {
-  const strict = perms({
-    async addToRoster() { return err({ kind: "INVALID_ROLE", allowed: ["healer", "mage", "tank"] }); },
-  });
-  const r = await makeDispatcher({ perms: strict }).dispatch(
-    "perm",
-    ctx({ args: recordArgs({ action: "roster-add", perm: "F7 core", ign: "Gamma", role: "cannoneer" }) }),
-  );
-  assert.match(r.text, /healer, mage, tank/);
-});
-
-test("a full perm says how many seats there are", async () => {
-  const full = perms({ async addToRoster() { return err({ kind: "FULL", capacity: 5 }); } });
-  const r = await makeDispatcher({ perms: full }).dispatch(
-    "perm",
-    ctx({ args: recordArgs({ action: "roster-add", perm: "F7 core", ign: "Gamma", role: "tank" }) }),
-  );
-  assert.match(r.text, /full — 5 seats/);
-});
-
-test("editing someone else's perm is refused with the rule, not a stack trace", async () => {
-  const notMine = perms({ async removeFromRoster() { return err({ kind: "NOT_OWNER" }); } });
-  const r = await makeDispatcher({ perms: notMine }).dispatch(
-    "perm",
-    ctx({ args: recordArgs({ action: "roster-remove", perm: "F7 core", ign: "Alpha", role: "healer" }) }),
-  );
-  assert.match(r.text, /Only the person who created that perm/);
-});
-
-test("every action that needs a perm asks for one rather than guessing", async () => {
-  for (const action of ["roster-add", "roster-remove", "disband", "default"]) {
-    const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action }) }));
-    assert.match(r.text, /Which perm\?/, action);
-  }
-});
-
-test("disbanding is ephemeral and says the name is reusable", async () => {
-  const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "disband", perm: "F7 core" }) }));
-  assert.equal(r.ephemeral, true);
-  assert.match(r.text, /Disbanded "F7 core"\. The name is free again\./);
-});
-
-test("/perm action:default explains what it changed", async () => {
-  const r = await makeDispatcher().dispatch("perm", ctx({ args: recordArgs({ action: "default", perm: "F7 core" }) }));
-  assert.match(r.text, /now what \/lfg fills from for dungeons/);
-});
-
 /**
- * The actor's staff flag is derived from the capability check, not from the
- * caller — a surface that could pass `isStaff: true` itself would make the
- * owner-or-staff rule unenforceable.
+ * `/perm` is one word now: it opens the console and everything else happens on
+ * the components. What each control does is `perm-console.test.ts`; what the
+ * dispatcher owes is the console itself, with its controls attached.
  */
-test("the staff flag reaching the perm service comes from the capability check", async () => {
-  const seen: boolean[] = [];
-  const record = perms({
-    async disbandPerm(_g, _n, actor) { seen.push(actor.isStaff); return ok(aPerm); },
-  });
-  const args = recordArgs({ action: "disband", perm: "F7 core" });
-
-  await makeDispatcher({ perms: record }).dispatch("perm", ctx({ args }));
-  await makeDispatcher({
-    perms: record,
-    identity: identity({ async hasCapability() { return false; } }),
-  }).dispatch("perm", ctx({ args }));
-
-  assert.deepEqual(seen, [true, false]);
+test("/perm opens the console rather than asking for arguments", async () => {
+  const r = await makeDispatcher().dispatch("perm", ctx({ args: noArgs }));
+  assert.equal(r.embed?.title, "Standing parties");
+  assert.match(r.text, /F7 core 2\/5/);
+  assert.ok((r.components ?? []).length > 0, "a console with no controls is a list");
+  assert.deepEqual(buildBridgeRegistry().get("perm")?.options, [], "no arguments left to get wrong");
 });
 
 test("RSVP buttons route to the same reply as /rsvp", async () => {

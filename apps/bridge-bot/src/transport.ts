@@ -105,6 +105,7 @@ import {
 } from "./tickets-discord.js";
 import { RoleMenuGateway } from "./role-menus.js";
 import { registerRoleMenuComponents, roleMenuMessagePort } from "./role-menus-discord.js";
+import { handlePermModal, registerPermComponents } from "./perms-discord.js";
 import { createBridgeRoleEffector } from "./role-effector.js";
 import { createDiscordDirectory } from "./directory.js";
 
@@ -771,6 +772,15 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   registerMarketButtons(app, components);
   registerHelpButton(app, components);
 
+  // The `/perm` console. Registered here with the other stateless-id controls
+  // rather than in the composition root, because it is routing and nothing
+  // else: the console itself is offline code in `@sbr/commands-bridge`.
+  const permRouting = {
+    resolveGuild: (discordGuildId: string) => app.resolveGuild(discordGuildId),
+    deps: app.handlerDeps,
+  };
+  registerPermComponents(components, permRouting);
+
   // Tickets. Built here rather than in the composition root because every one
   // of its side effects needs the live client, and registered against the same
   // stateless-id router as every other persistent control.
@@ -1197,6 +1207,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       // components — so they are offered to each owner in turn.
       void (async () => {
         if (await handleProgressionModal(i, app)) return;
+        if (await handlePermModal(i, permRouting)) return;
         await handleTicketModal(i, ticketRouting);
       })().catch((e: unknown) => app.log.error("modal failed", { error: String(e) }));
     }

@@ -13,6 +13,7 @@
     { "path": "../guild-config" },
     { "path": "../tickets" },
     { "path": "../observability" },
+    { "path": "../perms" },
     { "path": "../../brand" },
     { "path": "../embed-kit" }
   ]

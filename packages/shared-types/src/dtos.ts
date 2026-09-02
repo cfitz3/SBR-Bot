@@ -630,6 +630,19 @@ export interface PermMemberDTO {
   /** From the newest ProfileSnapshot, when one exists. No live Hypixel call. */
   readonly catacombsLevel: number | null;
   readonly skillAverage: number | null;
+  /**
+   * Their level in the class this seat is played as — healer level for the
+   * healer, tank level for the tank.
+   *
+   * Catacombs level says how much dungeon somebody has run; it says nothing
+   * about whether they have run it in the class they are sitting in. A cata 42
+   * player seated as healer with healer 14 is the single most useful thing a
+   * party roster can tell you, and until this field existed the card could not.
+   *
+   * Null for a seat whose activity has no classes (Kuudra jobs, a fishing
+   * lobby), for an unlinked player, and for a class level we have never read.
+   */
+  readonly roleLevel: number | null;
 }
 
 /** `/perm info` — a standing party and its roster. */

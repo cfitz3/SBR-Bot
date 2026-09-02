@@ -138,6 +138,14 @@ export const DEFAULT_EMBEDS = {
     findings: "Findings",
     history: "History",
     window: "Window",
+    /* -- perms -- */
+    /** The roster itself: one line per seat, never one field per seat. */
+    party: "Party",
+    seats: "Seats",
+    owner: "Owner",
+    notes: "Notes",
+    /** The perms a guild has, as lines inside one field. */
+    perms: "Perms",
   },
 
   /**
@@ -178,6 +186,11 @@ export const DEFAULT_EMBEDS = {
     target: "Goal",
     trend: "Trend",
     goal: "Goal",
+    party: "Party",
+    seats: "Seats",
+    owner: "Owner",
+    notes: "Notes",
+    perms: "Perms",
   },
 
   /**
@@ -255,6 +268,24 @@ export const DEFAULT_EMBEDS = {
     petScore: "pet score",
     minionSlots: "minion slots",
     essence: "essence",
+  },
+
+  /**
+   * How an activity is named on a card.
+   *
+   * `LFGActivity` is an enum shouted in SCREAMING_CASE, and `toLowerCase()` was
+   * the old answer — which is why a party card said "dungeons" while every other
+   * surface in the product said "Dungeons". A table rather than a casing rule,
+   * for the same reason `metricPhrase` is one: the right casing is a fact about
+   * each word, not a transform.
+   */
+  activity: {
+    DUNGEONS: "Dungeons",
+    KUUDRA: "Kuudra",
+    SLAYERS: "Slayers",
+    FISHING: "Fishing",
+    MINING: "Mining",
+    OTHER: "Other",
   },
 
   /**
@@ -579,6 +610,56 @@ export const DEFAULT_EMBEDS = {
     eventNoScores: "No scores yet — the first poll sets everyone's baseline.",
     /** `{metric}` reads mid-sentence, so it comes from `metricPhrase`. */
     eventLevel: "Nobody has gained any {metric} yet.",
+    /* -- perms -- */
+    /**
+     * The headline of a party card. `{activity}` is the activity, sentence-cased
+     * by `metricPhrase`'s rule rather than by `toLowerCase()`.
+     */
+    permHeadline: "{activity} — {filled} of {capacity} seats filled.",
+    permDisbanded: "Disbanded. The name is free to use again.",
+    permNoRoster: "No seats filled yet.",
+    /**
+     * Said of a seat, not of a person: the roster knows an IGN and has no
+     * Discord account to put beside it. Short, because it sits at the end of a
+     * line that is already carrying numbers.
+     */
+    permUnlinked: "unlinked",
+    permLeftGuild: "left the guild",
+    /** `{marker}` is the shared glyph, so the legend cannot name a different one. */
+    permLagFooter: "{marker} marks a class level far behind the player's catacombs.",
+    /** A static note, which is why it is a footer rather than a field. */
+    permDefault: "Default party for /lfg.",
+    /**
+     * The same two states again, as one word each, for a list line that has
+     * already spent its room on the party's name and seat count.
+     */
+    permDefaultTag: "default",
+    permDisbandedTag: "disbanded",
+    permNone: "No parties yet.",
+    /**
+     * The console could not read the guild's parties. Points at `/health`
+     * rather than narrating the failure: the member cannot fix a database, and
+     * the one thing they can do is find out whether anything else is down too.
+     */
+    permUnavailable: "Couldn't load parties. /health has the current status.",
+    permNotLinked: "Link your Minecraft account with /link before taking a seat.",
+    permNotSeated: "You don't have a seat in this party.",
+    /** A control from a message older than the thing it points at. */
+    permStaleControl: "That control is out of date. Run /perm again.",
+    /** The prompts on the two ephemeral menus that stand in front of a modal. */
+    permPickActivity: "What will the party run?",
+    permPickRole: "Which role are they filling?",
+    /** Titles and labels for the two modals. Free text goes nowhere else. */
+    permNameModalTitle: "New party",
+    permNameLabel: "Name",
+    permNotesLabel: "Notes (optional)",
+    permIgnModalTitle: "Add someone",
+    permIgnLabel: "Minecraft name",
+    /** The list card's title. Not "Guild perms": the guild is implied. */
+    permListTitle: "Standing parties",
+    permListMineTitle: "Your parties",
+    /** `{n}` of `{total}`, on a list that runs to more than one page. */
+    permListPage: "Page {n} of {total}",
   },
 };
 

@@ -40,6 +40,45 @@ const SHAPES: Readonly<Record<LFGActivity, ActivityShape>> = {
   OTHER: { capacity: 6, roles: [...GENERIC_ROLES] },
 };
 
+/**
+ * Role -> the platform's metric name for that class's level.
+ *
+ * Dungeons is the only activity whose roles are *classes* — things a player
+ * levels — and this is the seam where that fact is written down. Kuudra's roles
+ * are jobs, and a job has no level, so they are absent here and the roster
+ * prints nothing for them rather than inventing a number.
+ *
+ * `filler` is absent for the same reason: it is a seat nobody has claimed yet.
+ *
+ * This is also where the ctjs stats feed lands when it arrives. Splits, secrets
+ * and deaths are per-role figures in exactly the way a class level is, so they
+ * extend this table and the roster line that reads it, rather than needing a
+ * second path through the renderer.
+ */
+const CLASS_METRICS: Readonly<Record<string, string>> = {
+  healer: "classHealer",
+  mage: "classMage",
+  berserk: "classBerserk",
+  archer: "classArcher",
+  tank: "classTank",
+};
+
+/**
+ * The metric holding this role's class level, or null where the role has none.
+ *
+ * Takes the activity as well as the role because `tank` is a class in Catacombs
+ * and a job in Kuudra: the same word, and only one of them has a level to read.
+ */
+export function classMetricFor(activity: LFGActivity, role: string): string | null {
+  if (activity !== "DUNGEONS") return null;
+  return CLASS_METRICS[role.trim().toLowerCase()] ?? null;
+}
+
+/** The roles of this activity that are levelled classes, in offer order. */
+export function classRolesFor(activity: LFGActivity): readonly string[] {
+  return rolesFor(activity).filter((role) => classMetricFor(activity, role) !== null);
+}
+
 export function shapeOf(activity: LFGActivity): ActivityShape {
   return SHAPES[activity] ?? SHAPES.OTHER;
 }

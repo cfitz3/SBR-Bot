@@ -32,9 +32,12 @@ import { coveredRenderers, GALLERY, galleryCard } from "./index.js";
  * alternative — a hand-kept list of renderers — is the drift this test exists
  * to catch.
  */
-// `Card` joined `Embed` when F-01 landed: a renderer that builds one card
-// through the shared builder is named for what it builds, and the gallery has
-// to see those too or the newest cards are exactly the uncovered ones.
+/**
+ * `Card` joins the suffixes with the F-01 builder: a renderer that returns a
+ * `card()` is named for what it returns, and one that is not in this pattern is
+ * invisible to the coverage check — an unchecked card, which is the single thing
+ * this package exists to prevent.
+ */
 const RENDERER = /^render[A-Za-z]*(Embed|Pages|Card)$/;
 
 const SOURCES: readonly Record<string, unknown>[] = [bridge, admin, screening, triggers];

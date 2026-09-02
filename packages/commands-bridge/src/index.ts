@@ -96,7 +96,19 @@ export {
   renderTicketEmbed,
   renderTicketListEmbed,
 } from "./render-community.js";
-export { renderPermEmbed, renderPermListEmbed } from "./render-perms.js";
+export { renderPermCard, renderPermListPages } from "./render-perms.js";
+export {
+  activityRows,
+  addRoleRows,
+  permConsole,
+  permConsoleCopy,
+  permConsoleReplies,
+  permView,
+  PERM_IGN_MODAL,
+  PERM_NAME_MODAL,
+  PERM_NS,
+} from "./perm-console.js";
+export { permProblem } from "./perm-errors.js";
 export {
   InGameDispatcher,
   INGAME_MAX_CHARS,
