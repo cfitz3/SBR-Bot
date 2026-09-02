@@ -13,7 +13,13 @@ import {
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
 } from "discord.js";
-import { buildAdminRegistry, CASE_SELECT_NAMESPACE, FEATURE_SELECT_NAMESPACE } from "@sbr/commands-admin";
+import {
+  CASE_SELECT_NAMESPACE,
+  FEATURE_SELECT_NAMESPACE,
+  LOCKDOWN_NAMESPACE,
+  buildAdminRegistry,
+  parseLockdownId,
+} from "@sbr/commands-admin";
 import { ComponentRouter, interactionArgs, replyOptions, respond, toSlashCommands } from "@sbr/discord-kit";
 import { recordArgs } from "@sbr/shared-types";
 import { attachDiscordModObserver } from "./discord-mod-observer.js";
@@ -107,6 +113,58 @@ export function attachCaseSelect(components: ComponentRouter, app: AdminApp): vo
   });
 }
 
+/**
+ * The `/lockdown` buttons.
+ *
+ * Every button re-enters `AdminDispatcher.dispatch("lockdown", …)` with
+ * synthesised arguments rather than calling the safety service directly. The
+ * role floor, the guild's policy override and the handler are then the same
+ * ones a typed `/lockdown` goes through — a second path into a privileged write
+ * is a permission check nobody remembered to write. `action` is deliberately
+ * absent from the published command spec, so the click is the only way to reach
+ * it: there is no typeable form of "lock the server" that skips the card.
+ *
+ * The reply decides the message: a refusal comes back ephemeral and is answered
+ * with a fresh private message, while a successful lock comes back public and
+ * *updates the prompt in place*, so the warning staff saw and the record of what
+ * they did are one message that cannot disagree with itself.
+ */
+export function attachLockdownButtons(components: ComponentRouter, app: AdminApp): void {
+  components.register(LOCKDOWN_NAMESPACE, async (interaction, segments) => {
+    const parsed = parseLockdownId(segments);
+    if (!parsed || !interaction.guildId) return;
+    const internalGuildId = await app.resolveGuild(interaction.guildId);
+    if (!internalGuildId) {
+      await interaction.reply({
+        content: "This server isn't set up on the platform.",
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const reply = await app.dispatcher.dispatch("lockdown", {
+      guildId: internalGuildId,
+      actorId: interaction.user.id,
+      channelId: interaction.channelId,
+      args: recordArgs({
+        action: parsed.action,
+        ...(parsed.channelId ? { channel: parsed.channelId } : {}),
+        ...(parsed.duration ? { duration: parsed.duration } : {}),
+        reason: parsed.reason,
+      }),
+    });
+
+    if (reply.ephemeral) {
+      await interaction.reply(replyOptions(reply));
+      return;
+    }
+    // `interaction.update()` rejects the ephemeral flag outright, and this reply
+    // is public by construction, so drop it rather than pass it along.
+    const { flags: _public, ...update } = replyOptions(reply);
+    await interaction.update(update);
+  });
+}
+
 /** How long to wait for the gateway to report ready before giving up. */
 /**
  * The feature menu's click.
@@ -190,6 +248,8 @@ export async function startAdminGateway(
   // The feature card's select menu. Its state lives in the option value, so it
   // keeps working on a message posted before the last restart.
   attachFeatureMenu(components, app);
+
+  attachLockdownButtons(components, app);
 
   // Joins and leaves go straight onto the bus; nothing is rendered here.
   attachMemberObserver(client, {

@@ -1407,7 +1407,16 @@ export interface AntiRaidInput {
 }
 
 export type SafetyError =
-  | { readonly kind: "ALREADY_ACTIVE"; readonly until: string | null }
+  | {
+      readonly kind: "ALREADY_ACTIVE";
+      readonly until: string | null;
+      /**
+       * What is already in force. The caller offers the way out of it — lift, or
+       * escalate to the whole server — and cannot do that from "no" alone.
+       */
+      readonly scope?: "CHANNEL" | "SERVER";
+      readonly channelId?: string | null;
+    }
   | { readonly kind: "NOT_ACTIVE" }
   | { readonly kind: "CHANNEL_REQUIRED" }
   | { readonly kind: "DISCORD_FAILED"; readonly detail: string };
@@ -1442,8 +1451,20 @@ export interface GuildEffects {
   untimeout(guildId: string, userId: string, reason: string): Promise<Result<void, GuildEffectError>>;
   /** Returns how many messages were actually deleted. */
   purge(input: PurgeInput): Promise<Result<number, GuildEffectError>>;
-  /** Locks or unlocks a channel (or every text channel when `channelId` is null). */
-  setLocked(guildId: string, channelId: string | null, locked: boolean): Promise<Result<number, GuildEffectError>>;
+  /**
+   * Locks or unlocks a channel (or every text channel when `channelId` is null),
+   * and answers with the ids it actually changed.
+   *
+   * The ids, not a count: lifting a lockdown has to reopen the channels this
+   * lockdown closed and leave alone the ones that were already shut. A number
+   * cannot express that difference, and the version that returned one reopened
+   * every locked channel in the guild.
+   */
+  setLocked(
+    guildId: string,
+    channelId: string | null,
+    locked: boolean,
+  ): Promise<Result<readonly string[], GuildEffectError>>;
 }
 
 export interface PurgeInput {

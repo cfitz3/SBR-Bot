@@ -8,6 +8,10 @@ export {
   FEATURE_SELECT_NAMESPACE,
   paginate,
   parseFeatureChoice,
+  LOCKDOWN_NAMESPACE,
+  LOCKDOWN_REASON_MAX,
+  lockdownId,
+  parseLockdownId,
   relativeTs,
   renderApplicationEmbed,
   renderApplicationListEmbed,
@@ -22,10 +26,14 @@ export {
   renderFeaturesEmbed,
   renderFilterTestEmbed,
   renderInfractionPages,
+  renderLockdownControls,
+  renderLockdownEmbed,
   renderSafetyError,
   renderSafetyStatusEmbed,
   renderWordlistEmbed,
+  trimLockdownReason,
 } from "./render.js";
+export type { LockdownAction, LockdownArgs, LockdownPrompt } from "./render.js";
 export type {
   AdminAutocompleteContext,
   AdminAutocompleteHandler,

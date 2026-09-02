@@ -30,6 +30,7 @@ import type { JoinActionResult, JoinQueueService } from "@sbr/screening";
 import {
   parseFeatureChoice,
   relativeTs,
+  trimLockdownReason,
   renderAdmit,
   renderApplicationEmbed,
   renderApplicationListEmbed,
@@ -44,12 +45,15 @@ import {
   renderInfractionPages,
   renderJoinAction,
   renderJoinQueueEmbed,
+  renderLockdownControls,
+  renderLockdownEmbed,
   renderSafetyError,
   renderSafetyStatusEmbed,
   renderTicketEmbed,
   renderTicketListEmbed,
   renderWordlistEmbed,
 } from "./render.js";
+import type { LockdownArgs } from "./render.js";
 
 const E = copy.error;
 
@@ -402,31 +406,63 @@ const caseLookup: AdminHandler = async (ctx, deps) => {
 
 // ── Safety postures ─────────────────────────────────────────────────────────
 
+/**
+ * `/lockdown` — the whole lockdown lifecycle behind one name.
+ *
+ * There were two commands. `/lockdown` locked and `/lockdown-lift` unlocked,
+ * which meant the command that ends an emergency had a name you only learn by
+ * having ended one before. Worse, the guard on the locking half was
+ * `confirm:true` — a word typed on the same line as the mistake, by the same
+ * person, in the same second.
+ *
+ * Now the command answers with a card of what is in force, or what is about to
+ * be, and the buttons under it do the work. `action` is not a published option:
+ * the buttons are the only route to a write, so every lock and every lift is
+ * something a staffer saw described before they agreed to it.
+ */
 const lockdown: AdminHandler = async (ctx, deps) => {
-  const scope = ctx.args.getString("scope") === "server" ? "SERVER" : "CHANNEL";
-  const result = await deps.safety.lockdown({
+  const args: LockdownArgs = {
+    channelId: ctx.args.getChannel("channel") ?? ctx.channelId ?? null,
+    duration: ctx.args.getString("duration"),
+    reason: trimLockdownReason(ctx.args.getString("reason")),
+  };
+  const action = ctx.args.getString("action");
+
+  const show = async (notice?: string): Promise<AdminReply> => {
+    const status = await deps.safety.status(ctx.guildId);
+    if (!status.ok) return { ephemeral: true, text: "Couldn't read the safety status. Check /health." };
+    return {
+      text: "",
+      ephemeral: false,
+      embed: renderLockdownEmbed(status.value, notice === undefined ? args : { ...args, notice }),
+      components: renderLockdownControls(status.value, args),
+    };
+  };
+
+  if (action === null) return show();
+
+  if (action === "lift") {
+    const lifted = await deps.safety.liftLockdown(ctx.guildId);
+    // A lift that failed part-way leaves channels shut, so the card has to be
+    // rebuilt from the store rather than assume the posture is over.
+    if (!lifted.ok) return show("Couldn't lift it — some channels may still be locked. Check /health.");
+    return show(lifted.value === null ? "There was nothing to lift." : "Lifted.");
+  }
+
+  const scope = action === "server" ? "SERVER" : "CHANNEL";
+  const locked = await deps.safety.lockdown({
     guildId: ctx.guildId,
     actorDiscordId: ctx.actorId,
     scope,
-    channelId: scope === "CHANNEL" ? (ctx.args.getChannel("channel") ?? ctx.channelId ?? null) : null,
-    reason: ctx.args.getString("reason") ?? NO_REASON,
-    durationSeconds: parseDurationSeconds(ctx.args.getString("duration")) ?? null,
+    channelId: scope === "CHANNEL" ? args.channelId : null,
+    reason: args.reason === "" ? NO_REASON : args.reason,
+    durationSeconds: parseDurationSeconds(args.duration) ?? null,
   });
-  if (!result.ok) return { ephemeral: true, text: renderSafetyError(result.error) };
-
-  const until = result.value.expiresAt
-    ? `Lifts automatically ${relativeTs(result.value.expiresAt)}.`
-    : "No expiry set — remember to lift it with /lockdown-lift.";
-  const where = result.value.channelId ? `<#${result.value.channelId}>` : "the whole server";
-  return { ephemeral: false, text: `🔒 Locked down ${where}. ${until}` };
-};
-
-const lockdownLift: AdminHandler = async (ctx, deps) => {
-  const result = await deps.safety.liftLockdown(ctx.guildId);
-  if (!result.ok) return { ephemeral: true, text: E.command.adminFailed };
-  if (!result.value) return { ephemeral: true, text: "Nothing is locked down right now." };
-  const where = result.value.channelId ? `<#${result.value.channelId}>` : "the server";
-  return { ephemeral: false, text: `🔓 Lifted the lockdown on ${where}.` };
+  // ALREADY_ACTIVE is a race, not a mistake: somebody locked between this card
+  // being drawn and the button being pressed. Redrawing shows what they did and
+  // offers the buttons that now apply, rather than an error about a stale plan.
+  if (!locked.ok) return show(renderSafetyError(locked.error));
+  return show();
 };
 
 const antiraidOn: AdminHandler = async (ctx, deps) => {
@@ -1231,31 +1267,18 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
     },
     {
       name: "lockdown",
-      description: "Lock a channel or the whole server",
+      description: "Lock a channel or the whole server, or lift a lockdown",
       options: [
-        {
-          name: "scope",
-          description: "channel (default) or server",
-          type: "string",
-          choices: [
-            { name: "channel", value: "channel" },
-            { name: "server", value: "server" },
-          ],
-        },
         { name: "channel", description: "Channel to lock (defaults to here)", type: "channel" },
         { name: "reason", description: "Why", type: "string" },
         { name: "duration", description: "Auto-lift after e.g. 30m", type: "string" },
-        { name: "confirm", description: "Confirm this destructive action", type: "boolean" },
       ],
       minRole: "OFFICER",
-      destructive: true,
+      // Not `destructive`: the dispatcher's gate is a `confirm:true` typed
+      // alongside the command, and this command no longer locks anything on its
+      // own — it draws a card. The button under that card is the confirmation,
+      // and it is a better one, because the card says what will shut.
       handler: lockdown,
-    },
-    {
-      name: "lockdown-lift",
-      description: "End an active lockdown early",
-      minRole: "OFFICER",
-      handler: lockdownLift,
     },
     {
       name: "antiraid-on",

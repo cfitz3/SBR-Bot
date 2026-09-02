@@ -830,6 +830,7 @@ export const SAFETY_ON: SafetyStatusDTO = {
     actorDiscordId: "200000000000000001",
     startedAt: iso(-20 * 60_000),
     expiresAt: iso(40 * 60_000),
+    lockedChannelIds: ["300000000000000001"],
   },
   antiRaid: {
     guildId: "g1",
@@ -860,6 +861,26 @@ export const FEATURES_STALE: Record<string, boolean> = {
   welcome: false,
   events: true,
   beta_ui: true,
+};
+
+/**
+ * A server-wide lock that swallowed an earlier channel lock. `absorbedChannelId`
+ * is what lets the card say which lock was folded in rather than leaving the
+ * staffer who set it wondering where it went.
+ */
+export const SAFETY_SERVER: SafetyStatusDTO = {
+  lockdown: {
+    guildId: "g1",
+    scope: "SERVER",
+    channelId: null,
+    reason: "Raid in progress",
+    actorDiscordId: "200000000000000001",
+    startedAt: iso(-4 * 60_000),
+    expiresAt: iso(56 * 60_000),
+    lockedChannelIds: ["300000000000000001", "300000000000000002", "300000000000000003"],
+    absorbedChannelId: "300000000000000001",
+  },
+  antiRaid: null,
 };
 
 export const APPLICATION: ApplicationDTO = {

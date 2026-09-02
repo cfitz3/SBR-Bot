@@ -78,7 +78,7 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 ### Operational safety
 | Command | Tier | Safety notes |
 |---------|------|--------------|
-| `/lockdown` | Admin | Channel/server scope; reason; auto-expiry; **confirmation**. |
+| `/lockdown` | Admin | One command for lock, widen and lift. Draws a card of what will shut; the buttons under it do the work. Reason, auto-expiry. |
 | `/antiraid-on` / `-off` | Admin | Sensitivity + duration; announces to staff. |
 | `/audit` | Officer | Search the log by actor, target, type, or date range; overview first, cases on click (§7d). |
 | `/case` | Officer | One case by id — the same card the mod log posted. |
@@ -147,10 +147,13 @@ Two gates, both enforced **server-side** in `packages/identity`; the UI/command 
 1. Anti-raid heuristics trip (join spike) → bot auto-alerts staff channel.
 2. Admin runs /antiraid-on sensitivity:high duration:30m
    → new joins gated/verified, rate caps tighten, invite-age checks on.
-3. If ongoing: /lockdown scope:server reason:"active raid" duration:20m
-   → confirmation → posting locked; status broadcast.
+3. If ongoing: /lockdown reason:"active raid" duration:20m
+   → card names the channel and the effect → [Lock this channel] [Lock the whole server]
+   → the card becomes the announcement; posting locked.
+   A channel lock already in force offers [Lift] and [Lock the whole server]:
+   widening folds the channel lock in rather than needing a lift first.
 4. Cleanup: /purge on affected channels (bounded), /ban on raiders (rank-checked).
-5. /antiraid-off + /lockdown lift → every step in the audit log with timestamps.
+5. /antiraid-off + the [Lift the lockdown] button → every step in the audit log with timestamps.
 ```
 
 ### 4.4 Governance change (traceable config)
@@ -202,7 +205,7 @@ Designed to **fail safe** (protect the server) and **fail loud** (always tell st
 | Control | Trigger | Effect | Reversal |
 |---------|---------|--------|----------|
 | **Anti-raid mode** | `/antiraid-on` or auto heuristic (join spike, new-account flood, coordinated joins) | Join gating (min account age, verification required), tightened rate caps, restricted first-message perms, mass-mention block | `/antiraid-off`; auto-expires on `duration` |
-| **Lockdown** | `/lockdown` | Deny send in channel/server scope | `/lockdown` lift; auto-expiry |
+| **Lockdown** | `/lockdown` | Deny send in the named channel, or across the server | The **Lift the lockdown** button on the same card; auto-expiry. A lift reopens exactly the channels the lock shut, so channels that were already closed stay closed |
 | **Auto-mute on flood** | Sustained spam past filter escalation | Shadow/temp mute + `Infraction(SPAM)` + staff alert | Time-based (`mute:*` TTL) or manual |
 | **Purge** | `/purge` | Bounded bulk delete (≤100, ≤14d) | Not reversible (Discord); logged as scope+count |
 | **Verification gate** | anti-raid / recruitment config | New members can't speak/relay until verified/linked | Config-driven |
@@ -215,6 +218,53 @@ Designed to **fail safe** (protect the server) and **fail loud** (always tell st
 - **Blast-radius isolation:** the Admin bot's token/scopes are separate from the member bot, so its powers can't be reached through the member surface.
 
 ---
+
+### 6a. `/lockdown` — one command, and a card instead of a password
+
+There were two commands. `/lockdown` locked, `/lockdown-lift` unlocked, and the
+name of the second one is something you learn by having ended an emergency
+before — which is exactly the wrong time to be learning it. `/lockdown-lift` is
+deregistered; there is one name, and whatever is in force, typing it shows the
+way out.
+
+**The guard is a card, not `confirm:true`.** The old gate was a word typed on the
+same line as the mistake, by the same person, in the same second — it proves the
+typist can type, and nothing else. Now `/lockdown` writes nothing. It answers
+with what is about to shut, or what is already shut and who shut it, and the
+buttons under it do the work. `action` is not a published option, so the card is
+the only route to a lock: there is no typeable form that skips it.
+
+**The prompt is public on purpose.** The buttons are role-gated, so an onlooker
+gains only the knowledge that the server is locked, which they were seconds from
+discovering by trying to type. In exchange, confirming *edits that same message*
+into the announcement — one message, rather than a warning and a record that can
+disagree. A refusal comes back privately and leaves the card alone.
+
+**Widening folds, it does not stack.** A raid that starts in one channel and
+spreads is the ordinary case, and the old code answered the escalation with
+`ALREADY_ACTIVE` — so the way to widen a lockdown was to lift it first, briefly
+reopening the channel the raid was in. A channel lock now offers both *Lift* and
+*Lock the whole server*; taking the second inherits the channel the first one
+shut, so nothing is orphaned when the wider lock lifts. Narrowing is deliberately
+not symmetric: it stays a lift and a re-lock, so "lock this channel" can never
+quietly reopen the rest of the server.
+
+**A lift reopens exactly what the lock shut.** Unlocking used to walk every text
+channel and grant Send Messages back, which meant an archive, a staff room, or a
+channel some officer closed last month came open as a side effect of a raid
+ending. The Discord effects port now reports the channels it actually changed,
+the lockdown record stores them, and the lift — manual or by expiry — undoes
+those and only those. Records written before this carry `lockedChannelIds: null`
+and still lift the old way, because stranding a live lockdown on the deploy that
+fixed lockdowns is the one outcome worse than the bug.
+
+**Buttons survive restarts.** The whole invocation — action, channel, duration
+and reason — lives in the customId, so a card drawn before a deploy still works
+after it. The reason is trimmed to 60 characters *before* it reaches the card,
+not just before it reaches the button, so what staff approve is exactly what gets
+recorded. The click re-enters `AdminDispatcher` with synthesised arguments rather
+than calling the safety service, so the role floor and the guild's policy
+override are the ones already written down.
 
 ## 7. Coordination with the Web Panel
 

@@ -1326,6 +1326,27 @@ export interface LockdownStateDTO {
   readonly actorDiscordId: string;
   readonly startedAt: string;
   readonly expiresAt: string | null;
+  /**
+   * Exactly the channels this lockdown closed, so lifting it opens exactly
+   * those and no others.
+   *
+   * Without it, lifting a server-wide lock meant "unlock every channel that is
+   * currently locked", which reopens the ones the server had deliberately kept
+   * shut long before the raid started — a permission grant nobody made, applied
+   * at the worst possible moment. A channel that was already locked when the
+   * lockdown engaged is absent here and stays shut on lift.
+   *
+   * `null` is a record written by a build that did not track this; the service
+   * falls back to the old scope-shaped unlock rather than guessing.
+   */
+  readonly lockedChannelIds: readonly string[] | null;
+  /**
+   * Set on a server lock that superseded a channel lock, naming the channel it
+   * absorbed. The channel's own record is gone — one guild holds one lockdown —
+   * so without this the earlier lock would vanish from the log with no trace of
+   * having been folded in.
+   */
+  readonly absorbedChannelId?: string | null;
 }
 
 /** An active `/antiraid-on` posture. */

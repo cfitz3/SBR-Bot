@@ -33,6 +33,7 @@ import type { Logger } from "@sbr/observability";
 import { AdminDispatcher } from "./dispatcher.js";
 import { buildAdminRegistry } from "./handlers.js";
 import { parseDurationSeconds } from "./util.js";
+import { LOCKDOWN_REASON_MAX, parseLockdownId } from "./render.js";
 import type { AdminContext, RoleMenuBridge, RoleResolver, StickyBridge, TicketBridge } from "./types.js";
 import { copy } from "@sbr/brand";
 
@@ -142,7 +143,8 @@ function guildConfig(over: Partial<GuildConfigService> = {}): GuildConfigService
 function lockState(over: Partial<LockdownStateDTO> = {}): LockdownStateDTO {
   return {
     guildId: "g1", scope: "SERVER", channelId: null, reason: "raid",
-    actorDiscordId: "actor", startedAt: "t", expiresAt: null, ...over,
+    actorDiscordId: "actor", startedAt: "t", expiresAt: null,
+    lockedChannelIds: null, ...over,
   };
 }
 function safety(over: Partial<SafetyService> = {}): SafetyService {
@@ -181,7 +183,7 @@ function effects(over: Partial<GuildEffects> = {}): GuildEffects {
     async timeout() { return ok(undefined); },
     async untimeout() { return ok(undefined); },
     async purge() { return ok(0); },
-    async setLocked() { return ok(0); },
+    async setLocked() { return ok([]); },
     ...over,
   };
 }
@@ -385,31 +387,118 @@ test("purge falls back to the channel it was invoked in", async () => {
   assert.equal(seen, "333333333333333333");
 });
 
-test("lockdown warns when no duration was given", async () => {
-  const r = await make().dispatch(
-    "lockdown",
-    ctx({ args: recordArgs({ scope: "server", reason: "raid", confirm: "true" }) }),
+test("lockdown with no action writes nothing — it draws the card and waits", async () => {
+  // The old command locked the moment it was typed, guarded by `confirm:true`
+  // on the same line. Nothing may happen before a staffer has seen what will.
+  let wrote = 0;
+  const svc = safety({ async lockdown(i) { wrote += 1; return ok(lockState({ scope: i.scope })); } });
+  const r = await make({ safety: svc }).dispatch("lockdown", ctx({ args: recordArgs({ reason: "raid" }) }));
+  assert.equal(wrote, 0);
+  assert.equal(r.ephemeral, false, "the prompt is public so confirming can update it in place");
+  assert.match(r.embed?.description ?? "", /Nothing is locked/);
+  assert.deepEqual(
+    r.components?.[0]?.buttons.map((b) => b.label),
+    ["Lock this channel", "Lock the whole server"],
   );
-  assert.match(r.text, /No expiry set/);
 });
 
-test("lockdown reports the auto-lift time when one was set", async () => {
+test("the buttons carry the typed reason and duration, so the click means what the card said", async () => {
+  const r = await make().dispatch(
+    "lockdown",
+    ctx({ args: recordArgs({ reason: "raid in progress", duration: "30m" }) }),
+  );
+  const id = r.components?.[0]?.buttons[0]?.customId ?? "";
+  assert.deepEqual(parseLockdownId(id.split(":").slice(1)), {
+    action: "channel",
+    channelId: "333333333333333333",
+    duration: "30m",
+    reason: "raid in progress",
+  });
+});
+
+test("a reason too long for a customId is trimmed on the card, not just in the button", async () => {
+  // What is approved has to be exactly what is recorded: a card promising the
+  // full sentence while the button carries half of it is a card that lies.
+  const long = "x".repeat(LOCKDOWN_REASON_MAX + 40);
+  let seen: string | null = null;
+  const svc = safety({ async lockdown(i) { seen = i.reason; return ok(lockState()); } });
+  const r = await make({ safety: svc }).dispatch(
+    "lockdown",
+    ctx({ args: recordArgs({ action: "channel", reason: long }) }),
+  );
+  assert.equal((seen as unknown as string).length, LOCKDOWN_REASON_MAX);
+  assert.ok((r.components?.[0]?.buttons[0]?.customId ?? "").length <= 100);
+});
+
+test("a channel lock offers both the way out and the way wider", async () => {
+  // A staffer who typed /lockdown during a raid is trying to stop something.
+  // Making them remember a second command name is the wrong thing to ask.
   const svc = safety({
-    async lockdown(input) {
-      assert.equal(input.durationSeconds, 1800);
-      return ok(lockState({ expiresAt: "2026-08-07T12:30:00.000Z" }));
+    async status() { return ok({ lockdown: lockState({ scope: "CHANNEL", channelId: "c9" }), antiRaid: null }); },
+  });
+  const r = await make({ safety: svc }).dispatch("lockdown", ctx({ args: recordArgs({}) }));
+  assert.deepEqual(
+    r.components?.[0]?.buttons.map((b) => b.label),
+    ["Lift the lockdown", "Lock the whole server"],
+  );
+});
+
+test("a server lock offers only the lift — there is nothing wider to go to", async () => {
+  const svc = safety({
+    async status() { return ok({ lockdown: lockState({ scope: "SERVER" }), antiRaid: null }); },
+  });
+  const r = await make({ safety: svc }).dispatch("lockdown", ctx({ args: recordArgs({}) }));
+  assert.deepEqual(r.components?.[0]?.buttons.map((b) => b.label), ["Lift the lockdown"]);
+});
+
+test("lifting re-reads the posture rather than claiming the lock is gone", async () => {
+  // A lift that fails part-way leaves channels shut. Echoing "lifted" off a
+  // local copy would read identically whether or not the unlock landed.
+  let live: LockdownStateDTO | null = lockState({ scope: "SERVER" });
+  const svc = safety({
+    async status() { return ok({ lockdown: live, antiRaid: null }); },
+    async liftLockdown() { const was = live; live = null; return ok(was); },
+  });
+  const r = await make({ safety: svc }).dispatch("lockdown", ctx({ args: recordArgs({ action: "lift" }) }));
+  assert.match(r.embed?.description ?? "", /^Lifted\./);
+  assert.match(r.embed?.description ?? "", /Nothing is locked/);
+});
+
+test("lifting when nothing is locked says so rather than reporting a lift", async () => {
+  const r = await make().dispatch("lockdown", ctx({ args: recordArgs({ action: "lift" }) }));
+  assert.match(r.embed?.description ?? "", /There was nothing to lift/);
+});
+
+test("losing a race to another staffer redraws rather than erroring", async () => {
+  // ALREADY_ACTIVE between the card being drawn and the button being pressed is
+  // somebody else acting, not a mistake. The buttons that now apply are more
+  // use than a message about a plan that has been overtaken.
+  let live: LockdownStateDTO | null = null;
+  const svc = safety({
+    async status() { return ok({ lockdown: live, antiRaid: null }); },
+    async lockdown() {
+      live = lockState({ scope: "CHANNEL", channelId: "c9" });
+      return err({ kind: "ALREADY_ACTIVE" as const, until: null, scope: "CHANNEL" as const, channelId: "c9" });
     },
   });
   const r = await make({ safety: svc }).dispatch(
     "lockdown",
-    ctx({ args: recordArgs({ scope: "server", duration: "30m", confirm: "true" }) }),
+    ctx({ args: recordArgs({ action: "channel" }) }),
   );
-  assert.match(r.text, /Lifts automatically/);
+  assert.equal(r.ephemeral, false);
+  assert.deepEqual(
+    r.components?.[0]?.buttons.map((b) => b.label),
+    ["Lift the lockdown", "Lock the whole server"],
+  );
 });
 
-test("lifting a lockdown that isn't active says so plainly", async () => {
-  const r = await make().dispatch("lockdown-lift", ctx({ args: recordArgs({}) }));
-  assert.match(r.text, /Nothing is locked down/);
+test("action is not a published option, so the card is the only route to a write", async () => {
+  // The guard is structural: nothing typeable reaches the lock without the
+  // prompt having been drawn and clicked first.
+  const spec = buildAdminRegistry().get("lockdown");
+  assert.equal(spec?.options?.some((o) => o.name === "action"), false);
+  assert.equal(spec?.destructive ?? false, false, "the card replaced confirm:true, not supplemented it");
+  assert.equal(buildAdminRegistry().has("lockdown-lift"), false, "one command, deregistered from Discord");
 });
 
 test("antiraid-on defaults to MEDIUM sensitivity", async () => {

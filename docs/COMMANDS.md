@@ -413,7 +413,7 @@ What a member may open is configuration, not a command: the ticket menu (`Ticket
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
 | `/audit` | Query the moderation/audit log | Officer | `filters` (actor/target/type/range) | Paginated audit results | No matches | DB (audit tables) |
-| `/lockdown` | Lock channel(s) to stop posting | Admin | `scope` (channel/server), `reason?`, `duration?` | Confirmation + status | Already locked | Discord API + DB + Cache |
+| `/lockdown` | Lock, widen or lift — whatever the posture needs | Admin | `channel?`, `reason?`, `duration?` | Card of the posture, then buttons | Already locked → the card redraws with the buttons that now apply | Discord API + DB + Cache |
 | `/antiraid-on` | Enable raid protection (join gating, rate caps) | Admin | `sensitivity?`, `duration?` | Confirmation + active settings | Already on | DB (`GuildConfig`) + Cache |
 | `/antiraid-off` | Disable raid protection | Admin | *(none)* | Confirmation | Not active | DB + Cache |
 
