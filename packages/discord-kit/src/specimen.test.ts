@@ -49,20 +49,29 @@ test("a non-object inside an array is skipped with its index named", () => {
 
 // ── Each unsupported field produces its own note ─────────────────────────────
 
-test("author, image, video, provider and timestamp are each reported", () => {
-  const notes = NOTES({
+test("author, image and timestamp are carried now, not reported as dropped", () => {
+  // These three were the standing gap between a specimen the operator liked and
+  // a card we could build, so `EmbedView` grew a home for each of them.
+  const { views, notes } = fromDiscordJson({
     title: "Card",
-    author: { name: "SBR" },
+    author: { name: "SBR", icon_url: "https://example.com/head.png" },
     image: { url: "https://example.com/i.png" },
-    video: { url: "https://example.com/v.mp4" },
-    provider: { name: "x" },
     timestamp: "2026-08-13T00:00:00Z",
   });
-  assert.match(notes, /author line/);
-  assert.match(notes, /full-width image/);
+  assert.deepEqual(views[0]?.author, { name: "SBR", iconUrl: "https://example.com/head.png" });
+  assert.equal(views[0]?.imageUrl, "https://example.com/i.png");
+  assert.equal(views[0]?.timestamp, "2026-08-13T00:00:00Z");
+  assert.equal(notes.length, 0);
+});
+
+test("video and provider are still reported, because nothing renders them", () => {
+  const notes = NOTES({
+    title: "Card",
+    video: { url: "https://example.com/v.mp4" },
+    provider: { name: "x" },
+  });
   assert.match(notes, /video/);
   assert.match(notes, /provider/);
-  assert.match(notes, /timestamp/);
 });
 
 test("a null unsupported field is absent, not present-and-empty", () => {
