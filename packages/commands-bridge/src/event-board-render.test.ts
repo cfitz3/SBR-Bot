@@ -1,33 +1,36 @@
 /**
- * How an event board reads, per metric family.
+ * The event card: one message per event, at every stage of its life.
  *
- * The original renderer had one formatter and six metrics, and the formatter
- * was written for the two big ones — so widening the catalog to eighteen made
- * "+12.5k skill average" reachable. These tests are per family rather than per
- * metric, because the family is what decides the shape.
+ * Two things are being held here. The first is per-metric-family formatting —
+ * the original renderer had one formatter written for the two big metrics, so
+ * widening the catalog to eighteen made "+12.5k skill average" reachable. The
+ * second is the shape of the card itself: which sections exist when, and that
+ * none of the counts leak back into a field name, which is where they were
+ * before and where they read as headings that change under the reader.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatMetricDelta, renderEventBoardEmbed, type EventBoardView } from "./index.js";
+import { formatMetricDelta, renderEventCard, type EventCardView } from "./index.js";
 
-function view(over: Partial<EventBoardView> = {}): EventBoardView {
+function view(over: Partial<EventCardView> = {}): EventCardView {
   return {
     eventId: "e1",
     title: "Dungeon night",
     status: "LIVE",
     startsAt: "2026-08-26T20:00:00.000Z",
     endsAt: "2026-08-26T23:00:00.000Z",
-    metrics: [{ metric: "catacombsLevel", standings: [{ discordId: "u1", delta: 1.5 }] }],
+    metric: "catacombsLevel",
+    standings: [{ discordId: "u1", delta: 1.5 }],
     participantCount: 4,
     updatedAt: "2026-08-26T21:00:00.000Z",
     ...over,
   };
 }
 
-function fields(v: EventBoardView): Record<string, string> {
+function fields(v: EventCardView): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const f of renderEventBoardEmbed(v).fields ?? []) out[f.name] = f.value;
+  for (const f of renderEventCard(v).fields ?? []) out[f.name] = f.value;
   return out;
 }
 
@@ -59,66 +62,120 @@ test("a loss keeps its sign, and an unreadable number says so", () => {
   assert.equal(formatMetricDelta("catacombsLevel", Number.NaN), "—");
 });
 
-test("every tracked metric gets a table, and the board says what it is scoring", () => {
+test("the card names what it scores, and says so plainly when it scores nothing", () => {
+  assert.equal(fields(view())["Scoring"], "catacombs level");
+  assert.match(fields(view({ metric: null }))["Scoring"] ?? "", /Turnout only/);
+});
+
+/**
+ * The signup message and the leaderboard are the same message. Which of the two
+ * a reader is looking at is decided entirely by the event's status.
+ */
+test("a scheduled event shows its roster and no standings", () => {
   const f = fields(
     view({
-      metrics: [
-        { metric: "catacombsLevel", standings: [{ discordId: "u1", delta: 2 }] },
-        { metric: "slayerBlaze", standings: [{ discordId: "u2", delta: 300_000 }] },
-      ],
+      status: "SCHEDULED",
+      going: [{ discordId: "u1" }, { discordId: "u2" }],
+      maybe: [{ discordId: "u3" }],
     }),
   );
-  assert.equal(f["Scoring"], "catacombs level · Inferno XP");
-  assert.match(f["Top 1 · catacombs level"] ?? "", /\+2$/);
-  assert.match(f["Top 1 · Inferno XP"] ?? "", /\+300k$/);
+  assert.match(f["Who's coming"] ?? "", /Going \(2\)/);
+  assert.match(f["Who's coming"] ?? "", /Maybe \(1\)/);
+  assert.ok(!("Standings" in f));
+});
+
+test("a live event shows standings and drops the roster", () => {
+  const f = fields(view({ going: [{ discordId: "u1" }] }));
+  assert.ok("Standings" in f);
+  assert.ok(!("Who's coming" in f));
+});
+
+test("nobody signed up yet is a sentence, not an empty field Discord would reject", () => {
+  const f = fields(view({ status: "SCHEDULED" }));
+  assert.equal(f["Who's coming"], "Nobody yet.");
 });
 
 test("no participants ranked reads as a first poll, not as an error", () => {
-  const f = fields(view({ metrics: [{ metric: "catacombsLevel", standings: [] }] }));
-  assert.match(f["Standings · catacombs level"] ?? "", /baseline/);
+  const f = fields(view({ standings: [] }));
+  assert.match(f["Standings"] ?? "", /baseline/);
 });
 
 test("an all-zero table says everyone is level rather than printing a column of +0", () => {
   const f = fields(
     view({
-      metrics: [
-        {
-          metric: "skillAverage",
-          standings: [
-            { discordId: "u1", delta: 0 },
-            { discordId: "u2", delta: 0 },
-          ],
-        },
+      metric: "skillAverage",
+      standings: [
+        { discordId: "u1", delta: 0 },
+        { discordId: "u2", delta: 0 },
       ],
     }),
   );
-  assert.match(f["Top 2 · skill average"] ?? "", /Nobody has gained any skill average yet/);
-  assert.doesNotMatch(f["Top 2 · skill average"] ?? "", /\+0/);
+  assert.match(f["Standings"] ?? "", /Nobody has gained any skill average yet/);
+  assert.doesNotMatch(f["Standings"] ?? "", /\+0/);
 });
 
-test("the prize, the end time and the unlinked are all on the board", () => {
-  const f = fields(view({ prize: "500k coins", unlinked: [{ discordId: "u9" }] }));
-  assert.equal(f["Prize"], "500k coins");
-  assert.ok("Ends" in f);
-  assert.match(f["Not scored — no linked account (1)"] ?? "", /<@u9>/);
+/**
+ * The counts used to be in the field names — "Top 4 · catacombs level", "Not
+ * scored — no linked account (1)". Data in a heading is the one embed rule that
+ * a renderer breaks without noticing, so it is asserted rather than reviewed.
+ */
+test("no field name carries a number", () => {
+  const embed = renderEventCard(
+    view({
+      unlinked: [{ discordId: "u9" }, { discordId: "u8" }],
+      standings: Array.from({ length: 4 }, (_, i) => ({ discordId: `u${i}`, delta: 10 - i })),
+    }),
+  );
+  for (const f of embed.fields ?? []) assert.doesNotMatch(f.name, /\d/, `field name "${f.name}" carries data`);
 });
 
-test("a finished board drops the countdown rather than showing a negative one", () => {
-  const f = fields(view({ status: "COMPLETED" }));
-  assert.ok(!("Ends" in f));
+test("the unlinked are counted inside the value and pointed at the fix", () => {
+  const f = fields(view({ unlinked: [{ discordId: "u9" }] }));
+  assert.match(f["Not scored"] ?? "", /\*\*1\*\*/);
+  assert.match(f["Not scored"] ?? "", /\/link/);
+  assert.match(f["Not scored"] ?? "", /<@u9>/);
 });
 
-test("an event tracking nothing renders without a standings section", () => {
-  const f = fields(view({ metrics: [] }));
-  assert.ok(!("Scoring" in f));
-  assert.ok(Object.keys(f).includes("Participants"));
+test("the small facts are one field rather than five", () => {
+  const f = fields(view({ prize: "500k coins", hostDiscordId: "u7", capacity: 20 }));
+  const details = f["Details"] ?? "";
+  assert.match(details, /\*\*Prize\*\* 500k coins/);
+  assert.match(details, /\*\*Host\*\* <@u7>/);
+  assert.match(details, /\*\*Signed up\*\* 4\/20/);
+  assert.ok(!("Prize" in f), "the prize is a line, not a field of its own");
+});
+
+test("an uncapped event prints a count rather than a fraction of nothing", () => {
+  assert.match(fields(view())["Details"] ?? "", /\*\*Signed up\*\* 4$/m);
+});
+
+test("a finished event says when it ended instead of counting down to it", () => {
+  const details = fields(view({ status: "COMPLETED" }))["Details"] ?? "";
+  assert.match(details, /\*\*Ended\*\*/);
+  assert.doesNotMatch(details, /\*\*Ends\*\*/);
 });
 
 test("the podium is medals and the rest are numerals", () => {
   const standings = Array.from({ length: 4 }, (_, i) => ({ discordId: `u${i}`, delta: 10 - i }));
-  const f = fields(view({ metrics: [{ metric: "catacombsLevel", standings }] }));
-  const table = f["Top 4 · catacombs level"] ?? "";
+  const table = fields(view({ standings }))["Standings"] ?? "";
   assert.match(table, /🥇 <@u0>/);
   assert.match(table, /🥉 <@u2>/);
   assert.match(table, /\*\*4\.\*\* <@u3>/);
+});
+
+/**
+ * The organiser's own words are the reason anyone signs up. They go in the
+ * headline under the status line rather than into a field, which is where the
+ * card layer puts a description and where a reader looks first.
+ */
+test("the status leads the headline and the organiser's description follows it", () => {
+  const embed = renderEventCard(view({ status: "SCHEDULED", description: "Bring pots." }));
+  assert.match(embed.description ?? "", /^Signups are open/);
+  assert.match(embed.description ?? "", /Bring pots\.$/);
+});
+
+test("the card carries a native timestamp and a static footer", () => {
+  const embed = renderEventCard(view());
+  assert.equal(embed.timestamp, "2026-08-26T21:00:00.000Z");
+  assert.equal(embed.footer, "id e1");
 });

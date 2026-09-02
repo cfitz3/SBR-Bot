@@ -1049,6 +1049,12 @@ export interface EventEdit {
   readonly actorDiscordId: string;
   /** True when the actor may edit anybody's event. */
   readonly isStaff?: boolean;
+  /**
+   * Editable because the activity is: an event's type and its scored metric are
+   * two halves of one choice (see `EventActivity`), so an event switched from a
+   * Catacombs push to a slayer grind must not stay filed as a dungeon run.
+   */
+  readonly type?: EventType;
   readonly title?: string;
   readonly description?: string | null;
   readonly startsAt?: string;

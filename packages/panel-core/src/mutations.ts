@@ -12,8 +12,9 @@ import {
   BridgeCapability,
   CONFIG_CHANNEL_SLOTS,
   EVENT_MAX_TRACKED_METRICS,
+  eventActivity,
   EVENT_POLL_MAX_MINUTES,
-  EVENT_POLL_MIN_MINUTES,
+  eventPollFloorMinutes,
   isAchievementTier,
   isConfigChannelSlot,
   isEventMetric,
@@ -29,7 +30,6 @@ import type {
   CommunityService,
   ConfigChannelSlot,
   EventEdit,
-  EventType,
   GuildConfigService,
   HypixelResult,
   IdentityService,
@@ -555,6 +555,15 @@ export interface PanelMutationsDeps {
    */
   readonly eventEffects?: EventEffects;
   /**
+   * True where this deployment holds a production-tier Hypixel key, which is
+   * what lets an event be polled every half hour instead of every hour.
+   *
+   * Optional and false by default: an install that has not said so is assumed
+   * to be under the personal-key cap, which is the safe direction for a limit
+   * whose purpose is to be hard to exceed by accident.
+   */
+  readonly hypixelProductionKey?: boolean;
+  /**
    * Optional like the two above. Absent, the menu document still saves — it is
    * a settings row — but Publish refuses rather than reporting a message that
    * was never posted.
@@ -771,17 +780,6 @@ const MAX_DURATION_SECONDS = 365 * 24 * 60 * 60;
 
 const REASON_MAX = 500;
 
-/** Event types the schema knows; anything else is a typo, not a new category. */
-const EVENT_TYPES: readonly EventType[] = [
-  "DUNGEON",
-  "SLAYER",
-  "FISHING",
-  "MINING",
-  "GIVEAWAY",
-  "MEETING",
-  "CUSTOM",
-];
-
 /** Long enough for "Catacombs F7 carry night", short enough to fit a table cell. */
 const EVENT_TITLE_MAX = 120;
 
@@ -815,8 +813,25 @@ const EVENT_PRIZE_MAX = 200;
  */
 function readTrackerSettings(
   body: Record<string, unknown>,
+  floorMinutes: number,
 ): { settings: Record<string, unknown> } | { message: string } {
   const settings: Record<string, unknown> = {};
+
+  // The activity decides both the type and the scored metric, so a body that
+  // carries one must not also carry the other: two controls for one fact is how
+  // a "Catacombs push" scoring networth became possible in the first place.
+  if (body["activity"] !== undefined) {
+    if (body["trackedMetrics"] !== undefined) {
+      return { message: "send an activity or trackedMetrics, not both" };
+    }
+    const activity = eventActivity(body["activity"]);
+    if (activity === null) return { message: "unknown activity" };
+    settings["type"] = activity.type;
+    // One metric, or none for an event that is not a contest. Written as the
+    // whole list rather than merged into the stored one, so switching activity
+    // cannot leave the previous activity's metric scoring alongside the new.
+    settings["trackedMetrics"] = activity.metric === null ? [] : [activity.metric];
+  }
 
   if (body["trackedMetrics"] !== undefined) {
     const raw = body["trackedMetrics"];
@@ -837,10 +852,11 @@ function readTrackerSettings(
       return { message: "pollIntervalMinutes must be a number" };
     }
     // Bounded here as well as in the service, so the panel says why rather than
-    // relaying a generic rejection. The floor is the Hypixel per-player cap, not
-    // a preference — see EVENT_POLL_MIN_MINUTES.
-    if (raw < EVENT_POLL_MIN_MINUTES || raw > EVENT_POLL_MAX_MINUTES) {
-      return { message: `the tracker polls every ${EVENT_POLL_MIN_MINUTES} to ${EVENT_POLL_MAX_MINUTES} minutes` };
+    // relaying a generic rejection. The floor is the Hypixel per-player cap and
+    // not a preference — an hour on a personal key, half of one where a
+    // production key has been configured. See `eventPollFloorMinutes`.
+    if (raw < floorMinutes || raw > EVENT_POLL_MAX_MINUTES) {
+      return { message: `the tracker polls every ${floorMinutes} to ${EVENT_POLL_MAX_MINUTES} minutes` };
     }
     settings["pollIntervalMinutes"] = raw;
   }
@@ -3372,14 +3388,17 @@ export class PanelMutations {
       if (typeof input !== "object" || input === null) return invalid("body must be an object");
       const body = input as Record<string, unknown>;
 
-      const title = typeof body["title"] === "string" ? body["title"].trim() : "";
-      if (title.length === 0) return invalid("a title is required");
-      if (title.length > EVENT_TITLE_MAX) return invalid(`title must be under ${EVENT_TITLE_MAX} characters`);
+      // The activity is the event's one identifying choice: it fixes the type,
+      // the metric the board scores, and the name the event carries unless
+      // somebody types a better one. The body no longer sends a type at all —
+      // an event filed as a dungeon run while scoring networth was a legal
+      // combination for as long as those were separate controls.
+      const activity = eventActivity(body["activity"]);
+      if (activity === null) return invalid("an activity is required");
 
-      const type = body["type"];
-      if (typeof type !== "string" || !EVENT_TYPES.includes(type as EventType)) {
-        return invalid(`type must be one of ${EVENT_TYPES.join(", ")}`);
-      }
+      const typed = typeof body["title"] === "string" ? body["title"].trim() : "";
+      if (typed.length > EVENT_TITLE_MAX) return invalid(`title must be under ${EVENT_TITLE_MAX} characters`);
+      const title = typed.length === 0 ? activity.defaultTitle : typed;
 
       const startsAt = body["startsAt"];
       if (typeof startsAt !== "string" || Number.isNaN(Date.parse(startsAt))) {
@@ -3411,20 +3430,39 @@ export class PanelMutations {
       // to be corrected in a second step — and one that went LIVE before that
       // step captured its baselines against the wrong metric list, which no
       // later edit can undo.
-      const tracker = readTrackerSettings(body);
+      const tracker = readTrackerSettings(body, this.pollFloor());
       if ("message" in tracker) return invalid(tracker.message);
 
       const result = await this.d.community.createEvent({
         guildId,
         title,
         startsAt: new Date(startsAt).toISOString(),
-        type: type as EventType,
         hostDiscordId: actorDiscordId,
         description,
         capacity,
+        // Spread after the fixed fields: `type` and `trackedMetrics` come from
+        // the activity, and the client has no say in either.
         ...tracker.settings,
+        type: activity.type,
       });
-      return { result, change: { title, type, startsAt, capacity, description, ...tracker.settings } };
+
+      // The message goes up now, not at the next sweep. It is the signup sheet:
+      // an event created for tonight whose post appears half an hour later has
+      // spent that half hour invisible to the people it needed answers from.
+      // Best-effort on purpose — the event is created and stored either way, and
+      // the sweep posts the message on its next pass if this call cannot.
+      if (result.ok && this.d.eventEffects !== undefined) {
+        try {
+          await this.d.eventEffects.publishBoard(guildId, result.value.id, actorDiscordId);
+        } catch {
+          // Left to the sweep.
+        }
+      }
+
+      return {
+        result,
+        change: { title, activity: activity.key, startsAt, capacity, description, ...tracker.settings },
+      };
     });
   }
 
@@ -3485,7 +3523,7 @@ export class PanelMutations {
         edit["capacity"] = raw;
       }
 
-      const tracker = readTrackerSettings(body);
+      const tracker = readTrackerSettings(body, this.pollFloor());
       if ("message" in tracker) return invalid(tracker.message);
       Object.assign(edit, tracker.settings);
 
@@ -3671,6 +3709,11 @@ export class PanelMutations {
    * panel that only records its successes hides exactly the pattern (a wave of
    * refused writes) worth noticing.
    */
+  /** The shortest poll interval this deployment is allowed to offer. */
+  private pollFloor(): number {
+    return eventPollFloorMinutes(this.d.hypixelProductionKey === true);
+  }
+
   private async run(
     session: PanelSession | null,
     guildId: string,

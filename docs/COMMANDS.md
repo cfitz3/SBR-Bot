@@ -18,7 +18,7 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 
 > ### Retired commands
 >
-> Eighteen commands are flagged `enabled: false` and are **absent from Discord's
+> Twenty-two commands are flagged `enabled: false` and are **absent from Discord's
 > command list**, from `/help`, and from guild chat. They are not deleted: the
 > handlers stay compiled and under test, and turning one back on is a one-line
 > change. Sections 1, 2, 4, 6 and 20 below still describe them, because what they
@@ -60,6 +60,16 @@ Full command specification for the three surfaces: the **member-facing Bridge bo
 >   in a guild.
 >   `/tag` is a staff tool wearing a member command — the tags themselves stay,
 >   posted by the ticket flow and edited from the panel.
+>
+> - **§13, events** — `/events`, `/create-event`, `/rsvp`, `/attendance`, and
+>   the `!event` alias. An event is one message now: posted when it is created,
+>   the roster and the RSVP buttons while signups are open, the standings in
+>   place once it starts, the result afterwards. None of the four has a question
+>   left to answer — the channel lists what is coming and who is coming without
+>   being asked, the buttons take the answer, and creation moved to the panel,
+>   which is the only surface that can offer the activity choice a slash command
+>   could not. Recording who actually turned up stays on the panel's events
+>   page, where the tracker's observations sit beside the hand-ticked boxes.
 >
 > The flag is honoured in three places — `toSlashCommands` (so the command
 > leaves Discord's registry), the dispatcher (so a stale client is refused with

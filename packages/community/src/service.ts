@@ -310,6 +310,7 @@ export class CommunityServiceImpl implements CommunityService {
       if (title.length === 0) return err({ kind: "INVALID_TIME", detail: "an event needs a title." });
       Object.assign(patch, { title });
     }
+    if (input.type !== undefined) Object.assign(patch, { type: input.type });
     if (input.description !== undefined) Object.assign(patch, { description: input.description });
 
     if (input.startsAt !== undefined) {

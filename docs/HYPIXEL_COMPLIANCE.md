@@ -103,6 +103,14 @@ insert. `pollIntervalMinutes` is clamped to a 60-minute floor in `trackEvents`
 itself (`EVENT_POLL_FLOOR_MINUTES`), not only in the panel, because rows carrying
 the older 5- and 10-minute values are still in the database.
 
+The floor is 30 minutes — the cadence a live contest actually wants — **only**
+where `HYPIXEL_KEY_MODE=production` asserts a production-tier grant.
+`eventPollFloorMinutes` (`packages/shared-types/src/enums.ts`) is the one place
+that decision is made, and both enforcement points read it: the panel refuses a
+shorter interval at write time, and `trackEvents` clamps at read time in case a
+row outlives the key that allowed it. On the shipped default — `personal` — the
+floor is an hour, which is the per-player cap this section is about.
+
 ### The history that remains is one members build themselves
 
 `ProfileSnapshot` narrows to rows a member explicitly saved. `/snapshot`

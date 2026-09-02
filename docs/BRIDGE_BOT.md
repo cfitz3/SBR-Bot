@@ -41,7 +41,7 @@ Design for `apps/bridge-bot` — the member-facing surface that bridges Discord 
 The bot exposes two command channels; both route to the **same domain services** so behavior is identical.
 
 ### 2.1 Discord slash commands
-Full member surface per `COMMANDS.md` §1–7 (`/link`, `/me`, `/stats`, `/networth`, `/price`, `/rsvp`, `/help`, …), less the ten retired there. Permission via `packages/identity` + `BridgePermission`. Personal/admin output ephemeral; shareable lookups public.
+Full member surface per `COMMANDS.md` §1–7 (`/link`, `/me`, `/stats`, `/networth`, `/price`, `/help`, …), less the fourteen retired there. Permission via `packages/identity` + `BridgePermission`. Personal/admin output ephemeral; shareable lookups public.
 
 ### 2.2 In-game commands (guild chat)
 Prefix commands (prefix + enabled set from `GuildConfig`). **Read-only / low-risk subset only** — never moderation, linking secrets, or config.

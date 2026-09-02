@@ -369,8 +369,10 @@ test("the real registry exposes only lookups in-game, and every write requires a
     // Lookups (§17).
     // `bazaar` and `lowestbin` are gone from this list because they are gone
     // from the registry: their shorthands now resolve to `price`, which is the
-    // one card that answers what both of them asked.
-    "dungeons", "events", "help", "leaderboard",
+    // one card that answers what both of them asked. `events` left it with
+    // `E-01`: the event is a message in the events channel now, and guild chat
+    // has no way to reach one.
+    "dungeons", "help", "leaderboard",
     "networth", "perm", "price", "profile", "skills", "slayers",
     // Progression (§17, Part IV). One command now, where there were three:
     // `/progression` charts, shows the goal for the charted metric, and saves

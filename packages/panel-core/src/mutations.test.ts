@@ -166,7 +166,12 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
     decideApplication: record("decideApplication"),
     closeTicket: record("closeTicket"),
     setMemberRole: record("setMemberRole"),
-    createEvent: record("createEvent"),
+    // Answers with the created event rather than recording and returning void:
+    // the message that announces it is posted from the id this hands back.
+    async createEvent(input: Record<string, unknown>) {
+      recorded.calls.push({ method: "createEvent", args: [input] });
+      return ok({ id: "evt_new", guildId: "g1" });
+    },
     cancelEvent: record("cancelEvent"),
     updateEvent: record("updateEvent"),
     completeEvent: record("completeEvent"),
@@ -456,6 +461,8 @@ function make(
     noExceptions?: boolean;
     /** What `remove` reports back: false is "another admin got there first". */
     exceptionRemoved?: boolean;
+    /** This deployment holds a production-tier Hypixel key (DP-1). */
+    productionKey?: boolean;
     /** Same, for a deployment with no roster to preview role changes against. */
     noRolesInsight?: boolean;
     /** The roster the dry run reads, when there is one. */
@@ -484,6 +491,7 @@ function make(
     ...(over.noEventEffects === true
       ? {}
       : { eventEffects: eventEffectsRecorder(recorded, over.eventEffectsThrow === true) }),
+    ...(over.productionKey === true ? { hypixelProductionKey: true } : {}),
     ...(over.noRoleMenuEffects === true
       ? {}
       : { roleMenuEffects: roleMenuEffectsRecorder(recorded, over.roleMenuEffectsThrow === true) }),
@@ -920,7 +928,7 @@ test("an officer schedules an event hosted by themselves, not by the body", asyn
 
   const result = await mutations.createEvent(session(), "g1", {
     title: "  F7 carry night  ",
-    type: "DUNGEON",
+    activity: "CATACOMBS",
     startsAt: "2026-09-01T18:00:00.000Z",
     capacity: 5,
     description: "  bring pots  ",
@@ -928,7 +936,7 @@ test("an officer schedules an event hosted by themselves, not by the body", asyn
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(recorded.calls, [
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "createEvent"), [
     {
       method: "createEvent",
       args: [
@@ -936,31 +944,100 @@ test("an officer schedules an event hosted by themselves, not by the body", asyn
           guildId: "g1",
           title: "F7 carry night",
           startsAt: "2026-09-01T18:00:00.000Z",
-          type: "DUNGEON",
           hostDiscordId: "111",
           description: "bring pots",
           capacity: 5,
+          type: "DUNGEON",
+          trackedMetrics: ["catacombsLevel"],
         },
       ],
     },
   ]);
 });
 
-test("an event needs a title, a known type and a readable start time", async () => {
+/**
+ * The type and the metric are not sent by the client at all. They are read off
+ * the activity, which is how "Catacombs push, scored on networth" — legal for
+ * as long as those were three independent controls — stops being an event
+ * somebody can create by accident.
+ */
+/**
+ * The message is the signup sheet, so it goes up with the event and not at the
+ * next sweep — an event created for tonight cannot spend half an hour invisible
+ * to the people it needs answers from.
+ */
+test("creating an event posts its message straight away", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
-  const base = { title: "Run", type: "DUNGEON", startsAt: "2026-09-01T18:00:00.000Z" };
+
+  const result = await mutations.createEvent(session(), "g1", {
+    activity: "CATACOMBS",
+    startsAt: "2026-09-01T18:00:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(recorded.calls.at(-1), { method: "publishBoard", args: ["g1", "evt_new", "111"] });
+});
+
+/** A bot that cannot post is not a reason to lose the event that was created. */
+test("an event survives a bot that cannot post its message", async () => {
+  const { mutations } = make({ roleMap: { "111": "OFFICER" }, eventEffectsThrow: true });
+
+  const result = await mutations.createEvent(session(), "g1", {
+    activity: "CATACOMBS",
+    startsAt: "2026-09-01T18:00:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test("the activity fixes the type and the one metric, whatever the body claims", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.createEvent(session(), "g1", {
+    activity: "SLAYER_ENDERMAN",
+    type: "MEETING",
+    startsAt: "2026-09-01T18:00:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+  const sent = recorded.calls[0]?.args[0] as Record<string, unknown>;
+  assert.equal(sent["type"], "SLAYER");
+  assert.deepEqual(sent["trackedMetrics"], ["slayerEnderman"]);
+  assert.equal(sent["title"], "Voidgloom grind", "an unnamed event is named after what it is");
+});
+
+/**
+ * A meeting has a start time and a guest list and nothing to measure. Forcing a
+ * metric onto it would put a leaderboard under an agenda.
+ */
+test("an activity that is not a contest scores nothing", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.createEvent(session(), "g1", {
+    activity: "MEETING",
+    startsAt: "2026-09-01T18:00:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+  const sent = recorded.calls[0]?.args[0] as Record<string, unknown>;
+  assert.deepEqual(sent["trackedMetrics"], []);
+  assert.equal(sent["type"], "MEETING");
+});
+
+test("an event needs a known activity and a readable start time", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+  const base = { title: "Run", activity: "CATACOMBS", startsAt: "2026-09-01T18:00:00.000Z" };
 
   const bad = async (over: Record<string, unknown>): Promise<string | undefined> =>
     (await mutations.createEvent(session(), "g1", { ...base, ...over })).error?.kind;
 
-  assert.equal(await bad({ title: "   " }), "INVALID_INPUT");
-  assert.equal(await bad({ type: "RAID" }), "INVALID_INPUT");
+  assert.equal(await bad({ activity: undefined }), "INVALID_INPUT");
+  assert.equal(await bad({ activity: "RAID" }), "INVALID_INPUT");
   assert.equal(await bad({ startsAt: "next tuesday" }), "INVALID_INPUT");
   assert.equal(await bad({ capacity: 0 }), "INVALID_INPUT");
   assert.equal(await bad({ capacity: 2.5 }), "INVALID_INPUT");
-  // Nothing that fails validation may reach the service or the audit trail.
-  assert.deepEqual(recorded.calls, []);
-  assert.deepEqual(recorded.audits, []);
+  // A blank title is no longer an error: it means "call it what it is".
+  assert.equal(await bad({ title: "   " }), undefined);
 });
 
 /** Blank optionals are null, not empty strings the database has to interpret. */
@@ -970,7 +1047,7 @@ test("an event with no capacity or description sends nulls", async () => {
   assert.equal(
     (await mutations.createEvent(session(), "g1", {
       title: "Meeting",
-      type: "MEETING",
+      activity: "MEETING",
       startsAt: "2026-09-01T18:00:00.000Z",
     })).ok,
     true,
@@ -980,10 +1057,11 @@ test("an event with no capacity or description sends nulls", async () => {
       guildId: "g1",
       title: "Meeting",
       startsAt: "2026-09-01T18:00:00.000Z",
-      type: "MEETING",
       hostDiscordId: "111",
       description: null,
       capacity: null,
+      type: "MEETING",
+      trackedMetrics: [],
     },
   ]);
 });
@@ -1013,6 +1091,31 @@ test("a poll interval under the Hypixel floor is refused rather than silently cl
   assert.equal(recorded.calls.some((c) => c.method === "updateEvent"), false, "nothing was written");
 });
 
+/**
+ * DP-1, as a flag rather than a change: half-hourly polling is what a contest
+ * wants and what the per-player cap forbids, so the shorter floor is unlocked
+ * by the same setting that asserts the production grant and by nothing else.
+ */
+test("a production key unlocks the half-hourly floor the personal key forbids", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" }, productionKey: true });
+
+  const result = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", pollIntervalMinutes: 30 });
+
+  assert.equal(result.ok, true);
+  const sent = recorded.calls.find((c) => c.method === "updateEvent")?.args[0] as Record<string, unknown>;
+  assert.equal(sent["pollIntervalMinutes"], 30);
+});
+
+test("and nothing below it: the grant moves the floor, it does not remove one", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" }, productionKey: true });
+
+  const result = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", pollIntervalMinutes: 15 });
+
+  assert.equal(result.ok, false);
+  assert.match(JSON.stringify(result), /30 to 1440 minutes/);
+  assert.equal(recorded.calls.some((c) => c.method === "updateEvent"), false);
+});
+
 test("an unknown metric is refused, and a known one from the widened catalog is not", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
 
@@ -1027,14 +1130,28 @@ test("an unknown metric is refused, and a known one from the widened catalog is 
   assert.deepEqual((call?.args[0] as Record<string, unknown>)["trackedMetrics"], ["classHealer"]);
 });
 
+/**
+ * Switching an event's activity has to move its type with it, or the event ends
+ * up filed as a dungeon run while its board scores slayer XP.
+ */
+test("changing the activity moves the type and replaces the metric outright", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  const result = await mutations.updateEvent(session(), "g1", { eventId: "evt_1", activity: "SLAYER_WOLF" });
+
+  assert.equal(result.ok, true);
+  const sent = recorded.calls.find((c) => c.method === "updateEvent")?.args[0] as Record<string, unknown>;
+  assert.equal(sent["type"], "SLAYER");
+  assert.deepEqual(sent["trackedMetrics"], ["slayerWolf"]);
+});
+
 test("an event is created with its tracker settings rather than defaulted and corrected", async () => {
   const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
 
   const result = await mutations.createEvent(session(), "g1", {
     title: "Slayer race",
-    type: "CUSTOM",
+    activity: "SLAYER_ENDERMAN",
     startsAt: "2026-09-01T18:00:00.000Z",
-    trackedMetrics: ["slayerEnderman"],
     pollIntervalMinutes: 180,
     endsAt: "2026-09-01T22:00:00.000Z",
     prize: "  50m coins  ",
@@ -1227,7 +1344,7 @@ test("events are Officer work — a moderator is refused both halves", async () 
 
   const created = await mutations.createEvent(session(), "g1", {
     title: "Run",
-    type: "DUNGEON",
+    activity: "CATACOMBS",
     startsAt: "2026-09-01T18:00:00.000Z",
   });
   const cancelled = await mutations.cancelEvent(session(), "g1", "evt_1");

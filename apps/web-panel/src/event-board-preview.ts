@@ -17,7 +17,7 @@
  * already showing — so the preview costs one extra query of nothing at all and
  * cannot disagree with the numbers beside it.
  */
-import { renderEventBoardEmbed, type EventBoardView } from "@sbr/commands-bridge";
+import { renderEventCard, type EventCardView } from "@sbr/commands-bridge";
 import type { EventsVM, PageResult } from "@sbr/panel-core";
 import type { EmbedView } from "@sbr/shared-types";
 
@@ -43,34 +43,34 @@ export function boardPreview(result: PageResult<EventsVM>, now: Date = new Date(
   const event = vm.events.find((candidate) => candidate.id === vm.selected) ?? null;
   if (event === null) return { access: result.access, data: { embed: null } };
 
-  const view: EventBoardView = {
+  // The page reads standings in the event's own metric order, and the card
+  // scores the first of them — the same one the message in Discord is ranking.
+  const scored = vm.standings[0] ?? null;
+
+  const view: EventCardView = {
     eventId: event.id,
     title: event.title,
     status: boardStatus(event.status),
     startsAt: event.startsAt,
     endsAt: event.endsAt,
-    // The page reads standings in the event's own metric order, which is the
-    // order the board draws them in, so no re-sorting happens here.
-    metrics: vm.standings.map((block) => ({
-      metric: block.metric,
-      standings: block.entries.map((entry) => ({ discordId: entry.discordId, delta: entry.delta })),
-    })),
+    metric: scored?.metric ?? null,
+    standings: (scored?.entries ?? []).map((entry) => ({ discordId: entry.discordId, delta: entry.delta })),
     participantCount: event.going,
     unlinked: vm.unlinked.map((entry) => ({ discordId: entry.discordId })),
     prize: event.prize,
     updatedAt: now.toISOString(),
   };
 
-  return { access: result.access, data: { embed: renderEventBoardEmbed(view) } };
+  return { access: result.access, data: { embed: renderEventCard(view) } };
 }
 
 /**
- * The four statuses the board knows.
+ * The four statuses the card knows.
  *
  * Anything else is treated as scheduled rather than rejected: a status added
  * upstream should cost a slightly wrong preview, never a failed page.
  */
-function boardStatus(status: string): EventBoardView["status"] {
+function boardStatus(status: string): EventCardView["status"] {
   switch (status) {
     case "LIVE":
     case "COMPLETED":

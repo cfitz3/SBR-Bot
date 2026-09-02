@@ -73,6 +73,33 @@ export const DEFAULT_EMBEDS = {
     rank: "Rank",
     tenure: "Tenure",
     lastEarned: "Last earned",
+
+    /* ── the event card ── */
+    /** The consolidated block of small facts: when, who, how many, what for. */
+    details: "Details",
+    starts: "Starts",
+    started: "Started",
+    ends: "Ends",
+    ended: "Ended",
+    host: "Host",
+    signedUp: "Signed up",
+    prize: "Prize",
+    /** The way out of the message and into Discord's own event. */
+    reminder: "Reminder",
+    /** What the event measures — one metric, or nothing. */
+    scoring: "Scoring",
+    /** Who is coming, while signups are the point of the message. */
+    roster: "Who's coming",
+    /** The leaderboard, once there is something to rank. */
+    standings: "Standings",
+    /**
+     * The signed-up members nothing can score.
+     *
+     * Named without their count, deliberately: the number belongs in the value,
+     * because a heading that reads "(1)" one minute and "(4)" the next is a
+     * heading that changes under the reader.
+     */
+    notScored: "Not scored",
     whereFrom: "Where it came from",
     snapshots: "Snapshots",
     /** `/networth`: the vertical category list, and the sections behind it. */
@@ -517,6 +544,41 @@ export const DEFAULT_EMBEDS = {
     joinPriorRemoval: "Previous removal",
     joinAttemptsLabel: "Attempts",
     joinDeadline: "Decide by",
+    /* ── events ── */
+    /**
+     * The line the event card opens with, by status.
+     *
+     * One message carries an event from signups to result, so the headline is
+     * the only part that has to say which of those is happening — everything
+     * below it is the same sections with different contents.
+     */
+    eventOpen: "Signups are open — the buttons below record whether you're coming.",
+    eventLive: "Live now. Standings update as the tracker polls.",
+    eventDone: "Finished. Final standings below.",
+    eventOff: "Cancelled.",
+    /** An event that measures nothing: a meeting, a giveaway, a social night. */
+    eventUnscored: "Turnout only — nothing is scored.",
+    /** `{id}` is the event id, which is how the bot finds its own message again. */
+    eventId: "id {id}",
+    eventNotify: "Remind me on Discord",
+    /**
+     * Where an External scheduled event says it happens.
+     *
+     * Discord requires a location on an external event and shows it in the
+     * server's event list. It is the game, not a channel: the guild meets in
+     * SkyBlock, and a channel name there would point at the message rather than
+     * at the thing the message is about.
+     */
+    eventLocation: "Hypixel SkyBlock",
+    eventNobody: "Nobody yet.",
+    /** `{n}` going, `{n}` undecided — the two counts kept apart on purpose. */
+    eventGoing: "**Going ({n})**",
+    eventMaybe: "**Maybe ({n})**",
+    /** `{n}` signed up with no linked account, so nothing can read their stats. */
+    eventUnlinked: "**{n}** signed up with no linked account — /link, and the next poll counts them:",
+    eventNoScores: "No scores yet — the first poll sets everyone's baseline.",
+    /** `{metric}` reads mid-sentence, so it comes from `metricPhrase`. */
+    eventLevel: "Nobody has gained any {metric} yet.",
   },
 };
 

@@ -23,7 +23,7 @@ Design for `apps/admin-bot` — the staff-facing surface that owns **moderation,
 | O2 | Onboarding | Tickets | open/assign/close support & appeal tickets. |
 | O3 | Onboarding | Member lifecycle | set roles, notes, membership status; verification oversight. |
 | P1 | **Operational** | Safety controls | lockdown, anti-raid on/off, purge. |
-| P2 | Operational | Events/attendance (staff side) | create events, record attendance (member RSVP lives on the bridge bot). |
+| P2 | Operational | Events/attendance (staff side) | create events, record attendance — **on the panel**, not as commands (`E-01`). Member RSVP is the buttons on the event's own message. |
 | A1 | **Auditability** | Immutable audit log | every action appended with actor, target, reason, before/after, timestamp, source. |
 | A2 | Auditability | Audit query | `/audit` search + panel view; tamper-evident, exportable. |
 | C1 | **Coordination** | Panel parity | shares `packages/moderation`/`identity`; changes propagate via cache invalidation + pub/sub. |
@@ -81,8 +81,11 @@ Full list in `COMMANDS.md` §8–16. Grouped here by domain with the safety post
 | `/lockdown` | Admin | Channel/server scope; reason; auto-expiry; **confirmation**. |
 | `/antiraid-on` / `-off` | Admin | Sensitivity + duration; announces to staff. |
 | `/audit` | Officer | Query the immutable log. |
-| `/attendance` | Officer | Mark/report attendance. |
-| `/create-event` | Officer | Schedule event; announce via bridge bot. |
+
+Events are not on this bot and are no longer on the member bot either. Creating
+one, correcting one, and recording who turned up are all on the panel's events
+page (`E-01`); the event itself is one message the bridge bot posts and keeps
+current.
 
 **Destructive-action guardrails (all of `/ban`, `/kick`, `/purge`, `/lockdown`, mass actions):**
 - Interactive **confirmation** (buttons) showing exactly who/what will be affected before commit.
@@ -250,10 +253,14 @@ The bot is the only process holding a Discord gateway cache, so it exposes that 
 | `GET /internal/g/{guildId}/roles` | `{id, name, color, position, managed, assignable, blockedReason}[]` |
 | `GET /internal/g/{guildId}/members?q=` | `{id, username, globalName, nick, avatarHash, roleIds, joinedAt, bot}[]` |
 | `POST /internal/g/{guildId}/enforce` | KICK / BAN / UNBAN / TIMEOUT / UNTIMEOUT, through `DiscordGuildEffects` |
-| `POST /internal/g/{guildId}/scheduled-event` | Creates a Discord scheduled event, returns its id |
+| `POST /internal/g/{guildId}/scheduled-event` | Creates **or updates** a Discord scheduled event, returns its id and URL |
 | `POST /internal/g/{guildId}/roles` | `{userId, add[], remove[], reason}` — grants and revokes, after a preflight |
 
 `{guildId}` is the **platform** guild id; the bot resolves it to the Discord snowflake itself, so the panel never has to hold both.
+
+**The scheduled-event route is create-or-update, and its caller is the bridge bot** (`apps/bridge-bot/src/scheduled-event-effector.ts`). Every event message the bridge publishes mirrors its event into Discord's own event list, so the server's events sidebar and the reminder Discord sends on the day both point at the thing the channel is showing. The write is here because it needs `Manage Events`, which the bridge bot deliberately does not hold — the same split that puts an automod timeout and a self-service role grant on this side of the loopback hop. A body without `discordEventId` creates; one with it edits, and a status move (`SCHEDULED` → `ACTIVE` → `COMPLETED`, or `SCHEDULED` → `CANCELLED`) is sent on its own rather than alongside a content revision, because Discord refuses to change the times of an event that has already started. The response always carries `url`: the link is what the caller came for, and it is valid whether or not this call changed anything.
+
+Unlike enforcement, **a failure here is not a claim that has to be retracted.** The mirror is a convenience; the event message is the event. Every refusal comes back as "no reminder link on the card this pass", the message publishes regardless, and the next redraw tries again.
 
 **Role writes are preflighted here, not only in the panel** (`apps/admin-bot/src/role-preflight.ts`). A role is refused before Discord is asked when the bot lacks Manage Roles, when the role no longer exists, when it is `@everyone` or integration-owned, when it sits **at or above** the bot's own highest role, or when it carries any of Administrator, Manage Server, Manage Roles, Manage Channels, Manage Webhooks, Ban Members, Kick Members or Timeout Members. That last rule is a deliberate limitation rather than an oversight: **a rule may not hand out authority**, so staff promotion stays a human act with a name attached to it. Revocation is screened more loosely — taking a dangerous role *away* is never the dangerous direction, and a role that has gained Manage Roles since it was granted is exactly the one we most need to be able to remove.
 

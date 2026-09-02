@@ -16,6 +16,7 @@ import {
   BridgeCapability as PlatformBridgeCapability,
   COMMUNITY_MILESTONE_METRICS as PLATFORM_COMMUNITY_METRICS,
   categoryOfMetric,
+  EVENT_ACTIVITIES as PLATFORM_EVENT_ACTIVITIES,
   EVENT_MAX_TRACKED_METRICS as PLATFORM_EVENT_MAX_TRACKED,
   EVENT_METRICS as PLATFORM_EVENT_METRICS,
   EVENT_POLL_CHOICES as PLATFORM_EVENT_POLL_CHOICES,
@@ -33,6 +34,7 @@ import {
   BridgeCapability,
   CATEGORY_OF_METRIC,
   COMMUNITY_MILESTONE_METRICS,
+  EVENT_ACTIVITIES,
   EVENT_MAX_TRACKED_METRICS,
   EVENT_METRICS,
   EVENT_POLL_CHOICES,
@@ -96,6 +98,13 @@ test("the poll bounds the form enforces are the domain's own", () => {
   assert.equal(EVENT_POLL_MAX_MINUTES, PLATFORM_EVENT_POLL_MAX);
   assert.deepEqual([...EVENT_POLL_CHOICES], [...PLATFORM_EVENT_POLL_CHOICES]);
   assert.equal(EVENT_MAX_TRACKED_METRICS, PLATFORM_EVENT_MAX_TRACKED);
+  // Order as well as membership: the dropdown is read top to bottom, and the
+  // platform list is grouped by what the activities are rather than
+  // alphabetically, which is an ordering worth not losing in the mirror.
+  assert.deepEqual(
+    EVENT_ACTIVITIES.map((a) => [a.key, a.metric]),
+    PLATFORM_EVENT_ACTIVITIES.map((a) => [a.key, a.metric]),
+  );
   for (const choice of EVENT_POLL_CHOICES) {
     assert.ok(choice >= EVENT_POLL_MIN_MINUTES && choice <= EVENT_POLL_MAX_MINUTES);
   }

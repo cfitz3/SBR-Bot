@@ -94,6 +94,17 @@ export interface CheckOptions {
  * DTO even documents "never a raw id" — so this catches the renderer that forgot.
  */
 const WRAPPED_ID = /<(?:@!?|@&|#|t:|a?:\w+:)\d{15,21}>/g;
+
+/**
+ * A link is an address, not a printed id.
+ *
+ * Discord's own URLs are built out of snowflakes — `/events/<guild>/<event>`,
+ * `/channels/<guild>/<channel>/<message>` — and a card that links to one is
+ * doing the opposite of what this rule guards against: the reader clicks it and
+ * never sees the number. Stripped before the scan so the rule keeps catching
+ * the renderer that printed an id it should have wrapped.
+ */
+const URL_TEXT = /https?:\/\/\S+/g;
 const BARE_ID = /\b\d{17,20}\b/g;
 
 /** Values that mean "we don't know" in some other project's dialect. */
@@ -134,7 +145,7 @@ function textLength(view: EmbedView): number {
 
 /** Bare snowflakes left after every wrapped mention has been removed. */
 function bareIds(text: string): readonly string[] {
-  return text.replace(WRAPPED_ID, " ").match(BARE_ID) ?? [];
+  return text.replace(URL_TEXT, " ").replace(WRAPPED_ID, " ").match(BARE_ID) ?? [];
 }
 
 function checkText(text: string, where: string, out: StyleIssue[]): void {

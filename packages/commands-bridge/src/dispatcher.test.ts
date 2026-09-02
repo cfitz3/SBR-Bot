@@ -2014,7 +2014,22 @@ test("a card about somebody else never carries a record", async () => {
 // place and not the others is worse than no retirement — the member sees a
 // command, runs it, and gets an error that reads as a broken bot.
 
-const RETIRED = ["missing", "nextupgrade", "whatnext", "lfg", "runs", "joinrun", "leaverun", "editrun", "closerun"] as const;
+const RETIRED = [
+  "missing",
+  "nextupgrade",
+  "whatnext",
+  "lfg",
+  "runs",
+  "joinrun",
+  "leaverun",
+  "editrun",
+  "closerun",
+  // `E-01`: the event message and the panel between them answer all four.
+  "events",
+  "create-event",
+  "rsvp",
+  "attendance",
+] as const;
 
 test("the retired commands are still in the registry, flagged rather than deleted", () => {
   const registry = buildBridgeRegistry();

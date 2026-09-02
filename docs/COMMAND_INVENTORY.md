@@ -19,15 +19,17 @@ Sources of truth for this file:
 Counted from the built registries rather than by hand; the section tables below
 have drifted behind them and are being brought up to date a slice at a time.
 
-**Fourteen of the 54 are retired** (`enabled: false`): `/verify`, `/goal`,
+**Twenty-two of the 54 are retired** (`enabled: false`): `/verify`, `/goal`,
 `/progress`, `/snapshot`, `/missing`, `/nextupgrade`, `/whatnext`, `/lfg`,
-`/runs`, `/joinrun`, `/leaverun`, `/editrun`, `/closerun`, `/cringe`. They are absent from Discord's
-registry, refused by the dispatcher, and silent in guild chat — but still in
-`buildBridgeRegistry()` with their handlers intact, which is why they are still
-counted and still described below. **40 member commands are actually reachable,
-and 22 in-game** (`lfg`, `runs` and `cringe` leave that surface with them; the
-three progression commands are replaced there by `/progression`, one where there
-were three). `COMMANDS.md` explains why each went. The rows below describe behaviour,
+`/runs`, `/joinrun`, `/leaverun`, `/editrun`, `/closerun`, `/cringe`, `/stats`,
+`/slayer`, `/guildquote`, `/rank`, `/tag`, `/create-event`, `/rsvp`,
+`/attendance`. They are absent from Discord's registry, refused by the
+dispatcher, and silent in guild chat — but still in `buildBridgeRegistry()` with
+their handlers intact, which is why they are still counted and still described
+below. **32 member commands are actually reachable, and 18 in-game** (`lfg`,
+`runs`, `cringe` and `events` leave that surface with them; the three
+progression commands are replaced there by `/progression`, one where there were
+three). `COMMANDS.md` explains why each went. The rows below describe behaviour,
 not availability.
 
 ---
@@ -169,7 +171,23 @@ which takes the whole relay down. Playtime is read from the in-memory tracker,
 which costs nothing per invocation — the card's cost is still one cached roster
 read.
 
-### 2.6 Events & RSVP
+### 2.6 Events & RSVP — **all four retired (`E-01`)**
+
+An event is one message now. It is posted into the events channel when the event
+is created, it carries the roster and the three RSVP buttons while signups are
+open, it becomes the standings in place when the event starts, and it is edited
+once more into the result. Nothing has to be listed, quoted by id, or asked
+about, so the four commands that did those things have no question left to
+answer: the channel answers `/events` and `/attendance` without being asked,
+the buttons answer `/rsvp`, and creation moved to the panel — the only surface
+that can offer the activity choice this command could not.
+
+Marking who actually *turned up*, as opposed to who said they would, is a
+different question and a staff one. It stays on the panel's events page, beside
+the tracker's own observations.
+
+The rows below describe what the handlers still do, since they are flagged
+rather than deleted.
 
 | Command | Options | CD | Cap | Purpose | Output |
 |---|---|---|---|---|---|

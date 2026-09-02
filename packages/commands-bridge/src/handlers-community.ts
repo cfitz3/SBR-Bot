@@ -453,6 +453,12 @@ export function communitySpecs(): readonly CommandSpec[] {
       description: "Upcoming guild events",
       cooldownMs: 10_000,
       inGame: true,
+      // Retired by `E-01`: an event is one message now. It is posted when the
+      // event is created, it carries the roster and the RSVP buttons while
+      // signups are open, and it becomes the standings in place — so the
+      // channel already answers what this command answered, without anybody
+      // having to ask it, and without an event id to quote.
+      enabled: false,
       handler: events,
     },
     {
@@ -486,6 +492,13 @@ export function communitySpecs(): readonly CommandSpec[] {
       ],
       capability: "RUN_COMMAND",
       cooldownMs: 30_000,
+      // Retired by `E-01`: creation moved to the panel, which is the only
+      // surface that can offer the choice this command could not. An event is
+      // now one activity — the activity fixes the type, the metric and the
+      // default name together — and a slash command with a free-text title and
+      // an independent type dropdown is exactly how "Catacombs push, scored on
+      // networth" became a thing somebody could create by accident.
+      enabled: false,
       handler: createEvent,
     },
     {
@@ -506,6 +519,11 @@ export function communitySpecs(): readonly CommandSpec[] {
         },
       ],
       cooldownMs: 5_000,
+      // Retired by `E-01`: the three buttons are on the event's own message,
+      // for as long as an answer means anything. Pressing one is a press;
+      // this was a command, an event id copied out of another message, and a
+      // choice list that said the same three things.
+      enabled: false,
       handler: rsvp,
     },
     {
@@ -514,6 +532,12 @@ export function communitySpecs(): readonly CommandSpec[] {
       description: "Who has responded to an event",
       options: [EVENT_ID_OPTION],
       cooldownMs: 10_000,
+      // Retired by `E-01`: who has responded is on the event's message, kept
+      // current by the presses themselves. Marking who actually *turned up* is
+      // a different question and a staff one — it stays on the panel's events
+      // page, where the tracker's own observations are already shown next to
+      // the hand-ticked boxes.
+      enabled: false,
       handler: attendance,
     },
     {
