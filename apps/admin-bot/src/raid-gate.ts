@@ -98,6 +98,17 @@ export function attachRaidGate(client: Client, deps: RaidGateDeps): void {
   const now = deps.now ?? (() => Date.now());
 
   const gate = async (member: GuildMember): Promise<void> => {
+    // A bot join is an administrator's action, not a member's, and the gate
+    // reads as a member gate throughout: an integration added minutes ago has
+    // no account age to speak of and frequently no avatar, so every heuristic
+    // here fires on it at once. Skipped before the window is touched, so a
+    // staffer wiring up three integrations cannot trip the burst threshold and
+    // put the guild into a posture aimed at people. Whether a bot may be added
+    // at all is Discord's own Manage Server permission; this is not the place
+    // to second-guess it, and a `joinAction` of KICK or BAN reaching one would
+    // undo a staff decision and open a moderation case against a webhook.
+    if (member.user.bot) return;
+
     const guildId = await deps.resolveGuild(member.guild.id);
     if (guildId === null) return;
 
