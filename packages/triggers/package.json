@@ -1,5 +1,5 @@
 {
-  "name": "@sbr/panel-core",
+  "name": "@sbr/triggers",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,15 +17,8 @@
     "test": "node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
-    "@sbr/analytics": "*",
-    "@sbr/guild-config": "*",
-    "@sbr/moderation": "*",
-    "@sbr/observability": "*",
-    "@sbr/roles": "*",
-    "@sbr/screening": "*",
-    "@sbr/triggers": "*",
-    "@sbr/shared-types": "*",
-    "@sbr/tickets": "*",
-    "@sbr/xp": "*"
+    "@sbr/brand": "*",
+    "@sbr/embed-kit": "*",
+    "@sbr/shared-types": "*"
   }
 }

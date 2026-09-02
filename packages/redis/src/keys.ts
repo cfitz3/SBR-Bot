@@ -180,6 +180,10 @@ export function createKeyFactory(prefix: string) {
       p(`dedup:milestone:${accountId}:${type}:${threshold}`),
     dedupReminder: (eventId: string, offset: string) => p(`dedup:reminder:${eventId}:${offset}`),
     dedupEvent: (eventId: string) => p(`dedup:event:${eventId}`),
+    // A trigger firing. Keyed by rule and message rather than by message
+    // alone: two boards watching the same channel are two decisions, and a
+    // message can legitimately reach both.
+    dedupTrigger: (guildId: string, key: string) => p(`dedup:trigger:${guildId}:${key}`),
 
     // 10. Joke counters (`!cringe`). The only fun-command state there is, and
     // the only category here that holds something a member can see days later —

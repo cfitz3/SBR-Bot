@@ -13,6 +13,7 @@
     { "path": "../discord-kit" },
     { "path": "../commands-bridge" },
     { "path": "../commands-admin" },
+    { "path": "../triggers" },
     { "path": "../../brand" }
   ]
 }

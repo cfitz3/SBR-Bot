@@ -97,6 +97,7 @@ import {
   validateWelcome,
 } from "@sbr/roles";
 import { SCREENING_POLICY_KEY, serializePolicy, type ScreeningPolicy } from "@sbr/screening";
+import { MAX_TRIGGER_RULES, TRIGGERS_SETTING_KEY, parseTriggers, validateTriggers } from "@sbr/triggers";
 import {
   CAPABILITIES,
   COOLDOWN_SETTING_KEY,
@@ -179,6 +180,15 @@ export const MUTATION_TIERS = {
    * strict about the scheme rather than trusting the tier alone.
    */
   "help.link": "MODERATOR",
+  /**
+   * Reaction and phrase triggers. Admin, unlike the other two guild-facing
+   * wording settings above it, because a rule is not wording: it can repost a
+   * member's message into a channel they never posted in, pin in a channel they
+   * cannot pin in, and make the bot answer a phrase anybody can say. Each of
+   * those is a write into the server, so this sits at the tier the channel
+   * bindings do.
+   */
+  "config.triggers": "ADMIN",
   /**
    * The ticket menu and the panels advertising it. Admin because a category
    * names the staff roles pulled into a ticket and the Discord category it
@@ -1488,6 +1498,39 @@ export class PanelMutations {
       // that somebody replaced the walkthrough without copying its prose into a
       // log nobody reads.
       return { result, change: { image: next.image !== null, body: next.body !== null } };
+    });
+  }
+
+  /**
+   * The guild's trigger rules, saved whole.
+   *
+   * Whole rather than rule by rule because the list validates as a list: two
+   * rules cannot share an id, and the cap is on the set. A per-rule write would
+   * have to re-read and re-check the other nine anyway, and would leave a window
+   * where a half-applied edit is what the bot is running.
+   *
+   * The stored value is the *parsed* list, not the submitted blob. Validation
+   * has already said the input is legal, so parsing here is what normalises it —
+   * a custom emoji written as `<:star:123>` is stored as `star:123`, which is
+   * the form the gateway reports and therefore the only form that ever matches.
+   */
+  async saveTriggers(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "config.triggers", async () => {
+      const body = asBody(input);
+      if (body === null) return invalid("body must be an object");
+
+      const complaint = validateTriggers(body["rules"]);
+      if (complaint !== null) return invalid(complaint);
+
+      const rules = parseTriggers(body["rules"]);
+      const result = await this.d.config.setSetting(guildId, TRIGGERS_SETTING_KEY, { rules });
+      // How many and which, not their contents: the audit trail should show that
+      // somebody changed the guild's triggers without copying a staff-written
+      // reply into a log line.
+      return {
+        result,
+        change: { rules: rules.length, ids: rules.map((rule) => rule.id), cap: MAX_TRIGGER_RULES },
+      };
     });
   }
 

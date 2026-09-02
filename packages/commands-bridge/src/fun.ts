@@ -378,6 +378,15 @@ export function funSpecs(): readonly CommandSpec[] {
       description: "Add one to somebody's cringe tally",
       options: [{ name: "player", description: "Minecraft username", type: "string", required: true }],
       cooldownMs: 15_000,
+      // Retired. It is the one command here that is about a named person rather
+      // than about a throw or a dice roll, and a public counter of how cringe
+      // somebody is has no version that ages well in a guild that later has to
+      // moderate itself. A guild that wants a running joke on a message now has
+      // a trigger for it, aimed at a message somebody chose to post rather than
+      // at a name anybody can type. The spec stays so the handler stays compiled
+      // and tested; this flag is what deregisters it from Discord and from the
+      // in-game router.
+      enabled: false,
       inGame: true,
       handler: cringe,
     },

@@ -361,7 +361,7 @@ test("the real registry exposes only lookups in-game, and every write requires a
   assert.deepEqual(names, [
     // Fun (§19). They read nothing about anybody and write nothing anybody is
     // accountable for, so they widen the surface by exactly one joke each.
-    "8ball", "coinflip", "cringe", "roll", "rps",
+    "8ball", "coinflip", "roll", "rps",
     // The one diagnostic. Reachable here precisely because guild chat is where
     // a member stands when the relay is the thing that is broken, and it needs
     // no link: it reports on the platform, not on the caller.

@@ -23,6 +23,7 @@
     "@sbr/discord-kit": "*",
     "@sbr/embed-kit": "*",
     "@sbr/shared-types": "*",
-    "@sbr/tickets": "*"
+    "@sbr/tickets": "*",
+    "@sbr/triggers": "*"
   }
 }

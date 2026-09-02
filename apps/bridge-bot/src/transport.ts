@@ -16,11 +16,17 @@ import {
   TextInputStyle,
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
+  Partials,
   type Message,
+  type MessageReaction,
   type ModalSubmitInteraction,
+  type PartialMessageReaction,
+  type PartialUser,
+  type User,
   type TextBasedChannel,
 } from "discord.js";
 import { createBot, type Bot } from "mineflayer";
+import { TRIGGERS_SETTING_KEY, normalizeEmoji, parseTriggers } from "@sbr/triggers";
 import {
   HELP_NAMESPACE,
   PROGRESSION_NAMESPACE,
@@ -54,6 +60,7 @@ import { startLevelAnnouncer } from "./levels.js";
 import { startGoalWatcher } from "./goals.js";
 import { startMilestoneAnnouncer } from "./milestones.js";
 import { createAutoresponder } from "./autoresponder.js";
+import { createTriggerRunner, type TriggerSubject } from "./triggers.js";
 import { createStickyKeeper } from "./sticky.js";
 import { startReminderSweeper } from "./reminders.js";
 import { greetGuildJoin, startGreeter, type GreeterDeps } from "./welcome.js";
@@ -685,7 +692,17 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   }
 
   const discord = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      // Triggers watch reactions, which is its own intent and its own partials.
+      // Without the partials a reaction on a message from before this process
+      // started arrives as a stub and every board silently stops working after
+      // a deploy — the failure that looks like "it only works on new messages".
+      GatewayIntentBits.GuildMessageReactions,
+    ],
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction],
   });
   const handle = createInteractionHandler(app);
   const complete = createAutocompleteHandler(app);
@@ -914,6 +931,61 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
   // Canned replies, cached per guild: this reads the same store the panel edits
   // and `/tag` posts from.
   const autoresponder = createAutoresponder({ listTags: (guildId) => app.tags.listTags(guildId) });
+
+  // Triggers: reaction and phrase rules, and the three things they can do. The
+  // effects are written here because each needs the live client; whether a rule
+  // fired at all was decided offline, in `@sbr/triggers`.
+  const triggers = createTriggerRunner({
+    listRules: async (guildId) =>
+      parseTriggers(await app.handlerDeps.config.getSetting<unknown>(guildId, TRIGGERS_SETTING_KEY)),
+    claim: (guildId, key, ttl) => app.firings.claim(guildId, key, ttl),
+    effects: {
+      async repost(channelId, embed) {
+        const channel = await discord.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased() || !("send" in channel)) return;
+        await (channel as SendableChannel).send({
+          embeds: [toEmbed(embed)],
+          // The card names the author and links back to a message full of
+          // mentions. None of it may ping: being reposted is not a reason to be
+          // notified, and a quoted @everyone would be a second @everyone.
+          allowedMentions: { parse: [] },
+        });
+      },
+      async pin(channelId, messageId) {
+        const channel = await discord.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased() || !("messages" in channel)) return;
+        const message = await (channel as SendableChannel).messages.fetch(messageId).catch(() => null);
+        await message?.pin();
+      },
+      async reply(channelId, messageId, text) {
+        const channel = await discord.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased() || !("messages" in channel)) return;
+        const message = await (channel as SendableChannel).messages.fetch(messageId).catch(() => null);
+        // Staff-written text answering one member: it may notify the person it
+        // replies to and nobody else, the same rule the autoresponder follows.
+        await message?.reply({ content: text, allowedMentions: { repliedUser: true, parse: [] } });
+      },
+    },
+    log: app.log,
+  });
+  app.setTriggers(triggers);
+
+  /** What a repost quotes, read off the live message. */
+  function triggerSubject(message: Message): TriggerSubject {
+    // The first image is shown; anything else is acknowledged rather than
+    // silently dropped, so a card is never a misleadingly complete copy.
+    const attachments = [...message.attachments.values()];
+    const image = attachments.find((file) => (file.contentType ?? "").startsWith("image/")) ?? null;
+    return {
+      authorName: message.author.displayName ?? message.author.username,
+      authorAvatarUrl: message.author.displayAvatarURL(),
+      content: message.content,
+      imageUrl: image?.url ?? null,
+      hasOtherAttachments: attachments.length > (image === null ? 0 : 1),
+      jumpUrl: message.url,
+      postedAt: message.createdAt.toISOString(),
+    };
+  }
 
   // Sticky messages. The keeper is handed to the app because the staff bot's
   // `/sticky` reaches it over the loopback API — the message has to be this
@@ -1578,6 +1650,46 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     });
   });
 
+  // Reaction triggers. Every added reaction is an event on the same message, so
+  // the count is what decides and the ledger is what stops the repeat — nothing
+  // here tries to be clever about "the reaction that crossed the line".
+  discord.on(Events.MessageReactionAdd, (reaction: MessageReaction | PartialMessageReaction, user: User | PartialUser) => {
+    relay("triggers:reaction", async () => {
+      if (user.bot) return;
+      // A reaction on an old message arrives as a stub. Fetching is what makes
+      // a board work on the day it is turned on rather than only on messages
+      // posted after it.
+      const full = reaction.partial ? await reaction.fetch().catch(() => null) : reaction;
+      if (full === null) return;
+      const message = full.message.partial ? await full.message.fetch().catch(() => null) : full.message;
+      if (message === null || message.guildId === null) return;
+
+      const guildId = await resolveInternalGuild();
+      if (!guildId) return;
+
+      const emoji = normalizeEmoji(full.emoji.id === null ? full.emoji.name : `${full.emoji.name}:${full.emoji.id}`);
+      if (emoji === null) return;
+
+      // Whether the author is among the reactors, which is what lets a rule
+      // discount a self-star. Only fetched when it could change the answer.
+      const reactors = full.count !== null && full.count > 0 ? await full.users.fetch().catch(() => null) : null;
+
+      await triggers.onReaction(
+        guildId,
+        {
+          channelId: message.channelId,
+          messageId: message.id,
+          emoji,
+          count: full.count ?? 0,
+          authorId: message.author?.id ?? "",
+          authorIsBot: message.author?.bot === true,
+          authorReacted: message.author !== null && reactors !== null && reactors.has(message.author.id),
+        },
+        triggerSubject(message),
+      );
+    });
+  });
+
   // Discord → in-game relay (only messages in the configured bridge channel).
   discord.on(Events.MessageCreate, (msg: Message) => {
     const bot = session.bot;
@@ -1651,6 +1763,25 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
         .catch((error: unknown) => {
           app.log.warn("autoresponse did not land", { messageId: msg.id, error: String(error) });
         });
+    });
+
+    // Phrase triggers. Separate from the autoresponder on purpose: a tag answers
+    // a question in text, a trigger can also pin or repost, and staff configure
+    // the two in different places for different reasons.
+    relay("triggers:message", async () => {
+      const guildId = await resolveInternalGuild();
+      if (!guildId) return;
+      await triggers.onMessage(
+        guildId,
+        {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          content: msg.content,
+          authorId: msg.author.id,
+          authorIsBot: msg.author.bot,
+        },
+        triggerSubject(msg),
+      );
     });
 
     // Sticky messages: keep the channel's note at the bottom. Skipped for bot

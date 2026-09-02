@@ -80,6 +80,29 @@ export class RedisTallyStore {
   }
 }
 
+/**
+ * FiringLedger — one SET NX, which is the whole point.
+ *
+ * A trigger asks this before it acts, and the answer is authoritative for every
+ * bot process at once. Doing the same job with a read followed by a write would
+ * be correct on one shard and wrong the moment two reactions land together,
+ * which is exactly the traffic a popular starboard message generates.
+ *
+ * A Redis failure surfaces to the caller rather than being swallowed here: the
+ * runner decides whether an unknown answer means "post anyway" or "skip", and
+ * that is a policy decision, not a storage one.
+ */
+export class RedisFiringLedger {
+  constructor(private readonly ctx: RedisContext) {}
+  async claim(guildId: string, key: string, ttlSeconds: number): Promise<boolean> {
+    const ok = await this.ctx.client.set(this.ctx.keys.dedupTrigger(guildId, key), "1", {
+      NX: true,
+      EX: ttlSeconds,
+    });
+    return ok !== null;
+  }
+}
+
 /** What the automod evaluator needs read before it can judge a windowed rule. */
 export interface AutomodCounterRequest {
   readonly ruleId: string;
@@ -1505,5 +1528,6 @@ export function createRedisAdapters(ctx: RedisContext, opts: RedisAdapterOptions
     heartbeat: new RedisHeartbeat(ctx),
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),
     automodCounters: new RedisAutomodCounters(ctx),
+    firings: new RedisFiringLedger(ctx),
   };
 }

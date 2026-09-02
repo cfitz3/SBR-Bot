@@ -1551,6 +1551,7 @@ export const DEFAULT_PANEL = {
       "Added under the platform's steps, not instead of them — anything specific to this guild. Leave empty for none.",
     linkHelpBodyPlaceholder: "Ask in #support if the API option is missing.",
     linkHelpSave: "Save walkthrough",
+    cardTriggers: "Triggers",
     channelUnset: "not set",
     suspendLabel: "Suspend the Discord ↔ in-game bridge",
     suspendHint: "Stops relaying in both directions without taking the bot offline. Commands keep working.",
@@ -1590,6 +1591,53 @@ export const DEFAULT_PANEL = {
     prefixesLabel: "Command prefixes",
     prefixesHint: "In-game chat prefixes the bridge answers to.",
   },
+  /**
+   * Triggers — the starboard card and its relatives.
+   *
+   * Every hint here answers a question the control cannot: what an emoji has to
+   * be written as, why a self-star does not count, what "no channels" means.
+   * The feature is a small rules engine, and a rules engine with no explanation
+   * of its defaults is configured by trial and error against a live server.
+   */
+  triggers: {
+    empty: "No triggers yet. A starboard is the usual first one.",
+    add: "Add a rule",
+    remove: "Remove",
+    save: "Save triggers",
+    capHint: "Up to {n} rules. Each one is checked against every message and reaction in its channels.",
+    newLabel: "Starboard",
+    nameLabel: "Name",
+    nameHint: "Titles the card this rule posts. Stored as `{id}`.",
+    enabled: "Running",
+    whenLabel: "When",
+    whenReaction: "A message reaches a reaction count",
+    whenPhrase: "A message contains a phrase",
+    emojiLabel: "Emoji",
+    emojiHint: "One emoji. A custom one may be pasted as <:name:id> — it is stored as name:id, the form Discord reports.",
+    thresholdLabel: "How many",
+    thresholdHint: "Reactions needed. The author's own reaction is not counted unless you allow it below.",
+    phraseLabel: "Phrase",
+    phrasePlaceholder: "how do i link",
+    phraseHint: "Matched anywhere in the message, ignoring case. Not a pattern — plain words only.",
+    thenLabel: "Then",
+    thenRepost: "Repost it to a channel",
+    thenPin: "Pin it where it was posted",
+    thenReply: "Reply to it",
+    repostLabel: "Post to",
+    repostHint: "Where the card goes. Nothing in it pings, including a quoted mention.",
+    pinHint: "The bot needs Manage Messages in the channel the message is in.",
+    replyLabel: "Reply",
+    replyHint: "Sent as a reply, so it notifies the person it answers and nobody else.",
+    channelsLabel: "Only in",
+    channelsHint: "Leave empty to watch every channel the bot can see.",
+    exemptLabel: "Never in",
+    exemptHint: "Checked first, so a channel listed here is skipped even if it is listed above.",
+    includeBots: "Also trigger on messages from bots",
+    includeSelf: "Count the author's own reaction",
+    channelPlaceholder: "Search channels…",
+    chipRemove: "Remove channel",
+  },
+
   /**
    * Permissions.
    *

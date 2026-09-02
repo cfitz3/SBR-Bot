@@ -723,6 +723,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.saveProgressionMetrics(session, guildId, b));
       case "help.link":
         return sendMutation(res, await m.saveLinkHelp(session, guildId, b));
+      case "config.triggers":
+        return sendMutation(res, await m.saveTriggers(session, guildId, b));
       case "milestone.remove":
         return sendMutation(res, await m.removeMilestone(session, guildId, b["key"]));
       case "ticket.settings.save":

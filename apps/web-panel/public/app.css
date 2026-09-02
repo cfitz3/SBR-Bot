@@ -1489,3 +1489,16 @@ a.guild-switch:hover {
   padding: var(--space-2) 0;
   border-top: 1px solid var(--color-divider);
 }
+
+/* One rule in the trigger editor. Boxed because the editor is a list of
+   composites and, without a boundary, "which emoji belongs to which board"
+   becomes a counting exercise down a column of identical labels. */
+.rule-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--color-neutral-700);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--color-neutral-800) 40%, transparent);
+}

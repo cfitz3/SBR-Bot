@@ -95,6 +95,13 @@ export const DEFAULT_EMBEDS = {
     server: "Server",
     messagesWeek: "Messages this week",
     busiestWeek: "Busiest this week",
+    /* Trigger reposts. "Context" is one field holding the count, the
+       channel and the jump link, rather than three fields of one fact. */
+    context: "Context",
+    reactions: "Reactions",
+    channel: "Channel",
+    source: "Source",
+    attachments: "Attachments",
   },
 
   /**
@@ -440,6 +447,17 @@ export const DEFAULT_EMBEDS = {
      */
     linkConfirmed: "Still linked as **{ign}** — the check passed.",
     helpLinkFooter: "The check reads your Hypixel social field live — nothing is stored from it.",
+
+    /* ── triggers (starboard and its relatives) ── */
+    /** `{label}` — what staff named the rule, so a second board is not mistaken for the first. */
+    triggerTitle: "{label}",
+    /** `{count}` `{emoji}` — what put the message here. */
+    triggerReactions: "{count} × {emoji}",
+    /** The link back to the original, which is the whole point of a repost. */
+    triggerJump: "Jump to message",
+    triggerAttachment: "Attachment on the original",
+    triggerEmpty: "*No text — see the original.*",
+    triggerFooter: "Reposted by a guild trigger.",
 
     /* ── /progression ── */
     /** The empty state, before a member has saved anything at all. */

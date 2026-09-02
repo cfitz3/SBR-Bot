@@ -63,6 +63,7 @@ import {
   renderTicketListEmbed,
   renderWhoisEmbed,
 } from "@sbr/commands-bridge";
+import { renderTriggerPostEmbed } from "@sbr/triggers";
 import type {
   BazaarQuoteDTO,
   DungeonsDTO,
@@ -407,6 +408,18 @@ export const GALLERY: readonly GalleryCard[] = [
     "A guild that has configured nothing still gets the steps.",
     renderLinkHelpEmbed,
     { image: null, body: null },
+  ),
+  card(
+    "starboard",
+    "A trigger repost: who said it, what they said, and why it is here.",
+    renderTriggerPostEmbed,
+    f.STARBOARD,
+  ),
+  card(
+    "starboard-bare",
+    "An image with no caption — the card says so rather than rendering blank.",
+    renderTriggerPostEmbed,
+    f.STARBOARD_BARE,
   ),
   card("goals", "`/goal` — one target moving, one stalled.", renderGoalsEmbed, IGN, f.GOALS),
   card("goals-empty", "No goals set: an invitation, not an error.", renderGoalsEmbed, IGN, []),

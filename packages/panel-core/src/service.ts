@@ -56,6 +56,7 @@ import type {
   XpAdjustmentDTO,
   XpSourcePolicyDTO,
   XpStandingDTO,
+  TriggerRule,
 } from "@sbr/shared-types";
 import {
   parsePolicy,
@@ -63,6 +64,7 @@ import {
   SCREENING_POLICY_KEY,
   type ScreeningPolicyView,
 } from "@sbr/screening";
+import { TRIGGERS_SETTING_KEY, parseTriggers } from "@sbr/triggers";
 import {
   AUTO_ROLES_SETTING_KEY,
   ROLE_MENUS_SETTING_KEY,
@@ -488,6 +490,12 @@ export interface SettingsVM {
    * what the command falls back on — the platform's written steps and no image.
    */
   readonly linkHelp: LinkHelpPolicy;
+  /**
+   * The guild's reaction and phrase triggers, read through the same tolerant
+   * parser the bot runs on: a rule the bot would drop is absent here too, so
+   * the page never shows a board that is not actually running.
+   */
+  readonly triggers: readonly TriggerRule[];
 }
 
 /**
@@ -1259,11 +1267,12 @@ export class PanelService {
     const access = await authorize(session, guildId, "settings", this.d.roles);
     if (!access.allowed) return this.denied(access, "settings", guildId);
 
-    const [config, policy, cards, linkHelp] = await Promise.all([
+    const [config, policy, cards, linkHelp, triggers] = await Promise.all([
       this.d.config.get(guildId),
       this.d.config.getSetting<unknown>(guildId, SCREENING_POLICY_KEY),
       this.d.reads.listGuildCards([guildId]),
       this.d.config.getSetting<unknown>(guildId, LINK_HELP_SETTING_KEY).catch(() => null),
+      this.d.config.getSetting<unknown>(guildId, TRIGGERS_SETTING_KEY).catch(() => null),
     ]);
 
     const cfg = config.ok ? config.value : null;
@@ -1286,6 +1295,7 @@ export class PanelService {
         // Same tolerant parser `/help` reads through, so an image the command
         // would refuse to render shows here as absent rather than as saved.
         linkHelp: parseLinkHelp(linkHelp),
+        triggers: parseTriggers(triggers),
       },
     };
   }
