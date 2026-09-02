@@ -432,6 +432,9 @@ function community(over: Partial<CommunityService> = {}): CommunityService {
     async leaveLfg() { return ok({ ...aPost, slotsFilled: 1, members: ["111"] }); },
     async openTicket(input) { return ok({ ...aTicket, categoryId: input.categoryId }); },
     async closeTicket() { return ok({ ...aTicket, status: "CLOSED", closeReason: "sorted" }); },
+    // `/ticket action:close` re-reads the ticket to check the guild before the
+    // lifecycle sees it, so the base fake has to answer.
+    async getTicket() { return ok(aTicket); },
     async listTickets() { return ok([aTicket]); },
     async listTicketCategories(guildId) { return ok(seededCategories(guildId)); },
     async getApplication() { return ok(null); },
@@ -1519,6 +1522,22 @@ test("a failed capability read denies rather than grants ticket staff", async ()
 test("/ticket action:close without an id asks for one", async () => {
   const r = await makeDispatcher().dispatch("ticket", ctx({ args: recordArgs({ action: "close" }) }));
   assert.match(r.text, /Which ticket/);
+});
+
+test("a ticket from another guild is not closeable by its id", async () => {
+  // The lifecycle is handed an id and an actor, so the staff check would be
+  // answered against the wrong server's capabilities. Refused before that.
+  let closed = 0;
+  const c = community({
+    async getTicket() { return ok({ ...aTicket, guildId: "g2" }); },
+    async closeTicket() { closed += 1; return ok(aTicket); },
+  });
+  const r = await makeDispatcher({ community: c }).dispatch(
+    "ticket",
+    ctx({ args: recordArgs({ action: "close", id: "t1" }) }),
+  );
+  assert.match(r.text, /couldn't find a ticket/);
+  assert.equal(closed, 0);
 });
 
 test("/ticket action:close confirms and shows the reason", async () => {

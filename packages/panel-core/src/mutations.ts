@@ -3577,6 +3577,15 @@ export class PanelMutations {
       if (!accept && note.length === 0) return invalid("a reason is required when rejecting");
       if (note.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
 
+      // Same reasoning as `closeTicket`: `decideApplication` takes an id and a
+      // reviewer, not a guild, so an application from another server would
+      // otherwise be decidable from this one's page.
+      const found = await this.d.community.getApplication(applicationId);
+      if (!found.ok) return { result: found, change: { applicationId } };
+      if (found.value === null || found.value.guildId !== guildId) {
+        return invalid("no such application");
+      }
+
       const result = await this.d.community.decideApplication({
         applicationId,
         reviewerDiscordId: actorDiscordId,
@@ -3600,6 +3609,15 @@ export class PanelMutations {
       const note = typeof reason === "string" ? reason.trim() : "";
       if (note.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
 
+      // The ticket services key on the ticket id alone and know nothing about
+      // which server is asking, so this is the only place the guild can be
+      // checked. Without it a moderator of one guild could act on another
+      // guild's ticket by pasting its id into their own page — the same hole
+      // `updateEvent` and `resendTicketTranscript` already close.
+      const found = await this.d.community.getTicket(ticketId);
+      if (!found.ok) return { result: found, change: { ticketId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such ticket");
+
       const result = await this.d.community.closeTicket(
         ticketId,
         staffActor(actorDiscordId),
@@ -3621,6 +3639,11 @@ export class PanelMutations {
       if (typeof ticketId !== "string" || !ENTITY_ID.test(ticketId)) {
         return invalid("ticketId must be a ticket id");
       }
+      // Guild-scoped for the reason spelled out on `closeTicket`.
+      const found = await this.d.community.getTicket(ticketId);
+      if (!found.ok) return { result: found, change: { ticketId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such ticket");
+
       const result = await this.d.community.claimTicket(ticketId, staffActor(actorDiscordId));
       return { result, change: { ticketId } };
     });
@@ -3640,6 +3663,11 @@ export class PanelMutations {
       if (typeof toDiscordId !== "string" || !SNOWFLAKE.test(toDiscordId)) {
         return invalid("toDiscordId must be a Discord user id");
       }
+      // Guild-scoped for the reason spelled out on `closeTicket`.
+      const found = await this.d.community.getTicket(ticketId);
+      if (!found.ok) return { result: found, change: { ticketId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such ticket");
+
       const result = await this.d.community.transferTicket(ticketId, staffActor(actorDiscordId), toDiscordId);
       return { result, change: { ticketId, toDiscordId } };
     });

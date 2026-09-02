@@ -165,6 +165,8 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
   const community = {
     decideApplication: record("decideApplication"),
     closeTicket: record("closeTicket"),
+    claimTicket: record("claimTicket"),
+    transferTicket: record("transferTicket"),
     setMemberRole: record("setMemberRole"),
     createEvent: record("createEvent"),
     cancelEvent: record("cancelEvent"),
@@ -178,6 +180,19 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
       recorded.calls.push({ method: "getEvent", args: [eventId] });
       if (eventId === "evt_gone") return ok(null);
       return ok({ id: eventId, guildId: eventId === "evt_other" ? "g2" : "g1" });
+    },
+    // Tickets and applications answer the same way and for the same reason:
+    // their services key on the id alone, so the mutation layer re-reads them
+    // to check the guild. `*_other` belongs to g2; `*_gone` to nobody.
+    async getTicket(ticketId: string) {
+      recorded.calls.push({ method: "getTicket", args: [ticketId] });
+      if (ticketId === "t_gone") return ok(null);
+      return ok({ id: ticketId, guildId: ticketId === "t_other" ? "g2" : "g1", number: 7, transcriptReady: true });
+    },
+    async getApplication(applicationId: string) {
+      recorded.calls.push({ method: "getApplication", args: [applicationId] });
+      if (applicationId === "app_gone") return ok(null);
+      return ok({ id: applicationId, guildId: applicationId === "app_other" ? "g2" : "g1" });
     },
   } as unknown as CommunityService;
   const identity = { unlink: record("unlink") } as unknown as IdentityService;
@@ -931,9 +946,31 @@ test("a rejection must carry a reason; an acceptance need not", async () => {
   assert.equal(bare.error?.kind, "INVALID_INPUT");
 
   assert.equal((await mutations.decideApplication(session(), "g1", "app1", true, null)).ok, true);
-  assert.deepEqual(recorded.calls[0]?.args, [
+  assert.deepEqual(recorded.calls.find((c) => c.method === "decideApplication")?.args, [
     { applicationId: "app1", reviewerDiscordId: "111", accept: true, reason: null },
   ]);
+});
+
+test("a ticket or application from another guild is not reachable by its id", async () => {
+  // The services behind these take an id and an actor and nothing else, so the
+  // guild check exists only here. Pasting another server's id into this page's
+  // request has to read as "no such thing", not as a successful write.
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  for (const result of [
+    await mutations.closeTicket(session(), "g1", "t_other", "handled"),
+    await mutations.closeTicket(session(), "g1", "t_gone", "handled"),
+    await mutations.claimTicket(session(), "g1", "t_other"),
+    await mutations.transferTicket(session(), "g1", "t_other", "222222222222222222"),
+    await mutations.decideApplication(session(), "g1", "app_other", true, null),
+    await mutations.decideApplication(session(), "g1", "app_gone", true, null),
+  ]) {
+    assert.equal(result.error?.kind, "INVALID_INPUT");
+  }
+
+  // Read, refused, and never acted on.
+  const acted = recorded.calls.filter((c) => !["getTicket", "getApplication"].includes(c.method));
+  assert.deepEqual(acted, []);
 });
 
 test("application decisions are Officer work, ticket closes are Staff work", async () => {

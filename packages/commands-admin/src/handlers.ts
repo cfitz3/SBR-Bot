@@ -934,7 +934,13 @@ const applicationReview: AdminHandler = async (ctx, deps) => {
   if (id) {
     const result = await deps.community.getApplication(id);
     if (!result.ok) return { ephemeral: true, text: "Couldn't load that application." };
-    if (result.value === null) return { ephemeral: true, text: "I couldn't find an application with that id." };
+    // `getApplication` takes an id and nothing else, so a staffer of one server
+    // could otherwise read another server's application by pasting its id. The
+    // answer is the same as for an id that does not exist: telling them it
+    // exists elsewhere is the leak, in smaller print.
+    if (result.value === null || result.value.guildId !== ctx.guildId) {
+      return { ephemeral: true, text: "I couldn't find an application with that id." };
+    }
     return {
       ephemeral: true,
       text: `Application ${result.value.id} — ${result.value.status.toLowerCase()}.`,
@@ -961,6 +967,15 @@ function decideHandler(accept: boolean): AdminHandler {
     const id = ctx.args.getString("id");
     if (!id) return { ephemeral: true, text: "Which application? Pass `id:` — /application-review lists them." };
     const reason = ctx.args.getString("reason");
+
+    // Scoped for the same reason `/application-review` is, and with more at
+    // stake: accepting promotes the applicant onto *this* guild's roster below,
+    // so an id from another server would add a stranger to it.
+    const found = await deps.community.getApplication(id);
+    if (!found.ok) return { ephemeral: true, text: "Couldn't load that application." };
+    if (found.value === null || found.value.guildId !== ctx.guildId) {
+      return { ephemeral: true, text: "I couldn't find an application with that id." };
+    }
 
     const result = await deps.community.decideApplication({
       applicationId: id,

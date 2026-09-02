@@ -306,6 +306,15 @@ const ticket: CommandHandler = async (ctx, deps) => {
       discordId: ctx.userId,
       isStaff: await deps.identity.hasCapability(ctx.guildId, ctx.userId, "TICKET_MANAGE").catch(() => false),
     };
+    // And the guild is checked too, because the lifecycle cannot: it is handed
+    // a ticket id and an actor, so "is this staffer allowed" gets answered
+    // against the wrong server's capabilities for an id from another one.
+    const found = await deps.community.getTicket(id);
+    if (!found.ok) return { ephemeral: true, text: "Couldn't load that ticket." };
+    if (found.value === null || found.value.guildId !== ctx.guildId) {
+      return { ephemeral: true, text: "I couldn't find a ticket with that id." };
+    }
+
     const result = await deps.community.closeTicket(id, actor, ctx.args.getString("reason"));
     if (!result.ok) {
       return {

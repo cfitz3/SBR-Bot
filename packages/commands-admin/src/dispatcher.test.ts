@@ -107,6 +107,11 @@ const member: MemberSummaryDTO = {
   guildId: "g1", discordId: TARGET, ign: "Target", role: "MODERATOR",
   status: "ACTIVE", guildRank: null, joinedAt: null,
 };
+const anApplication: ApplicationDTO = {
+  id: "a1", guildId: "g1", applicantDiscordId: "555", status: "SUBMITTED",
+  submittedAt: "2026-08-01T00:00:00.000Z", reviewerDiscordId: null, decisionReason: null, decidedAt: null,
+};
+
 function community(over: Partial<CommunityService> = {}): CommunityService {
   // Partial by design: admin handlers touch a handful of community methods, and
   // the rest of the contract is covered by packages/community's own tests.
@@ -114,6 +119,9 @@ function community(over: Partial<CommunityService> = {}): CommunityService {
     async listUpcomingEvents() { return ok([]); },
     async listMembers() { return ok([]); },
     async listApplications() { return ok([]); },
+    // Every application handler re-reads the row to check it belongs to the
+    // guild the command was typed in, so the base fake has to answer.
+    async getApplication() { return ok(anApplication); },
     async setMemberRole() { return ok(member); },
     ...over,
   };
@@ -668,11 +676,6 @@ test("infractions reports the count", async () => {
 
 // ─────────────── Applications (COMMANDS.md /application-review) ───────────────
 
-const anApplication: ApplicationDTO = {
-  id: "a1", guildId: "g1", applicantDiscordId: "555", status: "SUBMITTED",
-  submittedAt: "2026-08-01T00:00:00.000Z", reviewerDiscordId: null, decisionReason: null, decidedAt: null,
-};
-
 test("/application-review with no id lists what's waiting", async () => {
   const c = community({ async listApplications() { return ok([anApplication]); } });
   const r = await make({ community: c }).dispatch("application-review", ctx({ args: recordArgs({}) }));
@@ -691,6 +694,25 @@ test("/application-review says so when the id doesn't exist", async () => {
   const c = community({ async getApplication() { return ok(null); } });
   const r = await make({ community: c }).dispatch("application-review", ctx({ args: recordArgs({ id: "nope" }) }));
   assert.match(r.text, /couldn't find an application/);
+});
+
+test("an application from another guild is not decidable by its id", async () => {
+  // Accepting promotes the applicant onto *this* guild's roster, so an id from
+  // another server would add a stranger to it. Answered as "no such id".
+  let decided = 0;
+  const c = community({
+    async getApplication() { return ok({ ...anApplication, guildId: "g2" }); },
+    async decideApplication() { decided += 1; return ok(anApplication); },
+  });
+  const r = await make({ community: c }).dispatch("accept-member", ctx({ args: recordArgs({ id: "a1" }) }));
+  assert.match(r.text, /couldn't find an application/);
+  assert.equal(decided, 0);
+
+  const seen = await make({ community: c }).dispatch(
+    "application-review",
+    ctx({ args: recordArgs({ id: "a1" }) }),
+  );
+  assert.match(seen.text, /couldn't find an application/);
 });
 
 test("/accept-member records the decision and promotes the applicant", async () => {
