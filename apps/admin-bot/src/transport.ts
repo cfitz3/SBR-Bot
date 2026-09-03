@@ -24,6 +24,7 @@ import { ComponentRouter, interactionArgs, replyOptions, respond, toSlashCommand
 import { recordArgs } from "@sbr/shared-types";
 import { attachDiscordModObserver } from "./discord-mod-observer.js";
 import { attachMemberObserver } from "./member-observer.js";
+import { attachUtilityComponents } from "./utility-components.js";
 import type { AdminApp } from "./composition.js";
 
 /**
@@ -250,6 +251,10 @@ export async function startAdminGateway(
   attachFeatureMenu(components, app);
 
   attachLockdownButtons(components, app);
+
+  // The staff utilities put their verbs on cards; every click re-enters the
+  // dispatcher, so the role floor and the destructive gate stay on one path.
+  attachUtilityComponents(components, app);
 
   // Joins and leaves go straight onto the bus; nothing is rendered here.
   attachMemberObserver(client, {

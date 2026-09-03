@@ -921,19 +921,25 @@ function ticketCommunity(rows: readonly TicketDTO[] = [ticket()]): CommunityServ
   } as Partial<CommunityService>);
 }
 
-test("/tickets list shows the open queue", async () => {
+test("/tickets with no id shows the open queue and offers it as a picker", async () => {
+  // No `action:` — the queue is what the bare command means, and reaching one
+  // ticket is a pick rather than a number the staffer has to already know.
   const r = await make({ roles: roles({ actor: "MODERATOR" }), community: ticketCommunity() }).dispatch(
     "tickets",
-    ctx({ args: recordArgs({ action: "list" }) }),
+    ctx({ args: recordArgs({}) }),
   );
   assert.match(r.text, /1 open/);
-  assert.match(r.embed?.fields?.[0]?.name ?? "", /#12/);
+  assert.match(r.embed?.fields?.[0]?.value ?? "", /#12/);
+  assert.deepEqual(
+    r.components?.[0]?.select?.options.map((o) => o.value),
+    ["tkt-1"],
+  );
 });
 
 test("/tickets view accepts the number staff actually say", async () => {
   const r = await make({ roles: roles({ actor: "MODERATOR" }), community: ticketCommunity() }).dispatch(
     "tickets",
-    ctx({ args: recordArgs({ action: "view", id: "#12" }) }),
+    ctx({ args: recordArgs({ id: "#12" }) }),
   );
   assert.match(r.embed?.title ?? "", /Ticket #12/);
 });
@@ -1006,13 +1012,21 @@ function menuBridge(over: Partial<RoleMenuBridge> = {}): RoleMenuBridge {
   };
 }
 
-test("/rolemenu list names the menus and where they live", async () => {
+test("/rolemenu with no id names the menus and where they live", async () => {
   const r = await make({ roles: roles({ actor: "OFFICER" }), roleMenuBridge: menuBridge() }).dispatch(
     "rolemenu",
-    ctx({ args: recordArgs({ action: "list" }) }),
+    ctx({ args: recordArgs({}) }),
   );
-  assert.match(r.text, /colours/);
-  assert.match(r.text, /not posted/);
+  const built = r.embed?.fields?.[0]?.value ?? "";
+  // The card names the menu the way staff named it; the slug is machinery and
+  // belongs in the control, not on the face of the card.
+  assert.match(built, /Pick a colour/);
+  assert.equal(built.includes("colours"), false);
+  assert.match(built, /not posted/);
+  assert.deepEqual(
+    r.components?.[0]?.select?.options.map((o) => o.value),
+    ["colours"],
+  );
 });
 
 test("/rolemenu post defaults to the channel it was typed in", async () => {
@@ -1028,6 +1042,8 @@ test("/rolemenu post defaults to the channel it was typed in", async () => {
   }).dispatch("rolemenu", ctx({ args: recordArgs({ action: "post", id: "colours" }) }));
   assert.deepEqual(seen, ["333333333333333333"]);
   assert.match(r.text, /Updated/);
+  // The implied channel is named in the reply, so the default stops being silent.
+  assert.match(r.embed?.description ?? "", /<#333333333333333333>/);
 });
 
 test("/rolemenu post reports the bridge's own words when it refuses", async () => {
@@ -1045,7 +1061,7 @@ test("/rolemenu post reports the bridge's own words when it refuses", async () =
 test("/rolemenu without a bridge says so rather than pretending", async () => {
   const r = await make({ roles: roles({ actor: "OFFICER" }) }).dispatch(
     "rolemenu",
-    ctx({ args: recordArgs({ action: "list" }) }),
+    ctx({ args: recordArgs({}) }),
   );
   assert.match(r.text, /bridge bot isn't running/);
 });
@@ -1078,15 +1094,27 @@ function stickyBridge(over: Partial<StickyBridge> = {}): StickyBridge {
   };
 }
 
-test("/sticky list names the channels and shows one line of each note", async () => {
+test("/sticky with nothing typed lists the channels, one line of each", async () => {
   const r = await make({ roles: roles({ actor: "OFFICER" }), stickyBridge: stickyBridge() }).dispatch(
     "sticky",
-    ctx({ args: recordArgs({ action: "list" }) }),
+    ctx({ args: recordArgs({}) }),
   );
-  assert.match(r.text, /<#444444444444444444>/);
-  assert.match(r.text, /Read the rules\./);
+  const where = r.embed?.fields?.[0]?.value ?? "";
+  assert.match(where, /<#444444444444444444>/);
+  assert.match(where, /Read the rules\./);
   // The second line of the note is not part of the summary.
-  assert.equal(r.text.includes("Seriously"), false);
+  assert.equal(where.includes("Seriously"), false);
+});
+
+test("a bare /sticky answers about the server, not about the channel it was typed in", async () => {
+  // Falling back to "here" would answer a question about the server with a card
+  // about one channel — usually the staff room the staffer happened to be in.
+  const r = await make({ roles: roles({ actor: "OFFICER" }), stickyBridge: stickyBridge() }).dispatch(
+    "sticky",
+    ctx({ args: recordArgs({}) }),
+  );
+  assert.equal(r.embed?.title, "Sticky messages");
+  assert.equal(r.components?.[0]?.select?.customId, "sticky:show:-");
 });
 
 test("/sticky set defaults to the channel it was typed in", async () => {
@@ -1099,18 +1127,20 @@ test("/sticky set defaults to the channel it was typed in", async () => {
         return { ok: true, created: true, applied: true };
       },
     }),
-  }).dispatch("sticky", ctx({ args: recordArgs({ action: "set", message: "No trading here" }) }));
+  }).dispatch("sticky", ctx({ args: recordArgs({ message: "No trading here" }) }));
 
   assert.deepEqual(seen, ["333333333333333333"]);
   assert.match(r.text, /Sticky set in/);
 });
 
-test("/sticky set with nothing to say explains itself instead of storing an empty note", async () => {
+test("/sticky with only whitespace reads as a look, not as an empty note", async () => {
+  // Blank input used to be an error about usage. It is now the same thing as
+  // typing nothing, which is what somebody who tabbed through the field meant.
   const r = await make({ roles: roles({ actor: "OFFICER" }), stickyBridge: stickyBridge() }).dispatch(
     "sticky",
-    ctx({ args: recordArgs({ action: "set", message: "   " }) }),
+    ctx({ args: recordArgs({ message: "   " }) }),
   );
-  assert.match(r.text, /Usage/);
+  assert.equal(r.embed?.title, "Sticky messages");
 });
 
 test("a saved sticky the bridge could not post says when it will appear", async () => {
@@ -1121,7 +1151,7 @@ test("a saved sticky the bridge could not post says when it will appear", async 
         return { ok: true, created: false, applied: false };
       },
     }),
-  }).dispatch("sticky", ctx({ args: recordArgs({ action: "set", message: "hi" }) }));
+  }).dispatch("sticky", ctx({ args: recordArgs({ message: "hi" }) }));
 
   assert.match(r.text, /Updated the sticky/);
   assert.match(r.text, /next time somebody talks/);
@@ -1154,7 +1184,7 @@ test("a cleared sticky the bridge could not reach admits the old message is stil
 test("/sticky without a bridge says so rather than saving what nothing will post", async () => {
   const r = await make({ roles: roles({ actor: "OFFICER" }) }).dispatch(
     "sticky",
-    ctx({ args: recordArgs({ action: "list" }) }),
+    ctx({ args: recordArgs({}) }),
   );
   assert.match(r.text, /bridge bot isn't running/);
 });
