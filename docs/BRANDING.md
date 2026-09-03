@@ -107,8 +107,8 @@ ago: "{span} ago",
 
 ```ts
 export const themeOverride: DeepPartial<Theme> = {
-  embed: { colors: { INFO: 0x9184d9 } },
-  panel: { colors: { accent: "#9184d9" }, chrome: { themeColor: "#161826" } },
+  embed: { colors: { INFO: 0xc2703d } },
+  panel: { colors: { accent: "#c2703d" }, chrome: { themeColor: "#140f0c" } },
 };
 ```
 

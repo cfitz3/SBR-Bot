@@ -58,16 +58,27 @@ import type {
   XpSourcePolicyDTO,
   WordAction,
   WordlistError,
+  NewWordlistRule,
   WordlistRuleUpdate,
   WordlistService,
   WordMatchType,
 } from "@sbr/shared-types";
 import {
+  ANTIRAID_SETTING_KEY,
   AUTOMOD_ACTION_TYPES,
   AUTOMOD_SETTING_KEY,
   AUTOMOD_TRIGGER_KINDS,
+  defaultAntiRaidRules,
+  describeAntiRaidRules,
   ESCALATION_SETTING_KEY,
   evaluateAutomod,
+  findPack,
+  packRules,
+  parseAntiRaid,
+  validatePattern,
+  WORDLIST_PACKS_SETTING_KEY,
+  RAID_JOIN_ACTIONS,
+  simulateRaid,
   MAX_GAME_MUTE_SECONDS,
   parseAutomod,
   RELAY_DISCORD_ACTIONS,
@@ -78,7 +89,11 @@ import {
   type AutomodRule,
   type AutomodTrigger,
   type AutomodTriggerKind,
+  type AntiRaidRules,
   type EscalationAction,
+  type PackSelection,
+  type RaidJoinAction,
+  type SimulatedJoin,
   type RelayDiscordAction,
   type RelayGameAction,
   type RelaySyncRow,
@@ -223,6 +238,11 @@ export const MUTATION_TIERS = {
    */
   "wordlist.upsert": "ADMIN",
   "wordlist.delete": "ADMIN",
+  // Enabling a pack changes what the filter does to every member at once, and
+  // a bulk import can add two hundred rules in one press. Both are the same
+  // authority as writing a rule by hand, held at the same level.
+  "wordlist.packs.save": "ADMIN",
+  "wordlist.import": "ADMIN",
   "moderation.defaults": "ADMIN",
   /**
    * The Discord→in-game punishment mapping. Admin because a row here turns a
@@ -250,6 +270,19 @@ export const MUTATION_TIERS = {
    * halfway, which is what an operator wants at the moment they want it.
    */
   "automod.enable": "ADMIN",
+  /**
+   * The anti-raid rules. Admin, and for a sharper reason than automod's: these
+   * numbers decide who gets through the door at all, and a threshold set too
+   * tight turns an ordinary busy evening into a server that kicks everybody
+   * who arrives.
+   */
+  "antiraid.save": "ADMIN",
+  /**
+   * The anti-raid dry run. Moderator, on `automod.test`'s reasoning — it stores
+   * nothing and gates nobody, and the person who needs to know why a member was
+   * turned away is the moderator reading the flag.
+   */
+  "antiraid.test": "MODERATOR",
   /**
    * The auto-role rules. Admin because a rule hands out Discord roles to
    * members with nobody in the loop, and one of those roles can be the one
@@ -657,6 +690,18 @@ const MAX_MILESTONE_REWARD = 1_000_000;
  * stable — a guild renames the `name` beside it instead.
  */
 const TICKET_KEY = /^[a-z0-9]+(?:[.:-][a-z0-9]+)*$/;
+/**
+ * Category keys, however, are matched case-insensitively.
+ *
+ * The five categories the platform seeds at install carry the upper-case names
+ * the old `TicketCategory` enum used — `SUPPORT`, `REPORT`, `APPEAL`,
+ * `APPLICATION`, `OTHER` — so a lower-case-only rule here rejects the
+ * platform's own rows: an admin could not put a seeded category on a panel,
+ * disable it, or delete it, and the panel blamed their input for it. New keys
+ * are still lower-cased on the way in by the editor; this rule exists so the
+ * data that already exists remains addressable.
+ */
+const TICKET_CATEGORY_KEY = /^[A-Za-z0-9]+(?:[.:-][A-Za-z0-9]+)*$/;
 const TICKET_NAME_MAX = 80;
 /** Discord truncates a select-menu option description at 100 characters. */
 const TICKET_DESCRIPTION_MAX = 100;
@@ -713,6 +758,15 @@ const WORDLIST_NOTE_MAX = 500;
 const MAX_WORD_SEVERITY = 10;
 const WORD_MATCH_TYPES: readonly WordMatchType[] = ["EXACT", "SUBSTRING", "REGEX", "WILDCARD"];
 const WORD_ACTIONS: readonly WordAction[] = ["FLAG", "REPLACE", "BLOCK", "SHADOW_MUTE"];
+/**
+ * The ceiling on one import.
+ *
+ * Not a storage limit — it is the number past which nobody has read what they
+ * are uploading. An import of five hundred patterns from a list found online is
+ * how a guild ends up filtering a word its own members use, discovering it a
+ * week later, and having no idea which of five hundred rows did it.
+ */
+const MAX_IMPORT_RULES = 200;
 
 /** A ladder longer than this is a sign somebody is editing it by mistake. */
 const MAX_ESCALATION_RUNGS = 10;
@@ -1647,8 +1701,8 @@ export class PanelMutations {
       const body = input as Record<string, unknown>;
 
       const key = body["key"];
-      if (typeof key !== "string" || !TICKET_KEY.test(key)) {
-        return invalid("key must be lowercase words joined by - . or :");
+      if (typeof key !== "string" || !TICKET_CATEGORY_KEY.test(key)) {
+        return invalid("key must be words joined by - . or :");
       }
       const name = body["name"];
       if (typeof name !== "string" || name.trim().length === 0 || name.length > TICKET_NAME_MAX) {
@@ -1774,7 +1828,9 @@ export class PanelMutations {
     return this.run(session, guildId, "ticket.category.remove", async () => {
       const tickets = this.d.tickets;
       if (tickets === undefined) return unavailable("Tickets are not enabled on this deployment");
-      if (typeof key !== "string" || !TICKET_KEY.test(key)) return invalid("key must be a ticket category key");
+      if (typeof key !== "string" || !TICKET_CATEGORY_KEY.test(key)) {
+        return invalid("key must be a ticket category key");
+      }
       // Refused here, with a reason, rather than left to the repository's
       // backstop — which would answer `removed: false` and read to the admin as
       // "it was already gone", about a category still sitting on their page.
@@ -1797,9 +1853,16 @@ export class PanelMutations {
   /**
    * Compose a panel, or edit one that already exists.
    *
-   * The category count decides the style Discord will accept, so it is checked
-   * here rather than at publish time: a panel that cannot be rendered should
-   * fail while the admin is looking at the form, not silently later.
+   * The upper category count decides the style Discord will accept, so it is
+   * checked here rather than at publish time: a panel that cannot be rendered
+   * should fail while the admin is looking at the form, not silently later.
+   *
+   * The lower bound is deliberately *not* checked here. A panel is named and
+   * given a channel before its categories are chosen — the create form has no
+   * category picker on it, because there is no panel to attach one to yet — so
+   * refusing an empty list made the panel impossible to create at all. Empty
+   * is a draft; `publishTicketPanel` is where it has to be answered, and that
+   * is where the refusal now lives.
    */
   async upsertTicketPanel(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
     return this.run(session, guildId, "ticket.panel.upsert", async () => {
@@ -1841,18 +1904,24 @@ export class PanelMutations {
         return invalid(`style must be one of ${PANEL_STYLES.join(", ")}`);
       }
       const categoryKeys = body["categoryKeys"];
-      if (
-        !Array.isArray(categoryKeys) ||
-        categoryKeys.length === 0 ||
-        categoryKeys.some((entry) => typeof entry !== "string" || !TICKET_KEY.test(entry))
-      ) {
-        return invalid("categoryKeys must be a non-empty list of category keys");
+      if (!Array.isArray(categoryKeys)) return invalid("categoryKeys must be a list of category keys");
+      // Each fault gets its own sentence, and a bad key is quoted back.
+      // Collapsing these into one message is what made the create form appear
+      // to reject an empty list when it was really rejecting the key format:
+      // the admin read "non-empty" and had no way to see which key was at
+      // fault, because the message never named one.
+      const badKey = categoryKeys.find(
+        (entry) => typeof entry !== "string" || !TICKET_CATEGORY_KEY.test(entry),
+      );
+      if (badKey !== undefined) {
+        return invalid(`"${String(badKey)}" is not a category key`);
       }
       // Order is content, not presentation — the buttons appear in the order
       // given — so duplicates are rejected rather than deduped behind the
       // admin's back, which would silently reorder what they typed.
       const keys = categoryKeys as readonly string[];
-      if (new Set(keys).size !== keys.length) return invalid("categoryKeys must not repeat a category");
+      const repeated = keys.find((key, at) => keys.indexOf(key) !== at);
+      if (repeated !== undefined) return invalid(`"${repeated}" is on this panel twice`);
       const cap = style === "BUTTONS" ? MAX_PANEL_BUTTON_CATEGORIES : MAX_PANEL_SELECT_CATEGORIES;
       if (keys.length > cap) {
         // Discord's caps, stated as Discord's: five buttons to a row, 25
@@ -1920,6 +1989,21 @@ export class PanelMutations {
       const panel = panels.find((row) => row.id === id);
       if (panel === undefined) return invalid("no such panel");
       if (panel.channelId === null) return invalid("give the panel a channel before publishing it");
+      // The other half of the draft/publish split described on
+      // `upsertTicketPanel`. A panel with nothing enabled on it renders to a
+      // message with no controls, which Discord accepts and no member can use,
+      // so it is refused here — with the reason, while an admin is reading.
+      const categories = await tickets.listCategories(guildId);
+      const enabled = panel.categoryKeys.filter((key) =>
+        categories.some((row) => row.key === key && row.enabled),
+      );
+      if (enabled.length === 0) {
+        return invalid(
+          panel.categoryKeys.length === 0
+            ? "add a category to the panel before publishing it"
+            : "every category on this panel is disabled or deleted",
+        );
+      }
 
       try {
         await effects.publishPanel(guildId, id, actorDiscordId);
@@ -2108,6 +2192,182 @@ export class PanelMutations {
       } catch (error) {
         return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
       }
+    });
+  }
+
+  /**
+   * Turn packaged lists on or off, and mute individual rules inside them.
+   *
+   * The whole selection is sent every time rather than one toggle at a time.
+   * The alternative is a per-pack endpoint that leaves the panel able to send
+   * "suppress this rule" for a pack that is off, which is a state nobody can
+   * see and nobody meant.
+   *
+   * Suppressions are kept for packs that are off, deliberately. A guild that
+   * switches Risky links off for a week and back on again should not silently
+   * get the bit.ly rule it had already decided against; the mute it typed
+   * outlives the toggle.
+   */
+  async saveWordlistPacks(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.packs.save", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const rawEnabled = body["enabled"];
+      if (!Array.isArray(rawEnabled)) return invalid("enabled must be an array of pack ids");
+      const enabled: string[] = [];
+      for (const id of rawEnabled) {
+        if (typeof id !== "string" || findPack(id) === null) {
+          return invalid(`no packaged list is called "${String(id)}"`);
+        }
+        if (!enabled.includes(id)) enabled.push(id);
+      }
+
+      const rawSuppressed = body["suppressed"] ?? [];
+      if (!Array.isArray(rawSuppressed)) return invalid("suppressed must be an array of pack rule keys");
+      const suppressed: string[] = [];
+      for (const key of rawSuppressed) {
+        if (typeof key !== "string") return invalid("suppressed entries must be strings");
+        const [packId, ruleKey] = key.split(":");
+        const pack = packId === undefined ? null : findPack(packId);
+        // Checked against the catalogue so a stale panel cannot write a mute
+        // for a rule that no longer exists, which would read as a mystery
+        // forever after: the rule is gone, the mute is not.
+        if (pack === null || ruleKey === undefined || !pack.rules.some((r) => r.key === ruleKey)) {
+          return invalid(`no packaged rule is called "${key}"`);
+        }
+        if (!suppressed.includes(key)) suppressed.push(key);
+      }
+
+      const selection: PackSelection = { enabled, suppressed };
+      const result = await this.d.config.setSetting(guildId, WORDLIST_PACKS_SETTING_KEY, selection);
+      if (!result.ok) return { error: { kind: "SERVICE_ERROR", detail: describe(result.error) } };
+      const active = packRules(guildId, selection).length;
+      const listWord = enabled.length === 1 ? "list" : "lists";
+      const ruleWord = active === 1 ? "rule" : "rules";
+      return {
+        result: { ok: true, rulesInForce: active },
+        change: { enabled, suppressed, rulesInForce: active },
+        note: `${enabled.length === 0 ? "No" : String(enabled.length)} packaged ${listWord} on, adding ${active} ${ruleWord}.`,
+      };
+    });
+  }
+
+  /**
+   * Add many rules at once, from a JSON array a guild pasted or uploaded.
+   *
+   * Every row is validated before any row is written, so a file with a bad
+   * regex at line ninety is rejected whole rather than leaving the guild with
+   * eighty-nine rules and a question about which ones landed. Rows that already
+   * exist are skipped rather than refused: an import is usually the second
+   * import, and failing on the overlap would make the feature useless for the
+   * one job it has.
+   *
+   * The reply says what happened to every row. An import that quietly discards
+   * half its input is worse than one that refuses, because the operator walks
+   * away believing the list is in force.
+   */
+  async importWordlist(session: PanelSession | null, guildId: string, input: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "wordlist.import", async (actorDiscordId) => {
+      const wordlist = this.d.wordlist;
+      if (wordlist === undefined) return unavailable("The chat filter is not enabled on this deployment");
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      let rows: unknown;
+      const raw = body["rules"];
+      if (typeof raw === "string") {
+        // Accepting text as well as an array is what lets the page offer a
+        // paste box and a file picker over one endpoint. The parse failure is
+        // reported here, where the operator can see which it was.
+        try {
+          rows = JSON.parse(raw);
+        } catch {
+          return invalid("that is not valid JSON");
+        }
+      } else {
+        rows = raw;
+      }
+      if (!Array.isArray(rows)) return invalid("rules must be a JSON array");
+      if (rows.length === 0) return invalid("the file contains no rules");
+      if (rows.length > MAX_IMPORT_RULES) {
+        return invalid(`an import may carry at most ${MAX_IMPORT_RULES} rules; this one has ${rows.length}`);
+      }
+
+      const parsed: NewWordlistRule[] = [];
+      for (const [index, row] of rows.entries()) {
+        const at = `rule ${index + 1}`;
+        if (typeof row !== "object" || row === null || Array.isArray(row)) {
+          return invalid(`${at} is not an object`);
+        }
+        const r = row as Record<string, unknown>;
+
+        const pattern = r["pattern"];
+        if (typeof pattern !== "string" || pattern.trim().length === 0 || pattern.length > WORDLIST_PATTERN_MAX) {
+          return invalid(`${at}: pattern must be 1-${WORDLIST_PATTERN_MAX} characters`);
+        }
+        const matchType = (r["matchType"] ?? "SUBSTRING") as WordMatchType;
+        if (!WORD_MATCH_TYPES.includes(matchType)) {
+          return invalid(`${at}: matchType must be one of ${WORD_MATCH_TYPES.join(", ")}`);
+        }
+        const action = (r["action"] ?? "FLAG") as WordAction;
+        if (!WORD_ACTIONS.includes(action)) {
+          return invalid(`${at}: action must be one of ${WORD_ACTIONS.join(", ")}`);
+        }
+        const severityRaw = r["severity"] ?? 1;
+        if (typeof severityRaw !== "number" || !Number.isInteger(severityRaw) || severityRaw < 1 || severityRaw > 10) {
+          return invalid(`${at}: severity must be a whole number from 1 to 10`);
+        }
+        // Compiled here rather than left for the service, so a bad regex is
+        // named by its line number instead of arriving as rule 90 of 90.
+        const bad = validatePattern(pattern, matchType);
+        if (bad !== null) return invalid(`${at}: ${bad}`);
+
+        const note = r["note"];
+        if (note !== undefined && note !== null && typeof note !== "string") {
+          return invalid(`${at}: note must be text`);
+        }
+        parsed.push({
+          guildId,
+          pattern,
+          matchType,
+          action,
+          severity: severityRaw,
+          addedByDiscordId: actorDiscordId,
+          note: (note ?? null) as string | null,
+        });
+      }
+
+      let added = 0;
+      let skipped = 0;
+      try {
+        for (const rule of parsed) {
+          const result = await wordlist.add(rule);
+          if (result.ok) {
+            added += 1;
+            continue;
+          }
+          // A duplicate is the expected case on a re-import, not a failure.
+          // Anything else stops the run: the file is wrong in a way the rest of
+          // it is likely to repeat, and half an import is the worst outcome.
+          if (result.error.kind === "DUPLICATE") {
+            skipped += 1;
+            continue;
+          }
+          return { error: wordlistRefusal(result.error) };
+        }
+      } catch (error) {
+        return { error: { kind: "SERVICE_ERROR", detail: describe(error) } };
+      }
+
+      // Patterns stay out of the trail, for the reason `upsertWordlistRule`
+      // gives: the wordlist is the one setting whose contents are the thing it
+      // exists to catch.
+      return {
+        result: { ok: true, added, skipped },
+        change: { added, skipped, submitted: parsed.length },
+        note: `${added} added, ${skipped} already present.`,
+      };
     });
   }
 
@@ -2375,6 +2635,203 @@ export class PanelMutations {
           action: decision.action,
           deleted: decision.deleteMessage,
           rules: decision.matched.map((m) => m.ruleId),
+        },
+        note,
+      };
+    });
+  }
+
+  /**
+   * Save the anti-raid rules.
+   *
+   * Strict where `parseAntiRaid` is lenient, for the reason the automod pair
+   * gives: the parser is salvaging a row that is already stored, this is the
+   * gate deciding what gets stored. A configuration that would parse back into
+   * something other than what the admin typed is refused rather than quietly
+   * corrected, because the correction here is a threshold and the admin would
+   * go on believing their number was the one in force.
+   */
+  async saveAntiRaid(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "antiraid.save", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const enabled = body["enabled"];
+      if (typeof enabled !== "boolean") return invalid("enabled must be a boolean");
+      const autoEngage = body["autoEngage"];
+      if (typeof autoEngage !== "boolean") return invalid("autoEngage must be a boolean");
+      const requireAvatar = body["requireAvatar"];
+      if (typeof requireAvatar !== "boolean") return invalid("requireAvatar must be a boolean");
+      const lockdownOnEngage = body["lockdownOnEngage"];
+      if (typeof lockdownOnEngage !== "boolean") return invalid("lockdownOnEngage must be a boolean");
+
+      const burst = body["burst"];
+      if (typeof burst !== "object" || burst === null || Array.isArray(burst)) {
+        return invalid("burst must be an object");
+      }
+      const burstRow = burst as Record<string, unknown>;
+      const joins = burstRow["joins"];
+      // The floor is 2 rather than 1 because a threshold of one join is not a
+      // burst rule, it is the posture permanently on, and an admin who wants
+      // that has the switch for it.
+      if (!isCount(joins, MAX_ANTIRAID_BURST_JOINS) || joins < 2) {
+        return invalid(`burst.joins must be a whole number from 2 to ${MAX_ANTIRAID_BURST_JOINS}`);
+      }
+      const windowSeconds = burstRow["windowSeconds"];
+      if (!isCount(windowSeconds, MAX_ANTIRAID_WINDOW_SECONDS) || windowSeconds < 5) {
+        return invalid(
+          `burst.windowSeconds must be a whole number from 5 to ${MAX_ANTIRAID_WINDOW_SECONDS}`,
+        );
+      }
+
+      const minAccountAgeHours = body["minAccountAgeHours"];
+      if (!isCount(minAccountAgeHours, MAX_ANTIRAID_ACCOUNT_AGE_HOURS)) {
+        return invalid(
+          `minAccountAgeHours must be a whole number from 0 to ${MAX_ANTIRAID_ACCOUNT_AGE_HOURS}`,
+        );
+      }
+
+      const joinAction = body["joinAction"];
+      if (
+        typeof joinAction !== "string" ||
+        !(RAID_JOIN_ACTIONS as readonly string[]).includes(joinAction)
+      ) {
+        return invalid(`joinAction must be one of ${RAID_JOIN_ACTIONS.join(", ")}`);
+      }
+
+      // Null is a real answer — the posture stays on until a human lifts it —
+      // so it is taken before the range check rather than treated as absent.
+      const rawLift = body["autoLiftMinutes"];
+      if (rawLift !== null && (!isCount(rawLift, MAX_ANTIRAID_LIFT_MINUTES) || rawLift < 1)) {
+        return invalid(
+          `autoLiftMinutes must be a whole number from 1 to ${MAX_ANTIRAID_LIFT_MINUTES}, or null`,
+        );
+      }
+      // A posture that engages by itself and never lifts by itself is how a
+      // guild ends up gating every arrival for a fortnight after a raid nobody
+      // remembers. Refused rather than corrected: which of the two the admin
+      // meant is theirs to say.
+      if (autoEngage && rawLift === null) {
+        return invalid("a posture that engages by itself needs an auto-lift, or switch auto-engage off");
+      }
+
+      const rules: AntiRaidRules = {
+        enabled,
+        burst: { joins, windowSeconds },
+        autoEngage,
+        minAccountAgeHours,
+        requireAvatar,
+        joinAction: joinAction as RaidJoinAction,
+        autoLiftMinutes: rawLift,
+        lockdownOnEngage,
+      };
+
+      const result = await this.d.config.setSetting(guildId, ANTIRAID_SETTING_KEY, rules);
+      return {
+        result,
+        change: { ...rules, burst: { ...rules.burst } },
+        note: describeAntiRaidRules(rules),
+      };
+    });
+  }
+
+  /**
+   * Replay a burst of arrivals through the stored rules and report the outcome.
+   *
+   * Like `testAutomod`, this runs *the* evaluator rather than a description of
+   * it, and for a sharper version of the same reason: anti-raid rules are only
+   * exercised during a raid, which is the worst possible moment to discover a
+   * threshold was wrong. This is the only way to find out beforehand.
+   *
+   * The report also names what else would be running — whether automod is on,
+   * whether the wordlist has any rules — because the slice asked for rules
+   * tested against the other moderation features, and the honest answer to
+   * "what happens to a raider" is rarely anti-raid alone: a raid of accounts
+   * all posting the same slur meets the wordlist first, and an operator tuning
+   * join thresholds should see that rather than tightening a gate that was
+   * never the thing catching them.
+   *
+   * Nothing is stored and nobody is gated.
+   */
+  async testAntiRaid(
+    session: PanelSession | null,
+    guildId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    return this.run(session, guildId, "antiraid.test", async () => {
+      if (typeof input !== "object" || input === null) return invalid("body must be an object");
+      const body = input as Record<string, unknown>;
+
+      const rawJoins = body["joins"];
+      if (!Array.isArray(rawJoins) || rawJoins.length === 0) {
+        return invalid("joins must be a non-empty list");
+      }
+      if (rawJoins.length > MAX_ANTIRAID_TEST_JOINS) {
+        return invalid(`joins must be ${MAX_ANTIRAID_TEST_JOINS} arrivals or fewer`);
+      }
+      const joins: SimulatedJoin[] = [];
+      for (const [index, entry] of rawJoins.entries()) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          return invalid(`joins[${String(index)}] must be an object`);
+        }
+        const row = entry as Record<string, unknown>;
+        const age = row["accountAgeHours"];
+        if (
+          typeof age !== "number" ||
+          !Number.isFinite(age) ||
+          age < 0 ||
+          age > MAX_ANTIRAID_ACCOUNT_AGE_HOURS
+        ) {
+          return invalid(
+            `joins[${String(index)}].accountAgeHours must be a number from 0 to ${MAX_ANTIRAID_ACCOUNT_AGE_HOURS}`,
+          );
+        }
+        const hasAvatar = row["hasAvatar"];
+        if (typeof hasAvatar !== "boolean") {
+          return invalid(`joins[${String(index)}].hasAvatar must be a boolean`);
+        }
+        joins.push({ accountAgeHours: age, hasAvatar });
+      }
+
+      const postureActive = body["postureActive"] ?? false;
+      if (typeof postureActive !== "boolean") return invalid("postureActive must be a boolean");
+
+      const rules = parseAntiRaid(await this.d.config.getSetting(guildId, ANTIRAID_SETTING_KEY));
+      const run = simulateRaid(rules, joins, postureActive);
+
+      const automod = parseAutomod(await this.d.config.getSetting(guildId, AUTOMOD_SETTING_KEY));
+      const listed = this.d.wordlist ? await this.d.wordlist.list(guildId) : null;
+      const wordlistRules = listed !== null && listed.ok ? listed.value.length : 0;
+
+      const gated = run.outcomes.filter((o) => o.action !== "ALLOW").length;
+      const engaged =
+        run.engagedAt === null
+          ? postureActive
+            ? "The posture was already on for this run."
+            : "No arrival tripped the burst threshold, so nothing engaged."
+          : `Arrival ${String(run.engagedAt)} tripped the burst threshold and engaged the posture.`;
+      const alongside = [
+        automod.enabled && automod.rules.some((r) => r.enabled)
+          ? "Automod is on and would also see anything they post."
+          : "Automod is off, so anyone let through posts unchecked.",
+        wordlistRules === 0
+          ? "The wordlist is empty."
+          : `The wordlist has ${String(wordlistRules)} rule${wordlistRules === 1 ? "" : "s"} behind this.`,
+      ].join(" ");
+
+      const note = `${engaged} ${String(gated)} of ${String(joins.length)} arrivals would be gated. ${alongside}`;
+
+      return {
+        result: { ok: true },
+        change: {
+          arrivals: joins.length,
+          postureActive,
+          engagedAt: run.engagedAt,
+          totals: { ...run.totals },
         },
         note,
       };
@@ -3271,6 +3728,15 @@ export class PanelMutations {
       if (!accept && note.length === 0) return invalid("a reason is required when rejecting");
       if (note.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
 
+      // Same reasoning as `closeTicket`: `decideApplication` takes an id and a
+      // reviewer, not a guild, so an application from another server would
+      // otherwise be decidable from this one's page.
+      const found = await this.d.community.getApplication(applicationId);
+      if (!found.ok) return { result: found, change: { applicationId } };
+      if (found.value === null || found.value.guildId !== guildId) {
+        return invalid("no such application");
+      }
+
       const result = await this.d.community.decideApplication({
         applicationId,
         reviewerDiscordId: actorDiscordId,
@@ -3294,6 +3760,15 @@ export class PanelMutations {
       const note = typeof reason === "string" ? reason.trim() : "";
       if (note.length > REASON_MAX) return invalid(`reason must be under ${REASON_MAX} characters`);
 
+      // The ticket services key on the ticket id alone and know nothing about
+      // which server is asking, so this is the only place the guild can be
+      // checked. Without it a moderator of one guild could act on another
+      // guild's ticket by pasting its id into their own page — the same hole
+      // `updateEvent` and `resendTicketTranscript` already close.
+      const found = await this.d.community.getTicket(ticketId);
+      if (!found.ok) return { result: found, change: { ticketId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such ticket");
+
       const result = await this.d.community.closeTicket(
         ticketId,
         staffActor(actorDiscordId),
@@ -3315,6 +3790,11 @@ export class PanelMutations {
       if (typeof ticketId !== "string" || !ENTITY_ID.test(ticketId)) {
         return invalid("ticketId must be a ticket id");
       }
+      // Guild-scoped for the reason spelled out on `closeTicket`.
+      const found = await this.d.community.getTicket(ticketId);
+      if (!found.ok) return { result: found, change: { ticketId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such ticket");
+
       const result = await this.d.community.claimTicket(ticketId, staffActor(actorDiscordId));
       return { result, change: { ticketId } };
     });
@@ -3334,6 +3814,11 @@ export class PanelMutations {
       if (typeof toDiscordId !== "string" || !SNOWFLAKE.test(toDiscordId)) {
         return invalid("toDiscordId must be a Discord user id");
       }
+      // Guild-scoped for the reason spelled out on `closeTicket`.
+      const found = await this.d.community.getTicket(ticketId);
+      if (!found.ok) return { result: found, change: { ticketId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such ticket");
+
       const result = await this.d.community.transferTicket(ticketId, staffActor(actorDiscordId), toDiscordId);
       return { result, change: { ticketId, toDiscordId } };
     });
@@ -3820,6 +4305,13 @@ function invalid(detail: string): Step {
  * actually send — Discord's own limit is 2,000 — and finite so the endpoint
  * cannot be used to run a regex over a megabyte of text.
  */
+const MAX_ANTIRAID_BURST_JOINS = 200;
+const MAX_ANTIRAID_WINDOW_SECONDS = 3_600;
+/** A year. Past this the question belongs to screening, not a raid defence. */
+const MAX_ANTIRAID_ACCOUNT_AGE_HOURS = 24 * 365;
+const MAX_ANTIRAID_LIFT_MINUTES = 24 * 60;
+/** Enough to model a burst; past this the operator is stress-testing the box. */
+const MAX_ANTIRAID_TEST_JOINS = 50;
 const MAX_AUTOMOD_TEST_LENGTH = 2_000;
 const MAX_AUTOMOD_TEST_MENTIONS = 200;
 const MAX_AUTOMOD_TEST_COUNTER = 10_000;

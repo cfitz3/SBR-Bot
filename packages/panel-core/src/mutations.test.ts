@@ -165,6 +165,8 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
   const community = {
     decideApplication: record("decideApplication"),
     closeTicket: record("closeTicket"),
+    claimTicket: record("claimTicket"),
+    transferTicket: record("transferTicket"),
     setMemberRole: record("setMemberRole"),
     // Answers with the created event rather than recording and returning void:
     // the message that announces it is posted from the id this hands back.
@@ -183,6 +185,19 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
       recorded.calls.push({ method: "getEvent", args: [eventId] });
       if (eventId === "evt_gone") return ok(null);
       return ok({ id: eventId, guildId: eventId === "evt_other" ? "g2" : "g1" });
+    },
+    // Tickets and applications answer the same way and for the same reason:
+    // their services key on the id alone, so the mutation layer re-reads them
+    // to check the guild. `*_other` belongs to g2; `*_gone` to nobody.
+    async getTicket(ticketId: string) {
+      recorded.calls.push({ method: "getTicket", args: [ticketId] });
+      if (ticketId === "t_gone") return ok(null);
+      return ok({ id: ticketId, guildId: ticketId === "t_other" ? "g2" : "g1", number: 7, transcriptReady: true });
+    },
+    async getApplication(applicationId: string) {
+      recorded.calls.push({ method: "getApplication", args: [applicationId] });
+      if (applicationId === "app_gone") return ok(null);
+      return ok({ id: applicationId, guildId: applicationId === "app_other" ? "g2" : "g1" });
     },
   } as unknown as CommunityService;
   const identity = { unlink: record("unlink") } as unknown as IdentityService;
@@ -248,7 +263,36 @@ function ticketRecorder(recorded: Recorded, removed = true): TicketConfigService
       recorded.calls.push({ method: "saveTicketSettings", args: [guildId, input] });
       return { ...settings, ...input, guildId, updatedAt: "2026-08-14T12:00:00.000Z" };
     },
-    async listCategories() { return []; },
+    // Two live categories and one switched off, so the publish check has both
+    // answers to give. `SUPPORT` carries the upper-case key the platform seeds
+    // at install, which is exactly the shape the panel used to reject.
+    async listCategories(guildId) {
+      const base = {
+        guildId,
+        description: "",
+        emoji: null,
+        channelNameTemplate: "ticket-{num}",
+        parentChannelId: null,
+        staffRoleIds: [],
+        requiredRoleIds: [],
+        pingRoleIds: [],
+        openingMessage: "",
+        image: null,
+        claiming: true,
+        cooldownSeconds: null,
+        memberLimit: 1,
+        totalLimit: 50,
+        slowModeSeconds: null,
+        requireTopic: false,
+        questions: [],
+      } as const;
+      return [
+        { ...base, id: "c1", key: "support", name: "Support", position: 0, enabled: true },
+        { ...base, id: "c2", key: "appeal", name: "Appeal", position: 1, enabled: true },
+        { ...base, id: "c3", key: "SUPPORT", name: "Seeded support", position: 2, enabled: true },
+        { ...base, id: "c4", key: "retired", name: "Retired", position: 3, enabled: false },
+      ];
+    },
     async upsertCategory(guildId, input) {
       recorded.calls.push({ method: "upsertTicketCategory", args: [guildId, input] });
       return { ...input, id: "c1", guildId };
@@ -287,6 +331,37 @@ function ticketRecorder(recorded: Recorded, removed = true): TicketConfigService
           thumbnail: null,
           style: "SELECT",
           categoryKeys: ["appeal"],
+          updatedAt: null,
+        },
+        // Everything this one offers is switched off, so it would render to a
+        // message with no controls on it.
+        {
+          id: "p3",
+          guildId,
+          name: "Retired",
+          channelId: "123456789012345678",
+          messageId: null,
+          title: "Nothing here",
+          description: null,
+          image: null,
+          thumbnail: null,
+          style: "BUTTONS",
+          categoryKeys: ["retired"],
+          updatedAt: null,
+        },
+        // A freshly created draft: named, given a channel, no categories yet.
+        {
+          id: "p4",
+          guildId,
+          name: "Draft",
+          channelId: "123456789012345678",
+          messageId: null,
+          title: "Draft",
+          description: null,
+          image: null,
+          thumbnail: null,
+          style: "BUTTONS",
+          categoryKeys: [],
           updatedAt: null,
         },
       ];
@@ -881,9 +956,31 @@ test("a rejection must carry a reason; an acceptance need not", async () => {
   assert.equal(bare.error?.kind, "INVALID_INPUT");
 
   assert.equal((await mutations.decideApplication(session(), "g1", "app1", true, null)).ok, true);
-  assert.deepEqual(recorded.calls[0]?.args, [
+  assert.deepEqual(recorded.calls.find((c) => c.method === "decideApplication")?.args, [
     { applicationId: "app1", reviewerDiscordId: "111", accept: true, reason: null },
   ]);
+});
+
+test("a ticket or application from another guild is not reachable by its id", async () => {
+  // The services behind these take an id and an actor and nothing else, so the
+  // guild check exists only here. Pasting another server's id into this page's
+  // request has to read as "no such thing", not as a successful write.
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  for (const result of [
+    await mutations.closeTicket(session(), "g1", "t_other", "handled"),
+    await mutations.closeTicket(session(), "g1", "t_gone", "handled"),
+    await mutations.claimTicket(session(), "g1", "t_other"),
+    await mutations.transferTicket(session(), "g1", "t_other", "222222222222222222"),
+    await mutations.decideApplication(session(), "g1", "app_other", true, null),
+    await mutations.decideApplication(session(), "g1", "app_gone", true, null),
+  ]) {
+    assert.equal(result.error?.kind, "INVALID_INPUT");
+  }
+
+  // Read, refused, and never acted on.
+  const acted = recorded.calls.filter((c) => !["getTicket", "getApplication"].includes(c.method));
+  assert.deepEqual(acted, []);
 });
 
 test("application decisions are Officer work, ticket closes are Staff work", async () => {
@@ -1860,7 +1957,7 @@ test("a category that could never be opened is refused before it reaches the sto
   const { mutations, recorded } = make();
 
   const cases: Record<string, unknown>[] = [
-    { key: "Staff App" },                       // keys are lowercase and typable
+    { key: "Staff App" },                       // a space is not a key separator
     { key: "" },
     { name: "   " },
     { name: "x".repeat(81) },
@@ -1936,7 +2033,8 @@ test("a panel is held to the shape Discord will actually render", async () => {
     { name: "" },
     { channelId: "here" },
     { style: "DROPDOWN" },
-    { categoryKeys: [] },                                     // a panel with nothing on it
+    { categoryKeys: "support" },                              // a list, not one key
+    { categoryKeys: ["not a key"] },
     { categoryKeys: ["support", "support"] },                 // order is content; no silent dedupe
     // Six buttons will not fit a Discord action row.
     { style: "BUTTONS", categoryKeys: ["a", "b", "c", "d", "e", "f"] },
@@ -1977,6 +2075,63 @@ test("publishing a panel with no channel is refused rather than reported as post
   assert.equal(unrouted.error?.kind, "INVALID_INPUT");
   const missing = await mutations.publishTicketPanel(session(), "g1", "p9");
   assert.equal(missing.error?.kind, "INVALID_INPUT");
+  assert.equal(recorded.calls.length, 1);
+});
+
+test("the categories the platform seeds are addressable, upper case and all", async () => {
+  // The five seeded keys are the old enum's names — SUPPORT, REPORT, APPEAL,
+  // APPLICATION, OTHER. A lower-case-only rule made every one of them
+  // unreachable from the panel: an admin could not put a seeded category on a
+  // panel, disable it, or delete it, and the refusal blamed their input.
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.upsertTicketCategory(session(), "g1", categoryBody({ key: "SUPPORT" }))).ok, true);
+  assert.equal((await mutations.removeTicketCategory(session(), "g1", "APPLICATION")).ok, true);
+  assert.equal(
+    (await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: ["SUPPORT", "appeal"] }))).ok,
+    true,
+  );
+  assert.equal(recorded.calls.length, 3);
+});
+
+test("a bad category key is quoted back rather than reported as an empty list", async () => {
+  // One message for three faults is what made the create form look like it was
+  // rejecting an empty list when it was rejecting a key format, with no way to
+  // see which key was at fault.
+  const { mutations } = make();
+
+  const notAList = await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: "support" }));
+  assert.match(String(notAList.error?.detail), /list of category keys/);
+
+  const badKey = await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: ["support", "no way"] }));
+  assert.match(String(badKey.error?.detail), /"no way" is not a category key/);
+
+  const twice = await mutations.upsertTicketPanel(
+    session(),
+    "g1",
+    panelBody({ categoryKeys: ["support", "support"] }),
+  );
+  assert.match(String(twice.error?.detail), /"support" is on this panel twice/);
+});
+
+test("a panel is created empty and answers for it at publish, not at save", async () => {
+  // The create form has no category picker on it — there is no panel to attach
+  // one to yet — so refusing an empty list on save made a panel impossible to
+  // create at all. Empty is a draft; publishing one is what gets refused.
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.upsertTicketPanel(session(), "g1", panelBody({ categoryKeys: [] }))).ok, true);
+  assert.deepEqual((recorded.calls[0]?.args[1] as { categoryKeys: readonly string[] }).categoryKeys, []);
+
+  const draft = await mutations.publishTicketPanel(session(), "g1", "p4");
+  assert.equal(draft.error?.kind, "INVALID_INPUT");
+  assert.match(String(draft.error?.detail), /add a category/);
+
+  // Distinct from the draft: categories were chosen, and then switched off.
+  const allOff = await mutations.publishTicketPanel(session(), "g1", "p3");
+  assert.equal(allOff.error?.kind, "INVALID_INPUT");
+  assert.match(String(allOff.error?.detail), /disabled or deleted/);
+
   assert.equal(recorded.calls.length, 1);
 });
 
@@ -2100,6 +2255,138 @@ test("the audit records which rule changed and how, but never the pattern", asyn
     enabled: true,
     patternLength: 6,
   });
+  assert.equal(JSON.stringify(recorded.audits).includes("a slur"), false);
+});
+
+test("packaged lists are stored as one selection, checked against the catalogue", async () => {
+  const { mutations, recorded } = make();
+
+  const saved = await mutations.saveWordlistPacks(session(), "g1", {
+    enabled: ["links", "links", "scams"],
+    suppressed: ["links:shortener"],
+  });
+  assert.equal(saved.ok, true);
+  const call = recorded.calls[0];
+  assert.equal(call?.method, "setSetting");
+  assert.deepEqual(call?.args, [
+    "g1",
+    "moderation.wordlist-packs",
+    // Deduplicated: the panel sends checkbox state, and a page rendered twice
+    // should not be able to double a pack.
+    { enabled: ["links", "scams"], suppressed: ["links:shortener"] },
+  ]);
+});
+
+test("a pack or a mute that does not exist is refused rather than stored", async () => {
+  const { mutations, recorded } = make();
+
+  assert.equal((await mutations.saveWordlistPacks(session(), "g1", { enabled: ["nope"] })).ok, false);
+  assert.equal((await mutations.saveWordlistPacks(session(), "g1", { enabled: "scams" })).ok, false);
+  // The rule key is real, but not in that pack.
+  assert.equal(
+    (await mutations.saveWordlistPacks(session(), "g1", { enabled: [], suppressed: ["scams:shortener"] })).ok,
+    false,
+  );
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("turning every pack off is a decision, and is stored as one", async () => {
+  const { mutations, recorded } = make();
+
+  const cleared = await mutations.saveWordlistPacks(session(), "g1", { enabled: [] });
+  assert.equal(cleared.ok, true);
+  assert.deepEqual(recorded.calls[0]?.args[2], { enabled: [], suppressed: [] });
+});
+
+test("only an admin decides what the packaged lists do", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "OFFICER" } });
+
+  assert.equal((await mutations.saveWordlistPacks(session(), "g1", { enabled: [] })).access.allowed, false);
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: [] })).access.allowed, false);
+  assert.deepEqual(recorded.calls, []);
+});
+
+const importRow = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  pattern: "free nitro",
+  matchType: "SUBSTRING",
+  action: "BLOCK",
+  severity: 3,
+  ...over,
+});
+
+test("an import adds every row it was given, and says how many", async () => {
+  const { mutations, recorded } = make();
+
+  const done = await mutations.importWordlist(session(), "g1", {
+    rules: [importRow(), importRow({ pattern: "gift card" })],
+  });
+  assert.equal(done.ok, true);
+  assert.equal(recorded.calls.length, 2);
+  assert.equal(recorded.calls[0]?.method, "addWordlistRule");
+  assert.deepEqual(recorded.audits[0]?.change, { added: 2, skipped: 0, submitted: 2 });
+});
+
+test("an import takes JSON as text, because that is what a file is", async () => {
+  const { mutations, recorded } = make();
+
+  const done = await mutations.importWordlist(session(), "g1", {
+    rules: JSON.stringify([importRow()]),
+  });
+  assert.equal(done.ok, true);
+  assert.equal(recorded.calls.length, 1);
+
+  const broken = await mutations.importWordlist(session(), "g1", { rules: "{not json" });
+  assert.equal(broken.ok, false);
+});
+
+test("rows fall back to sensible defaults rather than demanding every field", async () => {
+  const { mutations, recorded } = make();
+
+  await mutations.importWordlist(session(), "g1", { rules: [{ pattern: "just a word" }] });
+  const input = recorded.calls[0]?.args[0] as Record<string, unknown>;
+  assert.equal(input["matchType"], "SUBSTRING");
+  assert.equal(input["action"], "FLAG");
+  assert.equal(input["severity"], 1);
+});
+
+test("a bad row stops the whole import and is named by its position", async () => {
+  // Half an import is the worst outcome: the operator believes the list is in
+  // force and has no way to tell which rows landed.
+  const { mutations, recorded } = make();
+
+  const refused = await mutations.importWordlist(session(), "g1", {
+    rules: [importRow(), importRow({ pattern: "([unclosed", matchType: "REGEX" })],
+  });
+  assert.equal(refused.ok, false);
+  assert.match(String(refused.error?.detail ?? ""), /rule 2/);
+  // Nothing was written, including the row that was fine.
+  assert.deepEqual(recorded.calls, []);
+});
+
+test("an import refuses what nobody has read", async () => {
+  const { mutations } = make();
+
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: [] })).ok, false);
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: {} })).ok, false);
+  const huge = Array.from({ length: 201 }, (_, i) => importRow({ pattern: `p${String(i)}` }));
+  assert.equal((await mutations.importWordlist(session(), "g1", { rules: huge })).ok, false);
+});
+
+test("re-importing the same file skips what is already there instead of failing", async () => {
+  const { mutations, recorded } = make({ wordlistRefusal: { kind: "DUPLICATE" } });
+
+  const again = await mutations.importWordlist(session(), "g1", {
+    rules: [importRow(), importRow({ pattern: "gift card" })],
+  });
+  assert.equal(again.ok, true);
+  assert.deepEqual(recorded.audits[0]?.change, { added: 0, skipped: 2, submitted: 2 });
+});
+
+test("the import trail counts rows without reproducing their patterns", async () => {
+  const { mutations, recorded } = make();
+
+  await mutations.importWordlist(session(), "g1", { rules: [importRow({ pattern: "a slur" })] });
+  assert.equal(recorded.audits[0]?.mutation, "wordlist.import");
   assert.equal(JSON.stringify(recorded.audits).includes("a slur"), false);
 });
 
@@ -2332,6 +2619,150 @@ test("an officer cannot decide what a Discord ban does inside the game guild", a
 
   assert.equal((await mutations.setRelaySync(session(), "g1", relayBody())).access.allowed, false);
   assert.deepEqual(recorded.calls, []);
+});
+
+// ── anti-raid ──
+
+const raidBody = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  enabled: true,
+  burst: { joins: 8, windowSeconds: 60 },
+  autoEngage: true,
+  minAccountAgeHours: 48,
+  requireAvatar: false,
+  joinAction: "FLAG",
+  autoLiftMinutes: 60,
+  lockdownOnEngage: false,
+  ...over,
+});
+
+test("saving anti-raid rules stores them and says what they now do", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "ADMIN" } });
+
+  const result = await mutations.saveAntiRaid(session(), "g1", raidBody({ joinAction: "KICK" }));
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /8 joins in 60s/);
+  const write = recorded.calls.find((c) => c.method === "setSetting");
+  assert.equal(write?.args[1], "moderation.antiraid");
+});
+
+test("anti-raid rules that would not mean what the admin typed are refused", async () => {
+  const { mutations, recorded } = make({ roleMap: { "111": "ADMIN" } });
+
+  const cases: unknown[] = [
+    "not an object",
+    raidBody({ enabled: "yes" }),
+    raidBody({ burst: { joins: 1, windowSeconds: 60 } }),
+    raidBody({ burst: { joins: 8, windowSeconds: 2 } }),
+    raidBody({ burst: null }),
+    raidBody({ minAccountAgeHours: -1 }),
+    raidBody({ joinAction: "TIMEOUT" }),
+    raidBody({ autoLiftMinutes: 0 }),
+    // A posture that turns itself on and never turns itself off.
+    raidBody({ autoEngage: true, autoLiftMinutes: null }),
+  ];
+  for (const [i, body] of cases.entries()) {
+    const result = await mutations.saveAntiRaid(session(), "g1", body);
+    assert.equal(result.ok, false, `case ${String(i)}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${String(i)}`);
+  }
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "setSetting"), []);
+});
+
+test("staying on until lifted is accepted when nothing engages by itself", async () => {
+  const { mutations } = make({ roleMap: { "111": "ADMIN" } });
+
+  const result = await mutations.saveAntiRaid(
+    session(),
+    "g1",
+    raidBody({ autoEngage: false, autoLiftMinutes: null }),
+  );
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /staff switch it on/);
+  assert.match(result.note ?? "", /until lifted/);
+});
+
+test("a moderator may try a raid against the rules but not change them", async () => {
+  const { mutations } = make({ roleMap: { "111": "MODERATOR" } });
+
+  assert.equal((await mutations.saveAntiRaid(session(), "g1", raidBody())).access.allowed, false);
+  assert.equal(
+    (
+      await mutations.testAntiRaid(session(), "g1", {
+        joins: [{ accountAgeHours: 1, hasAvatar: true }],
+      })
+    ).access.allowed,
+    true,
+  );
+});
+
+test("the dry run replays the burst and reports which arrival engaged the posture", async () => {
+  const { mutations, recorded } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: {
+      "moderation.antiraid": {
+        enabled: true,
+        burst: { joins: 3, windowSeconds: 60 },
+        autoEngage: true,
+        minAccountAgeHours: 48,
+        requireAvatar: false,
+        joinAction: "KICK",
+        autoLiftMinutes: 60,
+        lockdownOnEngage: false,
+      },
+    },
+  });
+
+  const result = await mutations.testAntiRaid(session(), "g1", {
+    joins: [
+      { accountAgeHours: 1, hasAvatar: false },
+      { accountAgeHours: 1, hasAvatar: false },
+      { accountAgeHours: 1, hasAvatar: false },
+      { accountAgeHours: 900, hasAvatar: true },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /Arrival 3/);
+  const change = recorded.audits.at(-1)?.change as Record<string, unknown>;
+  assert.equal(change["engagedAt"], 3);
+  assert.deepEqual(change["totals"], { ALLOW: 3, FLAG: 0, KICK: 1, BAN: 0 });
+  // A dry run stores nothing.
+  assert.deepEqual(recorded.calls.filter((c) => c.method === "setSetting"), []);
+});
+
+test("the dry run says what else is running alongside the gate", async () => {
+  const { mutations } = make({
+    roleMap: { "111": "MODERATOR" },
+    settings: { "moderation.automod": automodPolicy() },
+  });
+
+  const result = await mutations.testAntiRaid(session(), "g1", {
+    joins: [{ accountAgeHours: 1, hasAvatar: true }],
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.note ?? "", /Automod is on/);
+});
+
+test("a malformed dry run is refused rather than answered about something else", async () => {
+  const { mutations } = make({ roleMap: { "111": "MODERATOR" } });
+
+  const cases: unknown[] = [
+    "not an object",
+    { joins: [] },
+    { joins: "one" },
+    { joins: [{ accountAgeHours: -1, hasAvatar: true }] },
+    { joins: [{ accountAgeHours: 1 }] },
+    { joins: [{ accountAgeHours: 1, hasAvatar: true }], postureActive: "yes" },
+    { joins: Array.from({ length: 51 }, () => ({ accountAgeHours: 1, hasAvatar: true })) },
+  ];
+  for (const [i, body] of cases.entries()) {
+    const result = await mutations.testAntiRaid(session(), "g1", body);
+    assert.equal(result.ok, false, `case ${String(i)}`);
+    assert.equal(result.error?.kind, "INVALID_INPUT", `case ${String(i)}`);
+  }
 });
 
 // ── the automod test box ──

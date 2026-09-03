@@ -59,6 +59,13 @@ export function attachMemberObserver(client: Client, deps: MemberObserverDeps): 
     member: GuildMember | PartialGuildMember,
     kind: MemberBusMessage["kind"],
   ): Promise<void> => {
+    // Bots are not members. Welcoming one is noise in the channel members
+    // read, and marking its roles dirty spends a reconciliation pass on an
+    // account whose roles are held by whoever invited it rather than by any
+    // rule this platform owns. Both directions: a farewell for a removed
+    // integration is the same noise.
+    if (member.user?.bot === true) return;
+
     const guildId = await deps.resolveGuild(member.guild.id);
     // An unmapped server is not an error. The bot is in servers this platform
     // has never been told about, and they are not owed a greeting.

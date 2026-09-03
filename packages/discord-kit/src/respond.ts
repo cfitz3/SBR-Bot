@@ -8,7 +8,7 @@
  * restart (RSVP, run sign-ups) encode their state in the customId instead and
  * are handled by the persistent component router.
  */
-import type { EmbedView } from "@sbr/shared-types";
+import { FLATTEN_SEPARATOR, type EmbedView } from "@sbr/shared-types";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -43,7 +43,9 @@ function pageEmbed(pages: readonly EmbedView[], index: number) {
   const view = pages[index]!;
   // Append the position to whatever footer the handler set, rather than
   // replacing it — the staleness note lives there too.
-  const footer = view.footer ? `${view.footer} • page ${index + 1}/${pages.length}` : `page ${index + 1}/${pages.length}`;
+  const footer = view.footer
+    ? `${view.footer}${FLATTEN_SEPARATOR}page ${index + 1}/${pages.length}`
+    : `page ${index + 1}/${pages.length}`;
   return toEmbed({ ...view, footer });
 }
 

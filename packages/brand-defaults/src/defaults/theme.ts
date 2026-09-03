@@ -14,6 +14,12 @@
  *  - the panel token block, which `app.css` declares in `:root` and the panel
  *    now re-serves from here as `/theme.css`.
  *
+ * The design language is **Operator** (`Direction 1 — Operator`): instrument
+ * panel density. Colour is reserved for state — every surface, line and label is
+ * a cool grey, and the accent appears only on the active thing. It replaced
+ * Nocturne, which spent its accent on decoration and could not then use it to
+ * mean anything.
+ *
  * Written without `as const` deliberately: see `../types.ts` — leaves must widen
  * so an override can replace them.
  */
@@ -25,13 +31,21 @@ export const DEFAULT_THEME = {
      * an imported specimen's raw hex can be matched back to a name — a card whose
      * colour is a literal has escaped the palette, which is exactly the drift the
      * style checker exists to catch.
+     *
+     * These are the panel's own tone hues, not Discord's defaults. `INFO` used to
+     * be blurple (`0x5865f2`) and `SUCCESS`/`WARNING`/`DANGER` were Discord's
+     * three — so a card sent by this platform was indistinguishable from a card
+     * sent by any other bot in the channel. Operator's accent and tone map make
+     * the stripe down the left of a card the same colour as the state it names in
+     * the panel, which is the only reason a member ever learns what the colours
+     * mean.
      */
     colors: {
-      NEUTRAL: 0x2b2d31,
-      INFO: 0x5865f2,
-      SUCCESS: 0x57f287,
-      WARNING: 0xfee75c,
-      DANGER: 0xed4245,
+      NEUTRAL: 0x232830,
+      INFO: 0x5fa8d3,
+      SUCCESS: 0x4fb286,
+      WARNING: 0xd9a441,
+      DANGER: 0xd9534f,
     },
 
     /**
@@ -51,6 +65,14 @@ export const DEFAULT_THEME = {
       footer: 120,
       /** Between facts on one line: `cata 42 · sa 51.3`. */
       separator: " · ",
+      /**
+       * Between a card's subject and what the card is: `Frostbyte_ — stats`.
+       * An em dash, not a hyphen — the two are indistinguishable in a changelog
+       * and very distinguishable in a card.
+       */
+      titleSeparator: " — ",
+      /** An author row is one line naming the subject, not a summary. */
+      author: 80,
       /** What an unknown value prints as. Never "N/A", never a silent zero. */
       unknown: "—",
 
@@ -139,86 +161,118 @@ export const DEFAULT_THEME = {
      * it wants to match `colors.bg`.
      */
     chrome: {
-      themeColor: "#161826",
+      themeColor: "#0d0f12",
     },
 
     /**
-     * The Nocturne palette. Mirrors `app.css`'s `:root`, which stays in place as
+     * The Operator palette. Mirrors `app.css`'s `:root`, which stays in place as
      * the documented fallback for a panel served without the brand layer.
+     *
+     * Two things to know before editing the ramps. The neutral ramp is not a
+     * smooth gradient — 100…700 are *text* greys and 800/900 are *line* greys,
+     * and the step between 700 and 800 is deliberately large because nothing in
+     * the design sits between "dimmest readable label" and "hairline". The
+     * accent ramp ends the same way: 800 and 900 are the two accent-tinted
+     * surfaces (a chip's fill, the active nav row's ground), not shades of the
+     * accent you would ever set text in.
      */
     colors: {
-      bg: "#161826",
-      surface: "#232532",
-      text: "#e9e9ed",
-      accent: "#9184d9",
-      accent2: "#a7a1db",
-      divider: "color-mix(in srgb, #e9e9ed 16%, transparent)",
+      bg: "#0d0f12",
+      surface: "#101318",
+      text: "#d8dee7",
+      accent: "#5fa8d3",
+      accent2: "#8fc6e6",
+      divider: "#232830",
 
-      neutral100: "#f3f5fe",
-      neutral200: "#e4e7f5",
-      neutral300: "#cfd3e5",
-      neutral400: "#b2b6ca",
-      neutral500: "#9397ab",
-      neutral600: "#75798c",
-      neutral700: "#595d6c",
-      neutral800: "#3f424d",
-      neutral900: "#292b31",
+      neutral100: "#eef2f7",
+      neutral200: "#d8dee7",
+      neutral300: "#b6bfcb",
+      neutral400: "#98a2b0",
+      neutral500: "#7b8492",
+      neutral600: "#5a6270",
+      neutral700: "#4e5663",
+      neutral800: "#232830",
+      neutral900: "#171b21",
 
-      accent100: "#f5f4ff",
-      accent200: "#e7e5fe",
-      accent300: "#d2cefd",
-      accent400: "#b5abfc",
-      accent500: "#968ae0",
-      accent600: "#796cbf",
-      accent700: "#5d5294",
-      accent800: "#423a6a",
-      accent900: "#2b2741",
+      accent100: "#eaf4fa",
+      accent200: "#cfe6f3",
+      accent300: "#a8d2e9",
+      accent400: "#8fc6e6",
+      accent500: "#5fa8d3",
+      accent600: "#4a8bb3",
+      accent700: "#3a6d8c",
+      accent800: "#1e2732",
+      accent900: "#182029",
     },
 
     /**
-     * Status hues. The design's own tone map paints "warn" in the accent, which
-     * reads fine on a mock with one warning on screen but collapses on Health and
-     * Events, where warn and accent sit in the same table and must mean different
-     * things. Warn gets its own amber for that reason.
+     * Status hues, straight from the design's swatch.
+     *
+     * Nocturne painted "warn" in the accent and this file carried a note about
+     * having to invent an amber, because warn and accent shared a table on Health
+     * and Events and had to mean different things. Operator reserves the accent
+     * for state *selection* rather than for a state, so all three tones are the
+     * design's own values and there is nothing left to reconcile.
      */
     tone: {
-      ok: "#6fcf97",
-      warn: "#e0b061",
-      bad: "#e2726b",
-    },
-
-    /** The eight-step scale, in px. */
-    space: {
-      s1: "2.8px",
-      s2: "5.6px",
-      s3: "8.4px",
-      s4: "11.2px",
-      s5: "16.8px",
-      s6: "22.4px",
-      s7: "33.6px",
-      s8: "44.8px",
-    },
-
-    radius: {
-      sm: "4px",
-      md: "8px",
-      lg: "14px",
-    },
-
-    shadow: {
-      sm: "0 0 0 1px var(--color-neutral-800)",
-      md: "0 0 0 1px var(--color-neutral-700), 0 6px 18px rgb(0 0 0 / 55%)",
-      lg: "0 0 0 1px var(--color-neutral-500), 0 16px 40px rgb(0 0 0 / 65%)",
+      ok: "#4fb286",
+      warn: "#d9a441",
+      bad: "#d9534f",
     },
 
     /**
-     * No webfont is fetched: the CSP names no external origin, so Inter is used
-     * only when the operator happens to have it installed and the system stack
-     * carries the same measurements otherwise.
+     * The eight-step scale, in px.
+     *
+     * Whole pixels. Nocturne's scale was a 2.8px geometric run, which put a
+     * hairline border on a fractional boundary and let the browser round two
+     * adjacent 1px rules to different widths — visible as a seam in the tile grid
+     * at exactly the density Operator asks for.
+     */
+    space: {
+      s1: "2px",
+      s2: "4px",
+      s3: "6px",
+      s4: "8px",
+      s5: "12px",
+      s6: "16px",
+      s7: "22px",
+      s8: "32px",
+    },
+
+    /** Sharp. A card is a bounded region, not a rounded object. */
+    radius: {
+      sm: "2px",
+      md: "3px",
+      lg: "4px",
+    },
+
+    /**
+     * Rings, not shadows.
+     *
+     * Operator is flat: depth is carried by a hairline and a surface step, never
+     * by a drop shadow. The three names survive because `app.css` and the theme
+     * contract both use them, but each is now a 1px ring — an override that wants
+     * a real shadow can still supply one.
+     */
+    shadow: {
+      sm: "0 0 0 1px var(--color-neutral-800)",
+      md: "0 0 0 1px var(--color-neutral-800)",
+      lg: "0 0 0 1px var(--color-neutral-700)",
+    },
+
+    /**
+     * No webfont is fetched: the CSP names no external origin, so IBM Plex is
+     * used only when the operator happens to have it installed and the system
+     * stack carries the same measurements otherwise.
+     *
+     * The mono stack matters more than the sans one here. Operator sets every
+     * numeral, IGN, id and timestamp in mono, so `ui-monospace` is doing real
+     * work on most machines — and it is a good fallback, which is why this is
+     * still the right trade against shipping four woff2 files.
      */
     font: {
-      sans: 'Inter, "Inter var", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-      mono: "ui-monospace, SFMono-Regular, Menlo, monospace",
+      sans: '"IBM Plex Sans", "IBM Plex Sans Var", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+      mono: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
     },
   },
 };

@@ -34,6 +34,15 @@ export const DIGEST_CATEGORIES: readonly LeaderboardCategory[] = ["level", "weal
 /** How many rows one digest board shows. A page, not the whole guild. */
 export const DIGEST_PAGE_SIZE = 10;
 
+/**
+ * The author row every digest board carries.
+ *
+ * `/leaderboard` deliberately has none — the reader just asked for it, so the
+ * title is the whole answer. A digest arrives unasked-for in a channel someone
+ * is scrolling past, and the first thing they need is why it is there.
+ */
+export const DIGEST_AUTHOR = "Weekly digest";
+
 export interface LeaderboardDigestPort {
   page(query: {
     readonly guildId: string;
@@ -110,7 +119,8 @@ export class LeaderboardDigest {
 
     let posted = 0;
     for (const page of live) {
-      if (await this.d.discord.post(channelId, renderLeaderboardEmbed(page))) posted += 1;
+      const embed: EmbedView = { ...renderLeaderboardEmbed(page), author: { name: DIGEST_AUTHOR } };
+      if (await this.d.discord.post(channelId, embed)) posted += 1;
     }
     if (posted === 0) {
       return {

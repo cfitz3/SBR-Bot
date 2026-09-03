@@ -34,7 +34,14 @@ export async function renderHealth(host: HTMLElement, guildId: string): Promise<
     jobs.length === 0
       ? emptyState("healthJobs")
       : table(
-          [t("colJob"), t("colStatus"), t("colLastRun"), t("colDuration"), t("colFailures"), ""],
+          [
+            t("colJob"),
+            t("colStatus"),
+            t("colLastRun"),
+            { label: t("colDuration"), align: "num" },
+            { label: t("colFailures"), align: "num" },
+            "",
+          ],
           jobs.map((job) => [
             jobCell(job),
             statusBadge(job),
@@ -93,7 +100,7 @@ function waitingBody(waiting: HealthVM["waiting"]): HTMLElement {
 function servicesBody(services: readonly ServiceRow[]): HTMLElement {
   if (services.length === 0) return emptyState("healthServices");
   return table(
-    [t("colService"), t("colStatus"), t("colInstances"), t("colLastBeat"), t("colDetail")],
+    [t("colService"), t("colStatus"), { label: t("colInstances"), align: "num" }, t("colLastBeat"), t("colDetail")],
     [...services].sort(byServiceSeverity).map((service) => [
       service.service,
       serviceBadge(service),

@@ -25,6 +25,7 @@ import { recordArgs } from "@sbr/shared-types";
 import { attachDiscordModObserver } from "./discord-mod-observer.js";
 import { attachMemberObserver } from "./member-observer.js";
 import { attachUtilityComponents } from "./utility-components.js";
+import { attachRaidGate } from "./raid-gate.js";
 import type { AdminApp } from "./composition.js";
 
 /**
@@ -271,6 +272,11 @@ export async function startAdminGateway(
     record: (input) => app.recordDiscordAction(input),
     logger: app.log,
   });
+  // The anti-raid posture, applied. Attached beside the observer rather than
+  // inside it: observing is for whoever greets a member, gating is a privileged
+  // decision, and folding the two together would mean a failure in one silently
+  // skipped the other.
+  attachRaidGate(client, app.raidGate);
 
   client.on(Events.InteractionCreate, (i) => {
     // Each branch catches its own failure: an unhandled rejection here would

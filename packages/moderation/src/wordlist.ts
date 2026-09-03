@@ -20,7 +20,8 @@ import {
   type WordlistService,
 } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
-import type { WordlistRepository } from "./ports.js";
+import type { WordlistPackSource, WordlistRepository } from "./ports.js";
+import { isPackRuleId, resolveWordlist, NO_PACKS } from "./wordlist-packs.js";
 
 /** A compiled rule: does this message text trip it? */
 export type Matcher = (content: string) => boolean;
@@ -104,20 +105,61 @@ export function evaluateText(rules: readonly WordlistRuleDTO[], text: string): F
 
 export interface WordlistServiceDeps {
   readonly repo: WordlistRepository;
+  /**
+   * Optional. Without it the guild sees only the rules it typed — the behaviour
+   * every deployment had before packaged lists existed, and the behaviour any
+   * test that does not care about packs should keep getting for free.
+   */
+  readonly packs?: WordlistPackSource;
   readonly logger: Logger;
 }
 
 export class WordlistServiceImpl implements WordlistService {
   private readonly repo: WordlistRepository;
+  private readonly packs: WordlistPackSource | null;
   private readonly log: Logger;
 
   constructor(deps: WordlistServiceDeps) {
     this.repo = deps.repo;
+    this.packs = deps.packs ?? null;
     this.log = deps.logger.child({ service: "wordlist" });
   }
 
+  /**
+   * A packs read must not be able to silence the filter.
+   *
+   * The setting is one row in the same database the rules came from, so a
+   * failure here is unlikely — but the consequence of getting it wrong is that
+   * a transient error turns every enabled pack off at once, silently, for as
+   * long as it lasts. Losing the packs while keeping the guild's own rules is
+   * the smaller failure, and the one that is visible on the panel.
+   */
+  private async selection(guildId: string) {
+    if (this.packs === null) return NO_PACKS;
+    try {
+      return await this.packs.selection(guildId);
+    } catch (error) {
+      this.log.warn("could not read the pack selection; packaged rules skipped", {
+        guildId,
+        error: String(error),
+      });
+      return NO_PACKS;
+    }
+  }
+
+  /**
+   * The rules in force: the guild's own, plus whichever packs it has on.
+   *
+   * Packs are layered here rather than at each caller so that the panel, the
+   * relay and `/filter-test` cannot drift apart on what "the wordlist" means.
+   * The CRUD methods below deliberately read `repo.list` instead, because they
+   * are asking a different question — what is in this guild's table — and a
+   * duplicate check against a shipped pattern would refuse an edit the guild
+   * has every right to make.
+   */
   async list(guildId: string): Promise<Result<readonly WordlistRuleDTO[]>> {
-    return ok(await this.repo.list(guildId));
+    const [own, selection] = await Promise.all([this.repo.list(guildId), this.selection(guildId)]);
+    return ok(resolveWordlist(guildId, own, selection));
   }
 
   async add(input: NewWordlistRule): Promise<Result<WordlistRuleDTO, WordlistError>> {
@@ -161,6 +203,11 @@ export class WordlistServiceImpl implements WordlistService {
     id: string,
     patch: WordlistRuleUpdate,
   ): Promise<Result<WordlistRuleDTO | null, WordlistError>> {
+    // A pack rule is not a row and cannot be edited into one. Suppressing it is
+    // the supported way to disagree with it, and it survives the next release.
+    if (isPackRuleId(id)) {
+      return err({ kind: "INVALID_PATTERN", detail: "packaged rules are changed by suppressing them" });
+    }
     const existing = await this.repo.list(guildId);
     const current = existing.find((r) => r.id === id);
     if (!current) return ok(null);
@@ -185,12 +232,16 @@ export class WordlistServiceImpl implements WordlistService {
   }
 
   async remove(guildId: string, ref: string): Promise<Result<WordlistRuleDTO | null>> {
+    // Same reasoning as `update`: there is no row to delete, and reporting
+    // "no such rule" is honest about the guild's own table.
+    if (isPackRuleId(ref)) return ok(null);
     const removed = (await this.repo.removeById(guildId, ref)) ?? (await this.repo.removeByPattern(guildId, ref));
     if (removed) this.log.info("wordlist rule removed", { guildId, id: removed.id });
     return ok(removed);
   }
 
   async test(guildId: string, text: string): Promise<Result<FilterTestDTO>> {
-    return ok(evaluateText(await this.repo.list(guildId), text));
+    const rules = await this.list(guildId);
+    return ok(evaluateText(rules.ok ? rules.value : [], text));
   }
 }

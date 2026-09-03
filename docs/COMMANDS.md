@@ -406,6 +406,19 @@ All write to `ModerationAction` (audit) and, where relevant, `Infraction`; enfor
 
 What a member may open is configuration, not a command: the ticket menu (`TicketTypeConfig`) and the panel that advertises it (`TicketPanelConfig`) are edited on the panel's admin-only **Tickets** page. The bot reads that menu — see COMMAND_INVENTORY.md §2.8 for the member-facing `/ticket`. A guild that configures nothing offers the five built-in types, which are the fixed `TicketCategory` values.
 
+**Why the member-facing `/ticket` was kept.** The overhaul planned to retire it
+once the ticket panel reached parity, on the standing rule that no command goes
+before its replacement does. The panel reaches parity on three of the four
+things `/ticket` does — opening (a panel button, which additionally asks the
+category's questions and posts its opening message, neither of which the slash
+path ever did), closing (the channel's own close control, and staff closing from
+the panel's Tickets page), and category management. It does **not** reach parity
+on the fourth: a panel has to be *published* before any of it exists, nothing
+seeds one at install, and a guild that has not published one would be left with
+no way to open a ticket at all. `/ticket` is therefore the guaranteed entry
+point and stays. This mirrors `/lfg`, which the same rule kept in a different
+shape rather than removed.
+
 ---
 
 ## 15. Admin Bot — Server Safety & Audit
@@ -417,15 +430,96 @@ What a member may open is configuration, not a command: the ticket menu (`Ticket
 | `/antiraid-on` | Enable raid protection (join gating, rate caps) | Admin | `sensitivity?`, `duration?` | Confirmation + active settings | Already on | DB (`GuildConfig`) + Cache |
 | `/antiraid-off` | Disable raid protection | Admin | *(none)* | Confirmation | Not active | DB + Cache |
 
+**What anti-raid actually does, and what `sensitivity` is now.** Until this
+release the posture was a flag and a sensitivity that nothing read: `/safety`
+reported it, the sweep expired it, and no join path consulted either. It is now
+a rule set — burst threshold and window, minimum account age, an optional avatar
+requirement, what a gated member gets, and whether it engages and lifts itself —
+stored under `moderation.antiraid` and enforced at `GuildMemberAdd` by the admin
+bot's raid gate.
+
+`sensitivity` is consequently a **preset, not a mode**. LOW/MEDIUM/HIGH pick a
+starting set of numbers for a guild that has never configured anti-raid; a guild
+that has keeps its own, and typing `HIGH` does not overwrite them. The rules
+themselves are edited on the panel (Moderation → Anti-raid, Admin-tier), which
+also carries a dry run: describe a burst and it is replayed through the same
+evaluator the gate uses, reporting which arrival would engage the posture, what
+each one would get, and whether automod and the wordlist are running behind it.
+
+Every preset flags rather than removes. A gated member who is kicked or banned
+goes through `ModerationService.applyAction`, so it is a case with an actor, a
+reason and a reversal path rather than a silent removal. The gate fails **open**:
+if it cannot read its rules it lets the member in and logs, because a server that
+stops admitting anybody over a Redis timeout is the worse failure.
+
+The commands stay. They are the switch — a human deciding the server is under
+attack now — and the panel is the configuration; neither replaces the other.
+
 ---
 
 ## 16. Admin Bot — Content Filtering
 
 | Command | Purpose | Perms | Inputs / Options | Output | Command-specific errors | Data |
 |---------|---------|-------|------------------|--------|-------------------------|------|
-| `/wordlist-add` | Add a filter rule | Officer | `pattern`, `match_type`, `action`, `severity?` | Confirmation + compiled rule | Invalid regex; duplicate | DB (`WordlistEntry`) + Cache (recompile) |
-| `/wordlist-remove` | Remove a filter rule | Officer | `pattern` **or** `rule_id` | Confirmation | Rule not found | DB + Cache |
+| ~~`/wordlist`~~ | *Retired (P-03)* — list the filter rules | — | — | — | — | — |
+| ~~`/wordlist-add`~~ | *Retired (P-03)* — add a filter rule | — | — | — | — | — |
+| ~~`/wordlist-remove`~~ | *Retired (P-03)* — remove a filter rule | — | — | — | — | — |
 | `/filter-test` | Test a message against the current wordlist | Staff | `text` | Which rules match + resulting action | *(none — always returns a result)* | Cache (compiled wordlist) → DB |
+
+**Where the three wordlist commands went, and what replaced them.**
+
+They are `enabled: false` in `buildAdminRegistry()`, so they are gone from
+Discord's slash-command registry on the next deploy rather than present and
+answering with an error. Their handlers are untouched and still under test: the
+flag is a withdrawal, not a deletion, and turning one back on is one line.
+
+Parity was checked before the flag went on, which is why the removal and the
+panel work are the same slice. The Moderation page's **Filter** section already
+had create, edit, delete and list — it shows the pattern, the match type, the
+action, the severity and the enabled switch on one card per rule, and writes the
+whole rule on every change so the mutation can validate the *result* of an edit.
+What the commands could never do is now there too:
+
+- **Packaged lists.** `packages/moderation/src/wordlist-packs.ts` ships three:
+  **Scam bait** (free-Nitro and gift-card phrasing, typosquatted Discord and
+  Steam domains, crypto doubling), **Risky links** (IP loggers blocked;
+  shorteners and server invites flagged, because a shortener is not proof of
+  anything and a filter that silently eats every `bit.ly` teaches members the
+  server is broken), and **Hypixel risk** (account selling, real-money trading,
+  named cheat clients — the messages that put the *guild* at risk rather than
+  the chat).
+- **No packaged slur list, deliberately.** Which words a community treats as a
+  slur is specific to its language, its region and its membership. A list
+  written here would be too aggressive for some guilds and full of holes for
+  others, and every guild that enabled it would stop looking. Import is how a
+  guild brings the list its own moderators agree on.
+- **Every pack is off until an admin turns it on.** Installing this platform
+  changes nothing about what a guild filters.
+- **Packs layer under the guild's own rules; they are not copied into them.**
+  Enabling one adds no rows, a release that fixes a pattern fixes it for every
+  guild that had the pack on, and turning a pack off returns the guild's own
+  list untouched. Seeding rows at install would make a pack unfixable the moment
+  a scam changed shape, because by then it is a thousand guilds' data.
+- **Per-rule mute.** A guild that wants Risky links but posts `bit.ly` links
+  internally suppresses that one rule (`links:shortener`) and keeps the IP
+  loggers. This is what "custom lists extending packaged ones" means in
+  practice, and the mute survives switching the pack off and on again.
+- **JSON import.** A pasted or uploaded array of `{pattern, matchType?, action?,
+  severity?, note?}`, up to 200 at a time. Every row is validated before any row
+  is written, so a bad regex at line ninety rejects the file whole rather than
+  leaving eighty-nine rules and a question about which landed; rows that already
+  exist are skipped, because an import is usually the second import. The reply
+  says how many were added and how many were already there.
+
+Both new mutations (`wordlist.packs.save`, `wordlist.import`) are **Admin**:
+enabling a pack changes what the filter does to every member at once, and an
+import can add two hundred rules in one press.
+
+A pack rule reaches the relay, the automod runner and `/filter-test` as the same
+`WordlistRuleDTO` a typed rule does — `WordlistServiceImpl.list` resolves the
+packs into its answer, and `WordlistFilterImpl` in the bridge resolves them into
+its cache. There is no second evaluator. Only the panel tells the two apart, and
+only so it can decline to offer an edit button on a row it does not own.
 
 ---
 

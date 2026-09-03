@@ -42,6 +42,8 @@ import {
   WordlistServiceImpl,
   type ModLogSink,
   type StaffAlertSink,
+  parsePackSelection,
+  WORDLIST_PACKS_SETTING_KEY,
 } from "@sbr/moderation";
 import type { EmbedView } from "@sbr/shared-types";
 import { PANEL_ACCESS_FLOOR, PanelMutations, PanelService, type ConfigAuditSink, type PanelSession } from "@sbr/panel-core";
@@ -338,7 +340,14 @@ export async function createPanelApp(): Promise<PanelApp> {
    * whatever this writes, so an edit here and an edit from Discord are the same
    * edit made through the same validation.
    */
-  const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, logger: log });
+  // Packaged lists are a setting, so the source is the config repository the
+  // rest of the app already reads settings through.
+  const wordlistPacks = {
+    async selection(guildId: string) {
+      return parsePackSelection(await guildConfigRepository.getSetting(guildId, WORDLIST_PACKS_SETTING_KEY));
+    },
+  };
+  const wordlist = new WordlistServiceImpl({ repo: wordlistRepository, packs: wordlistPacks, logger: log });
 
   const rolesInsight = createRolesInsight({ dirty: adapters.rolesDirty, refusals: adapters.roleRefusals });
 

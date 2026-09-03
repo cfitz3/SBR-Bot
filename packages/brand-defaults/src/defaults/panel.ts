@@ -514,7 +514,7 @@ export const DEFAULT_PANEL = {
       PLATINUM: "Platinum",
     },
     /** `{metric}` and `{key}` — what this row measures and what identifies it. */
-    rowSummary: "{metric} • key {key}",
+    rowSummary: "{metric} · key {key}",
     cardAdd: "Add a milestone",
     remove: "Remove",
     removeConfirm: "Confirm remove",
@@ -932,12 +932,14 @@ export const DEFAULT_PANEL = {
     tabsAria: "Moderation section",
     tabHistory: "History",
     tabAutomod: "Automod",
+    tabAntiRaid: "Anti-raid",
     tabFilter: "Filter",
     tabCooldowns: "Cooldowns",
 
     /** One subtitle per section, since the page's answer changes with the tab. */
     subtitleAutomod: "{live} of {total} rules live",
     subtitleAutomodOff: "Switched off — rules are kept but nothing fires",
+    subtitleAntiRaid: "Who gets through the door while the server is under attack",
     subtitleFilter: "The chat filter, the warning ladder, and what a punishment does in guild chat",
     subtitleCooldowns: "How long a member waits between commands, and between relayed messages",
     subtitleMember: "{count} infraction(s) on record for this member",
@@ -952,6 +954,8 @@ export const DEFAULT_PANEL = {
     cardRecentInfractions: "Recent infractions",
     cardRelay: "Guild chat relay",
     cardAutomod: "Automod",
+    cardAntiRaid: "Anti-raid",
+    cardRaidTest: "Try a raid",
     cardTest: "Test a message",
     cardRules: "Rules",
     /** With at least one rule, the count goes in the heading. */
@@ -1097,6 +1101,47 @@ export const DEFAULT_PANEL = {
     automodLabel: "Automod on",
     automodHint: "Off stops every rule at once and keeps them all. Use this first when something is misfiring.",
     newRule: "New rule",
+
+    antiRaidIntro:
+      "Anti-raid gates arriving members while the posture is on, and does nothing at all while it is off — so a new account joining a quiet server is never asked to prove anything. A removal here becomes a case in the log like any other, with a reason and a way back.",
+    antiRaidReadOnly: "Anti-raid rules are set by an admin. Ask one to change them.",
+    antiRaidEnabledLabel: "Anti-raid on",
+    antiRaidEnabledHint: "Off switches the whole gate off, including the manual /antiraid command.",
+    antiRaidAutoEngageLabel: "Turn itself on",
+    antiRaidAutoEngageHint: "Engage the posture when joins spike, without waiting for staff.",
+    antiRaidBurstJoinsLabel: "Joins that count as a raid",
+    antiRaidBurstJoinsHint: "How many arrivals inside the window before the posture engages. 2 to 200.",
+    antiRaidWindowLabel: "Window (seconds)",
+    antiRaidWindowHint: "How long that count is measured over. 5 to 3600.",
+    antiRaidAgeLabel: "Minimum account age (hours)",
+    antiRaidAgeHint: "Accounts younger than this are gated while the posture is on. 0 turns the check off.",
+    antiRaidAvatarLabel: "Require a profile picture",
+    antiRaidAvatarHint: "Gate accounts still on Discord's default avatar.",
+    antiRaidActionLabel: "What a gated member gets",
+    antiRaidActionHint: "Only applies while the posture is on.",
+    antiRaidActionFlag: "Flag for staff",
+    antiRaidActionAllow: "Nothing — let them in",
+    antiRaidActionKick: "Kick",
+    antiRaidActionBan: "Ban",
+    antiRaidLiftLabel: "Lift after (minutes)",
+    antiRaidLiftHint: "Blank keeps the posture on until staff lift it. Required when it turns itself on.",
+    antiRaidLiftPlaceholder: "until lifted",
+    antiRaidLockdownLabel: "Lock the server down too",
+    antiRaidLockdownHint: "Also close the server to messages when the posture engages.",
+
+    raidTestIntro:
+      "Describe a burst and this replays it through the rules above — the same check the gate runs. Nothing is stored and nobody is gated.",
+    raidTestArrivalsLabel: "Members arriving",
+    raidTestArrivalsAria: "How many members arrive in the burst",
+    raidTestAgeLabel: "Their account age (hours)",
+    raidTestAgeAria: "How old each arriving account is, in hours",
+    raidTestAvatarLabel: "They have a profile picture",
+    raidTestAvatarHint: "Only matters when the avatar rule is on.",
+    raidTestPostureLabel: "Posture already on",
+    raidTestPostureHint: "Ask what happens to an ordinary arrival while anti-raid is running.",
+    raidTestRun: "Run",
+    errRaidArrivals: "Enter a whole number of arrivals from 1 to 50.",
+    errRaidAge: "Enter an account age in hours from 0 to 8760.",
 
     surfaceDiscord: "discord",
     surfaceGuildChat: "guild chat",
@@ -1260,8 +1305,20 @@ export const DEFAULT_PANEL = {
       "Rules run on every message the bridge relays, in severity order — the harshest verdict among the matches is the one applied. Test a phrase against the live set with /filter-test before saving it.",
     cardEscalation: "Repeat warnings",
     cardRelaySync: "In-game punishment sync",
+    cardPacks: "Packaged lists",
+    cardImport: "Import rules",
     cardCreate: "Add a rule",
     cardRules: "Rules",
+    packsIntro:
+      "Lists this platform maintains. Every one is off until you switch it on, and each rule inside can be muted without losing the rest. Slur lists are deliberately not packaged — bring your own with Import.",
+    packRuleOn: "In force",
+    importIntro:
+      "A JSON array of rules. Each needs a pattern; matchType, action and severity default to SUBSTRING, FLAG and 1. Rules already present are skipped, and a file with a bad rule is rejected whole. Up to 200 at a time.",
+    importLabel: "Rules to import",
+    importFileLabel: "Choose a JSON file",
+    importPlaceholder: '[{ "pattern": "free nitro", "matchType": "SUBSTRING", "action": "BLOCK", "severity": 5 }]',
+    importLoaded: "File loaded. Check it, then import.",
+    importRun: "Import",
     /** What each verdict does to a message, in the relay's terms. */
     action: {
       FLAG: "Relayed as written, and recorded for staff to look at.",
@@ -1488,12 +1545,19 @@ export const DEFAULT_PANEL = {
     styleButtons: "Buttons",
     styleSelect: "Select menu",
     panelCategoriesLabel: "Categories",
-    panelCategoriesHint: "Which categories this panel offers, in the order they appear.",
+    panelCategoriesHint:
+      "Which categories this panel offers, in the order they appear. Remove and re-add one to move it to the end.",
+    panelCategoriesAdd: "Add a category…",
+    panelCategoriesEmpty: "None yet. A panel needs at least one before it can be published.",
+    /** Marks a category that exists but is switched off, in the panel picker. */
+    categoryOff: "(disabled)",
     publish: "Publish",
     publishConfirm: "Confirm publish",
     createPanel: "Add panel",
     createPanelNamePlaceholder: "e.g. Support desk",
     createPanelTitlePlaceholder: "e.g. Need a hand?",
+    createPanelNote:
+      "Add the panel first, then open it to choose its channel and categories.",
 
     // ── tags ──
     tagsNote:

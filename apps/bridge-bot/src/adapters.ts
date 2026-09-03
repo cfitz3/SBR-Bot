@@ -13,7 +13,12 @@ import {
   rolePolicyReader,
   wordlistRepository,
 } from "@sbr/db";
-import { evaluateText } from "@sbr/moderation";
+import {
+  evaluateText,
+  parsePackSelection,
+  resolveWordlist,
+  WORDLIST_PACKS_SETTING_KEY,
+} from "@sbr/moderation";
 import {
   COOLDOWN_SETTING_KEY,
   parseCooldowns,
@@ -221,7 +226,22 @@ export class WordlistFilterImpl implements WordlistFilter {
     if (cached && cached.expiry > Date.now()) return cached.rules;
     // `list` rather than `listEnabled`: evaluateText skips disabled rules
     // itself, and this keeps the relay's input identical to `/filter-test`'s.
-    const rules = await wordlistRepository.list(guildId);
+    //
+    // The packs are resolved here for the same reason. A guild that switches
+    // on the Hypixel pack means it for guild chat above all — that is where
+    // account selling actually gets typed — so the relay has to see the same
+    // list the panel shows, not the guild's own rows alone.
+    const [own, selection] = await Promise.all([
+      wordlistRepository.list(guildId),
+      guildConfigRepository
+        .getSetting(guildId, WORDLIST_PACKS_SETTING_KEY)
+        .then(parsePackSelection)
+        // Keep the guild's own rules rather than failing the message: a filter
+        // that stops filtering on a settings hiccup fails in the wrong
+        // direction, and the cache would hold that emptiness for a full TTL.
+        .catch(() => parsePackSelection(null)),
+    ]);
+    const rules = resolveWordlist(guildId, own, selection);
     this.cache.set(guildId, { rules, expiry: Date.now() + this.ttlMs });
     return rules;
   }

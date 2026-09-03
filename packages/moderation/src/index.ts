@@ -11,6 +11,25 @@ export {
 export { rankOf, isPunitive, needsBotPermission } from "./rank.js";
 export { DISCORD_ACTOR, modLogEmbed, type ModLogSink } from "./mod-log.js";
 export {
+  burstReached,
+  defaultRules as defaultAntiRaidRules,
+  describeRules as describeAntiRaidRules,
+  evaluateJoin,
+  parseAntiRaid,
+  simulateRaid,
+  ALLOW_JOIN,
+  ANTIRAID_SETTING_KEY,
+  DEFAULT_ANTIRAID,
+  RAID_JOIN_ACTIONS,
+  type AntiRaidRules,
+  type JoinContext,
+  type JoinDecision,
+  type RaidJoinAction,
+  type RaidSimulation,
+  type SimulatedJoin,
+  type SimulatedOutcome,
+} from "./antiraid.js";
+export {
   counterRequestsFor,
   evaluateAutomod,
   parseAutomod,
@@ -104,6 +123,20 @@ export {
   type Matcher,
   type WordlistServiceDeps,
 } from "./wordlist.js";
+export {
+  findPack,
+  isPackRuleId,
+  packRuleId,
+  packRules,
+  parsePackSelection,
+  resolveWordlist,
+  NO_PACKS,
+  WORDLIST_PACKS,
+  WORDLIST_PACKS_SETTING_KEY,
+  type PackRule,
+  type PackSelection,
+  type WordlistPack,
+} from "./wordlist-packs.js";
 export type {
   AutomodCounterStore,
   AutomodPolicySource,
@@ -123,6 +156,7 @@ export type {
   NewActionRecord,
   NewWordlistRecord,
   SafetyStateStore,
+  WordlistPackSource,
   WordlistRepository,
 } from "./ports.js";
 export type { ModerationMetrics } from "./metrics.js";

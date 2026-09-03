@@ -33,6 +33,7 @@ import {
   fieldGroup,
   memberPicker,
   multiPickerField,
+  optionChipsField,
   reasonBox,
   selectField,
   statusSlot,
@@ -565,22 +566,18 @@ function panelEditor(
         save: (next) => write({ style: next as TicketPanelDTO["style"] }),
       }),
       // Keys, not ids: a panel points at categories by key so renaming one
-      // never orphans the panel. The mutation refuses a key that is not a
-      // category, and refuses more than the style can render.
-      multiPickerField({
+      // never orphans the panel. Chosen from this guild's own categories
+      // rather than typed — this control used to be the *role* picker, which
+      // offered a list of Discord roles and then rejected every one of them
+      // for not being a category key, making a panel impossible to fill in.
+      optionChipsField({
         label: t("panelCategoriesLabel"),
         hint: t("panelCategoriesHint"),
-        guildId,
-        kind: "role",
         values: panel.categoryKeys,
-        save: async (keys) => {
-          const known = new Set(categories.map((c) => c.key));
-          const unknown = keys.filter((k) => !known.has(k));
-          if (unknown.length > 0) {
-            return { kind: "error", message: `${unknown.join(", ")}: no such category` };
-          }
-          return write({ categoryKeys: [...keys] });
-        },
+        options: categoryOptions(categories),
+        addLabel: t("panelCategoriesAdd"),
+        emptyLabel: t("panelCategoriesEmpty"),
+        save: (keys) => write({ categoryKeys: [...keys] }),
       }),
     ),
     h(
@@ -607,6 +604,21 @@ function panelEditor(
   );
 }
 
+/**
+ * The categories a panel may point at, in the order members will see them.
+ *
+ * Disabled ones are offered and marked rather than hidden: a panel is often
+ * assembled before the category behind it is switched on, and a picker that
+ * silently omits a category the admin just created reads as a bug.
+ */
+function categoryOptions(
+  categories: readonly TicketCategoryDTO[],
+): readonly (readonly [string, string])[] {
+  return [...categories]
+    .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name))
+    .map((c) => [c.key, c.enabled ? c.name : `${c.name} ${t("categoryOff")}`] as const);
+}
+
 function createPanelForm(guildId: string, reload: () => void): HTMLElement {
   const status = statusSlot();
   const name = plainField(t("createPanelNamePlaceholder"), t("panelNameLabel"));
@@ -615,6 +627,7 @@ function createPanelForm(guildId: string, reload: () => void): HTMLElement {
   return h(
     "div",
     { class: "field" },
+    h("p", { class: "field-hint" }, t("createPanelNote")),
     h("div", { class: "field-row" }, name, title),
     h(
       "div",

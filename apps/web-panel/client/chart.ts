@@ -22,20 +22,16 @@ const PAD = { top: 12, right: 12, bottom: 26, left: 46 };
  * Series colours. Literal hues rather than custom properties because the legend
  * swatch and the line have to agree exactly, and an SVG `stroke` reading a token
  * that a future stylesheet renames fails silently — as a black line. The first
- * is the Nocturne accent; the rest are the status hues plus two neighbours,
- * chosen for separation against this ground rather than for a colour wheel.
+ * is the Operator accent and the next three are its status hues, so a series
+ * named "errors" or "resolved" is drawn in the colour that state is painted
+ * everywhere else in the panel. The last two are neighbours chosen for
+ * separation against this ground rather than for a colour wheel.
  */
-const COLORS = ["#9184d9", "#6fcf97", "#e0b061", "#e2726b", "#6fb3d1", "#c48ad9"] as const;
+const COLORS = ["#5fa8d3", "#4fb286", "#d9a441", "#d9534f", "#8fc6e6", "#8f7fd0"] as const;
 
 function color(i: number): string {
   return COLORS[i % COLORS.length] ?? COLORS[0];
 }
-
-/**
- * Gradient ids have to be unique per document: two charts on one page sharing an
- * id means the second one's fill silently resolves to the first one's.
- */
-let gradientSeq = 0;
 
 /** A y-axis top that lands on a round number, so the gridline labels read well. */
 function niceMax(peak: number): number {
@@ -102,39 +98,32 @@ export function lineChart(chart: MetricChart, period: string): HTMLElement {
       points,
       fill: "none",
       stroke: color(i),
-      "stroke-width": 2,
+      "stroke-width": 1.5,
       "stroke-linejoin": "round",
       "stroke-linecap": "round",
     });
   });
 
   /*
-   * The design fills the area under the line with a fade to nothing. That only
-   * works for a single series — two overlapping washes read as a third colour
-   * that means nothing — so a multi-series chart stays as bare lines.
+   * The area under a single series is tinted so the line reads as a quantity
+   * rather than a squiggle. A flat wash, not a fade: Operator has no soft
+   * transitions, and a gradient to transparent also needs a `<defs>` with a
+   * document-unique id, which was a real source of one chart silently borrowing
+   * another's fill. Only one series gets it — two overlapping washes read as a
+   * third colour that means nothing — so a multi-series chart stays bare lines.
    */
-  const gradientId = `chart-fade-${(gradientSeq += 1)}`;
   const only = chart.series.length === 1 ? chart.series[0] : null;
   const area =
     only && buckets.length > 1
       ? [
-          s(
-            "defs",
-            {},
-            s(
-              "linearGradient",
-              { id: gradientId, x1: "0", y1: "0", x2: "0", y2: "1" },
-              s("stop", { offset: "0", "stop-color": color(0), "stop-opacity": "0.34" }),
-              s("stop", { offset: "1", "stop-color": color(0), "stop-opacity": "0" }),
-            ),
-          ),
           s("polygon", {
             points: [
               `${x(0).toFixed(1)},${(PAD.top + plotH).toFixed(1)}`,
               ...only.points.map((value, idx) => `${x(idx).toFixed(1)},${y(value).toFixed(1)}`),
               `${x(buckets.length - 1).toFixed(1)},${(PAD.top + plotH).toFixed(1)}`,
             ].join(" "),
-            fill: `url(#${gradientId})`,
+            fill: color(0),
+            "fill-opacity": "0.12",
             stroke: "none",
           }),
         ]

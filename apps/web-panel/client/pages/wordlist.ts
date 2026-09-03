@@ -17,7 +17,7 @@
  * control here is Admin-tier: the list is, by construction, a collection of the
  * slurs and scam URLs the guild is filtering.
  */
-import type { WordlistVM } from "@sbr/panel-core";
+import type { PackSelection, WordlistPack, WordlistVM } from "@sbr/panel-core";
 import type { WordlistRuleDTO } from "@sbr/shared-types";
 import { WordAction, WordMatchType } from "./enums.js";
 import { postAction, type WriteResult } from "../api.js";
@@ -70,13 +70,18 @@ const actionOptions = (): readonly (readonly [string, string])[] =>
  * in place.
  */
 export function filterCards(guildId: string, vm: WordlistVM, reload: () => void): readonly HTMLElement[] {
-  const { installed, rules, escalation, relaySync } = vm;
+  const { installed, rules, escalation, relaySync, packs, packCatalogue } = vm;
   return [
     h("p", { class: "page-note" }, t("intro")),
     card(t("cardEscalation"), escalationForm(guildId, escalation, reload)),
     card(t("cardRelaySync"), relaySyncForm(guildId, relaySync, reload)),
     ...(installed
       ? [
+          // Packs come before the create form deliberately: the first question
+          // a new guild has is "do I have to write all of this myself", and the
+          // answer is on screen before the empty pattern box is.
+          card(t("cardPacks"), packsForm(guildId, packs, packCatalogue, reload)),
+          card(t("cardImport"), importForm(guildId, reload)),
           card(t("cardCreate"), createForm(guildId, reload)),
           ...(rules.length === 0
             ? [card(t("cardRules"), emptyState("wordlistRules"))]
@@ -84,6 +89,148 @@ export function filterCards(guildId: string, vm: WordlistVM, reload: () => void)
         ]
       : [card(t("cardRules"), emptyState("wordlistDisabled"))]),
   ];
+}
+
+/**
+ * The packaged lists, and the individual rules a guild has muted inside them.
+ *
+ * Every toggle sends the whole selection, because that is the shape the
+ * mutation validates: a per-toggle endpoint would let the page ask to mute a
+ * rule inside a pack that is off, which is a state nobody can see.
+ *
+ * A pack's rules are shown rather than summarised. The patterns are the whole
+ * question — an admin deciding whether to switch on Risky links is deciding
+ * about `bit.ly`, not about the word "risky" — and a pack nobody can read is a
+ * pack nobody should enable.
+ */
+function packsForm(
+  guildId: string,
+  selection: PackSelection,
+  catalogue: readonly WordlistPack[],
+  reload: () => void,
+): HTMLElement {
+  const enabled = new Set(selection.enabled);
+  const suppressed = new Set(selection.suppressed);
+
+  const save = (): Promise<WriteResult> =>
+    postAction(guildId, "wordlist.packs.save", {
+      enabled: [...enabled],
+      suppressed: [...suppressed],
+    });
+
+  const packBlock = (pack: WordlistPack): HTMLElement => {
+    const on = enabled.has(pack.id);
+    return h(
+      "div",
+      { class: "field" },
+      toggleField({
+        label: pack.name,
+        hint: pack.description,
+        checked: on,
+        save: (next) => {
+          if (next) enabled.add(pack.id);
+          else enabled.delete(pack.id);
+          // Reloaded so the rule list under the toggle appears or greys out
+          // without the operator having to guess that it would have.
+          return save().then((result) => {
+            if (result.kind === "ok") reload();
+            return result;
+          });
+        },
+      }),
+      h(
+        "ul",
+        { class: "roster-list pack-rules" },
+        ...pack.rules.map((rule) => {
+          const key = `${pack.id}:${rule.key}`;
+          const muted = suppressed.has(key);
+          return h(
+            "li",
+            { class: muted ? "pack-rule pack-rule-muted" : "pack-rule" },
+            h("code", { class: "pack-pattern" }, rule.pattern),
+            badge(rule.action.toLowerCase(), rule.action === "BLOCK" ? "bad" : "warn"),
+            h("span", { class: "muted" }, rule.note),
+            toggleField({
+              label: t("packRuleOn"),
+              checked: !muted,
+              readOnly: !on,
+              save: (next) => {
+                if (next) suppressed.delete(key);
+                else suppressed.add(key);
+                return save();
+              },
+            }),
+          );
+        }),
+      ),
+    );
+  };
+
+  return h(
+    "div",
+    { class: "fields" },
+    h("p", { class: "field-hint" }, t("packsIntro")),
+    ...catalogue.map(packBlock),
+  );
+}
+
+/**
+ * Bulk import: a JSON array of rules, pasted or dropped in as a file.
+ *
+ * Both routes post the same text to the same mutation, which is what keeps the
+ * two from disagreeing about what a valid file is. The file picker only reads
+ * it — nothing is uploaded until the operator presses the button, so a
+ * mis-clicked file is a re-pick rather than two hundred rules.
+ */
+function importForm(guildId: string, reload: () => void): HTMLElement {
+  const status = statusSlot();
+
+  const box = h("textarea", {
+    class: "control control-area",
+    rows: "6",
+    placeholder: t("importPlaceholder"),
+    "aria-label": t("importLabel"),
+    spellcheck: "false",
+  }) as HTMLTextAreaElement;
+
+  const picker = h("input", {
+    class: "control control-text pack-file",
+    type: "file",
+    accept: "application/json,.json",
+    "aria-label": t("importFileLabel"),
+  }) as HTMLInputElement;
+
+  picker.addEventListener("change", () => {
+    const file = picker.files?.[0];
+    if (!file) return;
+    void file.text().then((text) => {
+      // Into the box rather than straight to the server: the operator sees what
+      // they are about to add, which is the entire safeguard on an import.
+      box.value = text;
+      status.set("saved", t("importLoaded"));
+    });
+  });
+
+  const submit = actionButton({
+    label: t("importRun"),
+    status,
+    run: () => postAction(guildId, "wordlist.import", { rules: box.value }),
+    onDone: () => {
+      box.value = "";
+      picker.value = "";
+      reload();
+    },
+  });
+
+  return h(
+    "div",
+    { class: "field" },
+    h("p", { class: "field-hint" }, t("importIntro")),
+    picker,
+    box,
+    h("div", { class: "field-row" }, submit),
+    status.el,
+  );
 }
 
 /**

@@ -747,6 +747,10 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.upsertWordlistRule(session, guildId, b));
       case "wordlist.delete":
         return sendMutation(res, await m.deleteWordlistRule(session, guildId, b["id"]));
+      case "wordlist.packs.save":
+        return sendMutation(res, await m.saveWordlistPacks(session, guildId, b));
+      case "wordlist.import":
+        return sendMutation(res, await m.importWordlist(session, guildId, b));
       case "moderation.defaults":
         return sendMutation(res, await m.setModerationDefaults(session, guildId, b));
       case "moderation.relay-sync":
@@ -759,6 +763,13 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.removeAutomodRule(session, guildId, b));
       case "automod.enable":
         return sendMutation(res, await m.setAutomodEnabled(session, guildId, b));
+      // Anti-raid. The dry run rides the write channel for `automod.test`'s
+      // reason: it stores nothing, but it needs the same authorization and the
+      // same shaped body the save takes.
+      case "antiraid.save":
+        return sendMutation(res, await m.saveAntiRaid(session, guildId, b));
+      case "antiraid.test":
+        return sendMutation(res, await m.testAntiRaid(session, guildId, b));
       // Auto-roles and the greeter. The preview goes through the write channel
       // and writes nothing — it is here because it needs the same authorization
       // and the same body the save would take, and answering "what would this

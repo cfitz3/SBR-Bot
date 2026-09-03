@@ -49,6 +49,11 @@ export {
   type RolesHealthVM,
   type TicketsVM,
   type WordlistVM,
+} from "./service.js";
+// Re-exported so the panel's browser half, which has no bundler and cannot
+// import @sbr/moderation, can still type the pack catalogue it is handed.
+export type { PackSelection, WordlistPack } from "@sbr/moderation";
+export {
   XP_SOURCE_ORDER,
   type HealthVM,
   type PermissionsVM,

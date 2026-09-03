@@ -154,7 +154,7 @@ function boardBody(page: NonNullable<LeaderboardVM["page"]>, go: (next: Partial<
           h("span", {}, `#${String(page.viewer.rank)} ${c("dot")} ${page.viewer.label}`),
           h("span", {}, formatValue(page.viewer.value, format)),
         ),
-    table([t("colRank"), t("colMember"), t("colValue"), t("colReading")], rows),
+    table([t("colRank"), t("colMember"), { label: t("colValue"), align: "num" }, t("colReading")], rows),
     pager(page, go),
     h(
       "p",

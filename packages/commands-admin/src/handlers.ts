@@ -17,7 +17,13 @@ import type {
   WordMatchType,
 } from "@sbr/shared-types";
 import { copy, withCommandCopy } from "@sbr/brand";
-import { isEscalation, modLogEmbed } from "@sbr/moderation";
+import {
+  ANTIRAID_SETTING_KEY,
+  describeAntiRaidRules,
+  parseAntiRaid,
+  isEscalation,
+  modLogEmbed,
+} from "@sbr/moderation";
 import type {
   AdminCommandSpec,
   AdminContext,
@@ -489,16 +495,33 @@ const lockdown: AdminHandler = async (ctx, deps) => {
   return show();
 };
 
+/**
+ * Turn the posture on, and say what it will actually do.
+ *
+ * Sensitivity is a preset for a guild that has never configured anti-raid on
+ * the panel, not a mode: `parseAntiRaid` layers it under whatever is stored, so
+ * an admin who set their own thresholds keeps them and somebody typing HIGH
+ * here does not silently overwrite them. The reply quotes the resolved rules
+ * because "on at HIGH sensitivity" told staff nothing about who was being
+ * turned away — which was true in a stronger sense than anyone realised, since
+ * until this release the answer was nobody.
+ */
 const antiraidOn: AdminHandler = async (ctx, deps) => {
+  const sensitivity = (ctx.args.getString("sensitivity") as RaidSensitivity | null) ?? "MEDIUM";
   const result = await deps.safety.enableAntiRaid({
     guildId: ctx.guildId,
     actorDiscordId: ctx.actorId,
-    sensitivity: (ctx.args.getString("sensitivity") as RaidSensitivity | null) ?? "MEDIUM",
+    sensitivity,
     durationSeconds: parseDurationSeconds(ctx.args.getString("duration")) ?? null,
   });
   if (!result.ok) return { ephemeral: true, text: renderSafetyError(result.error) };
+  const stored = await deps.config.getSetting(ctx.guildId, ANTIRAID_SETTING_KEY).catch(() => null);
+  const rules = parseAntiRaid(stored, sensitivity);
   const until = result.value.expiresAt ? ` until ${relativeTs(result.value.expiresAt)}` : "";
-  return { ephemeral: false, text: `🛡️ Anti-raid on at ${result.value.sensitivity} sensitivity${until}.` };
+  return {
+    ephemeral: false,
+    text: `🛡️ Anti-raid on${until}. ${describeAntiRaidRules(rules)}`,
+  };
 };
 
 const antiraidOff: AdminHandler = async (ctx, deps) => {
@@ -1134,7 +1157,13 @@ const applicationReview: AdminHandler = async (ctx, deps) => {
   if (id) {
     const result = await deps.community.getApplication(id);
     if (!result.ok) return { ephemeral: true, text: E.generic.loadFailed };
-    if (result.value === null) return { ephemeral: true, text: E.generic.notFound };
+    // `getApplication` takes an id and nothing else, so a staffer of one server
+    // could otherwise read another server's application by pasting its id. The
+    // answer is the same as for an id that does not exist: telling them it
+    // exists elsewhere is the leak, in smaller print.
+    if (result.value === null || result.value.guildId !== ctx.guildId) {
+      return { ephemeral: true, text: E.generic.notFound };
+    }
     return {
       ephemeral: true,
       text: `Application ${result.value.id} — ${result.value.status.toLowerCase()}.`,
@@ -1161,6 +1190,15 @@ function decideHandler(accept: boolean): AdminHandler {
     const id = ctx.args.getString("id");
     if (!id) return { ephemeral: true, text: "Which application? Pass `id:` — /application-review lists them." };
     const reason = ctx.args.getString("reason");
+
+    // Scoped for the same reason `/application-review` is, and with more at
+    // stake: accepting promotes the applicant onto *this* guild's roster below,
+    // so an id from another server would add a stranger to it.
+    const found = await deps.community.getApplication(id);
+    if (!found.ok) return { ephemeral: true, text: "Couldn't load that application." };
+    if (found.value === null || found.value.guildId !== ctx.guildId) {
+      return { ephemeral: true, text: E.generic.notFound };
+    }
 
     const result = await deps.community.decideApplication({
       applicationId: id,
@@ -1396,6 +1434,18 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       description: "List the chat-filter rules",
       minRole: "MODERATOR",
       handler: wordlist,
+      // Retired: the Moderation page's Filter section does everything these
+      // three did and the things they could not. `/wordlist` printed a list
+      // with no way to change a row; `/wordlist-add` asked for a pattern, a
+      // match type, an action, a severity and a note across five slash options
+      // and gave nothing back but "added"; and neither could reach a packaged
+      // list or import a file. Parity was checked before this flag went on:
+      // create, edit, delete and list are all on the panel, which is why the
+      // removal and the pack work ship in the same slice (P-03).
+      //
+      // The handler stays. A deployment that wants the command back is a
+      // one-line change, and the dispatcher tests still exercise it.
+      enabled: false,
     },
     {
       name: "wordlist-add",
@@ -1429,6 +1479,18 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       ],
       minRole: "OFFICER",
       handler: wordlistAdd,
+      // Retired: the Moderation page's Filter section does everything these
+      // three did and the things they could not. `/wordlist` printed a list
+      // with no way to change a row; `/wordlist-add` asked for a pattern, a
+      // match type, an action, a severity and a note across five slash options
+      // and gave nothing back but "added"; and neither could reach a packaged
+      // list or import a file. Parity was checked before this flag went on:
+      // create, edit, delete and list are all on the panel, which is why the
+      // removal and the pack work ship in the same slice (P-03).
+      //
+      // The handler stays. A deployment that wants the command back is a
+      // one-line change, and the dispatcher tests still exercise it.
+      enabled: false,
     },
     {
       name: "wordlist-remove",
@@ -1438,6 +1500,18 @@ export function buildAdminRegistry(): Map<string, AdminCommandSpec> {
       ],
       minRole: "OFFICER",
       handler: wordlistRemove,
+      // Retired: the Moderation page's Filter section does everything these
+      // three did and the things they could not. `/wordlist` printed a list
+      // with no way to change a row; `/wordlist-add` asked for a pattern, a
+      // match type, an action, a severity and a note across five slash options
+      // and gave nothing back but "added"; and neither could reach a packaged
+      // list or import a file. Parity was checked before this flag went on:
+      // create, edit, delete and list are all on the panel, which is why the
+      // removal and the pack work ship in the same slice (P-03).
+      //
+      // The handler stays. A deployment that wants the command back is a
+      // one-line change, and the dispatcher tests still exercise it.
+      enabled: false,
       // Officers remove rules by pattern far more often than by id, so offer
       // both and let them pick the one they recognise.
       autocomplete: async (focused, ctx, deps) => {

@@ -50,7 +50,7 @@ export function renderEventsEmbed(events: readonly EventDTO[]): EmbedView {
     title: "Upcoming events",
     fields: events.slice(0, 10).map((e) => ({
       name: `${e.title}${e.type === undefined ? "" : ` · ${e.type.toLowerCase()}`}`,
-      value: `${timestampTag(e.startsAt)} (${timestampTag(e.startsAt, "R")}) • ${capacityLabel(e)} • \`${e.id}\``,
+      value: `${timestampTag(e.startsAt)} (${timestampTag(e.startsAt, "R")}) · ${capacityLabel(e)} · \`${e.id}\``,
       inline: false,
     })),
     footer: "RSVP with /rsvp event:<id> or the buttons on the event post.",
@@ -428,7 +428,7 @@ export function renderAttendanceEmbed(attendance: AttendanceDTO): EmbedView {
 
   return {
     title: `${event.title} — attendance`,
-    description: `${timestampTag(event.startsAt)} • ${capacityLabel(event)}`,
+    description: `${timestampTag(event.startsAt)} · ${capacityLabel(event)}`,
     fields: [
       ...turnout,
       { name: `Going (${attendance.going.length})`, value: mentionList(attendance.going), inline: false },
@@ -466,12 +466,12 @@ function statusLine(post: LFGPostDTO): string {
   if (post.status === "CLOSED" && post.closedByDiscordId !== null) {
     return `closed by <@${post.closedByDiscordId}>`;
   }
-  return `${post.activity.toLowerCase()} • ${post.status.toLowerCase()}`;
+  return `${post.activity.toLowerCase()} · ${post.status.toLowerCase()}`;
 }
 
 function lfgFooter(post: LFGPostDTO): string {
   if (post.status !== "OPEN" && post.status !== "FULL") return `id ${post.id}`;
-  return post.expiresAt === null ? `id ${post.id}` : `id ${post.id} • expires ${timestampTag(post.expiresAt, "R")}`;
+  return post.expiresAt === null ? `id ${post.id}` : `id ${post.id} · expires ${timestampTag(post.expiresAt, "R")}`;
 }
 
 /**
@@ -501,7 +501,7 @@ export function renderLfgListEmbed(posts: readonly LFGPostDTO[]): EmbedView {
     title: "Open runs",
     fields: posts.slice(0, 10).map((p) => ({
       name: `${p.activity.toLowerCase()} — ${p.slotsFilled}/${p.slotsTotal}`,
-      value: `<@${p.authorDiscordId}>${p.details === null ? "" : ` — ${p.details}`} • \`${p.id}\``,
+      value: `<@${p.authorDiscordId}>${p.details === null ? "" : ` — ${p.details}`} · \`${p.id}\``,
       inline: false,
     })),
     footer: "Join with /joinrun id:<id>.",
@@ -543,7 +543,7 @@ export function renderTicketListEmbed(tickets: readonly TicketDTO[]): EmbedView 
     title: "Open tickets",
     fields: tickets.slice(0, 10).map((t) => ({
       name: `#${t.number} ${t.categoryName ?? "—"} — ${t.status.toLowerCase()}`,
-      value: `<@${t.openerDiscordId}>${(t.topic ?? t.subject) === null ? "" : ` — ${t.topic ?? t.subject}`} • \`${t.id}\``,
+      value: `<@${t.openerDiscordId}>${(t.topic ?? t.subject) === null ? "" : ` — ${t.topic ?? t.subject}`} · \`${t.id}\``,
       inline: false,
     })),
     color: "INFO",

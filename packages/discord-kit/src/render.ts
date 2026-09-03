@@ -56,6 +56,16 @@ const STYLES = {
 
 export function toEmbed(view: EmbedView): EmbedBuilder {
   const embed = new EmbedBuilder().setColor(VIEW_COLORS[view.color ?? "NEUTRAL"]);
+  // The author row goes on first because that is the order it reads in: subject,
+  // then what the card says about it. discord.js does not care, but a renderer
+  // that builds the card in reading order is one you can check against a mock.
+  if (view.author) {
+    embed.setAuthor({
+      name: clampText(view.author.name, MAX_AUTHOR_NAME),
+      ...(view.author.iconUrl ? { iconURL: view.author.iconUrl } : {}),
+      ...(view.author.url ? { url: view.author.url } : {}),
+    });
+  }
   if (view.title) embed.setTitle(view.title);
   if (view.description) embed.setDescription(view.description);
   if (view.url) embed.setURL(view.url);
