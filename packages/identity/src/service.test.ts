@@ -297,3 +297,55 @@ test("an explicit deny outranks both a grant and the role floor", async () => {
   // Scoped to the one capability — the rest of the role's authority survives.
   assert.equal(await svc.hasCapability("g", "111", "RUN_COMMAND"), true);
 });
+
+// ── the immediate role pass ────────────────────────────────────────────────
+
+const AriaSocial = { Aria: { kind: "FOUND" as const, uuid: "uuid-aria", ign: "Aria", discordId: "Aria" } };
+
+function serviceWithMarker(
+  state: FakeState,
+  markMember: (discordId: string) => Promise<{ guilds: number; pending: boolean } | void>,
+) {
+  return new IdentityServiceImpl({
+    repo: makeRepo(state),
+    social: makeSocial(AriaSocial),
+    roles: makeRoles(state),
+    rolesDirty: { markMember },
+    logger: silentLogger,
+  });
+}
+
+test("a link applies roles on the request rather than only marking them", async () => {
+  const marked: string[] = [];
+  const svc = serviceWithMarker(emptyState(), async (discordId) => {
+    marked.push(discordId);
+    return { guilds: 1, pending: false };
+  });
+
+  const result = await svc.linkByIgn(ARIA, "Aria");
+
+  assert.deepEqual(marked, ["111"]);
+  assert.equal(result.ok && result.value.rolesPending, undefined);
+});
+
+test("a link Hypixel could not gate is reported pending, not failed", async () => {
+  const svc = serviceWithMarker(emptyState(), async () => ({ guilds: 1, pending: true }));
+
+  const result = await svc.linkByIgn(ARIA, "Aria");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.value.rolesPending, true);
+});
+
+test("a marker that throws still leaves the member linked", async () => {
+  const state = emptyState();
+  const svc = serviceWithMarker(state, () => Promise.reject(new Error("redis down")));
+
+  const result = await svc.linkByIgn(ARIA, "Aria");
+
+  assert.equal(result.ok, true);
+  assert.equal(state.owners.get("uuid-aria"), "111");
+  // Unknown is not pending: the sweep still owns them, and telling somebody
+  // their roles are "arriving shortly" when nothing was marked would be a lie.
+  assert.equal(result.ok && result.value.rolesPending, undefined);
+});

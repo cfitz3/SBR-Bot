@@ -18,6 +18,7 @@
     { "path": "../../packages/guild-config" },
     { "path": "../../packages/hypixel" },
     { "path": "../../packages/identity" },
+    { "path": "../../packages/jobs" },
     { "path": "../../packages/leaderboards" },
     { "path": "../../packages/embed-kit" },
     { "path": "../../packages/discord-kit" },

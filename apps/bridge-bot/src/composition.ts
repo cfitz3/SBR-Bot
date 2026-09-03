@@ -40,6 +40,7 @@ import {
   playSessionSink,
   serverActivityRepository,
 } from "@sbr/db";
+import { createGuildRankProbe } from "@sbr/jobs";
 import { IdentityServiceImpl } from "@sbr/identity";
 import { fetchHttp, HypixelClient, hypixelCheck, type SkyblockProfileDTO } from "@sbr/hypixel";
 import { SkykingsClient } from "@sbr/skykings";
@@ -425,6 +426,18 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   // `floors` matters most here: this is the process that asks `hasCapability`
   // for every relayed message, so it is where a guild's configured floors have
   // to be in force rather than the defaults.
+  // The immediate half of `/link`: settle Hypixel guild membership on the
+  // request itself, so a member who links a minute after joining the guild gets
+  // their guild role now rather than at the next roster scan. `LINK_GUILD_PROBE=0`
+  // turns it off and returns the marker to the roster-cache behaviour it had
+  // before, which is the whole reason it is a flag.
+  const linkGuildProbe = (process.env.LINK_GUILD_PROBE ?? "1") !== "0";
+  const roleDirty = memberRoleDirtyMarker(adapters.rolesDirty, {
+    ...(linkGuildProbe ? { probe: createGuildRankProbe(hypixel) } : {}),
+    retryMs: Number(process.env.LINK_GUILD_PROBE_RETRY_MS ?? 45_000),
+    log,
+  });
+
   const identity = new IdentityServiceImpl({
     repo: identityRepository,
     social: hypixel,
@@ -432,7 +445,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
     floors: rolePolicyReader,
     // Auto-roles hear about links and completed events promptly rather than
     // waiting for the reconciler's daily sweep to notice.
-    rolesDirty: memberRoleDirtyMarker(adapters.rolesDirty),
+    rolesDirty: roleDirty,
     logger: log,
   });
 

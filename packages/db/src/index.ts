@@ -73,7 +73,13 @@ export { serverActivityRepository } from "./repositories/server-activity.js";
 export { milestoneDefinitionRepository, milestoneAnnouncementRepository } from "./repositories/milestones.js";
 export { playSessionSink, playtimeRepository } from "./repositories/playtime.js";
 export { roleGrantRepository } from "./repositories/role-grants.js";
-export { roleSyncRepository, memberRoleDirtyMarker } from "./repositories/role-sync.js";
+export {
+  roleSyncRepository,
+  memberRoleDirtyMarker,
+  type LiveGuildRankProbe,
+  type MemberMarkReport,
+  type MemberRoleDirtyMarkerOptions,
+} from "./repositories/role-sync.js";
 export { ticketConfigRepository } from "./repositories/ticket-config.js";
 export {
   ticketRepository,

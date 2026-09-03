@@ -39,6 +39,7 @@ import {
 } from "@sbr/moderation";
 import type { EmbedView } from "@sbr/shared-types";
 import { IdentityServiceImpl } from "@sbr/identity";
+import { createGuildRankProbe } from "@sbr/jobs";
 import { JoinQueueService, ScreeningService, type GuildCommandSender } from "@sbr/screening";
 import { HypixelClient } from "@sbr/hypixel";
 import { CommunityServiceImpl } from "@sbr/community";
@@ -369,6 +370,18 @@ export async function createAdminApp(): Promise<AdminApp> {
     rateGate: adapters.rateGate,
     logger: log,
   });
+  // The immediate half of `/link`: settle Hypixel guild membership on the
+  // request itself, so a member who links a minute after joining the guild gets
+  // their guild role now rather than at the next roster scan. `LINK_GUILD_PROBE=0`
+  // turns it off and returns the marker to the roster-cache behaviour it had
+  // before, which is the whole reason it is a flag.
+  const linkGuildProbe = (process.env.LINK_GUILD_PROBE ?? "1") !== "0";
+  const roleDirty = memberRoleDirtyMarker(adapters.rolesDirty, {
+    ...(linkGuildProbe ? { probe: createGuildRankProbe(hypixel) } : {}),
+    retryMs: Number(process.env.LINK_GUILD_PROBE_RETRY_MS ?? 45_000),
+    log,
+  });
+
   const identity = new IdentityServiceImpl({
     repo: identityRepository,
     social: hypixel,
@@ -378,7 +391,7 @@ export async function createAdminApp(): Promise<AdminApp> {
     floors: rolePolicyReader,
     // Auto-roles hear about links and completed events promptly rather than
     // waiting for the reconciler's daily sweep to notice.
-    rolesDirty: memberRoleDirtyMarker(adapters.rolesDirty),
+    rolesDirty: roleDirty,
     logger: log,
   });
   const community = new CommunityServiceImpl({

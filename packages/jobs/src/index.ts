@@ -41,6 +41,7 @@ export {
   type RoleMemberSnapshot,
   type RoleSyncDeps,
 } from "./role-sync.js";
+export { createGuildRankProbe, type GuildLookup, type ProbeGuild } from "./role-gate.js";
 export {
   NUDGE_BURST,
   NUDGE_MAX_PENDING,

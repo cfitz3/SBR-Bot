@@ -138,7 +138,14 @@ const link: CommandHandler = async (ctx, deps) => {
   // Re-checking an account already on file is a confirmation, not a new link,
   // and saying "linked" to somebody repairing one reads as though it had come
   // undone.
-  const template = named ? copy.embed.card.linkDone : copy.embed.card.linkConfirmed;
+  // Three sentences, because there are three outcomes worth distinguishing: a
+  // new link, a re-check that passed, and a link whose guild-gated roles are
+  // still outstanding because Hypixel would not answer.
+  const template = result.value.rolesPending
+    ? copy.embed.card.linkPending
+    : named
+      ? copy.embed.card.linkDone
+      : copy.embed.card.linkConfirmed;
   return { ephemeral: true, text: template.replace("{ign}", result.value.ign) };
 };
 
@@ -158,6 +165,9 @@ const verify: CommandHandler = async (ctx, deps) => {
   }
   const result = await deps.identity.linkByIgn(linkActor(ctx), ign);
   if (!result.ok) return { ephemeral: true, text: renderLinkError(result.error) };
+  if (result.value.rolesPending) {
+    return { ephemeral: true, text: copy.embed.card.linkPending.replace("{ign}", result.value.ign) };
+  }
   return { ephemeral: true, text: `Verified as ${result.value.ign}. ✅` };
 };
 

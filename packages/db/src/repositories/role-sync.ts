@@ -97,6 +97,65 @@ export const roleSyncRepository = {
   },
 
   /**
+   * The Hypixel guild a platform guild is bound to, or null when nobody has
+   * bound one yet.
+   *
+   * Read on the link path so a live membership probe knows which guild it is
+   * asking about. A guild with no binding simply skips the probe: there is no
+   * roster to be a member of, so "in guild" is not a question that has an
+   * answer for it.
+   */
+  async hypixelGuildIdFor(guildId: string): Promise<string | null> {
+    const row = await prisma.guild.findUnique({
+      where: { id: guildId },
+      select: { hypixelGuildId: true },
+    });
+    return row?.hypixelGuildId ?? null;
+  },
+
+  /** The member's verified Minecraft uuid, which is what Hypixel is asked about. */
+  async linkedUuid(discordId: string): Promise<string | null> {
+    const row = await prisma.linkedAccount.findFirst({
+      where: { status: "VERIFIED", discordUser: { discordId } },
+      orderBy: [{ isPrimary: "desc" }, { verifiedAt: "desc" }],
+      select: { minecraftAccount: { select: { uuid: true } } },
+    });
+    return row?.minecraftAccount.uuid ?? null;
+  },
+
+  /**
+   * Write a guild rank we just read from Hypixel itself.
+   *
+   * The counterpart to `adoptCachedGuildRank`, and deliberately the opposite
+   * shape: that one fills a null from a roster cache that may be six hours old
+   * and refuses to overwrite anything, because it is guessing. This one is
+   * called with an answer Hypixel gave a moment ago, so it overwrites — a rank
+   * that changed is now correct, and a member who has left the guild has their
+   * rank cleared, which is what makes an IN_GUILD rule revoke on the spot
+   * instead of at the next roster scan.
+   *
+   * Still leaves `status` alone. Leaving the Hypixel guild is not leaving the
+   * Discord server, and conflating the two is how a member loses everything for
+   * changing guilds.
+   *
+   * Returns whether the stored rank actually changed, so the caller can say so
+   * in a log without a second read.
+   */
+  async writeGuildRank(guildId: string, discordId: string, rank: string | null): Promise<boolean> {
+    // Read first rather than filtering on `NOT: { guildRank: rank }`: in SQL a
+    // `<> 'Member'` comparison is *unknown* for a NULL rank, so the row that
+    // most needs the write — somebody who has never had one — is the one such a
+    // filter would silently skip.
+    const member = await prisma.guildMember.findFirst({
+      where: { guildId, discordUser: { discordId } },
+      select: { id: true, guildRank: true },
+    });
+    if (member === null || member.guildRank === rank) return false;
+    await prisma.guildMember.update({ where: { id: member.id }, data: { guildRank: rank } });
+    return true;
+  },
+
+  /**
    * Discord ids for a batch of Minecraft uuids, for callers that only learned
    * about a change in Hypixel terms.
    *
@@ -196,26 +255,157 @@ export const roleSyncRepository = {
 };
 
 /**
- * Turns a per-guild dirty marker into the guild-agnostic one identity wants.
+ * Asks Hypixel, right now, what rank somebody holds in a guild.
+ *
+ * A port rather than an import because `@sbr/db` has no business knowing what
+ * an HTTP client is, and because the honest answers are three rather than two:
+ * a rank, `null` for "confirmed not a member", and `undefined` for "could not
+ * tell". The third is the one that matters — treating an unreachable API as
+ * "not a member" would revoke the guild role of everybody who linked during an
+ * outage, which is a far worse failure than the role arriving late.
+ */
+export interface LiveGuildRankProbe {
+  rank(hypixelGuildId: string, uuid: string): Promise<string | null | undefined>;
+}
+
+/** What one member's immediate pass managed to settle. */
+export interface MemberMarkReport {
+  /** How many platform guilds the member belongs to. */
+  readonly guilds: number;
+  /**
+   * True when at least one guild's Hypixel membership could not be confirmed,
+   * so any guild-gated role is still outstanding. The caller says so to the
+   * member; the retry and the sweep are what eventually make it false.
+   */
+  readonly pending: boolean;
+}
+
+export interface MemberRoleDirtyMarkerOptions {
+  /**
+   * Live guild membership, when the app has a Hypixel client to spare. Absent
+   * — which is what setting `LINK_GUILD_PROBE=0` produces — falls back to the
+   * roster cache exactly as before, so the flag is a true off switch rather
+   * than a different code path.
+   */
+  readonly probe?: LiveGuildRankProbe;
+  /** How long to wait before one more attempt at a membership we could not read. */
+  readonly retryMs?: number;
+  /** How many such attempts. One, by default: past that the sweep is the answer. */
+  readonly retries?: number;
+  /** Step-by-step operational trace of a link. Silent when absent. */
+  readonly log?: {
+    info(message: string, meta?: Record<string, unknown>): void;
+    warn(message: string, meta?: Record<string, unknown>): void;
+  };
+}
+
+const DEFAULT_RETRY_MS = 45_000;
+
+/**
+ * Turns a per-guild dirty marker into the guild-agnostic one identity wants,
+ * and — given a probe — settles the member's Hypixel guild status before it
+ * marks, so the reconcile that follows evaluates the facts as they are rather
+ * than as the last roster scan left them.
  *
  * Lives here rather than in a composition file because every app that links
  * accounts needs exactly this, and the fan-out query is a database concern. The
  * structural parameter type keeps `@sbr/db` from having to depend on either the
  * identity package or the Redis one.
+ *
+ * The order inside the loop is load-bearing and has cost us a bug before:
+ * membership is settled *before* the mark, never after. The reconcile a mark
+ * triggers reads the member's facts once, so a rank that lands afterwards is a
+ * fact that arrived too late to be used.
+ *
+ * Nothing here retries forever and nothing here is durable. Every member it
+ * touches is in `roles:dirty:<guildId>` regardless, and the fifteen-minute
+ * sweep is still what guarantees they are reconciled at all — this only decides
+ * how many of them get there while somebody is still looking at the reply.
  */
-export function memberRoleDirtyMarker(sink: {
-  mark(guildId: string, discordIds: readonly string[]): Promise<void>;
-}): { markMember(discordId: string): Promise<void> } {
-  return {
-    async markMember(discordId) {
-      const guildIds = await roleSyncRepository.guildIdsForMember(discordId);
-      for (const guildId of guildIds) {
-        // Before the mark, never after. The reconcile this mark triggers reads
-        // the member's facts once; a rank adopted afterwards would be a fact
-        // that arrived too late to be used, which is the whole bug.
+export function memberRoleDirtyMarker(
+  sink: { mark(guildId: string, discordIds: readonly string[]): Promise<void> },
+  options: MemberRoleDirtyMarkerOptions = {},
+): { markMember(discordId: string): Promise<MemberMarkReport> } {
+  const log = options.log;
+  const retries = options.retries ?? 1;
+  const retryMs = options.retryMs ?? DEFAULT_RETRY_MS;
+
+  /**
+   * Settle one guild's membership from Hypixel. Returns whether it was settled;
+   * `false` means the caller should fall back to the roster cache and report the
+   * member as pending.
+   */
+  async function settle(guildId: string, discordId: string, uuid: string): Promise<boolean> {
+    const probe = options.probe;
+    if (probe === undefined) return false;
+
+    const hypixelGuildId = await roleSyncRepository.hypixelGuildIdFor(guildId).catch(() => null);
+    if (hypixelGuildId === null) {
+      log?.info("link: guild has no Hypixel guild bound", { guildId, discordId });
+      return false;
+    }
+
+    const rank = await probe.rank(hypixelGuildId, uuid).catch(() => undefined);
+    if (rank === undefined) {
+      log?.warn("link: Hypixel would not say whether the member is in the guild", {
+        guildId,
+        discordId,
+        hypixelGuildId,
+      });
+      return false;
+    }
+
+    const changed = await roleSyncRepository
+      .writeGuildRank(guildId, discordId, rank)
+      .catch(() => false);
+    log?.info("link: guild membership resolved", {
+      guildId,
+      discordId,
+      inGuild: rank !== null,
+      rank,
+      changed,
+    });
+    return true;
+  }
+
+  async function pass(discordId: string, attemptsLeft: number): Promise<MemberMarkReport> {
+    const guildIds = await roleSyncRepository.guildIdsForMember(discordId);
+    // One read for every guild rather than one per guild: a member's link is
+    // guild-agnostic, and so is the uuid Hypixel is asked about.
+    const uuid =
+      options.probe === undefined
+        ? null
+        : await roleSyncRepository.linkedUuid(discordId).catch(() => null);
+
+    let pending = false;
+    for (const guildId of guildIds) {
+      const settled = uuid === null ? false : await settle(guildId, discordId, uuid);
+      if (!settled) {
+        if (options.probe !== undefined && uuid !== null) pending = true;
         await roleSyncRepository.adoptCachedGuildRank(guildId, discordId).catch(() => false);
-        await sink.mark(guildId, [discordId]);
       }
+      await sink.mark(guildId, [discordId]);
+      log?.info("link: member marked for role sync", { guildId, discordId, settled });
+    }
+
+    // The short-lived retry. Not durable and not a queue: a timer in this
+    // process, unreferenced so it never holds a shutdown open, doing one more
+    // pass at a membership Hypixel would not confirm. If the process dies first
+    // the member is still dirty and the sweep still reconciles them.
+    if (pending && attemptsLeft > 0) {
+      const timer = setTimeout(() => {
+        void pass(discordId, attemptsLeft - 1).catch(() => undefined);
+      }, retryMs);
+      timer.unref?.();
+      log?.info("link: guild membership retry scheduled", { discordId, inMs: retryMs });
+    }
+
+    return { guilds: guildIds.length, pending };
+  }
+
+  return {
+    markMember(discordId) {
+      return pass(discordId, retries);
     },
   };
 }

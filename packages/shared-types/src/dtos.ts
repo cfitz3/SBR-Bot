@@ -38,6 +38,16 @@ export interface LinkedIdentityDTO {
   readonly status: LinkStatus;
   readonly primary: boolean;
   readonly verifiedAt: string | null;
+  /**
+   * Set by `/link` only, and only when the immediate role pass could not
+   * confirm Hypixel guild membership — so any guild-gated role is still
+   * outstanding and will be applied by the retry or the next sweep.
+   *
+   * Optional because it is a property of one *act* of linking rather than of
+   * the link: every read path omits it, and its absence means nothing was left
+   * hanging rather than "unknown".
+   */
+  readonly rolesPending?: boolean;
 }
 
 export interface MemberSummaryDTO {

@@ -521,6 +521,13 @@ export const DEFAULT_EMBEDS = {
      * as though it had come undone.
      */
     linkConfirmed: "Still linked as **{ign}** — the check passed.",
+    /**
+     * `{ign}` — the link itself succeeded, but Hypixel would not say whether
+     * they are in the guild, so any guild-gated role is still outstanding. Said
+     * plainly, because the member's next move is to wait rather than to retry.
+     */
+    linkPending:
+      "Linked to **{ign}**. Hypixel is not answering right now, so your guild roles will arrive shortly.",
     helpLinkFooter: "The check reads your Hypixel social field live — nothing is stored from it.",
 
     /* ── triggers (starboard and its relatives) ── */

@@ -31,7 +31,20 @@ import type { Logger } from "@sbr/observability";
  * business answering.
  */
 export interface MemberRoleDirtyMarker {
-  markMember(discordId: string): Promise<void>;
+  markMember(discordId: string): Promise<MemberMarkReport | void>;
+}
+
+/**
+ * What the immediate role pass settled while the member was still waiting.
+ *
+ * `pending` is the only field this package acts on, and it means one thing:
+ * Hypixel would not say whether the member is in the guild, so a guild-gated
+ * role has not been decided yet. The member is told; a retry and the sweep are
+ * what make it stop being true.
+ */
+export interface MemberMarkReport {
+  readonly guilds: number;
+  readonly pending: boolean;
 }
 
 /**
@@ -160,8 +173,26 @@ export class IdentityServiceImpl implements IdentityService {
       ign: social.ign,
     });
     this.log.info("link verified", { discordId, ign: social.ign, uuid: social.uuid });
-    await this.rolesDirty?.markMember(discordId).catch(() => undefined);
-    return ok(link);
+
+    // Roles are applied on this request rather than on the next sweep. The
+    // marker settles the member's Hypixel guild status, marks them dirty and
+    // nudges the immediate reconcile; everything it cannot settle stays marked
+    // for the fifteen-minute pass, which is why a failure here is reported to
+    // the member as "pending" rather than as a failed link.
+    const report = await this.rolesDirty?.markMember(discordId).catch((error: unknown) => {
+      this.log.warn("link roles could not be applied now", {
+        discordId,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+      return undefined;
+    });
+    const pending = report != null && report.pending;
+    this.log.info("link roles dispatched", {
+      discordId,
+      guilds: report?.guilds ?? 0,
+      pending,
+    });
+    return ok(pending ? { ...link, rolesPending: true } : link);
   }
 
   async unlink(discordId: string, minecraftUuid: string): Promise<Result<void>> {
