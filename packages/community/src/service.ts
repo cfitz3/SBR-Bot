@@ -28,6 +28,7 @@ import {
   type LfgEdit,
   type LfgError,
   type MemberRole,
+  type MemberCleanupDTO,
   type MemberSummaryDTO,
   type NewEvent,
   type NewLfgPost,
@@ -195,6 +196,33 @@ export class CommunityServiceImpl implements CommunityService {
     // is already saved, and the sweep is the backstop if the mark is lost.
     await this.rolesDirty?.mark(guildId, [discordId]).catch(() => undefined);
     return ok(updated);
+  }
+
+  async archiveMember(guildId: string, discordId: string): Promise<Result<MemberCleanupDTO>> {
+    const affected = await this.repo.archiveMember(guildId, discordId);
+    if (affected === 0) return err(new Error("that member isn't on this server's roster"));
+    this.log.info("member archived", { guildId, discordId });
+    // Archiving drops their level, and the reconcile is what takes the roles
+    // that level was holding. Same best-effort nudge as a rank change.
+    await this.rolesDirty?.mark(guildId, [discordId]).catch(() => undefined);
+    return ok({ affected });
+  }
+
+  async archiveDepartedMembers(guildId: string): Promise<Result<MemberCleanupDTO>> {
+    const discordIds = await this.repo.archiveDepartedMembers(guildId);
+    this.log.info("departed members archived", { guildId, count: discordIds.length });
+    if (discordIds.length > 0) {
+      await this.rolesDirty?.mark(guildId, discordIds).catch(() => undefined);
+    }
+    return ok({ affected: discordIds.length });
+  }
+
+  async stripMemberRoles(guildId: string, discordId: string): Promise<Result<MemberCleanupDTO>> {
+    const affected = await this.repo.stripMemberRoles(guildId, discordId);
+    if (affected === 0) return err(new Error("that member isn't on this server's roster"));
+    this.log.info("member roles stripped", { guildId, discordId });
+    await this.rolesDirty?.mark(guildId, [discordId]).catch(() => undefined);
+    return ok({ affected });
   }
 
   // ─────────────────────────────── Events ───────────────────────────────

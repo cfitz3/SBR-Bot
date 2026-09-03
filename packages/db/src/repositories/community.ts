@@ -196,6 +196,47 @@ export const communityRepository = {
     return members.find((m) => m.discordId === discordId) ?? null;
   },
 
+  async archiveMember(guildId: string, discordId: string): Promise<number> {
+    const user = await prisma.discordUser.findUnique({ where: { discordId }, select: { id: true } });
+    if (!user) return 0;
+    const updated = await prisma.guildMember.updateMany({
+      where: { guildId, discordUserId: user.id },
+      // INACTIVE rather than LEFT: LEFT is a fact the gateway records, and a
+      // staffer's tidy-up should not claim to have seen somebody leave.
+      data: { status: "INACTIVE", role: "MEMBER", roleOverride: null },
+    });
+    return updated.count;
+  },
+
+  async archiveDepartedMembers(guildId: string): Promise<readonly string[]> {
+    // Only rows that still hold something worth taking away. A departed member
+    // already at MEMBER with no override is archived in every way that matters.
+    const departed = await prisma.guildMember.findMany({
+      where: {
+        guildId,
+        status: { in: ["LEFT", "BANNED"] },
+        OR: [{ role: { not: "MEMBER" } }, { roleOverride: { not: null } }],
+      },
+      select: { id: true, discordUser: { select: { discordId: true } } },
+    });
+    if (departed.length === 0) return [];
+    await prisma.guildMember.updateMany({
+      where: { id: { in: departed.map((row) => row.id) } },
+      data: { role: "MEMBER", roleOverride: null },
+    });
+    return departed.map((row) => row.discordUser.discordId);
+  },
+
+  async stripMemberRoles(guildId: string, discordId: string): Promise<number> {
+    const user = await prisma.discordUser.findUnique({ where: { discordId }, select: { id: true } });
+    if (!user) return 0;
+    const updated = await prisma.guildMember.updateMany({
+      where: { guildId, discordUserId: user.id },
+      data: { role: "MEMBER", roleOverride: "MEMBER" },
+    });
+    return updated.count;
+  },
+
   async getEventForRsvp(eventId: string): Promise<EventRsvpInfo | null> {
     const event = await prisma.event.findUnique({ where: { id: eventId }, select: { status: true, capacity: true } });
     if (!event) return null;

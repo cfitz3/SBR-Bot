@@ -124,6 +124,12 @@ export interface CommunityRepository {
   listApplications(guildId: string): Promise<readonly ApplicationDTO[]>;
   /** Null when the guild has no member row for that Discord id. */
   setMemberRole(guildId: string, discordId: string, role: MemberRole): Promise<MemberSummaryDTO | null>;
+  /** Rows changed; zero when the guild has no member row for that Discord id. */
+  archiveMember(guildId: string, discordId: string): Promise<number>;
+  /** Archives every LEFT or BANNED member still holding a role or override. Returns their Discord ids. */
+  archiveDepartedMembers(guildId: string): Promise<readonly string[]>;
+  /** Rows changed; zero when the guild has no member row for that Discord id. */
+  stripMemberRoles(guildId: string, discordId: string): Promise<number>;
   getEventForRsvp(eventId: string): Promise<EventRsvpInfo | null>;
   upsertRsvp(eventId: string, discordId: string, state: RSVPState): Promise<void>;
 

@@ -91,6 +91,9 @@ function repo(over: Partial<CommunityRepository> = {}): Fake {
       async listMembers() { return []; },
       async listApplications() { return []; },
       async setMemberRole() { return null; },
+      async archiveMember() { return 0; },
+      async archiveDepartedMembers() { return []; },
+      async stripMemberRoles() { return 0; },
       async getEventForRsvp() { return null; },
       async setAttendance(eventId, discordIds, recordedBy) {
         attendanceWrites.push({ eventId, discordIds: [...discordIds], recordedBy });

@@ -388,6 +388,9 @@ export const MUTATION_TIERS = {
   /** Redrawing the tracker board edits a message in a members-visible channel. */
   "event.board.publish": "OFFICER",
   "member.unlink": "OFFICER",
+  /** Tidying up after somebody who has gone is roster upkeep, which is Officer work. */
+  "member.archive": "OFFICER",
+  "member.archive.departed": "OFFICER",
   /**
    * Admin, though §3.10 says Officer for member edits.
    *
@@ -398,6 +401,8 @@ export const MUTATION_TIERS = {
    * that this particular edit sits one tier higher.
    */
   "member.role": "ADMIN",
+  /** Removing somebody's roles is a demotion by another name, so it sits with role assignment. */
+  "member.roles.strip": "ADMIN",
 } as const satisfies Readonly<Record<string, MemberRole>>;
 
 export type MutationName = keyof typeof MUTATION_TIERS;
@@ -4188,6 +4193,45 @@ export class PanelMutations {
       }
       const result = await this.d.identity.unlink(discordId, minecraftUuid);
       return { result, change: { discordId, minecraftUuid } };
+    });
+  }
+
+  /**
+   * Retire a membership record. For somebody the Discord side says has left, or
+   * whom the last guild scan did not find: their standing goes, their history
+   * stays, and the reconcile takes the roles their level was holding.
+   */
+  async archiveMember(session: PanelSession | null, guildId: string, discordId: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "member.archive", async (actorDiscordId) => {
+      if (typeof discordId !== "string" || !SNOWFLAKE.test(discordId)) {
+        return invalid("discordId must be a Discord id");
+      }
+      if (discordId === actorDiscordId) return invalid("you cannot archive yourself from the panel");
+      const result = await this.d.community.archiveMember(guildId, discordId);
+      return { result, change: { discordId } };
+    });
+  }
+
+  /** Everyone recorded as LEFT or BANNED who still holds a role, archived in one press. */
+  async archiveDepartedMembers(session: PanelSession | null, guildId: string): Promise<MutationResult> {
+    return this.run(session, guildId, "member.archive.departed", async () => {
+      const result = await this.d.community.archiveDepartedMembers(guildId);
+      return { result, change: {} };
+    });
+  }
+
+  /**
+   * Pin a member to MEMBER so every gated auto-role is revoked on reconcile.
+   * The tool for a punished member who is still on the server.
+   */
+  async stripMemberRoles(session: PanelSession | null, guildId: string, discordId: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "member.roles.strip", async (actorDiscordId) => {
+      if (typeof discordId !== "string" || !SNOWFLAKE.test(discordId)) {
+        return invalid("discordId must be a Discord id");
+      }
+      if (discordId === actorDiscordId) return invalid("you cannot remove your own roles from the panel");
+      const result = await this.d.community.stripMemberRoles(guildId, discordId);
+      return { result, change: { discordId } };
     });
   }
 

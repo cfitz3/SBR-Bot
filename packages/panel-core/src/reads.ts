@@ -129,8 +129,18 @@ export interface DirectoryMemberRow {
   readonly linked: boolean;
   /** Platform role, or null for an in-game-only row that has no membership. */
   readonly role: string | null;
-  /** ACTIVE / LEFT on the Discord side; null for in-game-only rows. */
+  /** ACTIVE / INACTIVE / LEFT / BANNED on the Discord side; null for in-game-only rows. */
   readonly status: string | null;
+  /**
+   * Whether the in-game guild still has them. Null when there is no uuid to
+   * ask about, or no scan has ever answered; false is a departure the last scan
+   * saw — the row that used to be unrepresentable and is the one staff clean up.
+   */
+  readonly inGuild: boolean | null;
+  /** When the Discord side recorded them leaving; null while they are here. */
+  readonly leftAt: string | null;
+  /** Open punishments against either side of the row. Zero is the usual answer. */
+  readonly activeCases: number;
   readonly weeklyGexp: number | null;
   readonly lastSeenAt: string | null;
 }
@@ -151,6 +161,13 @@ export interface DirectoryPage {
   readonly guildCount: number;
   readonly linkedCount: number;
   /** True when more rows matched than `limit` returned. */
+  /**
+   * Rows the cleanup tools have something to do with: recorded as having left
+   * or banned on the Discord side, or not found by the last guild scan. Counted
+   * over the whole roster, not the current search, so the button that offers to
+   * tidy them up can say how many there are.
+   */
+  readonly departedCount: number;
   readonly truncated: boolean;
 }
 

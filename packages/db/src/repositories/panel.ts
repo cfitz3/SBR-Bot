@@ -9,7 +9,7 @@
  * Analytics reads come from `MetricRollup` and never from `AnalyticsEvent` —
  * the raw fact table grows without bound and a chart must not scan it.
  */
-import type { TicketDTO } from "@sbr/shared-types";
+import { rankOfRole, type MemberRole, type TicketDTO } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 import { TICKET_SELECT, toTicketDTO } from "./tickets.js";
 
@@ -181,6 +181,10 @@ export interface DirectoryMemberRowOut {
   readonly linked: boolean;
   readonly role: string | null;
   readonly status: string | null;
+  /** Whether the last guild scan found them. Null when unknowable — no uuid, or no scan yet. */
+  readonly inGuild: boolean | null;
+  readonly leftAt: string | null;
+  readonly activeCases: number;
   readonly weeklyGexp: number | null;
   readonly lastSeenAt: string | null;
 }
@@ -198,6 +202,7 @@ export interface DirectoryPageRow {
   readonly discordCount: number;
   readonly guildCount: number;
   readonly linkedCount: number;
+  readonly departedCount: number;
   readonly truncated: boolean;
 }
 
@@ -220,6 +225,32 @@ function sideMatches(row: DirectoryMemberRowOut, side: DirectorySideIn): boolean
 }
 
 const iso = (d: Date | null | undefined): string | null => (d ? d.toISOString() : null);
+
+/**
+ * How far behind the newest scan a cache row may be and still count as present.
+ * A roster walk is minutes, not hours; three hours is generous to a slow scan
+ * and far short of the next one.
+ */
+const DEPARTURE_TOLERANCE_MS = 3 * 60 * 60_000;
+
+/** Present, then departed, then unknown — the order staff want to read them in. */
+function guildStanding(row: DirectoryMemberRowOut): number {
+  if (row.inGuild === true) return 0;
+  if (row.inGuild === false) return 1;
+  return 2;
+}
+
+function compareDirectoryRows(a: DirectoryMemberRowOut, b: DirectoryMemberRowOut): number {
+  if (a.linked !== b.linked) return a.linked ? -1 : 1;
+  const standing = guildStanding(a) - guildStanding(b);
+  if (standing !== 0) return standing;
+  const rank = rankOfRole((b.role ?? "MEMBER") as MemberRole) - rankOfRole((a.role ?? "MEMBER") as MemberRole);
+  if (rank !== 0) return rank;
+  const nameA = a.nickname ?? a.username ?? a.ign ?? "";
+  const nameB = b.nickname ?? b.username ?? b.ign ?? "";
+  return nameA.localeCompare(nameB);
+}
+
 
 /**
  * `ActivityDaily.day` and `GuildGexpDaily.day` are `@db.Date`, so a cutoff with
@@ -394,7 +425,7 @@ export const panelRepository = {
    * builds it.
    */
   async listDirectory(guildId: string, query: DirectoryQueryInput): Promise<DirectoryPageRow> {
-    const [discordSide, gameSide] = await Promise.all([
+    const [discordSide, gameSide, openCases] = await Promise.all([
       prisma.guildMember.findMany({
         where: { guildId },
         orderBy: [{ role: "desc" }, { createdAt: "asc" }],
@@ -404,6 +435,7 @@ export const panelRepository = {
           guildRank: true,
           nickname: true,
           lastSeenAt: true,
+          leftAt: true,
           discordUser: {
             select: {
               discordId: true,
@@ -420,9 +452,30 @@ export const panelRepository = {
       prisma.guildMemberCache.findMany({
         where: { guildId },
         orderBy: { weeklyGexp: "desc" },
-        select: { uuid: true, ign: true, guildRank: true, weeklyGexp: true },
+        select: { uuid: true, ign: true, guildRank: true, weeklyGexp: true, refreshedAt: true },
+      }),
+      // One grouped count rather than a query per row: the moderation table is
+      // indexed on exactly (guildId, targetDiscordId, active).
+      prisma.moderationAction.groupBy({
+        by: ["targetDiscordId"],
+        where: { guildId, active: true, targetDiscordId: { not: null } },
+        _count: { _all: true },
       }),
     ]);
+
+    const casesByDiscordId = new Map<string, number>();
+    for (const group of openCases) {
+      if (group.targetDiscordId !== null) casesByDiscordId.set(group.targetDiscordId, group._count._all);
+    }
+
+    // The scan leaves departed members in the cache with an old `refreshedAt`
+    // rather than deleting them, so "still in the guild" is "was confirmed by
+    // the latest scan". The tolerance covers a scan that took a while to walk
+    // the roster; anything older than that is a tombstone.
+    const latestScan = gameSide.reduce<number>((max, row) => Math.max(max, row.refreshedAt.getTime()), 0);
+    const scanned = latestScan > 0;
+    const presentInGame = (refreshedAt: Date): boolean =>
+      latestScan - refreshedAt.getTime() <= DEPARTURE_TOLERANCE_MS;
 
     const byUuid = new Map(gameSide.map((row) => [row.uuid, row]));
     const claimed = new Set<string>();
@@ -436,6 +489,7 @@ export const panelRepository = {
       const uuid = link?.status === "VERIFIED" ? link.minecraftAccount.uuid : null;
       const game = uuid === null ? undefined : byUuid.get(uuid);
       if (uuid !== null) claimed.add(uuid);
+      const inGame = game !== undefined && presentInGame(game.refreshedAt);
       rows.push({
         discordId: member.discordUser.discordId,
         username: member.discordUser.username,
@@ -443,20 +497,30 @@ export const panelRepository = {
         uuid,
         ign: game?.ign ?? link?.minecraftAccount.currentIgn ?? null,
         // The in-game rank is the live one; the stored copy is a fallback for a
-        // member the last scan missed.
-        guildRank: game?.guildRank ?? member.guildRank,
+        // member the last scan missed. A departed member keeps neither: their
+        // last rank is not a rank they hold.
+        guildRank: inGame ? (game?.guildRank ?? member.guildRank) : null,
         linked: uuid !== null,
         role: member.role,
         status: member.status,
-        weeklyGexp: game?.weeklyGexp ?? null,
+        // Nothing to say about somebody with no account to look for, or before
+        // the first scan has answered.
+        inGuild: uuid === null || !scanned ? null : inGame,
+        leftAt: iso(member.leftAt),
+        activeCases: casesByDiscordId.get(member.discordUser.discordId) ?? 0,
+        weeklyGexp: inGame ? (game?.weeklyGexp ?? null) : null,
         lastSeenAt: iso(member.lastSeenAt),
       });
     }
 
     // Whoever the in-game guild knows and no Discord membership claimed. These
-    // are the rows the old read could not represent at all.
+    // are the rows the old read could not represent at all. A tombstone with no
+    // Discord side is nobody's business any more and is left out.
+    let guildCount = 0;
     for (const game of gameSide) {
-      if (claimed.has(game.uuid)) continue;
+      const present = presentInGame(game.refreshedAt);
+      if (present) guildCount += 1;
+      if (claimed.has(game.uuid) || !present) continue;
       rows.push({
         discordId: null,
         username: null,
@@ -467,10 +531,18 @@ export const panelRepository = {
         linked: false,
         role: null,
         status: null,
+        inGuild: true,
+        leftAt: null,
+        activeCases: 0,
         weeklyGexp: game.weeklyGexp,
         lastSeenAt: null,
       });
     }
+
+    // Linked before unlinked, then by whether they are still in the guild, then
+    // by authority, then by name. This is the order the page shows, so the
+    // browser can section the list without sorting it again.
+    rows.sort(compareDirectoryRows);
 
     const needle = query.q.trim().toLowerCase();
     const filtered = rows.filter((row) => {
@@ -484,8 +556,11 @@ export const panelRepository = {
     return {
       rows: filtered.slice(0, query.limit),
       discordCount: discordSide.filter((m) => m.status === "ACTIVE").length,
-      guildCount: gameSide.length,
+      guildCount,
       linkedCount: rows.filter((row) => row.linked).length,
+      departedCount: rows.filter(
+        (row) => row.inGuild === false || row.status === "LEFT" || row.status === "BANNED",
+      ).length,
       truncated: filtered.length > query.limit,
     };
   },

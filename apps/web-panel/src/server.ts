@@ -866,6 +866,12 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.setMemberRole(session, guildId, b["discordId"], b["role"]));
       case "member.unlink":
         return sendMutation(res, await m.unlinkMember(session, guildId, b["discordId"], b["minecraftUuid"]));
+      case "member.archive":
+        return sendMutation(res, await m.archiveMember(session, guildId, b["discordId"]));
+      case "member.archive.departed":
+        return sendMutation(res, await m.archiveDepartedMembers(session, guildId));
+      case "member.roles.strip":
+        return sendMutation(res, await m.stripMemberRoles(session, guildId, b["discordId"]));
       default:
         return send(res, 404, { error: "not_found" });
     }

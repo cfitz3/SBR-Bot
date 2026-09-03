@@ -429,12 +429,39 @@ export const DEFAULT_PANEL = {
     colMinecraft: "Minecraft",
     colLink: "Link",
     colGuildRank: "Guild rank",
+    colStanding: "Standing",
     colWeeklyGexp: "Weekly GEXP",
     colRole: "Platform role",
     /** `{name}` is the member's display name or id. */
     roleLabel: "Platform role for {name}",
     unlink: "Unlink",
     unlinkConfirm: "Confirm unlink",
+    /**
+     * Standing — the two ways somebody can be gone, kept apart because they
+     * call for different things. "Left guild" is the in-game roster no longer
+     * listing them; "Removed" is the Discord side recording a departure, which
+     * covers a kick and a ban alike. A row can be both.
+     */
+    inGuild: "In guild",
+    leftGuild: "Left guild",
+    removed: "Removed",
+    banned: "Banned",
+    /** No scan has answered about this member yet, so we do not claim either way. */
+    standingUnknown: "Unknown",
+    /** `{n}` is how many punishments against them are still open. */
+    openCases: "{n} open",
+    /** Cleanup — the tools for a roster that has drifted from the guild. */
+    cleanup: "Cleanup",
+    archive: "Archive",
+    archiveConfirm: "Confirm archive",
+    /** `{n}` is how many members are recorded as gone. */
+    archiveDeparted: "Archive {n} departed",
+    archiveDepartedConfirm: "Confirm archive",
+    archiveDepartedNone: "Nobody on this roster has left.",
+    stripRoles: "Remove roles",
+    stripRolesConfirm: "Confirm removal",
+    cleanupHint:
+      "Archiving drops a member's platform level and their auto-roles go on the next reconcile. Their history stays.",
     notInDiscord: "Not in Discord",
     unknownName: "unknown",
     /** A uuid with no name attached — the account exists, the lookup did not answer. */

@@ -468,6 +468,8 @@ export interface MembersVM {
   readonly discordCount: number;
   readonly guildCount: number;
   readonly linkedCount: number;
+  /** People who have gone one way or the other, whom the cleanup tools are for. */
+  readonly departedCount: number;
   /** More rows matched than were returned; the page says so rather than lying by omission. */
   readonly truncated: boolean;
   /** The current query, echoed so the client can render the state it asked for. */
@@ -1346,6 +1348,7 @@ export class PanelService {
         discordCount: page.discordCount,
         guildCount: page.guildCount,
         linkedCount: page.linkedCount,
+        departedCount: page.departedCount,
         truncated: page.truncated,
         q,
         side,

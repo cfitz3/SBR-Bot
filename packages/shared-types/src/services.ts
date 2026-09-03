@@ -959,6 +959,11 @@ export interface PlaytimeSource {
   playing(): Promise<readonly LivePlaytimeDTO[]>;
 }
 
+/** What a cleanup did: how many membership rows it touched. */
+export interface MemberCleanupDTO {
+  readonly affected: number;
+}
+
 /** Community events + membership (packages/community). */
 export interface CommunityService {
   listUpcomingEvents(guildId: string): Promise<Result<readonly EventDTO[]>>;
@@ -966,6 +971,19 @@ export interface CommunityService {
   listApplications(guildId: string): Promise<Result<readonly ApplicationDTO[]>>;
   /** `/set-role type:member` — change a member's platform role. */
   setMemberRole(guildId: string, discordId: string, role: MemberRole): Promise<Result<MemberSummaryDTO>>;
+  /**
+   * Retire a membership record for somebody who has gone: status INACTIVE,
+   * platform role back to MEMBER, no override. History stays; standing does not.
+   */
+  archiveMember(guildId: string, discordId: string): Promise<Result<MemberCleanupDTO>>;
+  /** Every member the Discord side has recorded as LEFT or BANNED, archived at once. */
+  archiveDepartedMembers(guildId: string): Promise<Result<MemberCleanupDTO>>;
+  /**
+   * Pin a member's platform level to MEMBER, which is what revokes every
+   * auto-role gated above it on the next reconcile. The one way *down* that a
+   * Discord role they still hold cannot outvote.
+   */
+  stripMemberRoles(guildId: string, discordId: string): Promise<Result<MemberCleanupDTO>>;
 
   // ── Events (`/create-event`, `/events`, `/rsvp`, `/attendance`) ──
   createEvent(input: NewEvent): Promise<Result<EventDTO, EventError>>;

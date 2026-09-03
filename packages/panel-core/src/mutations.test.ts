@@ -168,6 +168,9 @@ function actionRecorders(recorded: Recorded, result: Result<unknown> = ok(undefi
     claimTicket: record("claimTicket"),
     transferTicket: record("transferTicket"),
     setMemberRole: record("setMemberRole"),
+    archiveMember: record("archiveMember"),
+    archiveDepartedMembers: record("archiveDepartedMembers"),
+    stripMemberRoles: record("stripMemberRoles"),
     // Answers with the created event rather than recording and returning void:
     // the message that announces it is posted from the id this hands back.
     async createEvent(input: Record<string, unknown>) {

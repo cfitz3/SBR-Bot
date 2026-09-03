@@ -220,9 +220,9 @@ const GEXP_SERIES = [
 
 /** One of each shape the merge can produce: linked, Discord-only, game-only. */
 const DIRECTORY_ROWS: readonly DirectoryMemberRow[] = [
-  { discordId: "1", username: "a", nickname: null, uuid: "u", ign: "A", guildRank: null, linked: true, role: "MEMBER", status: "ACTIVE", weeklyGexp: 10, lastSeenAt: null },
-  { discordId: "2", username: "b", nickname: null, uuid: null, ign: null, guildRank: null, linked: false, role: "MEMBER", status: "ACTIVE", weeklyGexp: null, lastSeenAt: null },
-  { discordId: null, username: null, nickname: null, uuid: "w", ign: "C", guildRank: "Member", linked: false, role: null, status: null, weeklyGexp: 5, lastSeenAt: null },
+  { discordId: "1", username: "a", nickname: null, uuid: "u", ign: "A", guildRank: null, linked: true, role: "MEMBER", status: "ACTIVE", inGuild: true, leftAt: null, activeCases: 0, weeklyGexp: 10, lastSeenAt: null },
+  { discordId: "2", username: "b", nickname: null, uuid: null, ign: null, guildRank: null, linked: false, role: "MEMBER", status: "ACTIVE", inGuild: null, leftAt: null, activeCases: 0, weeklyGexp: null, lastSeenAt: null },
+  { discordId: null, username: null, nickname: null, uuid: "w", ign: "C", guildRank: "Member", linked: false, role: null, status: null, inGuild: true, leftAt: null, activeCases: 0, weeklyGexp: 5, lastSeenAt: null },
 ];
 
 function reads(over: Partial<PanelReads> = {}): PanelReads {
@@ -265,6 +265,7 @@ function reads(over: Partial<PanelReads> = {}): PanelReads {
         discordCount: all.filter((r) => r.discordId !== null).length,
         guildCount: all.filter((r) => r.uuid !== null).length,
         linkedCount: all.filter((r) => r.linked).length,
+        departedCount: all.filter((r) => r.inGuild === false).length,
         truncated: rows.length > query.limit,
       };
     },

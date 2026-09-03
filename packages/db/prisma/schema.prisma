@@ -535,6 +535,9 @@ model GuildMemberCache {
 
   @@unique([guildId, uuid])
   @@index([guildId, refreshedAt])
+  // The directory and the GEXP leaderboard both read a guild's cache highest
+  // first; without this the sort is a full scan of the guild's rows per page load.
+  @@index([guildId, weeklyGexp])
 }
 
 /// One row per member per day: Hypixel's own expHistory, de-duplicated into a

@@ -56,8 +56,10 @@ const GUILD_PAGES: readonly GuildPage[] = [
   { id: "health", group: "monitor", icon: "health", render: renderHealth },
   { id: "events", group: "monitor", icon: "events", render: renderEvents },
   { id: "leaderboard", group: "monitor", icon: "leaderboard", render: renderLeaderboard },
+  // Members sits with the things you watch, not the things that need a person:
+  // the page is a roster read first, and its cleanup tools are the exception.
+  { id: "members", group: "monitor", icon: "members", render: renderMembers },
   { id: "moderation", group: "queues", icon: "moderation", render: renderModeration },
-  { id: "members", group: "queues", icon: "members", render: renderMembers },
   { id: "tickets", group: "queues", icon: "tickets", render: renderTickets },
   { id: "settings", group: "configure", icon: "settings", render: renderSettings },
   { id: "milestones", group: "configure", icon: "milestones", render: renderMilestones },

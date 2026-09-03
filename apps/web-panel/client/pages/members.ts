@@ -13,6 +13,12 @@
  * belong to rows the browser would otherwise never receive; the input is
  * debounced so a keystroke does not cost a query.
  *
+ * Ordering is the server's, not the browser's: linked first, then by whether
+ * the guild still has them, then by authority, then by name. That puts the two
+ * rows staff act on — somebody unlinked, somebody gone — at the top of the list
+ * they are already reading, rather than behind a sort they have to think to
+ * apply.
+ *
  * OWNER is missing from the role dropdown on purpose — the mutation layer
  * refuses it, and offering an option that always fails is worse than not
  * offering it. Handing over ownership stays a deliberate act outside this page.
@@ -59,8 +65,18 @@ const state: { q: string; side: DirectorySide } = { q: "", side: "all" };
 /** Long enough that typing a name is one query, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 250;
 
+/**
+ * Whether this page has ever drawn in this session.
+ *
+ * A search keystroke and a cleanup both re-read the roster, and blanking the
+ * table to a spinner each time reads as a page breaking rather than a page
+ * working. So the spinner is for the first paint only; a refresh leaves the
+ * previous table on screen until the new one is ready.
+ */
+let painted = false;
+
 export async function renderMembers(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("members"));
+  if (!painted) replace(host, spinner("members"));
 
   const query = new URLSearchParams({ q: state.q, side: state.side });
   const result = await loadPage<MembersVM>(
@@ -72,6 +88,7 @@ export async function renderMembers(host: HTMLElement, guildId: string): Promise
   }
 
   const data = result.data;
+  painted = true;
   const rerender = (): void => void renderMembers(host, guildId);
 
   const search = h("input", {
@@ -152,9 +169,68 @@ export async function renderMembers(host: HTMLElement, guildId: string): Promise
                     )
                   : null,
               ),
+          h("p", { class: "note" }, t("cleanupHint")),
         ),
+        cleanupAction(guildId, data, rerender),
       ),
     ),
+  );
+}
+
+/**
+ * The one bulk tool: archive everybody the Discord side has recorded as gone
+ * who is still holding a role.
+ *
+ * Disabled rather than hidden when there is nobody to archive, with the count
+ * in the label either way — a button that appears and disappears makes staff
+ * wonder whether they imagined it, and "Archive 0 departed" is a clear answer
+ * to "is there anything to clean up".
+ */
+function cleanupAction(guildId: string, data: MembersVM, rerender: () => void): HTMLElement {
+  const status = statusSlot();
+  return h(
+    "div",
+    { class: "card-action" },
+    actionButton({
+      label: t("archiveDeparted").replace("{n}", count(data.departedCount)),
+      tone: "danger",
+      confirm: t("archiveDepartedConfirm"),
+      ...(data.departedCount === 0 ? { disabled: true } : {}),
+      status,
+      run: () => postAction(guildId, "member.archive.departed", {}),
+      onDone: rerender,
+    }),
+    status.el,
+  );
+}
+
+/**
+ * Where a member stands on each side, as badges.
+ *
+ * Two separate facts, deliberately not collapsed into one word: the in-game
+ * guild no longer listing somebody ("Left guild") and the Discord side having
+ * recorded them out ("Removed") happen independently and need different
+ * follow-up. `null` means no scan has answered yet, which is not the same as
+ * being gone, so nothing is claimed.
+ */
+function standing(member: DirectoryMemberRow): HTMLElement {
+  const marks: HTMLElement[] = [];
+  if (member.inGuild === false) marks.push(badge(t("leftGuild"), "warn"));
+  else if (member.inGuild === true) marks.push(badge(t("inGuild"), "ok"));
+
+  if (member.status === "BANNED") marks.push(badge(t("banned"), "bad"));
+  else if (member.status === "LEFT") marks.push(badge(t("removed"), "bad"));
+
+  if (member.activeCases > 0) {
+    marks.push(badge(t("openCases").replace("{n}", count(member.activeCases)), "warn"));
+  }
+
+  if (marks.length === 0) return h("span", { class: "muted" }, t("standingUnknown"));
+  return h(
+    "div",
+    {},
+    ...marks,
+    member.leftAt === null ? null : h("div", { class: "muted" }, relativeTime(member.leftAt)),
   );
 }
 
@@ -204,6 +280,7 @@ function membersTable(
             t("colMinecraft"),
             t("colLink"),
             t("colGuildRank"),
+            t("colStanding"),
             t("colWeeklyGexp"),
             t("colRole"),
             "",
@@ -253,6 +330,37 @@ function memberRow(guildId: string, member: DirectoryMemberRow, rerender: () => 
           onDone: rerender,
         });
 
+  // No Discord membership row means nothing to archive and no platform level to
+  // pin: an in-game-only row is a person this panel has no record of.
+  const cleanup =
+    discordId === null
+      ? null
+      : h(
+          "details",
+          { class: "collapse" },
+          h("summary", {}, t("cleanup")),
+          h(
+            "div",
+            { class: "row-actions" },
+            actionButton({
+              label: t("archive"),
+              tone: "danger",
+              confirm: t("archiveConfirm"),
+              status,
+              run: () => postAction(guildId, "member.archive", { discordId }),
+              onDone: rerender,
+            }),
+            actionButton({
+              label: t("stripRoles"),
+              tone: "danger",
+              confirm: t("stripRolesConfirm"),
+              status,
+              run: () => postAction(guildId, "member.roles.strip", { discordId }),
+              onDone: rerender,
+            }),
+          ),
+        );
+
   return h(
     "tr",
     {},
@@ -271,8 +379,22 @@ function memberRow(guildId: string, member: DirectoryMemberRow, rerender: () => 
     ),
     h("td", {}, member.linked ? badge(t("linked"), "ok") : badge(t("unlinked"), "warn")),
     h("td", {}, member.guildRank ?? c("dash")),
+    h("td", {}, standing(member)),
     h("td", {}, member.weeklyGexp === null ? c("dash") : count(member.weeklyGexp)),
     h("td", {}, role),
-    h("td", {}, h("div", { class: "row-actions" }, unlink, status.el)),
+    h(
+      "td",
+      {},
+      h(
+        "div",
+        { class: "row-actions" },
+        unlink,
+        // The destructive pair sits behind a disclosure rather than on the row:
+        // three danger buttons per member across a 300-row table is an invitation
+        // to a mis-click, and neither of these is anybody's routine action.
+        cleanup === null ? null : cleanup,
+        status.el,
+      ),
+    ),
   );
 }
