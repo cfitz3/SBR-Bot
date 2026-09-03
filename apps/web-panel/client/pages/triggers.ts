@@ -21,7 +21,7 @@ import {
   MAX_REPLY_LENGTH,
   MAX_TRIGGER_RULES,
   MIN_REACTION_THRESHOLD,
-} from "@sbr/triggers";
+} from "./trigger-limits.js";
 import { postAction, type WriteResult } from "../api.js";
 import { scope } from "../copy.js";
 import { actionButton, idChooser, statusSlot } from "../forms.js";

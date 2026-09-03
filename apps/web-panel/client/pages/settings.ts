@@ -10,7 +10,7 @@
  * Role bindings used to be a card here. They moved to Permissions, which owns
  * the whole question of what a level *is* — one page writes them, in one shape.
  */
-import { MAX_LINK_HELP_BODY, type LinkHelpPolicy } from "@sbr/guild-config";
+import type { LinkHelpPolicy } from "@sbr/guild-config";
 import type { SettingsVM } from "@sbr/panel-core";
 import type { ScreeningPolicyView } from "@sbr/screening";
 import { loadPage, postAction, type WriteResult } from "../api.js";
@@ -28,6 +28,7 @@ import {
 } from "../forms.js";
 import { h, replace } from "../dom.js";
 import { channelSlotCopy } from "./channel-slots.js";
+import { MAX_LINK_HELP_BODY } from "./link-help-limits.js";
 import { triggersForm } from "./triggers.js";
 import { LFG_PING_ROLE_KEY } from "./lfg-settings.js";
 import { FEATURES } from "./enums.js";
