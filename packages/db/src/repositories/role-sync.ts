@@ -106,7 +106,7 @@ export const roleSyncRepository = {
   async discordIdsForUuids(uuids: readonly string[]): Promise<readonly string[]> {
     if (uuids.length === 0) return [];
     const rows = await prisma.linkedAccount.findMany({
-      where: { minecraftUuid: { in: [...new Set(uuids)] }, status: "VERIFIED" },
+      where: { status: "VERIFIED", minecraftAccount: { uuid: { in: [...new Set(uuids)] } } },
       select: { discordUser: { select: { discordId: true } } },
     });
     return [...new Set(rows.map((row) => row.discordUser.discordId))];
