@@ -22,6 +22,8 @@ function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
     surfaces: ["DISCORD", "GUILD_CHAT"],
     enforcement: "CONFIRMED",
     enforcementDetail: null,
+    enforcementAttempts: 0,
+    enforcementAt: null,
     active: true,
     createdAt: "2026-03-01T11:00:00.000Z",
     updatedAt: null,

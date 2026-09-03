@@ -5,6 +5,7 @@
 import type { PackSelection } from "./wordlist-packs.js";
 import type {
   AntiRaidStateDTO,
+  EnforcementAttemptDTO,
   EnforcementStatus,
   AuditQuery,
   InfractionDTO,
@@ -82,8 +83,35 @@ export interface ModerationRepository {
    * row has to exist before anything is attempted: an enforcement that crashes
    * the process must leave evidence behind, and a row written only on success
    * leaves none.
+   *
+   * `attempt` is the 1-based count of tries this row has now had; passing it
+   * also stamps the attempt time, which is what the sweep measures staleness
+   * from. It is omitted when a person sets the status by hand, because a
+   * correction is not an attempt and must not spend one of the retries.
    */
-  setEnforcement(actionId: string, status: EnforcementStatus, detail: string | null): Promise<void>;
+  setEnforcement(
+    actionId: string,
+    status: EnforcementStatus,
+    detail: string | null,
+    attempt?: number,
+  ): Promise<void>;
+  /**
+   * Append what one surface said about one attempt.
+   *
+   * The case row carries only the current verdict, and the question staff ask
+   * when enforcement goes wrong is what Hypixel said and when. Append-only, and
+   * implementations swallow their own errors: losing the note must never fail
+   * the punishment it is a note about.
+   */
+  recordEnforcementAttempt(input: {
+    readonly actionId: string;
+    readonly attempt: number;
+    readonly surface: "DISCORD" | "GAME";
+    readonly outcome: string;
+    readonly detail: string | null;
+  }): Promise<void>;
+  /** The attempt log for one case, oldest first. */
+  listEnforcementAttempts(actionId: string, limit?: number): Promise<readonly EnforcementAttemptDTO[]>;
   /**
    * Punishments whose clock has run out but which are still flagged active —
    * the ones a sweep has to *reverse*, not merely un-flag. Returned newest
@@ -95,8 +123,13 @@ export interface ModerationRepository {
    *
    * A row goes PENDING when the guild command was sent and the guild said
    * nothing back inside the wait. That is a fair reading for fifteen seconds
-   * and a lie after ten minutes: by then nothing is coming, and a case that
-   * still reads "pending" is a ban nobody has been told did not happen.
+   * and a lie long after: by then either nothing is coming or the attempt was
+   * lost, and a case that still reads "pending" is a ban nobody has been told
+   * did not happen.
+   *
+   * Staleness is measured from the last attempt rather than from the case's
+   * creation, so a row the sweep has already retried is given the same grace
+   * over again instead of being judged against the moment it was written.
    */
   listStalePending(before: Date, limit: number): Promise<readonly ModerationActionDTO[]>;
   /**

@@ -1034,6 +1034,12 @@ export const DEFAULT_PANEL = {
     caseVoidedReason: "Voided: {reason}",
     caseVoidedNote: "This case has been withdrawn. Nothing further can be changed on it.",
     caseEditedBy: "Last corrected by {who}, {when}",
+    /**
+     * The line that separates "still going" from "gave up". A pending case on
+     * its first try and one on its last read identically without it.
+     */
+    caseAttempts: "Attempt {n} of {max}, last tried {when}",
+    caseAttemptsFailed: "Gave up after {n} attempts",
 
     caseReasonLabel: "Reason",
     caseReasonHint: "What the audit row says. Correcting it does not notify the member again.",

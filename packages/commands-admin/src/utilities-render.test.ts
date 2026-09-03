@@ -51,6 +51,8 @@ function note(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
     active: false,
     enforcement: "NOT_REQUIRED",
     enforcementDetail: null,
+    enforcementAttempts: 0,
+    enforcementAt: null,
     createdAt: "2026-03-01T11:00:00.000Z",
     updatedAt: null,
     editedByDiscordId: null,

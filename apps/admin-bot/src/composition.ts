@@ -31,6 +31,8 @@ import {
   WordlistServiceImpl,
   type DiscordActionInput,
   parsePackSelection,
+  MAX_ENFORCEMENT_ATTEMPTS,
+  STALE_GRACE_MS,
   WORDLIST_PACKS_SETTING_KEY,
   type DiscordEnforcer,
   type ModLogSink,
@@ -576,7 +578,13 @@ export async function createAdminApp(): Promise<AdminApp> {
       // call settles what was never answered for, so a `/g kick` the guild
       // ignored ends up as a FAILED case with an alert rather than a row that
       // reads "pending" until somebody happens to open it.
-      await moderation.settleStalePending().catch((error: unknown) => {
+      // Both knobs are here rather than in the service so a deployment whose
+      // bridge is slower than ours can widen the grace without a release. The
+      // grace has to outlast the bridge's outbound queue (ten minutes today);
+      // the attempt cap is what stops a case reading "pending" forever.
+      const graceMs = Number(process.env.ENFORCEMENT_RETRY_GRACE_MS ?? STALE_GRACE_MS);
+      const maxAttempts = Number(process.env.ENFORCEMENT_MAX_ATTEMPTS ?? MAX_ENFORCEMENT_ATTEMPTS);
+      await moderation.settleStalePending(graceMs, 50, maxAttempts).catch((error: unknown) => {
         log.error("could not settle unconfirmed punishments", { error: String(error) });
       });
       const r = await moderation.reverseExpired();

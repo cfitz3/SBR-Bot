@@ -21,6 +21,8 @@ function action(over: Partial<ModerationActionDTO>): ModerationActionDTO {
     surfaces: ["DISCORD"],
     enforcement: "NOT_REQUIRED",
     enforcementDetail: null,
+    enforcementAttempts: 0,
+    enforcementAt: null,
     active: false,
     createdAt: NOW.toISOString(),
     updatedAt: null,

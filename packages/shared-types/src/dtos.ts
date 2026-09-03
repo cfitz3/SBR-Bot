@@ -425,6 +425,16 @@ export interface ModerationActionDTO {
   /** Why enforcement failed, verbatim, for the staff alert and the audit page. */
   readonly enforcementDetail: string | null;
   /**
+   * How many times the platform has tried to carry this out.
+   *
+   * The number is what separates "still pending" from "truly failed". A case on
+   * its first attempt and a case on its last read identically without it, and
+   * staff were being alerted about the first as though it were the second.
+   */
+  readonly enforcementAttempts: number;
+  /** When the last attempt was made. Null only for rows older than the counter. */
+  readonly enforcementAt: string | null;
+  /**
    * When a person last corrected this case, or null while it stands as issued.
    *
    * Not "when the row last changed": the service stamping an enforcement
@@ -441,6 +451,21 @@ export interface ModerationActionDTO {
    */
   readonly voidedAt: string | null;
   readonly voidReason: string | null;
+}
+
+/**
+ * One attempt on one surface, as the panel shows it.
+ *
+ * Append-only, so a case that took three tries can be read as a story rather
+ * than as its last line. `outcome` is the surface's own verdict and `detail` is
+ * whatever it said in words — usually the Hypixel guild-chat line.
+ */
+export interface EnforcementAttemptDTO {
+  readonly attempt: number;
+  readonly surface: "DISCORD" | "GAME";
+  readonly outcome: string;
+  readonly detail: string | null;
+  readonly createdAt: string;
 }
 
 /**

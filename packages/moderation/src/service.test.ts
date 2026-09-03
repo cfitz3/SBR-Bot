@@ -31,29 +31,45 @@ interface EnforcementWrite {
   readonly actionId: string;
   readonly status: EnforcementStatus;
   readonly detail: string | null;
+  readonly attempt?: number;
+}
+
+interface EnforcementAttemptWrite {
+  readonly actionId: string;
+  readonly attempt: number;
+  readonly surface: "DISCORD" | "GAME";
+  readonly outcome: string;
+  readonly detail: string | null;
 }
 
 function repo(stale: readonly ModerationActionDTO[] = []): {
   repo: ModerationRepository;
   created: NewActionRecord[];
   enforced: EnforcementWrite[];
+  attempts: EnforcementAttemptWrite[];
 } {
   const created: NewActionRecord[] = [];
   const enforced: EnforcementWrite[] = [];
+  const attempts: EnforcementAttemptWrite[] = [];
   return {
     created,
     enforced,
+    attempts,
     repo: {
       async createInfraction(input) { return { ...input, id: "inf-1", createdAt: "t" }; },
       async createAction(input) {
         created.push(input);
-        return { ...input, id: "act-1", caseCode: "CASE-target-a1b2c3d4-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO;
+        return { ...input, id: "act-1", caseCode: "CASE-target-a1b2c3d4-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, enforcementAttempts: 0, enforcementAt: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO;
       },
       async listInfractions() { return []; },
       async listRecentInfractions() { return []; },
       async listActions() { return []; },
       async deactivateExpired() { return 0; },
-      async setEnforcement(actionId, status, detail) { enforced.push({ actionId, status, detail }); },
+      async setEnforcement(actionId, status, detail, attempt) {
+        enforced.push({ actionId, status, detail, ...(attempt === undefined ? {} : { attempt }) });
+      },
+      async recordEnforcementAttempt(input) { attempts.push(input); },
+      async listEnforcementAttempts() { return []; },
       async listExpiredActive() { return []; },
       async listStalePending() { return stale; },
       async findAction() { return null; },
@@ -201,7 +217,7 @@ test("listInForce narrows in the store and re-checks against this process's cloc
     id: "a1", caseCode: "CASE-target-a1b2c3d4-1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
     reason: "spam", durationSeconds: 60, expiresAt: "2026-08-05T23:59:00.000Z",
     surfaces: ["DISCORD"], active: true, createdAt: "2026-08-05T23:58:00.000Z",
-    enforcement: "CONFIRMED", enforcementDetail: null,
+    enforcement: "CONFIRMED", enforcementDetail: null, enforcementAttempts: 1, enforcementAt: null,
     updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
   };
   const live: ModerationActionDTO = { ...stale, id: "a2", expiresAt: null, type: "BAN" };
@@ -254,12 +270,12 @@ function repoWithWarns(count: number): { repo: ModerationRepository; created: Ne
     id: `w${i}`, caseCode: `CASE-target-a1b2c3d4-${i + 1}`, guildId: "g1", type: "WARN", actorDiscordId: "actor", targetDiscordId: "target",
     reason: "spam", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"],
     active: true, createdAt: "2026-08-05T00:00:00.000Z",
-    enforcement: "NOT_REQUIRED", enforcementDetail: null,
+    enforcement: "NOT_REQUIRED", enforcementDetail: null, enforcementAttempts: 1, enforcementAt: null,
     updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
   }));
   return {
     created: base.created,
-    repo: { ...base.repo, async createAction(i) { base.created.push(i); return { ...i, id: "act", caseCode: "CASE-target-a1b2c3d4-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO; }, async listActions() { return history; } },
+    repo: { ...base.repo, async createAction(i) { base.created.push(i); return { ...i, id: "act", caseCode: "CASE-target-a1b2c3d4-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, enforcementAttempts: 0, enforcementAt: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO; }, async listActions() { return history; } },
   };
 }
 
@@ -383,9 +399,12 @@ test("BAN relays a guild kick to guild chat for a linked member", async () => {
   if (result.ok) assert.equal(result.value.enforcement, "CONFIRMED");
 });
 
-test("a ban the bridge cannot run is FAILED, not resolved", async () => {
-  // The offline bridge: Redis accepted the publish and nobody was listening.
-  // The case must not read as a completed ban.
+test("a ban the bridge could not type yet is PENDING, not failed", async () => {
+  // The offline bridge. This used to be recorded as `enforcement_failed` on
+  // the spot, which is a claim about the punishment made from evidence about
+  // the *bridge*: the command never reached Hypixel, so Hypixel has not
+  // refused anything. It stays pending, the sweep retries it, and only running
+  // out of retries makes it a failure worth waking staff for.
   const r = repo();
   const a = alerts();
   const b = bus("NO_SESSION");
@@ -394,13 +413,32 @@ test("a ban the bridge cannot run is FAILED, not resolved", async () => {
   }).applyAction(input("BAN"));
 
   assert.equal(result.ok, true);
-  if (result.ok) {
-    assert.equal(result.value.enforcement, "FAILED");
-    assert.match(result.value.enforcementDetail ?? "", /guild chat/);
-  }
-  assert.deepEqual(r.enforced.map((w) => w.status), ["FAILED"]);
-  assert.equal(a.posted.length, 1);
-  assert.match(a.posted[0]!.text, /Enforcement failed/);
+  if (result.ok) assert.equal(result.value.enforcement, "PENDING");
+  assert.deepEqual(r.enforced.map((w) => w.status), ["PENDING"]);
+  assert.deepEqual(a.posted, []);
+});
+
+test("every attempt is written down, in the surface's own words", async () => {
+  // The log staff read when a punishment has to be finished by hand. The
+  // receipt code is kept verbatim: `NO_SESSION` and `REFUSED_BACKLOG` mean
+  // different things to whoever is working out why a kick never landed, and
+  // both collapse to "pending" by the time the case row sees them.
+  const r = repo();
+  const b = bus("NO_SESSION");
+  await build({
+    repoImpl: r.repo, gameCommands: b.bus, igns: linked, relaySync: defaultRelay,
+  }).applyAction(input("BAN"));
+
+  const game = r.attempts.find((w) => w.surface === "GAME");
+  assert.equal(game?.outcome, "NO_SESSION");
+  assert.equal(game?.attempt, 1);
+  assert.ok(r.attempts.some((w) => w.surface === "DISCORD"));
+});
+
+test("the attempt count is stamped with the verdict", async () => {
+  const r = repo();
+  await build({ repoImpl: r.repo }).applyAction(input("WARN"));
+  assert.equal(r.enforced[0]?.attempt, 1);
 });
 
 test("a ban Discord refuses is FAILED and names the reason", async () => {
@@ -529,7 +567,7 @@ function expired(over: Partial<ModerationActionDTO>): ModerationActionDTO {
     id: "old-1", guildId: "g1", type: "BAN", actorDiscordId: "actor", targetDiscordId: "target",
     reason: "because", durationSeconds: 3600, expiresAt: "2026-08-05T23:00:00.000Z",
     surfaces: ["DISCORD", "GUILD_CHAT"], active: true, createdAt: "2026-08-05T22:00:00.000Z",
-    enforcement: "CONFIRMED", enforcementDetail: null,
+    enforcement: "CONFIRMED", enforcementDetail: null, enforcementAttempts: 1, enforcementAt: null,
     ...over,
   } as ModerationActionDTO;
 }
@@ -609,29 +647,52 @@ test("a guild command nothing answered for stays PENDING rather than claiming ei
   assert.deepEqual(a.posted, []);
 });
 
-test("a punishment the guild never answered for is escalated, not left pending", async () => {
-  // The backstop. PENDING is honest for fifteen seconds and a lie after ten
-  // minutes: by then nothing is coming, and a case still reading "pending" is a
-  // ban nobody has been told did not land.
-  const stalled = {
+function stalled(over: Record<string, unknown> = {}): ModerationActionDTO {
+  return {
     id: "act-9", caseCode: "CASE-target-a1b2c3d4-9", guildId: "g1", type: "BAN", actorDiscordId: "staff-1", targetDiscordId: "target-1",
     reason: "Ban evasion", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"], active: true,
-    enforcement: "PENDING", enforcementDetail: "sent but not confirmed", createdAt: "t",
-    updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
+    enforcement: "PENDING", enforcementDetail: "sent but not confirmed", enforcementAttempts: 3, enforcementAt: null, createdAt: "t",
+    updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null, ...over,
   } as ModerationActionDTO;
-  const r = repo([stalled]);
+}
+
+test("a punishment out of retries is escalated, not left pending", async () => {
+  // The backstop. PENDING is honest while there is still something to try and
+  // a lie once there is not: by then nothing is coming, and a case still
+  // reading "pending" is a ban nobody has been told did not land.
+  const r = repo([stalled()]);
   const a = alerts();
   const out = await build({ repoImpl: r.repo, staffAlerts: a.sink }).settleStalePending();
 
   assert.equal(out.ok, true);
   if (out.ok) assert.equal(out.value, 1);
-  assert.deepEqual(r.enforced, [{
-    actionId: "act-9",
-    status: "FAILED",
-    detail: "the guild never confirmed the command; it was still pending when the sweep ran",
-  }]);
+  assert.equal(r.enforced[0]?.actionId, "act-9");
+  assert.equal(r.enforced[0]?.status, "FAILED");
+  assert.match(r.enforced[0]?.detail ?? "", /after 3 attempts/);
+  assert.match(r.enforced[0]?.detail ?? "", /Last answer: sent but not confirmed/);
   assert.equal(a.posted.length, 1);
-  assert.match(a.posted[0]!.text, /act-9/);
+  assert.match(a.posted[0]!.text, /CASE-target-a1b2c3d4-9/);
+});
+
+test("a punishment with retries left is tried again rather than condemned", async () => {
+  // The bug this method carried: the sweep's grace and the bridge's own
+  // outbound queue were both ten minutes, so a command queued behind a
+  // reconnect was failed at almost exactly the moment it was about to be
+  // typed. A row that still has attempts left gets one.
+  const r = repo([stalled({ enforcementAttempts: 1 })]);
+  const a = alerts();
+  const b = bus("CONFIRMED_INGAME");
+  const out = await build({
+    repoImpl: r.repo, gameCommands: b.bus, igns: linked, relaySync: defaultRelay, staffAlerts: a.sink,
+  }).settleStalePending();
+
+  // Nothing escalated, the command went out again, and nobody was paged.
+  assert.equal(out.ok && out.value, 0);
+  assert.deepEqual(b.sent, ["/g kick TargetIGN Ban evasion"]);
+  assert.deepEqual(a.posted, []);
+  // The retry is attempt two, and it settles the row rather than repeating it.
+  assert.equal(r.enforced[0]?.attempt, 2);
+  assert.equal(r.enforced[0]?.status, "CONFIRMED");
 });
 
 test("nothing stale means nothing said", async () => {
@@ -838,7 +899,7 @@ function seededCase(over: Partial<ModerationActionDTO> = {}): ModerationActionDT
     id: "act-1", caseCode: "CASE-target-a1b2c3d4-1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
     reason: "spam", durationSeconds: 7200, expiresAt: "2026-08-05T21:00:00.000Z",
     surfaces: ["DISCORD"], active: true, createdAt: "2026-08-05T19:00:00.000Z",
-    enforcement: "CONFIRMED", enforcementDetail: null,
+    enforcement: "CONFIRMED", enforcementDetail: null, enforcementAttempts: 1, enforcementAt: null,
     updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
     ...over,
   };

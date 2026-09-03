@@ -23,6 +23,8 @@ function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
     reason: "spam",
     enforcement: "CONFIRMED",
     enforcementDetail: null,
+    enforcementAttempts: 0,
+    enforcementAt: null,
     updatedAt: null,
     editedByDiscordId: null,
     voidedAt: null,

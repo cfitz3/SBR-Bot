@@ -120,12 +120,22 @@ function enforcementFields(action: ModerationActionDTO): readonly (EmbedFieldVie
       // give, and the reader's next question is always which surface is
       // waiting. Named, it is either "the guild has not answered yet" or a
       // reason to go and look.
+      //
+      // The attempt count rides along because "still in progress" on try one
+      // and on try three are different situations: the first is a queue, the
+      // third is about to become a failure, and staff who can see which is
+      // which stop asking.
       return [
         field(
           "Enforcement",
-          action.enforcementDetail === null
-            ? "Still in progress."
-            : `Still in progress — ${action.enforcementDetail}`,
+          [
+            action.enforcementDetail === null
+              ? "Still in progress."
+              : `Still in progress — ${action.enforcementDetail}`,
+            action.enforcementAttempts > 1 ? `Attempt ${action.enforcementAttempts}.` : null,
+          ]
+            .filter((line): line is string => line !== null)
+            .join(" "),
         ),
       ];
     case "CONFIRMED":

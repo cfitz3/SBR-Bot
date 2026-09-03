@@ -792,6 +792,16 @@ model ModerationAction {
   /// Why it did not land, when it did not: the specific reason staff need in
   /// order to finish the job by hand.
   enforcementDetail        String?
+  /// How many times the platform has tried to carry this action out. Bounded:
+  /// the sweep retries an unanswered punishment a few times and only then
+  /// calls it failed, because the commonest reason for silence is a bridge
+  /// queue waiting on a Minecraft session, and that resolves itself.
+  enforcementAttempts      Int               @default(0)
+  /// When the last attempt was made — not when the row was written. The sweep
+  /// measures staleness from here, so a command still sitting in the bridge's
+  /// ten-minute outbound queue is not judged against the moment the staffer
+  /// typed it.
+  enforcementAt            DateTime?
   createdAt                DateTime          @default(now())
   /// When the case was last edited by a person, or null while it is as issued.
   /// Deliberately not `@updatedAt`: the service stamping an enforcement verdict
@@ -805,8 +815,9 @@ model ModerationAction {
   voidedAt                 DateTime?
   voidReason               String?
 
-  guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
-  infraction Infraction? @relation(fields: [infractionId], references: [id], onDelete: SetNull)
+  guild      Guild                @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  infraction Infraction?          @relation(fields: [infractionId], references: [id], onDelete: SetNull)
+  attempts   EnforcementAttempt[]
 
   @@unique([guildId, caseCode])
   @@index([guildId, targetDiscordId, active])
@@ -817,6 +828,40 @@ model ModerationAction {
   // Allocation reads the highest number for one target; without this it is a
   // scan of the guild's whole moderation history on every punishment.
   @@index([guildId, targetDiscordId, caseNumber])
+  // The sweep's own query: everything still pending, oldest attempt first.
+  @@index([enforcement, enforcementAt])
+}
+
+/// One attempt to carry a punishment out, in the words of whoever answered.
+///
+/// The case row keeps only the current verdict, which is the right thing for a
+/// staff card and useless for the question staff actually ask when enforcement
+/// goes wrong: *what did Hypixel say, and when?* A single `enforcementDetail`
+/// column cannot hold that, because the second attempt overwrites the first and
+/// the interesting one is usually the first.
+///
+/// So every attempt on every surface writes a row here, verbatim: the guild
+/// chat line that confirmed or refused the command, or the reason it was never
+/// typed. Rows are append-only and cascade with the case.
+model EnforcementAttempt {
+  id String @id @default(cuid())
+  actionId String
+  /// 1-based, matching `ModerationAction.enforcementAttempts` at the time.
+  attempt   Int
+  /// `DISCORD` or `GAME`. A string rather than an enum because the set is a
+  /// property of how many surfaces we enforce on, which changes more often
+  /// than a migration is worth.
+  surface   String
+  /// The receipt verdict — `CONFIRMED_INGAME`, `REFUSED_BACKLOG`, `SKIPPED`,
+  /// and so on. Machine-read, so it stays exactly as the surface said it.
+  outcome   String
+  /// The human half: the Hypixel line, or the API error.
+  detail    String?
+  createdAt DateTime @default(now())
+
+  action ModerationAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@index([actionId, createdAt])
 }
 
 model Ticket {

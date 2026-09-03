@@ -649,6 +649,16 @@ function enforcementBadge(row: ModerationActionVM): HTMLElement | null {
 /** The statuses a person may declare by hand; the sweep owns PENDING. */
 const MANUAL_ENFORCEMENT: readonly string[] = ["CONFIRMED", "FAILED", "NOT_REQUIRED"];
 
+/**
+ * Mirrors `MAX_ENFORCEMENT_ATTEMPTS` in `@sbr/moderation`.
+ *
+ * Copied rather than imported: the panel's browser half has no bundler and
+ * cannot import a workspace package. It is display only — the number that
+ * decides anything lives in the service — so a deployment that widens the cap
+ * gets a card that under-counts, not one that lies about the verdict.
+ */
+const MAX_ENFORCEMENT_ATTEMPTS = 3;
+
 function enforcementOptions(current: string): readonly (readonly [string, string])[] {
   const settable = MANUAL_ENFORCEMENT.map(
     (value) => [value, lookup(t("enforcementName"), value, value)] as const,
@@ -683,8 +693,27 @@ function compactSpan(seconds: number): string {
  */
 function caseCard(guildId: string, row: ModerationActionVM, rerender: () => void): HTMLElement {
   const title = t("caseTitle").replace("{id}", row.caseCode);
+  // How many times the platform has tried, and when it last did. Without this
+  // a case that is queued behind an offline bridge and a case the platform has
+  // given up on both read as "pending", which is the confusion that made staff
+  // chase punishments that were about to land on their own.
+  const attempts =
+    row.enforcementAttempts <= 0
+      ? null
+      : h(
+          "p",
+          { class: "field-hint" },
+          row.enforcement === "FAILED"
+            ? t("caseAttemptsFailed").replace("{n}", String(row.enforcementAttempts))
+            : t("caseAttempts")
+                .replace("{n}", String(row.enforcementAttempts))
+                .replace("{max}", String(MAX_ENFORCEMENT_ATTEMPTS))
+                .replace("{when}", row.enforcementAt === null ? "—" : relativeTime(row.enforcementAt)),
+        );
+
   const trail: (HTMLElement | null)[] = [
     h("p", { class: "hint" }, t("caseIntro")),
+    attempts,
     row.editedByDiscordId === null || row.updatedAt === null
       ? null
       : h(

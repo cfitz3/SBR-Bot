@@ -6,6 +6,7 @@
 import { Prisma } from "@prisma/client";
 import type {
   AuditQuery,
+  EnforcementAttemptDTO,
   EnforcementStatus,
   InfractionDTO,
   ModActionType,
@@ -155,6 +156,8 @@ type ActionRow = {
   active: boolean;
   enforcement: string;
   enforcementDetail: string | null;
+  enforcementAttempts: number;
+  enforcementAt: Date | null;
   createdAt: Date;
   updatedAt: Date | null;
   editedByDiscordId: string | null;
@@ -190,6 +193,8 @@ function mapAction(r: ActionRow): ModerationActionDTO {
     active: r.active,
     enforcement: r.enforcement as EnforcementStatus,
     enforcementDetail: r.enforcementDetail,
+    enforcementAttempts: r.enforcementAttempts,
+    enforcementAt: r.enforcementAt === null ? null : r.enforcementAt.toISOString(),
     createdAt: r.createdAt.toISOString(),
     updatedAt: r.updatedAt === null ? null : r.updatedAt.toISOString(),
     editedByDiscordId: r.editedByDiscordId,
@@ -370,11 +375,74 @@ export const moderationRepository = {
     return result.count;
   },
 
-  async setEnforcement(actionId: string, status: EnforcementStatus, detail: string | null): Promise<void> {
+  /**
+   * Stamp a verdict, and — when the verdict came from an attempt rather than
+   * from a person — the attempt that produced it.
+   *
+   * `attempt` is optional for exactly that reason. A staffer setting the status
+   * by hand has not tried anything, and counting their correction as an attempt
+   * would spend one of the retries the sweep is allowed.
+   */
+  async setEnforcement(
+    actionId: string,
+    status: EnforcementStatus,
+    detail: string | null,
+    attempt?: number,
+  ): Promise<void> {
     await prisma.moderationAction.update({
       where: { id: actionId },
-      data: { enforcement: status, enforcementDetail: detail },
+      data: {
+        enforcement: status,
+        enforcementDetail: detail,
+        ...(attempt === undefined ? {} : { enforcementAttempts: attempt, enforcementAt: new Date() }),
+      },
     });
+  },
+
+  /**
+   * Append what one surface said, verbatim.
+   *
+   * Best-effort by construction: the caller has already carried the punishment
+   * out, and losing the note about it must not fail the punishment. Errors are
+   * swallowed here rather than at every call site.
+   */
+  async recordEnforcementAttempt(input: {
+    actionId: string;
+    attempt: number;
+    surface: string;
+    outcome: string;
+    detail: string | null;
+  }): Promise<void> {
+    await prisma.enforcementAttempt
+      .create({
+        data: {
+          actionId: input.actionId,
+          attempt: input.attempt,
+          surface: input.surface,
+          outcome: input.outcome,
+          detail: input.detail,
+        },
+      })
+      .catch(() => undefined);
+  },
+
+  /** The attempt log for one case, oldest first — it reads as a story. */
+  async listEnforcementAttempts(
+    actionId: string,
+    limit = 20,
+  ): Promise<readonly EnforcementAttemptDTO[]> {
+    const rows = await prisma.enforcementAttempt.findMany({
+      where: { actionId },
+      orderBy: { createdAt: "asc" },
+      take: Math.min(Math.max(limit, 1), 100),
+    });
+    return rows.map((r) => ({
+      attempt: r.attempt,
+      surface: r.surface === "GAME" ? ("GAME" as const) : ("DISCORD" as const),
+      outcome: r.outcome,
+      detail: r.detail,
+      createdAt: r.createdAt.toISOString(),
+    }));
   },
 
   /**
@@ -411,7 +479,14 @@ export const moderationRepository = {
    */
   async listStalePending(before: Date, limit: number): Promise<readonly ModerationActionDTO[]> {
     const rows = await prisma.moderationAction.findMany({
-      where: { enforcement: "PENDING", createdAt: { lte: before } },
+      // Staleness is measured from the last attempt, not from the moment the
+      // staffer typed the command. Those were the same thing until enforcement
+      // could be retried, and treating them as the same afterwards would judge
+      // a command that was retried a minute ago against an hour-old case.
+      where: {
+        enforcement: "PENDING",
+        OR: [{ enforcementAt: { lte: before } }, { enforcementAt: null, createdAt: { lte: before } }],
+      },
       orderBy: { createdAt: "asc" },
       take: Math.min(Math.max(limit, 1), 200),
     });

@@ -59,6 +59,27 @@ import { AUTOMOD_ACTOR } from "./automod-runner.js";
  * straight back into the game the notice came from, kicking somebody twice.
  */
 /**
+ * How long an unanswered punishment is left alone before the sweep tries again.
+ *
+ * Has to outlast the bridge's own outbound queue, which holds a command for up
+ * to ten minutes waiting for a Minecraft session to come back. When these two
+ * were both ten minutes, the sweep condemned commands the bridge was seconds
+ * from typing — the failure §3 exists to close.
+ */
+export const STALE_GRACE_MS = 15 * 60_000;
+
+/**
+ * How many times the platform tries before it calls a punishment failed.
+ *
+ * Bounded on purpose: retrying forever would leave a case reading "pending" for
+ * as long as a bridge stays down, which is the other half of the same lie.
+ * Three attempts spans roughly three quarters of an hour, which covers a
+ * restart, a Hypixel hiccup and a queue backlog, and does not cover a bridge
+ * that is simply gone.
+ */
+export const MAX_ENFORCEMENT_ATTEMPTS = 3;
+
+/**
  * What undoes what. Only the two types that hold enforcement over time appear:
  * a kick or a warning has nothing to reverse, so voiding one is a correction to
  * the record and nothing more.
@@ -657,26 +678,68 @@ export class ModerationServiceImpl implements ModerationService {
   }
 
   /**
-   * Settle the rows the guild never answered for.
+   * Retry the rows the guild never answered for, and fail the ones that are
+   * out of retries.
    *
-   * PENDING is an honest answer for the fifteen seconds a `/g kick` is allowed
-   * to take, and a dishonest one after ten minutes: nothing is coming, and a
-   * case still reading "pending" is a punishment nobody has been told did not
-   * land. This is the backstop that guarantees no row sits in limbo — it turns
-   * the silence into a FAILED case and a staff alert, which is the same
-   * treatment a refusal gets, because the consequence is identical.
+   * This used to do only the second half, on a ten-minute grace, measured from
+   * the moment the case was written — and the bridge's own outbound queue holds
+   * a command for up to ten minutes waiting for a Minecraft session. The two
+   * clocks were the same length, so a punishment queued behind a reconnect was
+   * stamped `enforcement_failed` at almost exactly the moment the bridge was
+   * about to type it. That is the bug this method carried.
    *
-   * The grace period is generous on purpose. It has to outlast the bridge's own
-   * outbound queue, which holds a command for as long as ten minutes waiting
-   * for a Minecraft session to come back.
+   * Now the grace outlasts that queue, staleness is measured from the last
+   * attempt rather than from the case, and running out of patience means
+   * *trying again* — up to `maxAttempts` times. Only a row that has spent all
+   * of them is called failed, which is the point at which "still pending" and
+   * "truly failed" are genuinely different answers rather than the same silence
+   * read twice.
+   *
+   * A refusal from Hypixel never reaches here: that is a verdict, and it is
+   * recorded as FAILED on the spot.
    */
-  async settleStalePending(graceMs = 10 * 60_000, limit = 50): Promise<Result<number>> {
+  async settleStalePending(
+    graceMs = STALE_GRACE_MS,
+    limit = 50,
+    maxAttempts = MAX_ENFORCEMENT_ATTEMPTS,
+  ): Promise<Result<number>> {
     const before = new Date(this.now().getTime() - graceMs);
     const stale = await this.repo.listStalePending(before, limit);
 
+    let retried = 0;
     let escalated = 0;
     for (const action of stale) {
-      const detail = "the guild never confirmed the command; it was still pending when the sweep ran";
+      const attempts = action.enforcementAttempts ?? 0;
+
+      if (attempts < maxAttempts) {
+        this.log.warn("retrying an unconfirmed punishment", {
+          guildId: action.guildId,
+          actionId: action.id,
+          caseCode: action.caseCode,
+          type: action.type,
+          attempt: attempts + 1,
+          of: maxAttempts,
+          lastDetail: action.enforcementDetail,
+        });
+        // The same path the original took. `enforce` stamps the new verdict,
+        // the new attempt count and the attempt time, so a row that is still
+        // unanswered comes back here one whole grace period later rather than
+        // on the next sweep.
+        await this.enforce(action).catch((error: unknown) => {
+          this.log.error("a retried enforcement threw", {
+            guildId: action.guildId,
+            actionId: action.id,
+            error: message(error),
+          });
+        });
+        retried += 1;
+        continue;
+      }
+
+      const last = action.enforcementDetail === null ? "" : ` Last answer: ${action.enforcementDetail}`;
+      const detail =
+        `the guild never confirmed the command after ${attempts} attempts over ` +
+        `${Math.round((graceMs * maxAttempts) / 60_000)} minutes.${last}`;
       await this.repo.setEnforcement(action.id, "FAILED", detail).catch((error: unknown) => {
         this.log.error("could not escalate a stale pending enforcement", {
           guildId: action.guildId,
@@ -687,6 +750,7 @@ export class ModerationServiceImpl implements ModerationService {
       await this.alertStaff(action, detail);
       escalated += 1;
     }
+    if (retried > 0) this.log.info("unconfirmed punishments retried", { retried });
     if (escalated > 0) this.log.warn("unconfirmed punishments escalated", { escalated });
     return ok(escalated);
   }
@@ -801,10 +865,15 @@ export class ModerationServiceImpl implements ModerationService {
     // a KICK: the member has already gone, so the retry answers "unknown
     // member", which is only read as success because we choose to read it that
     // way. Better to say plainly that this leg is done.
+    // 1-based, and read off the row rather than counted in memory, so a retry
+    // from the sweep, a retry from the panel and the original attempt all
+    // share one sequence.
+    const attempt = (action.enforcementAttempts ?? 0) + 1;
+
     const discord = options.discordAlreadyApplied === true
       ? ({ ok: true } as EnforcementOutcome)
-      : await this.enforceDiscord(action);
-    const game = await this.relayToGame(action);
+      : await this.enforceDiscord(action, attempt);
+    const game = await this.relayToGame(action, attempt);
 
     const failures: string[] = [];
     if (!discord.ok) failures.push(`Discord: ${discord.reason}`);
@@ -833,7 +902,7 @@ export class ModerationServiceImpl implements ModerationService {
     if (status === "FAILED") this.metrics?.actionFailed(action.guildId, action.type);
     else this.metrics?.actionApplied(action.guildId, action.type);
 
-    await this.repo.setEnforcement(action.id, status, detail).catch((error: unknown) => {
+    await this.repo.setEnforcement(action.id, status, detail, attempt).catch((error: unknown) => {
       this.log.error("could not record the enforcement outcome", {
         guildId: action.guildId,
         actionId: action.id,
@@ -862,12 +931,22 @@ export class ModerationServiceImpl implements ModerationService {
       });
     }
 
-    const settled: ModerationActionDTO = { ...action, enforcement: status, enforcementDetail: detail };
+    const settled: ModerationActionDTO = {
+      ...action,
+      enforcement: status,
+      enforcementDetail: detail,
+      enforcementAttempts: attempt,
+      enforcementAt: this.now().toISOString(),
+    };
     // Posted after the verdict is known, so the card can say whether it took.
     // Awaited rather than fired and forgotten, for the same reason everything
     // else in this method is: an unawaited failure here is an unhandled
     // rejection, and the sink already swallows its own errors.
-    await this.postModLog(settled);
+    //
+    // A retry only posts if it changed the answer. Three sweep attempts on a
+    // bridge that is down would otherwise be three identical cards saying the
+    // same nothing, and the card staff need is the one where the verdict moved.
+    if (attempt === 1 || status !== action.enforcement) await this.postModLog(settled);
     return settled;
   }
 
@@ -909,8 +988,62 @@ export class ModerationServiceImpl implements ModerationService {
     }
   }
 
+  /**
+   * Write down what a surface just said, with the time on it.
+   *
+   * The case row holds one verdict and the last reason for it, which answers
+   * "did this land" and not "what happened". This is the second question, and
+   * it is the one asked whenever a punishment has to be finished by hand:
+   * Hypixel's own words, per attempt, per surface, in order.
+   *
+   * Never allowed to fail anything. The punishment has already been carried
+   * out or already failed by the time this runs.
+   */
+  private async note(
+    action: ModerationActionDTO,
+    attempt: number,
+    surface: "DISCORD" | "GAME",
+    outcome: string,
+    detail: string | null,
+  ): Promise<void> {
+    this.log.info("enforcement attempt", {
+      guildId: action.guildId,
+      actionId: action.id,
+      caseCode: action.caseCode,
+      type: action.type,
+      attempt,
+      surface,
+      outcome,
+      detail,
+      at: this.now().toISOString(),
+    });
+    await this.repo
+      .recordEnforcementAttempt({ actionId: action.id, attempt, surface, outcome, detail })
+      .catch(() => undefined);
+  }
+
+  /** Reduce an outcome to the word the attempt log files it under. */
+  private static outcomeWord(outcome: EnforcementOutcome): string {
+    if (!outcome.ok) return "FAILED";
+    if ("skipped" in outcome && outcome.skipped) return "SKIPPED";
+    if ("pending" in outcome && outcome.pending) return "PENDING";
+    return "CONFIRMED";
+  }
+
   /** The Discord API half — the part that actually removes or silences someone. */
-  private async enforceDiscord(action: ModerationActionDTO): Promise<EnforcementOutcome> {
+  private async enforceDiscord(action: ModerationActionDTO, attempt: number): Promise<EnforcementOutcome> {
+    const answer = await this.discordLeg(action);
+    await this.note(
+      action,
+      attempt,
+      "DISCORD",
+      ModerationServiceImpl.outcomeWord(answer),
+      "reason" in answer ? answer.reason : null,
+    );
+    return answer;
+  }
+
+  private async discordLeg(action: ModerationActionDTO): Promise<EnforcementOutcome> {
     if (!requiresEnforcement(action.type)) return { ok: true };
     if (action.targetDiscordId === null) return { ok: true, skipped: true, reason: "no Discord target" };
     if (this.discord === null) {
@@ -942,7 +1075,7 @@ export class ModerationServiceImpl implements ModerationService {
     try {
       await this.staffAlerts.alert(
         action.guildId,
-        `⚠️ **Enforcement failed** — case \`${action.id}\` (${action.type}) against ${target} ` +
+        `⚠️ **Enforcement failed** — case \`${action.caseCode}\` (${action.type}) against ${target} ` +
           `was written to the log but did not take effect.\n> ${detail}\n` +
           `The case is marked \`enforcement_failed\` and needs doing by hand.`,
       );
@@ -970,12 +1103,31 @@ export class ModerationServiceImpl implements ModerationService {
    * succeeded, the message evaporated, and the only trace was a log line
    * nobody was reading. A banned member kept their guild slot.
    */
-  private async relayToGame(action: ModerationActionDTO): Promise<EnforcementOutcome> {
+  private async relayToGame(action: ModerationActionDTO, attempt: number): Promise<EnforcementOutcome> {
+    const { outcome, verdict } = await this.gameLeg(action);
+    await this.note(action, attempt, "GAME", verdict, "reason" in outcome ? outcome.reason : null);
+    return outcome;
+  }
+
+  /**
+   * The guild-chat leg, and the receipt code it came back with.
+   *
+   * The code is kept separate from the outcome because the attempt log wants
+   * Hypixel's own vocabulary — `REFUSED_BACKLOG` reads differently from
+   * `NO_SESSION` to whoever is working out why a kick never happened, and both
+   * collapse to "pending" by the time the case row sees them.
+   */
+  private async gameLeg(
+    action: ModerationActionDTO,
+  ): Promise<{ outcome: EnforcementOutcome; verdict: string }> {
+    const plain = async (outcome: EnforcementOutcome): Promise<{ outcome: EnforcementOutcome; verdict: string }> =>
+      ({ outcome, verdict: ModerationServiceImpl.outcomeWord(outcome) });
+
     if (this.gameCommands === null || this.igns === null) {
-      return { ok: true, skipped: true, reason: "no relay wired into this process" };
+      return plain({ ok: true, skipped: true, reason: "no relay wired into this process" });
     }
     if (action.targetDiscordId === null) {
-      return { ok: true, skipped: true, reason: "no Discord target" };
+      return plain({ ok: true, skipped: true, reason: "no Discord target" });
     }
 
     let plan: GameCommandPlan;
@@ -983,7 +1135,7 @@ export class ModerationServiceImpl implements ModerationService {
       const policy = parseRelaySync(
         this.relaySyncSource === null ? null : await this.relaySyncSource.readRelaySync(action.guildId),
       );
-      if (!policy.enabled) return { ok: true, skipped: true, reason: "relay sync is off for this guild" };
+      if (!policy.enabled) return plain({ ok: true, skipped: true, reason: "relay sync is off for this guild" });
 
       const ign = await this.igns.ignFor(action.guildId, action.targetDiscordId);
       plan = resolveGameCommand(policy, {
@@ -1001,7 +1153,7 @@ export class ModerationServiceImpl implements ModerationService {
         type: action.type,
         error: message(error),
       });
-      return { ok: false, reason: `could not resolve the guild command (${message(error)})` };
+      return plain({ ok: false, reason: `could not resolve the guild command (${message(error)})` });
     }
 
     if (plan.kind === "skip") {
@@ -1011,7 +1163,7 @@ export class ModerationServiceImpl implements ModerationService {
         target: action.targetDiscordId,
         reason: plan.why,
       });
-      return { ok: true, skipped: true, reason: plan.why };
+      return plain({ ok: true, skipped: true, reason: plan.why });
     }
 
     // Owed and unbuildable. Reported as a failure so the case says the guild
@@ -1023,7 +1175,7 @@ export class ModerationServiceImpl implements ModerationService {
         target: action.targetDiscordId,
         reason: plan.why,
       });
-      return { ok: false, reason: plan.why };
+      return plain({ ok: false, reason: plan.why });
     }
 
     const command = plan.command;
@@ -1037,27 +1189,37 @@ export class ModerationServiceImpl implements ModerationService {
         outcome: receipt.outcome,
         detail: receipt.detail,
       });
-      // Three answers, not two. Hypixel accepting the line is the only
-      // success; Hypixel refusing it, or the bridge never typing it, is a
-      // failure the case has to name. Everything in between — typed but
-      // unacknowledged, or nothing back inside the wait — is neither, and is
-      // left for the sweep rather than guessed at in either direction.
-      switch (receipt.outcome) {
-        case "CONFIRMED_INGAME":
-          return { ok: true };
-        case "UNCONFIRMED":
-        case "TIMED_OUT":
-          return { ok: true, pending: true, reason: `\`${command}\` was sent but not confirmed in game (${receipt.detail})` };
-        default:
-          return { ok: false, reason: `the guild did not run \`${command}\` (${receipt.detail})` };
-      }
+      // Three answers, not two, and the third is the one that was wrong.
+      //
+      // Hypixel accepting the line is the only success. Hypixel *refusing* it
+      // is the only failure — that is a verdict, and trying again would only
+      // collect it a second time. Everything else is the command not having
+      // been put to Hypixel yet: no session to type it into, a full outbound
+      // queue, a queue entry that aged out, or silence inside our own wait.
+      // None of those is evidence about the punishment, and all of them used
+      // to be recorded as `enforcement_failed` on the spot — which is how a
+      // bridge that reconnected two minutes later left behind a wall of failed
+      // cases for punishments that had, in the end, landed.
+      const outcome: EnforcementOutcome =
+        receipt.outcome === "CONFIRMED_INGAME"
+          ? { ok: true }
+          : receipt.outcome === "REFUSED_INGAME" || receipt.outcome === "WRONG_GUILD"
+            ? { ok: false, reason: `the guild refused \`${command}\` (${receipt.detail})` }
+            : {
+                ok: true,
+                pending: true,
+                reason: `\`${command}\` is not confirmed in game yet (${receipt.detail})`,
+              };
+      // The receipt code, not our reading of it: the log is where somebody
+      // works out whether the bridge was offline or the queue was full.
+      return { outcome, verdict: receipt.outcome };
     } catch (error) {
       this.log.error("relay sync failed", {
         guildId: action.guildId,
         type: action.type,
         error: message(error),
       });
-      return { ok: false, reason: `sending \`${command}\` failed (${message(error)})` };
+      return plain({ ok: false, reason: `sending \`${command}\` failed (${message(error)})` });
     }
   }
 

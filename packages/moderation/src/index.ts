@@ -3,6 +3,8 @@
  * infraction + action audit, enforcement mirror).
  */
 export {
+  MAX_ENFORCEMENT_ATTEMPTS,
+  STALE_GRACE_MS,
   ModerationServiceImpl,
   type DiscordActionInput,
   type ExternalActionInput,
