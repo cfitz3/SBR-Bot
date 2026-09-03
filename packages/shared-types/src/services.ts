@@ -1789,8 +1789,78 @@ export interface LeaderboardPositionDTO {
   readonly totalRanked: number;
 }
 
+/**
+ * The whole guild on one screen, every metric at once.
+ *
+ * A page ranks one category and pages through it, which is right for a chat
+ * command answering "who is top on Catacombs". It is wrong for staff looking at
+ * a roster of a hundred and twenty-five people and asking who is falling
+ * behind: they want every column side by side, sorted by whichever one they are
+ * thinking about, and they want the sort to happen when they click rather than
+ * a round trip later.
+ *
+ * So the board is one read of everything, and sorting and filtering are the
+ * reader's, done in the browser.
+ */
+export interface LeaderboardBoardCellDTO {
+  readonly value: number;
+  /** Competition rank within the category, tied the same way a page ties. */
+  readonly rank: number;
+  /** When the reading was taken; null for values derived at read time. */
+  readonly at: string | null;
+}
+
+export interface LeaderboardBoardRowDTO {
+  /**
+   * A stable row key. The member's Discord snowflake where they have one, else
+   * their uuid — the two identity spaces the categories are keyed in.
+   */
+  readonly id: string;
+  readonly discordId: string | null;
+  readonly uuid: string | null;
+  /**
+   * What to call them. An IGN wherever one is known, else their Discord
+   * username — never a snowflake and never a bare uuid, which is the whole
+   * point of resolving identity here rather than in the browser.
+   */
+  readonly name: string;
+  /** Their in-game guild rank, when the roster knows it. */
+  readonly guildRank: string | null;
+  readonly isViewer: boolean;
+  /** Category id → their cell. A category they are unranked in is absent. */
+  readonly cells: Readonly<Record<string, LeaderboardBoardCellDTO>>;
+}
+
+/** One sortable column on the board, in the order it should be offered. */
+export interface LeaderboardBoardColumnDTO {
+  readonly category: LeaderboardCategory;
+  readonly label: string;
+  readonly format: LeaderboardValueFormat;
+  readonly windowed: boolean;
+  /** How many members have a value at all, so a rank reads in proportion. */
+  readonly ranked: number;
+}
+
+export interface LeaderboardBoardDTO {
+  /** Which grouping this is — `stats` or `activity`. */
+  readonly tab: string;
+  readonly columns: readonly LeaderboardBoardColumnDTO[];
+  readonly rows: readonly LeaderboardBoardRowDTO[];
+  /** Days covered by the windowed columns. */
+  readonly windowDays: number;
+  /** Oldest reading anywhere on the board: worst-case staleness, not best. */
+  readonly oldestReadingAt: string | null;
+}
+
 export interface LeaderboardService {
   page(query: LeaderboardQuery): Promise<LeaderboardPageDTO>;
+  /** Every column at once for the whole roster — see `LeaderboardBoardDTO`. */
+  board(query: {
+    readonly guildId: string;
+    readonly discordId: string;
+    readonly tab: string;
+    readonly windowDays?: number;
+  }): Promise<LeaderboardBoardDTO>;
   /**
    * Where one member places across the categories asked for.
    *

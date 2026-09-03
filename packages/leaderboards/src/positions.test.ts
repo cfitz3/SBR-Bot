@@ -20,6 +20,9 @@ function source(options: StubOptions = {}): LeaderboardSource {
       if (options.failOn === category) throw new Error("source down");
       return options.rows?.[category] ?? values(["a", 30], ["me", 20], ["b", 10]);
     },
+    async roster() {
+      return [];
+    },
     async viewerKey() {
       return options.viewer === undefined ? "me" : options.viewer;
     },

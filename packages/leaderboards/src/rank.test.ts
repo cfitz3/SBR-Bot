@@ -172,6 +172,9 @@ test("the service clamps the window and passes it to the source", () => {
       asked = windowDays;
       return values(["a", 5]);
     },
+    async roster() {
+      return [];
+    },
     async viewerKey() {
       return null;
     },
@@ -189,6 +192,9 @@ test("a failing viewer lookup costs the caller their own row, not the board", as
   const service = new LeaderboardService({
     async values() {
       return values(["a", 5]);
+    },
+    async roster() {
+      return [];
     },
     async viewerKey() {
       throw new Error("db down");

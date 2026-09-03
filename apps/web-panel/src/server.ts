@@ -505,6 +505,17 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
               ...numeric(url.searchParams.get("window"), "windowDays"),
             }),
           );
+        // The board — every column for the whole roster — is a different read
+        // from the paged single-category board `/leaderboard` answers, and each
+        // has a surface that wants exactly one of them.
+        case "leaderboard-board":
+          return sendPage(
+            res,
+            await app.panel.loadLeaderboardBoard(session, guildId, {
+              tab: url.searchParams.get("tab") ?? "stats",
+              ...numeric(url.searchParams.get("window"), "windowDays"),
+            }),
+          );
         case "roles":
           return sendPage(res, await app.panel.loadRoles(session, guildId));
         case "tickets":

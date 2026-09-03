@@ -2056,28 +2056,25 @@ export const DEFAULT_PANEL = {
   leaderboard: {
     title: "Leaderboard",
     subtitle: "Guild standings.",
-    /** `{n}` members ranked on the board being shown. */
-    subtitleRanked: "{n} ranked on this board.",
+    /** `{n}` members on the board. The whole roster, not a page of it. */
+    subtitleRoster: "{n} members.",
     notEnabled: "Not enabled",
-    colRank: "#",
     colMember: "Member",
-    colValue: "Value",
-    colReading: "Reading",
+    colGuildRank: "Guild rank",
     windowLabel: "Window",
-    windowHint: "This board counts activity in a rolling window. The others are current standings.",
+    windowHint: "Columns marked with a window count activity over it. The rest are current standings.",
     window7: "Last 7 days",
     window30: "Last 30 days",
     window90: "Last 90 days",
     window365: "Last year",
-    /** `{page}` of `{total}`. */
-    pageStatus: "Page {page} of {total}",
-    prev: "Previous",
-    next: "Next",
+    filterPlaceholder: "Filter by name or rank",
+    clearFilter: "Clear",
+    /** The marks on a sorted column head. Arrows, so they read at a glance. */
+    sortDescending: "▼",
+    sortAscending: "▲",
     you: "you",
-    /** Shown above the table when the reader's own row is off the shown page. */
-    yourRow: "Your position",
-    /** `{when}` is how long ago the oldest reading on the page was taken. */
-    staleness: "Oldest reading on this page: {when}.",
+    /** `{when}` is how long ago the oldest reading on the board was taken. */
+    staleness: "Oldest reading on this board: {when}.",
     /** Said instead when nothing on the board has a reading time at all. */
     stalenessLive: "Worked out at the moment you loaded the page.",
   },

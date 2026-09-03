@@ -46,6 +46,7 @@ import type {
   GuildRuntimeConfig,
   InfractionDTO,
   LeaderboardCategory,
+  LeaderboardBoardDTO,
   LeaderboardPageDTO,
   LeaderboardService,
   MilestoneDefinitionDTO,
@@ -634,6 +635,23 @@ export interface LeaderboardVM {
   readonly tabs: readonly LeaderboardTabVM[];
   /** The board being shown. Null when nothing is installed to show one. */
   readonly page: LeaderboardPageDTO | null;
+}
+
+/**
+ * The panel's leaderboard, which is a table rather than a chart of one column.
+ *
+ * A guild is about a hundred and twenty-five people, and the question staff
+ * bring to this page is comparative — who is behind, who is carrying, who has
+ * gone quiet. That is one screen with every column on it, sorted by whichever
+ * one they are thinking about, not nine boards to click between. Sorting and
+ * filtering happen in the browser against this one payload; the only thing that
+ * costs a request is switching tab or changing the window.
+ */
+export interface LeaderboardBoardVM {
+  readonly installed: boolean;
+  /** `stats` and `activity`, with the labels to put on them. */
+  readonly tabs: readonly { readonly id: string; readonly label: string }[];
+  readonly board: LeaderboardBoardDTO | null;
 }
 
 export interface MilestonesVM {
@@ -1530,6 +1548,41 @@ export class PanelService {
    * role" and "joins get a welcome message" on two screens that never mention
    * each other.
    */
+  /**
+   * The whole roster with every metric on it. See `LeaderboardBoardVM`.
+   */
+  async loadLeaderboardBoard(
+    session: PanelSession | null,
+    guildId: string,
+    query: { readonly tab?: string; readonly windowDays?: number } = {},
+  ): Promise<PageResult<LeaderboardBoardVM>> {
+    const access = await authorize(session, guildId, "leaderboard", this.d.roles);
+    if (!access.allowed) return this.denied(access, "leaderboard", guildId);
+
+    const tabs = [
+      { id: "stats", label: "Stats" },
+      { id: "activity", label: "Activity" },
+    ];
+    const leaderboards = this.d.leaderboards;
+    if (leaderboards === undefined || session === null) {
+      return { access, data: { installed: false, tabs, board: null } };
+    }
+
+    return {
+      access,
+      data: {
+        installed: true,
+        tabs,
+        board: await leaderboards.board({
+          guildId,
+          discordId: session.discordId,
+          tab: query.tab ?? "stats",
+          ...(query.windowDays === undefined ? {} : { windowDays: query.windowDays }),
+        }),
+      },
+    };
+  }
+
   async loadRoles(session: PanelSession | null, guildId: string): Promise<PageResult<RolesVM>> {
     const access = await authorize(session, guildId, "roles", this.d.roles);
     if (!access.allowed) return this.denied(access, "roles", guildId);

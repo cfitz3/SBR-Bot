@@ -11,7 +11,7 @@
  * are not rewritten — but they stop being ranked, because a leaderboard is a
  * statement about the guild as it is now.
  */
-import type { LeaderboardCategory, LeaderboardSource, MemberValue } from "@sbr/leaderboards";
+import type { LeaderboardCategory, LeaderboardSource, MemberValue, RosterMember } from "@sbr/leaderboards";
 import { prisma } from "../client.js";
 
 /** Bound on any one board. A guild is ~125 people; this is the runaway guard. */
@@ -245,6 +245,83 @@ function isUuidCategory(category: LeaderboardCategory): boolean {
   );
 }
 
+/**
+ * The roster in both identity spaces at once, for the panel's board.
+ *
+ * Every active Discord member, plus whoever the in-game roster knows that no
+ * Discord member has claimed — the same union the member directory takes, and
+ * for the same reason: the rows that matter most to staff are the ones where
+ * the two sides do not meet.
+ *
+ * One query per side rather than a join, because the sides have no shared key
+ * until `LinkedAccount` puts one there, and a guild is a few hundred rows.
+ */
+async function rosterMembers(guildId: string): Promise<readonly RosterMember[]> {
+  const [discordSide, gameSide] = await Promise.all([
+    prisma.guildMember.findMany({
+      where: { guildId, status: "ACTIVE" },
+      take: MAX_ROWS,
+      select: {
+        guildRank: true,
+        discordUser: {
+          select: {
+            discordId: true,
+            username: true,
+            linkedAccounts: {
+              where: { status: "VERIFIED" },
+              orderBy: [{ isPrimary: "desc" }, { verifiedAt: "desc" }],
+              take: 1,
+              select: { minecraftAccount: { select: { uuid: true, currentIgn: true } } },
+            },
+          },
+        },
+      },
+    }),
+    prisma.guildMemberCache.findMany({
+      where: { guildId },
+      take: MAX_ROWS,
+      select: { uuid: true, ign: true, guildRank: true },
+    }),
+  ]);
+
+  const byUuid = new Map(gameSide.map((row) => [row.uuid, row]));
+  const claimed = new Set<string>();
+  const out: RosterMember[] = [];
+
+  for (const member of discordSide) {
+    const uuid = member.discordUser.linkedAccounts[0]?.minecraftAccount.uuid ?? null;
+    if (uuid !== null) claimed.add(uuid);
+    const game = uuid === null ? undefined : byUuid.get(uuid);
+    out.push({
+      discordId: member.discordUser.discordId,
+      uuid,
+      // An IGN is what staff recognise a member by; the Discord username is the
+      // fallback for somebody who has never linked. Neither is ever an id.
+      // A member we have never seen a name for is rare and still a row: the
+      // mention renders as their name in Discord, and it is the one id-shaped
+      // fallback that a person can actually read.
+      name:
+        game?.ign ??
+        member.discordUser.linkedAccounts[0]?.minecraftAccount.currentIgn ??
+        member.discordUser.username ??
+        `<@${member.discordUser.discordId}>`,
+      guildRank: game?.guildRank ?? member.guildRank,
+    });
+  }
+
+  for (const game of gameSide) {
+    if (claimed.has(game.uuid)) continue;
+    out.push({
+      discordId: null,
+      uuid: game.uuid,
+      name: game.ign ?? game.uuid.slice(0, 8),
+      guildRank: game.guildRank,
+    });
+  }
+
+  return out;
+}
+
 export const leaderboardSource: LeaderboardSource = {
   async values(guildId, category, windowDays): Promise<readonly MemberValue[]> {
     switch (category) {
@@ -269,6 +346,10 @@ export const leaderboardSource: LeaderboardSource = {
       case "gexp":
         return gexpValues(guildId, windowDays);
     }
+  },
+
+  async roster(guildId): Promise<readonly RosterMember[]> {
+    return rosterMembers(guildId);
   },
 
   async viewerKey(guildId, discordId, category): Promise<string | null> {

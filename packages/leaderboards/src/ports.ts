@@ -24,4 +24,25 @@ export interface LeaderboardSource {
    * none (unlinked, for the Hypixel-side boards).
    */
   viewerKey(guildId: string, discordId: string, category: LeaderboardCategory): Promise<string | null>;
+
+  /**
+   * Who is on the roster, in both identity spaces at once.
+   *
+   * The board needs this and a page does not: a page ranks one category and
+   * every row in it is keyed the same way, whereas a board puts a uuid-keyed
+   * column beside a snowflake-keyed one and has to know they are the same
+   * person. Resolving that here also means a row is named once, so the browser
+   * never has to render a snowflake and call it a member.
+   */
+  roster(guildId: string): Promise<readonly RosterMember[]>;
+}
+
+/** One member of the guild, as both identities and a name. */
+export interface RosterMember {
+  readonly discordId: string | null;
+  readonly uuid: string | null;
+  /** IGN where known, else the Discord username. Never a raw id. */
+  readonly name: string;
+  /** In-game guild rank, when the roster scan knows it. */
+  readonly guildRank: string | null;
 }

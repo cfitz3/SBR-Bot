@@ -5,10 +5,11 @@
  * place where the window and page size are clamped, rather than every caller
  * re-deciding what a reasonable request looks like.
  */
+import { buildBoard } from "./board.js";
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, rank, rankAll } from "./rank.js";
 import type { LeaderboardSource } from "./ports.js";
 import { CATEGORY_SPECS, type LeaderboardCategory, type LeaderboardPage } from "./types.js";
-import type { LeaderboardPositionDTO } from "@sbr/shared-types";
+import type { LeaderboardBoardDTO, LeaderboardPositionDTO } from "@sbr/shared-types";
 
 /** A month of activity: long enough to be a record, short enough to be current. */
 export const DEFAULT_WINDOW_DAYS = 30;
@@ -60,6 +61,24 @@ export class LeaderboardService {
       pageSize: clamp(query.pageSize ?? DEFAULT_PAGE_SIZE, 1, MAX_PAGE_SIZE),
       viewerKey,
       windowDays,
+    });
+  }
+
+  /**
+   * Every column at once, for the panel's board. See `board.ts` for why this is
+   * one read rather than one per column.
+   */
+  async board(query: {
+    readonly guildId: string;
+    readonly discordId: string;
+    readonly tab: string;
+    readonly windowDays?: number;
+  }): Promise<LeaderboardBoardDTO> {
+    return buildBoard(this.source, {
+      guildId: query.guildId,
+      discordId: query.discordId,
+      tab: query.tab,
+      windowDays: clamp(query.windowDays ?? DEFAULT_WINDOW_DAYS, 1, MAX_WINDOW_DAYS),
     });
   }
 

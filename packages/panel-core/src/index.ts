@@ -44,6 +44,7 @@ export {
   type XpVM,
   type MilestonesVM,
   type LeaderboardVM,
+  type LeaderboardBoardVM,
   type LeaderboardTabVM,
   type RolesVM,
   type RolesHealthVM,

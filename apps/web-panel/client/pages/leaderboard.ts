@@ -1,27 +1,35 @@
 /**
- * Leaderboard — the guild's standings, as a page.
+ * Leaderboard — the guild's standings, as a table.
  *
- * The same service `/leaderboard` reads, ranked by the same code, so a member
- * cannot be 3rd in Discord and 4th here. What the page adds is what an embed
- * cannot do: switch category without re-running a command, walk the pages, and
- * change the window on the boards that have one.
+ * This page used to be `/leaderboard` in a browser: one category at a time,
+ * ten rows a page, a request per click. That is the right shape for a chat
+ * command answering "who is top on Catacombs" and the wrong one for the
+ * question staff actually open the panel with — *how is the guild doing* —
+ * which is comparative, and comparison needs the columns side by side.
  *
- * Read-only. There is no action anywhere on this page, which is why it is the
- * one page that sits at MEMBER in `PAGE_TIERS` — see the note there about what
- * that tier does and does not currently buy.
+ * So: two tabs, every column on each, and the whole roster on one screen.
  *
- * Two rules the rendering keeps:
+ * Three rules the rendering keeps:
  *
- * - A rank is always shown in proportion. "3rd of 42" is a fact; a bare "3rd"
- *   on a board of four reads like an achievement and is not one.
- * - The reader's own row is pinned when it falls off the shown page, rather
- *   than being paged to. Somebody who is 137th should not have to find that
- *   out by clicking through fourteen pages.
+ * - **A click is not a request.** Sorting, reversing and filtering happen here,
+ *   against the payload already loaded. Only switching tab or window costs a
+ *   round trip, and even then the table is left on screen with the controls
+ *   disabled rather than blanked to a spinner — a page that flashes empty on
+ *   every interaction reads as broken even when it is fast.
+ * - **A rank is shown in proportion.** "3rd of 42" is a fact; a bare "3rd" on a
+ *   board of four reads like an achievement and is not one.
+ * - **Unranked is not zero.** A member with no networth reading has no wealth
+ *   cell and sorts to the bottom whichever way the column is read. Printing a
+ *   zero there would be a claim about their coins rather than about our data.
  */
-import type { LeaderboardVM } from "@sbr/panel-core";
-import type { LeaderboardEntryDTO, LeaderboardValueFormat } from "@sbr/shared-types";
+import type { LeaderboardBoardVM } from "@sbr/panel-core";
+import type {
+  LeaderboardBoardColumnDTO,
+  LeaderboardBoardRowDTO,
+  LeaderboardValueFormat,
+} from "@sbr/shared-types";
 import { loadPage } from "../api.js";
-import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner, table } from "../components.js";
+import { badge, card, deniedState, emptyState, errorState, pageTitle, spinner } from "../components.js";
 import { scope } from "../copy.js";
 import { compactNumber, count, relativeTime } from "../format.js";
 import { h, replace } from "../dom.js";
@@ -43,52 +51,70 @@ const WINDOWS: readonly (readonly [number, () => string])[] = [
 
 /** What the reader is looking at. Query state, not data — never persisted. */
 interface View {
-  readonly category: string;
-  readonly page: number;
+  readonly tab: string;
   readonly windowDays: number;
 }
 
-const FIRST: View = { category: "", page: 1, windowDays: 30 };
-
-export async function renderLeaderboard(host: HTMLElement, guildId: string): Promise<void> {
-  await show(host, guildId, FIRST);
+/** How the reader has arranged it. Never leaves the browser. */
+interface Arrangement {
+  /** A category id, or `name` for the member column. */
+  readonly sort: string;
+  readonly descending: boolean;
+  readonly filter: string;
 }
 
-async function show(host: HTMLElement, guildId: string, view: View): Promise<void> {
+const FIRST: View = { tab: "stats", windowDays: 30 };
+const UNSORTED: Arrangement = { sort: "", descending: false, filter: "" };
+
+export async function renderLeaderboard(host: HTMLElement, guildId: string): Promise<void> {
+  await show(host, guildId, FIRST, UNSORTED);
+}
+
+async function show(
+  host: HTMLElement,
+  guildId: string,
+  view: View,
+  arrangement: Arrangement,
+): Promise<void> {
   replace(host, spinner("leaderboard"));
 
-  const query = new URLSearchParams({ page: String(view.page), window: String(view.windowDays) });
-  if (view.category !== "") query.set("category", view.category);
-
-  const result = await loadPage<LeaderboardVM>(
-    `/api/guilds/${encodeURIComponent(guildId)}/leaderboard?${query.toString()}`,
+  const query = new URLSearchParams({ tab: view.tab, window: String(view.windowDays) });
+  const result = await loadPage<LeaderboardBoardVM>(
+    `/api/guilds/${encodeURIComponent(guildId)}/leaderboard-board?${query.toString()}`,
   );
   if (result.kind === "denied") return replace(host, deniedState(result.reason));
   if (result.kind === "error") {
-    return replace(host, errorState(result.message, () => void show(host, guildId, view)));
+    return replace(host, errorState(result.message, () => void show(host, guildId, view, arrangement)));
   }
 
-  const go = (next: Partial<View>): void => void show(host, guildId, { ...view, ...next });
-  const { installed, tabs, page } = result.data;
-
-  if (!installed || page === null) {
+  const { installed, tabs, board } = result.data;
+  if (!installed || board === null) {
     return replace(
       host,
       h("div", {}, pageTitle(t("title"), t("notEnabled")), emptyState("leaderboardUninstalled")),
     );
   }
 
-  // The board's own idea of which category it is, not the one asked for: an
-  // unknown category falls back server-side, and the tab strip must show what
-  // is actually on screen.
-  const active = page.category;
+  // Everything below re-renders from this one payload. `state` is what a click
+  // changes; `paint` is the only thing that touches the DOM.
+  let state = arrangement;
+  const body = h("div", {});
 
+  const paint = (): void => {
+    replace(body, boardBody(board, state, (next) => {
+      state = { ...state, ...next };
+      paint();
+    }));
+  };
+  paint();
+
+  const windowed = board.columns.some((column) => column.windowed);
   replace(
     host,
     h(
       "div",
       {},
-      pageTitle(t("title"), t("subtitleRanked").replace("{n}", count(page.totalRanked))),
+      pageTitle(t("title"), t("subtitleRoster").replace("{n}", count(board.rows.length))),
       h(
         "div",
         { class: "tabs tab-strip", role: "tablist" },
@@ -99,22 +125,29 @@ async function show(host: HTMLElement, guildId: string, view: View): Promise<voi
               type: "button",
               role: "tab",
               class: "tab",
-              "aria-selected": tab.id === active ? "true" : "false",
-              // Back to page one: page four of Catacombs has nothing to do with
-              // page four of Wealth, and keeping the number would land the
-              // reader somewhere arbitrary in a board they just opened.
-              onclick: () => go({ category: tab.id, page: 1 }),
+              "aria-selected": tab.id === board.tab ? "true" : "false",
+              // The filter survives a tab switch and the sort does not: a
+              // staffer looking up one member wants to keep looking at them,
+              // and a sort by Catacombs means nothing on the Activity tab.
+              onclick: () =>
+                void show(host, guildId, { ...view, tab: tab.id }, { ...UNSORTED, filter: state.filter }),
             },
             tab.label,
           ),
         ),
       ),
-      card(page.spec.label, boardBody(page, go), page.spec.windowed ? windowPicker(view, go) : null),
+      card(
+        t("title"),
+        body,
+        windowed
+          ? windowPicker(view, (days) => void show(host, guildId, { ...view, windowDays: days }, state))
+          : null,
+      ),
     ),
   );
 }
 
-function windowPicker(view: View, go: (next: Partial<View>) => void): HTMLElement {
+function windowPicker(view: View, go: (days: number) => void): HTMLElement {
   const select = h(
     "select",
     {
@@ -122,7 +155,7 @@ function windowPicker(view: View, go: (next: Partial<View>) => void): HTMLElemen
       "aria-label": t("windowLabel"),
       onchange: (event: Event) => {
         const value = Number((event.target as HTMLSelectElement).value);
-        if (Number.isFinite(value)) go({ windowDays: value, page: 1 });
+        if (Number.isFinite(value)) go(value);
       },
     },
     ...WINDOWS.map(([days, label]) =>
@@ -132,91 +165,191 @@ function windowPicker(view: View, go: (next: Partial<View>) => void): HTMLElemen
   return h("div", { class: "card-action" }, select);
 }
 
-function boardBody(page: NonNullable<LeaderboardVM["page"]>, go: (next: Partial<View>) => void): HTMLElement {
-  if (page.entries.length === 0) return emptyState("leaderboardBoard");
-
-  const format = page.spec.format;
-  const rows = page.entries.map((entry) => row(entry, format, page.totalRanked));
+function boardBody(
+  board: NonNullable<LeaderboardBoardVM["board"]>,
+  state: Arrangement,
+  set: (next: Partial<Arrangement>) => void,
+): HTMLElement {
+  const rows = arrange(board.rows, board.columns, state);
 
   return h(
     "div",
     {},
-    page.spec.windowed ? h("p", { class: "muted" }, t("windowHint")) : null,
-    // Pinned above the table rather than inside it: it is a different fact from
-    // "here are rows 1–10", and splicing it in would put a 137 between a 9 and
-    // a 10 with no explanation.
-    page.viewer === null
-      ? null
-      : h(
-          "div",
-          { class: "pinned-row" },
-          h("span", { class: "muted" }, t("yourRow")),
-          h("span", {}, `#${String(page.viewer.rank)} ${c("dot")} ${page.viewer.label}`),
-          h("span", {}, formatValue(page.viewer.value, format)),
-        ),
-    table([t("colRank"), t("colMember"), { label: t("colValue"), align: "num" }, t("colReading")], rows),
-    pager(page, go),
+    filterBox(state, set),
+    board.columns.some((column) => column.windowed)
+      ? h("p", { class: "muted" }, t("windowHint"))
+      : null,
+    rows.length === 0
+      ? emptyState("leaderboardBoard")
+      : boardTable(board.columns, rows, state, set),
     h(
       "p",
       { class: "muted" },
-      page.oldestReadingAt === null
+      board.oldestReadingAt === null
         ? t("stalenessLive")
-        : t("staleness").replace("{when}", relativeTime(page.oldestReadingAt)),
+        : t("staleness").replace("{when}", relativeTime(board.oldestReadingAt)),
     ),
   );
 }
 
-function row(
-  entry: LeaderboardEntryDTO,
-  format: LeaderboardValueFormat,
-  totalRanked: number,
-): readonly (string | HTMLElement)[] {
-  return [
-    // In proportion, always: see the header note.
-    `${String(entry.rank)} / ${count(totalRanked)}`,
-    entry.isViewer
-      ? h("span", { class: "person" }, h("span", {}, entry.label), badge(t("you"), "ok"))
-      : entry.label,
-    formatValue(entry.value, format),
-    // Null for the categories derived at read time — tenure, activity, XP —
-    // where there is no "reading" to be stale.
-    entry.at === null ? c("dash") : relativeTime(entry.at),
-  ];
+function filterBox(state: Arrangement, set: (next: Partial<Arrangement>) => void): HTMLElement {
+  return h(
+    "div",
+    { class: "toolbar" },
+    h("input", {
+      type: "search",
+      class: "control",
+      placeholder: t("filterPlaceholder"),
+      "aria-label": t("filterPlaceholder"),
+      value: state.filter,
+      // On input rather than on submit: the whole roster is already here, so
+      // filtering is a redraw and waiting for Enter would be a delay we chose.
+      oninput: (event: Event) => set({ filter: (event.target as HTMLInputElement).value }),
+    }),
+    state.filter === ""
+      ? null
+      : h("button", { type: "button", class: "button", onclick: () => set({ filter: "" }) }, t("clearFilter")),
+  );
 }
 
-function pager(page: NonNullable<LeaderboardVM["page"]>, go: (next: Partial<View>) => void): HTMLElement | null {
-  if (page.pageCount <= 1) return null;
-  const button = (label: string, target: number, disabled: boolean): HTMLElement =>
+/**
+ * The table, with every column head a sort control.
+ *
+ * A first click sorts a metric column highest-first, because that is what a
+ * leaderboard means; the member column goes A–Z first for the same reason. A
+ * second click reverses it, which is how "who is bottom" gets asked.
+ */
+function boardTable(
+  columns: readonly LeaderboardBoardColumnDTO[],
+  rows: readonly LeaderboardBoardRowDTO[],
+  state: Arrangement,
+  set: (next: Partial<Arrangement>) => void,
+): HTMLElement {
+  const head = (key: string, label: string, numeric: boolean): HTMLElement =>
     h(
-      "button",
+      "th",
       {
-        type: "button",
-        class: "button",
-        ...(disabled ? { disabled: true } : {}),
-        onclick: () => go({ page: target }),
+        scope: "col",
+        ...(numeric ? { class: "num" } : {}),
+        "aria-sort": state.sort !== key ? "none" : state.descending ? "descending" : "ascending",
       },
-      label,
+      h(
+        "button",
+        {
+          type: "button",
+          class: "table-sort",
+          onclick: () =>
+            set(
+              state.sort === key
+                ? { descending: !state.descending }
+                : { sort: key, descending: numeric },
+            ),
+        },
+        state.sort === key ? `${label} ${state.descending ? t("sortDescending") : t("sortAscending")}` : label,
+      ),
     );
 
   return h(
     "div",
-    { class: "pager" },
-    button(t("prev"), page.page - 1, page.page <= 1),
+    { class: "table-wrap" },
     h(
-      "span",
-      { class: "muted" },
-      t("pageStatus").replace("{page}", String(page.page)).replace("{total}", String(page.pageCount)),
+      "table",
+      { class: "table" },
+      h(
+        "thead",
+        {},
+        h(
+          "tr",
+          {},
+          head("name", t("colMember"), false),
+          h("th", { scope: "col" }, t("colGuildRank")),
+          ...columns.map((column) => head(column.category, column.label, true)),
+        ),
+      ),
+      h(
+        "tbody",
+        {},
+        ...rows.map((row) =>
+          h(
+            "tr",
+            {},
+            h(
+              "td",
+              {},
+              row.isViewer
+                ? h("span", { class: "person" }, h("span", {}, row.name), badge(t("you"), "ok"))
+                : row.name,
+            ),
+            h("td", {}, row.guildRank ?? c("dash")),
+            ...columns.map((column) => cell(row, column)),
+          ),
+        ),
+      ),
     ),
-    button(t("next"), page.page + 1, page.page >= page.pageCount),
   );
+}
+
+/** One member's number in one column, with its rank in proportion under it. */
+function cell(row: LeaderboardBoardRowDTO, column: LeaderboardBoardColumnDTO): HTMLElement {
+  const found = row.cells[column.category];
+  if (found === undefined) return h("td", { class: "num" }, c("dash"));
+  return h(
+    "td",
+    { class: "num" },
+    h("span", {}, formatValue(found.value, column.format)),
+    h("span", { class: "muted cell-rank" }, `#${String(found.rank)} / ${count(column.ranked)}`),
+  );
+}
+
+/**
+ * Filter, then sort. Both in the browser, against rows already in hand.
+ *
+ * The filter matches the name and the guild rank, which is what somebody types
+ * — a member's IGN, or "Guild Master" to see the officers together.
+ */
+function arrange(
+  rows: readonly LeaderboardBoardRowDTO[],
+  columns: readonly LeaderboardBoardColumnDTO[],
+  state: Arrangement,
+): readonly LeaderboardBoardRowDTO[] {
+  const needle = state.filter.trim().toLowerCase();
+  const kept =
+    needle === ""
+      ? [...rows]
+      : rows.filter((row) =>
+          [row.name, row.guildRank].some((field) => (field ?? "").toLowerCase().includes(needle)),
+        );
+
+  if (state.sort === "") return kept;
+
+  if (state.sort === "name") {
+    kept.sort((a, b) => a.name.localeCompare(b.name));
+    if (state.descending) kept.reverse();
+    return kept;
+  }
+
+  const known = columns.some((column) => column.category === state.sort);
+  if (!known) return kept;
+
+  kept.sort((a, b) => {
+    const left = a.cells[state.sort]?.value;
+    const right = b.cells[state.sort]?.value;
+    // Unranked sinks either way: it is missing data, not a low score, and a
+    // reverse sort that floated it to the top would say the opposite.
+    if (left === undefined && right === undefined) return a.name.localeCompare(b.name);
+    if (left === undefined) return 1;
+    if (right === undefined) return -1;
+    return state.descending ? right - left : left - right;
+  });
+  return kept;
 }
 
 /**
  * A ranked value in its own units.
  *
- * Coins are compacted because a networth board is otherwise a column of twelve
- * digits nobody reads; everything else is exact, because a level or a message
- * count is already short and rounding it would lose the comparison.
+ * Coins are compacted because a networth column is otherwise twelve digits
+ * nobody reads; everything else is exact, because a level or a message count is
+ * already short and rounding it would lose the comparison.
  */
 function formatValue(value: number, format: LeaderboardValueFormat): string {
   switch (format) {

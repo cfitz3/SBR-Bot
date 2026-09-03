@@ -997,34 +997,59 @@ a.guild-switch:hover {
   margin-bottom: var(--space-4);
 }
 
-/* The reader's own row, pinned above a board they are not on. Set apart from
-   the table rather than spliced into it, because "#137" between a 9 and a 10
-   would read as a rendering fault. */
-.pinned-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  padding: var(--space-3) var(--space-5);
-  margin-bottom: var(--space-4);
-  /* The accent means "this row is you" — the same job it does on the active nav
-     row, marked the same way: a bar on the leading edge over a tinted ground. */
-  background: var(--color-accent-900);
-  border: 1px solid var(--color-divider);
-  border-left: 2px solid var(--color-accent);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-neutral-200);
-}
-
-.pager {
+/* The bar above a board: a filter box, and the button that empties it. The
+   button only exists while there is something to clear, so the bar is one
+   control at rest rather than two with one permanently dead. */
+.toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-4);
-  margin-top: var(--space-4);
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.toolbar .control {
+  flex: 1 1 22ch;
+  max-width: 32ch;
+}
+
+/* A sortable column head. The button carries no chrome of its own — the header
+   cell is already a header, and a bordered button inside one would read as a
+   second control sitting in the row rather than as the label being pressable. */
+.table-sort {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.table-sort:hover {
+  color: var(--color-neutral-300);
+}
+
+.table-sort:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.table th.num .table-sort {
+  /* Right-aligned columns sort from their own edge, so the arrow lands beside
+     the digits it describes rather than adrift on the left. */
+  display: block;
+  width: 100%;
+  text-align: right;
+}
+
+/* The rank under a figure. Deliberately small and grey: "#3 / 42" is context
+   for the number above it, and set any louder it competes with the value the
+   column is actually about. */
+.cell-rank {
+  display: block;
+  font-size: 9.5px;
+  letter-spacing: var(--label-tracking);
 }
 
 .control-label {

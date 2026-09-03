@@ -18,7 +18,8 @@ export {
   type LeaderboardQuery,
 } from "./service.js";
 export { rank, rankAll, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, type RankOptions } from "./rank.js";
-export type { LeaderboardSource } from "./ports.js";
+export type { LeaderboardSource, RosterMember } from "./ports.js";
+export { BOARD_TABS, BOARD_TAB_IDS, boardTabFor, buildBoard, type BoardQuery } from "./board.js";
 export {
   CATEGORY_SPECS,
   LEADERBOARD_CATEGORIES,
