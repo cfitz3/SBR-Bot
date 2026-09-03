@@ -19,6 +19,8 @@
  *
  * Tolerant on read, strict on write, as every policy in the platform is.
  */
+import { normalizeEmoji } from "@sbr/shared-types";
+
 
 /** One button on a menu. */
 export interface RoleMenuOption {
@@ -99,6 +101,18 @@ function key(value: unknown): string | null {
   return lowered.length <= MAX_KEY && KEY_SHAPE.test(lowered) ? lowered : null;
 }
 
+/**
+ * The emoji as it should be stored, or none.
+ *
+ * Read is tolerant, so an emoji Discord would reject becomes no emoji rather
+ * than a menu that cannot be posted; the strict half below refuses it on save
+ * so nobody has to discover that by the button being bare.
+ */
+function storedEmoji(raw: unknown): string | null {
+  const normalized = normalizeEmoji(str(raw));
+  return normalized.ok ? normalized.value : null;
+}
+
 function parseOption(raw: unknown): RoleMenuOption | null {
   if (!isRecord(raw)) return null;
   const optionKey = key(raw["key"]);
@@ -109,7 +123,10 @@ function parseOption(raw: unknown): RoleMenuOption | null {
     roleId,
     label: (str(raw["label"]) ?? optionKey).slice(0, MAX_OPTION_LABEL),
     description: str(raw["description"])?.slice(0, MAX_OPTION_DESCRIPTION) ?? null,
-    emoji: str(raw["emoji"]),
+    // Normalised, not copied: `<:star:123>` is stored `star:123`, and anything
+    // Discord would reject is dropped rather than carried to a send that would
+    // then fail the whole menu message.
+    emoji: storedEmoji(raw["emoji"]),
   };
 }
 
@@ -202,6 +219,10 @@ export function validateRoleMenus(raw: unknown): string | null {
       if (option["description"] !== undefined && option["description"] !== null && str(option["description"]) === null) {
         return `${spot} has an empty note`;
       }
+      // Refused here rather than at send time: Discord rejects the entire menu
+      // message over one bad emoji, and names a component index when it does.
+      const emoji = normalizeEmoji(str(option["emoji"]));
+      if (!emoji.ok) return `${spot}: ${emoji.reason}`;
     }
   }
   return null;

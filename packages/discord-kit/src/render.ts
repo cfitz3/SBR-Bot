@@ -7,6 +7,7 @@
  * that knows about `EmbedBuilder`.
  */
 import type { ActionRowView, ButtonView, EmbedView, SelectMenuView } from "@sbr/shared-types";
+import { emojiPayload, parseEmoji } from "@sbr/shared-types";
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -42,6 +43,52 @@ const MAX_AUTHOR_NAME = 256;
 /** Discord counts UTF-16 code units, which is what `String#slice` counts too. */
 function clampText(text: string, max: number): string {
   return text.length <= max ? text : text.slice(0, max);
+}
+
+/**
+ * Where a dropped emoji is reported.
+ *
+ * discord-kit deliberately carries no logger dependency — it is the boundary
+ * between the view model and discord.js, and nothing else. A single injectable
+ * sink is the smallest thing that lets a host wire this into its real logger
+ * without that changing.
+ */
+type EmojiWarning = (message: string, context: { readonly emoji: string; readonly on: string }) => void;
+
+let warnEmoji: EmojiWarning = (message, context) => {
+  // The fallback of last resort; a host wires its own logger with setEmojiWarningSink.
+  console.warn(message, context);
+};
+
+/** Point dropped-emoji warnings at the host's logger. */
+export function setEmojiWarningSink(sink: EmojiWarning): void {
+  warnEmoji = sink;
+}
+
+/**
+ * Put an emoji on a component, or leave it off and say so.
+ *
+ * Discord answers a malformed emoji with
+ * `components[0].components[0].emoji.name[COMPONENT_INVALID_EMOJI]` and rejects
+ * the entire message — so one staffer typing `:)` into a ticket category took
+ * the whole ticket panel down, and the error named a component index rather
+ * than the category. A button without its emoji still works; a panel that never
+ * sends does not. The editor refuses bad input up front (see
+ * `normalizeEmoji`); this is the floor under legacy rows and anything that
+ * bypassed it.
+ */
+function applyEmoji(
+  raw: string | undefined,
+  on: string,
+  set: (payload: { name?: string; id?: string; animated?: boolean }) => void,
+): void {
+  if (!raw) return;
+  const parsed = parseEmoji(raw);
+  if (parsed === null) {
+    warnEmoji("dropping an emoji Discord would reject", { emoji: raw, on });
+    return;
+  }
+  set(emojiPayload(parsed));
 }
 
 const STYLES = {
@@ -92,7 +139,7 @@ function toButton(view: ButtonView): ButtonBuilder {
   // reverse. Discord rejects the payload if both or neither is set.
   if (view.style === "LINK") button.setURL(view.url ?? "https://discord.com");
   else button.setCustomId(view.customId ?? view.label.toLowerCase().replace(/\W+/g, "-"));
-  if (view.emoji) button.setEmoji(view.emoji);
+  applyEmoji(view.emoji, `button ${view.customId ?? view.label}`, (e) => button.setEmoji(e));
   if (view.disabled) button.setDisabled(true);
   return button;
 }
@@ -108,7 +155,7 @@ function toSelect(view: SelectMenuView): StringSelectMenuBuilder {
         .setLabel(clampText(o.label, MAX_OPTION_LABEL))
         .setValue(o.value);
       if (o.description) option.setDescription(clampText(o.description, MAX_OPTION_DESCRIPTION));
-      if (o.emoji) option.setEmoji(o.emoji);
+      applyEmoji(o.emoji, `option ${o.value} of ${view.customId}`, (e) => option.setEmoji(e));
       if (o.default) option.setDefault(true);
       return option;
     }),

@@ -22,6 +22,7 @@ import {
   isMilestoneMetric,
   isUpstreamUnavailable,
   MILESTONE_METRICS,
+  normalizeEmoji,
   MilestoneType as MILESTONE_TYPES,
   TAG_SCOPES,
 } from "@sbr/shared-types";
@@ -1712,10 +1713,19 @@ export class PanelMutations {
       if (typeof description !== "string" || description.length > TICKET_DESCRIPTION_MAX) {
         return invalid(`description must be under ${TICKET_DESCRIPTION_MAX} characters`);
       }
-      const emoji = body["emoji"] ?? null;
-      if (emoji !== null && (typeof emoji !== "string" || emoji.length > TICKET_EMOJI_MAX)) {
+      const rawEmoji = body["emoji"] ?? null;
+      if (rawEmoji !== null && (typeof rawEmoji !== "string" || rawEmoji.length > TICKET_EMOJI_MAX)) {
         return invalid(`emoji must be under ${TICKET_EMOJI_MAX} characters, or null`);
       }
+      // Refused at the editor rather than at send time. Discord answers a
+      // malformed component emoji with `COMPONENT_INVALID_EMOJI` and rejects the
+      // *whole* panel message, naming a component index — so one staffer typing
+      // `:)` here used to take down the guild's entire ticket panel, with an
+      // error that pointed nowhere near this field. The stored value is the
+      // normalised one, so `<:star:123>` becomes `star:123` on the way in.
+      const normalizedEmoji = normalizeEmoji(rawEmoji);
+      if (!normalizedEmoji.ok) return invalid(normalizedEmoji.reason);
+      const emoji = normalizedEmoji.value;
       if (!isCount(body["position"], MAX_TICKET_POSITION)) {
         return invalid(`position must be a whole number up to ${MAX_TICKET_POSITION}`);
       }
@@ -1773,7 +1783,7 @@ export class PanelMutations {
         key,
         name: name.trim(),
         description,
-        emoji: emoji as string | null,
+        emoji,
         position: body["position"],
         enabled: body["enabled"],
         channelNameTemplate: template.trim(),

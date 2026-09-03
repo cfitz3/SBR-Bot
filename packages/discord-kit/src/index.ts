@@ -51,7 +51,7 @@ export {
   type StyleIssue,
   type StyleSeverity,
 } from "@sbr/embed-kit";
-export { toEmbed, toActionRow, MAX_ROWS_PER_MESSAGE } from "./render.js";
+export { toEmbed, toActionRow, MAX_ROWS_PER_MESSAGE, setEmojiWarningSink } from "./render.js";
 export {
   containerMessage,
   replyOptions,

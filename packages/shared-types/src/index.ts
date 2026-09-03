@@ -12,3 +12,4 @@ export * from "./args.js";
 export * from "./errors.js";
 export * from "./features.js";
 export * from "./case-id.js";
+export * from "./emoji.js";
