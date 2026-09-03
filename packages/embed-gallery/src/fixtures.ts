@@ -732,6 +732,7 @@ export const INFRACTIONS: readonly InfractionDTO[] = [
 export const AUDIT: readonly ModerationActionDTO[] = [
   {
     id: "act-1",
+    caseCode: "CASE-Ferrariic-8f3a1c02-4",
     guildId: "g1",
     type: "MUTE",
     actorDiscordId: "200000000000000001",
@@ -751,6 +752,7 @@ export const AUDIT: readonly ModerationActionDTO[] = [
   },
   {
     id: "act-2",
+    caseCode: "CASE-Notch-069a79f4-1",
     guildId: "g1",
     type: "GUILD_EXPEL",
     actorDiscordId: "200000000000000002",
@@ -1480,6 +1482,7 @@ export const SCREENING_BROKEN: Screening = screening({
 /** A note against a linked member: the ordinary case. */
 export const NOTE: ModerationActionDTO = {
   id: "note-8a12",
+  caseCode: "CASE-Dinnerbone-61699b2e-2",
   guildId: "g1",
   type: "NOTE",
   actorDiscordId: "200000000000000001",

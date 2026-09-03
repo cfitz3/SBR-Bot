@@ -46,6 +46,7 @@ const silent: Logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {
 function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
   return {
     id: "act-1",
+    caseCode: "CASE-DrJay-a1b2c3d4-1",
     guildId: "g1",
     type: "WARN",
     actorDiscordId: "actor",
@@ -261,7 +262,7 @@ test("warn denied for a MEMBER-tier actor", async () => {
 test("warn succeeds for a MODERATOR and reports the case id", async () => {
   const r = await make({ roles: roles({ actor: "MODERATOR" }) }).dispatch("warn", ctx());
   assert.match(r.text, /Warned/);
-  assert.match(r.text, /act-1/);
+  assert.match(r.text, /CASE-DrJay-a1b2c3d4-1/);
 });
 
 test("warn tells the staffer when the ladder escalated it", async () => {
@@ -754,13 +755,16 @@ test("audit in_force asks the store for live punishments and says so when there 
 
 test("an expired mute reads as expired, not as one a staffer lifted", async () => {
   const rows = [
-    action({ id: "gone", type: "MUTE", active: true, expiresAt: "2000-01-01T00:00:00.000Z" }),
-    action({ id: "early", type: "MUTE", active: false, expiresAt: "2999-01-01T00:00:00.000Z" }),
+    action({ id: "gone", caseCode: "CASE-DrJay-a1b2c3d4-1", type: "MUTE", active: true, expiresAt: "2000-01-01T00:00:00.000Z" }),
+    action({ id: "early", caseCode: "CASE-DrJay-a1b2c3d4-2", type: "MUTE", active: false, expiresAt: "2999-01-01T00:00:00.000Z" }),
   ];
   const mod = moderation({ async listActions() { return ok(rows); } });
   const r = await make({ moderation: mod }).dispatch("audit", ctx({ args: recordArgs({}) }));
   const listing = r.pages?.[1]?.fields ?? [];
-  assert.deepEqual(listing.map((f) => f.name), ["Case gone", "Case early"]);
+  assert.deepEqual(listing.map((f) => f.name), [
+    "Case CASE-DrJay-a1b2c3d4-1",
+    "Case CASE-DrJay-a1b2c3d4-2",
+  ]);
   assert.match(listing[0]?.value ?? "", /expired/);
   assert.match(listing[1]?.value ?? "", /lifted/);
 });
@@ -770,7 +774,7 @@ test("/case renders the one row the id names", async () => {
   const mod = moderation({
     async findAction(g, id) {
       seen = [g, id];
-      return ok(action({ id: "act-1f3b", type: "BAN" }));
+      return ok(action({ id: "act-1f3b", caseCode: "CASE-DrJay-a1b2c3d4-7", type: "BAN" }));
     },
   });
   const r = await make({ moderation: mod }).dispatch(
@@ -779,7 +783,9 @@ test("/case renders the one row the id names", async () => {
   );
   // Guild-scoped, and the surrounding whitespace of a pasted id is not part of it.
   assert.deepEqual(seen as unknown as string[], ["g1", "act-1f3b"]);
-  assert.match(r.embed?.footer ?? "", /act-1f3b/);
+  // The lookup still takes the cuid — both ids are in circulation — but the
+  // card comes back named the way staff will quote it next.
+  assert.match(r.embed?.footer ?? "", /CASE-DrJay-a1b2c3d4-7/);
 });
 
 test("/case on an unknown id says nothing about other guilds", async () => {

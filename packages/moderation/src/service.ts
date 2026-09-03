@@ -373,7 +373,7 @@ export class ModerationServiceImpl implements ModerationService {
         type: reversal,
         actorDiscordId: editorDiscordId,
         targetDiscordId: found.targetDiscordId,
-        reason: `Case ${found.id} voided: ${reason}`,
+        reason: `Case ${found.caseCode} voided: ${reason}`,
         durationSeconds: null,
       });
       if (!undone.ok) return undone;
@@ -450,7 +450,7 @@ export class ModerationServiceImpl implements ModerationService {
         type,
         actorDiscordId: EXPIRY_ACTOR,
         targetDiscordId: action.targetDiscordId,
-        reason: `Automatic: ${action.type.toLowerCase()} from case ${action.id} expired`,
+        reason: `Automatic: ${action.type.toLowerCase()} from case ${action.caseCode} expired`,
       });
       if (result.ok) reversed += 1;
       else {

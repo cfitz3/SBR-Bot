@@ -757,6 +757,19 @@ model Infraction {
 
 model ModerationAction {
   id                       String            @id @default(cuid())
+  /// The name staff use: `CASE-DrJay-a1b2c3d4-2` — who it is about, the stable
+  /// half of their uuid, and their nth case in this guild. `id` above is the
+  /// old cuid and stays the primary key, so every mod-log card that already
+  /// quoted one still resolves; this is an additional name, not a replacement.
+  ///
+  /// Nullable because rows written before the scheme existed have none, and a
+  /// backfill that guessed at a name years later would be inventing evidence.
+  /// Readers fall back to `id`.
+  caseCode                 String?
+  /// The `2` in the id: this target's nth case in this guild, starting at 1.
+  /// Allocated by reading the current maximum and retrying on the unique
+  /// violation, the same way ticket numbers are.
+  caseNumber               Int               @default(0)
   guildId                  String
   infractionId             String?
   actorDiscordId           String
@@ -795,11 +808,15 @@ model ModerationAction {
   guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade)
   infraction Infraction? @relation(fields: [infractionId], references: [id], onDelete: SetNull)
 
+  @@unique([guildId, caseCode])
   @@index([guildId, targetDiscordId, active])
   @@index([guildId, type, createdAt])
   @@index([guildId, expiresAt])
   // The staff view of "what did we record but not do".
   @@index([guildId, enforcement, createdAt])
+  // Allocation reads the highest number for one target; without this it is a
+  // scan of the guild's whole moderation history on every punishment.
+  @@index([guildId, targetDiscordId, caseNumber])
 }
 
 model Ticket {

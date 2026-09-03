@@ -100,11 +100,16 @@ const sectionLabel = (id: Section): string => {
  */
 const state: {
   target: string;
+  search: string;
   section: Section;
   editing: string | null;
   managing: string | null;
 } = {
   target: "",
+  // A case id, a uuid, or a name that resolved to no member — anything staff
+  // arrive holding that is not a Discord id. It narrows the case log rather
+  // than choosing whose history is shown, so the two live side by side.
+  search: "",
   section: "history",
   editing: null,
   // The case whose management controls are open, if any. One at a time: these
@@ -155,7 +160,10 @@ const capabilityOptions = (): readonly (readonly [string, string])[] => [
 export async function renderModeration(host: HTMLElement, guildId: string): Promise<void> {
   replace(host, spinner("moderation"));
 
-  const query = state.target ? `?target=${encodeURIComponent(state.target)}` : "";
+  const params = new URLSearchParams();
+  if (state.target) params.set("target", state.target);
+  if (state.search) params.set("search", state.search);
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   const result = await loadPage<ModerationVM>(
     `/api/guilds/${encodeURIComponent(guildId)}/moderation${query}`,
   );
@@ -269,15 +277,28 @@ function historySection(guildId: string, data: ModerationVM, rerender: () => voi
  * with the directory down that is the only route through.
  */
 function lookupBody(guildId: string, rerender: () => void): HTMLElement {
-  const note = h("p", { class: "field-hint" }, "");
+  const note = h(
+    "p",
+    { class: "field-hint" },
+    state.search ? t("lookupSearching").replace("{term}", state.search) : "",
+  );
 
   function look(): void {
-    const raw = chooser.value();
+    const raw = chooser.value().trim();
+    // A term that is not a Discord id used to be a dead end. It is now a search
+    // over the case log, because the three things staff paste into this box —
+    // a case id, a uuid, a username — are all of them things a member picker
+    // cannot resolve and the log can.
     if (raw.length > 0 && !isSnowflake(raw)) {
-      note.textContent = t("lookupNoMatch");
+      state.target = "";
+      state.search = raw;
+      state.managing = null;
+      rerender();
       return;
     }
     state.target = raw;
+    state.search = "";
+    state.managing = null;
     rerender();
   }
 
@@ -304,12 +325,13 @@ function lookupBody(guildId: string, rerender: () => void): HTMLElement {
         { class: "field-row" },
         chooser.el,
         h("button", { class: "button button-primary", type: "button", onclick: look }, t("lookupGo")),
-        state.target
+        state.target || state.search
           ? h("button", {
               class: "button",
               type: "button",
               onclick: () => {
                 state.target = "";
+                state.search = "";
                 rerender();
               },
             }, t("lookupClear"))
@@ -480,6 +502,7 @@ function inForceBody(data: ModerationVM): HTMLElement {
   }
   return table(
     [
+      t("colCase"),
       t("colAction"),
       t("colMember"),
       t("colBy"),
@@ -577,6 +600,10 @@ function actionsBody(guildId: string, data: ModerationVM, rerender: () => void):
       t("colManage"),
     ],
     data.actions.map((row) => [
+      // First column, because it is the handle for everything else: the id
+      // staff quote in an appeal, paste into this page's own search box, and
+      // read off a mod-log card.
+      h("code", {}, row.caseCode),
       // Two badges, because they answer different questions: what the case is
       // now, and whether it ever actually happened. A row that says BAN and
       // nothing else is the shape this whole page exists to stop.
@@ -655,7 +682,7 @@ function compactSpan(seconds: number): string {
  * log and reality that this page exists to close.
  */
 function caseCard(guildId: string, row: ModerationActionVM, rerender: () => void): HTMLElement {
-  const title = t("caseTitle").replace("{id}", row.id);
+  const title = t("caseTitle").replace("{id}", row.caseCode);
   const trail: (HTMLElement | null)[] = [
     h("p", { class: "hint" }, t("caseIntro")),
     row.editedByDiscordId === null || row.updatedAt === null

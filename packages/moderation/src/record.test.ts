@@ -10,6 +10,7 @@ const MEMBER = "member-1";
 function action(over: Partial<ModerationActionDTO>): ModerationActionDTO {
   return {
     id: "a1",
+    caseCode: "CASE-target-a1b2c3d4-1",
     guildId: GUILD,
     type: "WARN",
     actorDiscordId: "staff-1",

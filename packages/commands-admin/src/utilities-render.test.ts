@@ -38,6 +38,7 @@ const seg = (id: string): readonly string[] => id.split(":").slice(1);
 function note(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
   return {
     id: "act-note-1",
+    caseCode: "CASE-DrJay-a1b2c3d4-2",
     guildId: "g1",
     type: "NOTE",
     actorDiscordId: "staff",
@@ -109,7 +110,7 @@ test("the note is the card's headline, not a sentence about a case id", () => {
   const view = renderNoteEmbed(note());
   assert.match(view.description ?? "", /carry pricing/);
   assert.match(value(view, "Where it lives"), /<@member>/);
-  assert.match(value(view, "Where it lives"), /act-note-1/);
+  assert.match(value(view, "Where it lives"), /CASE-DrJay-a1b2c3d4-2/);
 });
 
 test("a note is dated by when it was recorded, not by when the reply rendered", () => {

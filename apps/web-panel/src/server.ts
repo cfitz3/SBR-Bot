@@ -445,7 +445,12 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         case "moderation":
           return sendPage(
             res,
-            await app.panel.loadModeration(session, guildId, url.searchParams.get("target") ?? ""),
+            await app.panel.loadModeration(
+              session,
+              guildId,
+              url.searchParams.get("target") ?? "",
+              url.searchParams.get("search") ?? "",
+            ),
           );
         case "analytics": {
           // Unrecognised or absent query params are omitted rather than passed

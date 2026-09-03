@@ -205,7 +205,7 @@ export function modLogEmbed(action: ModerationActionDTO, now: Date = new Date())
     ],
     // Static, and the only genuinely static thing on the card: the id a reply,
     // an appeal and `/case` all quote.
-    footer: `Case ${action.id}`,
+    footer: `Case ${action.caseCode}`,
     timestamp: action.createdAt,
   });
 }

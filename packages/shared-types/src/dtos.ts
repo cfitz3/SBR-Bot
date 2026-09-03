@@ -393,6 +393,14 @@ export type ModerationSurface = "DISCORD" | "GUILD_CHAT";
 
 export interface ModerationActionDTO {
   readonly id: string;
+  /**
+   * What staff call this case: `CASE-DrJay-a1b2c3d4-2`.
+   *
+   * Always present, because every reader needs something to show: rows issued
+   * before the scheme existed fall back to their cuid, which is what they were
+   * always called. `id` remains the key every write addresses.
+   */
+  readonly caseCode: string;
   readonly guildId: string;
   readonly type: ModActionType;
   readonly actorDiscordId: string;

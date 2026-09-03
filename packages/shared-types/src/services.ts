@@ -732,6 +732,16 @@ export interface AuditQuery {
    * rows and not whatever survives filtering a hundred mixed ones.
    */
   readonly inForceOnly?: boolean;
+  /**
+   * Free text: a case id, a username, or a uuid.
+   *
+   * One box rather than three fields, because staff arrive with whichever of
+   * the three they happen to have. A term that looks like a case id is matched
+   * exactly; anything else is matched against the name and uuid the id carries,
+   * so a search by username still finds cases against somebody who has since
+   * been renamed.
+   */
+  readonly term?: string | null;
   readonly limit?: number;
 }
 

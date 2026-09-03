@@ -47,7 +47,7 @@ function repo(stale: readonly ModerationActionDTO[] = []): {
       async createInfraction(input) { return { ...input, id: "inf-1", createdAt: "t" }; },
       async createAction(input) {
         created.push(input);
-        return { ...input, id: "act-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO;
+        return { ...input, id: "act-1", caseCode: "CASE-target-a1b2c3d4-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO;
       },
       async listInfractions() { return []; },
       async listRecentInfractions() { return []; },
@@ -198,7 +198,7 @@ test("listInForce narrows in the store and re-checks against this process's cloc
   // the service must not hand it on as something still being served.
   let seen: AuditQuery | null = null;
   const stale: ModerationActionDTO = {
-    id: "a1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
+    id: "a1", caseCode: "CASE-target-a1b2c3d4-1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
     reason: "spam", durationSeconds: 60, expiresAt: "2026-08-05T23:59:00.000Z",
     surfaces: ["DISCORD"], active: true, createdAt: "2026-08-05T23:58:00.000Z",
     enforcement: "CONFIRMED", enforcementDetail: null,
@@ -251,7 +251,7 @@ test("sweepExpired reports what it cleared and passes the clock down", async () 
 function repoWithWarns(count: number): { repo: ModerationRepository; created: NewActionRecord[] } {
   const base = repo();
   const history: ModerationActionDTO[] = Array.from({ length: count }, (_, i) => ({
-    id: `w${i}`, guildId: "g1", type: "WARN", actorDiscordId: "actor", targetDiscordId: "target",
+    id: `w${i}`, caseCode: `CASE-target-a1b2c3d4-${i + 1}`, guildId: "g1", type: "WARN", actorDiscordId: "actor", targetDiscordId: "target",
     reason: "spam", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"],
     active: true, createdAt: "2026-08-05T00:00:00.000Z",
     enforcement: "NOT_REQUIRED", enforcementDetail: null,
@@ -259,7 +259,7 @@ function repoWithWarns(count: number): { repo: ModerationRepository; created: Ne
   }));
   return {
     created: base.created,
-    repo: { ...base.repo, async createAction(i) { base.created.push(i); return { ...i, id: "act", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO; }, async listActions() { return history; } },
+    repo: { ...base.repo, async createAction(i) { base.created.push(i); return { ...i, id: "act", caseCode: "CASE-target-a1b2c3d4-1", createdAt: "t", enforcement: "PENDING", enforcementDetail: null, updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null } as ModerationActionDTO; }, async listActions() { return history; } },
   };
 }
 
@@ -614,7 +614,7 @@ test("a punishment the guild never answered for is escalated, not left pending",
   // minutes: by then nothing is coming, and a case still reading "pending" is a
   // ban nobody has been told did not land.
   const stalled = {
-    id: "act-9", guildId: "g1", type: "BAN", actorDiscordId: "staff-1", targetDiscordId: "target-1",
+    id: "act-9", caseCode: "CASE-target-a1b2c3d4-9", guildId: "g1", type: "BAN", actorDiscordId: "staff-1", targetDiscordId: "target-1",
     reason: "Ban evasion", durationSeconds: null, expiresAt: null, surfaces: ["DISCORD"], active: true,
     enforcement: "PENDING", enforcementDetail: "sent but not confirmed", createdAt: "t",
     updatedAt: null, editedByDiscordId: null, voidedAt: null, voidReason: null,
@@ -835,7 +835,7 @@ function caseRepo(seed: ModerationActionDTO): {
 
 function seededCase(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
   return {
-    id: "act-1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
+    id: "act-1", caseCode: "CASE-target-a1b2c3d4-1", guildId: "g1", type: "MUTE", actorDiscordId: "actor", targetDiscordId: "target",
     reason: "spam", durationSeconds: 7200, expiresAt: "2026-08-05T21:00:00.000Z",
     surfaces: ["DISCORD"], active: true, createdAt: "2026-08-05T19:00:00.000Z",
     enforcement: "CONFIRMED", enforcementDetail: null,
@@ -921,7 +921,7 @@ test("voiding an active ban actually unbans them", async () => {
   assert.equal(c.created.length, 1);
   assert.equal(c.created[0]?.type, "UNBAN");
   assert.equal(c.created[0]?.targetDiscordId, "target");
-  assert.match(String(c.created[0]?.reason), /^Case act-1 voided: wrong person$/);
+  assert.match(String(c.created[0]?.reason), /^Case CASE-target-a1b2c3d4-1 voided: wrong person$/);
 });
 
 test("voiding a warning corrects the record without inventing a reversal", async () => {

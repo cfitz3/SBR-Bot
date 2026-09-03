@@ -69,3 +69,36 @@ test("the ordinary filters are applied only when supplied", () => {
   const where = auditWhere(q({ actorDiscordId: "a1", targetDiscordId: "t1", type: "KICK" }), NOW);
   assert.deepEqual(where, { guildId: "g1", actorDiscordId: "a1", targetDiscordId: "t1", type: "KICK" });
 });
+
+// ── free text ───────────────────────────────────────────────────────────────
+
+test("a term that looks like a case id is matched exactly, not fuzzily", () => {
+  const where = auditWhere(q({ term: "CASE-DrJay-a1b2c3d4-2" }), NOW);
+  assert.deepEqual(where.OR, [
+    { caseCode: { equals: "CASE-DrJay-a1b2c3d4-2", mode: "insensitive" } },
+    { id: "CASE-DrJay-a1b2c3d4-2" },
+  ]);
+});
+
+test("any other term searches the id, the target and the reason", () => {
+  const where = auditWhere(q({ term: " DrJay " }), NOW);
+  assert.deepEqual(where.OR, [
+    { caseCode: { contains: "DrJay", mode: "insensitive" } },
+    { id: "DrJay" },
+    { targetDiscordId: "DrJay" },
+    { reason: { contains: "DrJay", mode: "insensitive" } },
+  ]);
+});
+
+test("an empty term is not a filter", () => {
+  assert.deepEqual(auditWhere(q({ term: "   " }), NOW), { guildId: "g1" });
+});
+
+test("a term and in_force both apply, rather than one replacing the other", () => {
+  // Both narrow, and Prisma takes one `OR` per object: written the obvious way,
+  // the second would silently overwrite the first and widen the search back to
+  // every case in the guild.
+  const where = auditWhere(q({ term: "DrJay", inForceOnly: true }), NOW);
+  assert.equal(Array.isArray(where.OR), true);
+  assert.deepEqual(where.AND, [{ OR: [{ expiresAt: null }, { expiresAt: { gt: NOW } }] }]);
+});

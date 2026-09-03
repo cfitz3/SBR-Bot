@@ -3,6 +3,7 @@
  * `guildId` here is the internal Guild.id (cuid); the composition layer resolves
  * a Discord guild id to it via guildRepository.
  */
+import { Prisma } from "@prisma/client";
 import type {
   AuditQuery,
   EnforcementStatus,
@@ -10,6 +11,13 @@ import type {
   ModActionType,
   ModerationActionDTO,
   ModerationSurface,
+} from "@sbr/shared-types";
+import {
+  CASE_PREFIX,
+  caseUuidFragment,
+  formatCaseCode,
+  looksLikeCaseCode,
+  sanitizeCaseName,
 } from "@sbr/shared-types";
 import { prisma } from "../client.js";
 
@@ -61,13 +69,35 @@ export function auditWhere(query: AuditQuery, now: Date): Record<string, unknown
     where.createdAt = { ...(gte ? { gte } : {}), ...(until ? { lte: until } : {}) };
   }
 
+  const term = query.term?.trim();
+  if (term) {
+    // Three ways staff arrive at a case, in one box. A case id is matched on
+    // the id column exactly rather than fuzzily, because a term that is
+    // obviously an id should not also drag in every case whose reason happens
+    // to contain the target's name. Everything else is matched against the
+    // name and uuid the id carries, which is why searching a username works
+    // even for a member who has since been renamed.
+    where.OR = looksLikeCaseCode(term)
+      ? [{ caseCode: { equals: term, mode: "insensitive" } }, { id: term }]
+      : [
+          { caseCode: { contains: term, mode: "insensitive" } },
+          { id: term },
+          { targetDiscordId: term },
+          { reason: { contains: term, mode: "insensitive" } },
+        ];
+  }
+
   if (query.inForceOnly) {
     // Time-filtered here rather than after the fact: `take` would otherwise
     // spend its budget on rows that are about to be dropped, and a page of
     // "still in force" could come back half empty.
     where.active = true;
     where.type = query.type ?? { in: ["MUTE", "BAN"] };
-    where.OR = [{ expiresAt: null }, { expiresAt: { gt: now } }];
+    // `AND` rather than a second `OR`: Prisma takes one `OR` per object, and a
+    // free-text search combined with "still in force" means both, not either.
+    const stillInForce = { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] };
+    if (where.OR === undefined) Object.assign(where, stillInForce);
+    else where.AND = [stillInForce];
   }
   return where;
 }
@@ -113,6 +143,7 @@ interface ModerationActionPatch {
 
 type ActionRow = {
   id: string;
+  caseCode: string | null;
   guildId: string;
   type: string;
   actorDiscordId: string;
@@ -146,6 +177,8 @@ function mapInfraction(r: InfractionRow): InfractionDTO {
 function mapAction(r: ActionRow): ModerationActionDTO {
   return {
     id: r.id,
+    // Historical rows have no code; the id is what they were always called.
+    caseCode: r.caseCode ?? r.id,
     guildId: r.guildId,
     type: r.type as ModerationActionDTO["type"],
     actorDiscordId: r.actorDiscordId,
@@ -165,6 +198,54 @@ function mapAction(r: ActionRow): ModerationActionDTO {
   };
 }
 
+/** How many times case-code allocation retries a collision before giving up. */
+const CASE_ATTEMPTS = 5;
+
+/**
+ * Who a case is about, as the id spells it.
+ *
+ * The verified Minecraft link is preferred because that is the name staff
+ * recognise and the uuid is the half that survives a rename. A member who has
+ * never linked still gets a readable id from their Discord username, with
+ * their snowflake standing in for the uuid — just as stable, and just as much
+ * theirs. Resolution is best-effort: a lookup that fails yields `unknown`,
+ * because a punishment must not fail to be recorded over the spelling of its
+ * own name.
+ */
+async function caseSubject(
+  input: NewActionRecord,
+): Promise<{ name: string | null; uuid: string | null }> {
+  try {
+    if (input.targetMinecraftUuid !== null) {
+      const account = await prisma.minecraftAccount.findUnique({
+        where: { uuid: input.targetMinecraftUuid },
+        select: { currentIgn: true },
+      });
+      return { name: account?.currentIgn ?? null, uuid: input.targetMinecraftUuid };
+    }
+    if (input.targetDiscordId === null) return { name: null, uuid: null };
+    const user = await prisma.discordUser.findUnique({
+      where: { discordId: input.targetDiscordId },
+      select: {
+        username: true,
+        linkedAccounts: {
+          where: { status: "VERIFIED" },
+          orderBy: [{ isPrimary: "desc" }, { verifiedAt: "desc" }],
+          take: 1,
+          select: { minecraftAccount: { select: { uuid: true, currentIgn: true } } },
+        },
+      },
+    });
+    const linked = user?.linkedAccounts[0]?.minecraftAccount;
+    return {
+      name: linked?.currentIgn ?? user?.username ?? null,
+      uuid: linked?.uuid ?? input.targetDiscordId,
+    };
+  } catch {
+    return { name: null, uuid: input.targetDiscordId };
+  }
+}
+
 export const moderationRepository = {
   async createInfraction(input: Omit<InfractionDTO, "id" | "createdAt">): Promise<InfractionDTO> {
     const row = await prisma.infraction.create({
@@ -180,26 +261,61 @@ export const moderationRepository = {
   },
 
   async createAction(input: NewActionRecord): Promise<ModerationActionDTO> {
-    const row = await prisma.moderationAction.create({
-      data: {
-        guildId: input.guildId,
-        infractionId: input.infractionId,
-        type: input.type,
-        actorDiscordId: input.actorDiscordId,
-        targetDiscordId: input.targetDiscordId,
-        reason: input.reason,
-        durationSeconds: input.durationSeconds,
-        expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
-        surfaces: [...input.surfaces],
-        active: input.active,
-        sourceContext: input.sourceContext ?? "DISCORD",
-        // Born PENDING on purpose. The service stamps the verdict once both
-        // surfaces have answered, so a process that dies mid-enforcement leaves
-        // a row that says so rather than one that looks finished.
-        enforcement: "PENDING",
-      },
-    });
-    return mapAction(row);
+    const subject = await caseSubject(input);
+    // The sequence is per subject rather than per guild, and the subject is
+    // identified by the code's own name and uuid segments. Counting on the
+    // prefix rather than on `targetDiscordId` is what keeps a punishment
+    // issued against a bare uuid — no snowflake to group by — from sharing a
+    // counter with every other one.
+    const prefix = `${CASE_PREFIX}-${sanitizeCaseName(subject.name)}-${caseUuidFragment(subject.uuid)}-`;
+
+    for (let attempt = 0; attempt < CASE_ATTEMPTS; attempt += 1) {
+      const highest = await prisma.moderationAction.findFirst({
+        where: { guildId: input.guildId, caseCode: { startsWith: prefix } },
+        orderBy: { caseNumber: "desc" },
+        select: { caseNumber: true },
+      });
+      const caseNumber = (highest?.caseNumber ?? 0) + 1;
+      try {
+        const row = await prisma.moderationAction.create({
+          data: {
+            caseNumber,
+            caseCode: formatCaseCode({
+              name: subject.name,
+              uuid: subject.uuid,
+              sequence: caseNumber,
+            }),
+            guildId: input.guildId,
+            infractionId: input.infractionId,
+            type: input.type,
+            actorDiscordId: input.actorDiscordId,
+            targetDiscordId: input.targetDiscordId,
+            reason: input.reason,
+            durationSeconds: input.durationSeconds,
+            expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+            surfaces: [...input.surfaces],
+            active: input.active,
+            sourceContext: input.sourceContext ?? "DISCORD",
+            // Born PENDING on purpose. The service stamps the verdict once
+            // both surfaces have answered, so a process that dies
+            // mid-enforcement leaves a row that says so rather than one that
+            // looks finished.
+            enforcement: "PENDING",
+          },
+        });
+        return mapAction(row);
+      } catch (error) {
+        // Two staff punishing the same person in the same second compute the
+        // same number; the loser takes the next one. Cheaper and less
+        // deadlock-prone than serialising every punishment behind a lock, and
+        // the same trade ticket numbers make.
+        const collided =
+          error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+        if (!collided || attempt === CASE_ATTEMPTS - 1) throw error;
+      }
+    }
+    // Unreachable: the loop either returns or rethrows on its final attempt.
+    throw new Error("case code allocation exhausted");
   },
 
   async listInfractions(guildId: string, discordId: string): Promise<readonly InfractionDTO[]> {
@@ -338,8 +454,22 @@ export const moderationRepository = {
     return row === null ? null : mapAction(row);
   },
 
+  /**
+   * One case, by whichever id staff quoted.
+   *
+   * Both are accepted because both are in circulation: every card printed
+   * since the scheme landed shows `CASE-DrJay-a1b2c3d4-2`, and every card
+   * printed before it shows a cuid. Asking staff to know which era a case is
+   * from before they can look it up would be a worse id than the one we
+   * replaced.
+   */
   async findAction(guildId: string, actionId: string): Promise<ModerationActionDTO | null> {
-    const row = await prisma.moderationAction.findFirst({ where: { id: actionId, guildId } });
+    const row = await prisma.moderationAction.findFirst({
+      where: {
+        guildId,
+        OR: [{ id: actionId }, { caseCode: { equals: actionId, mode: "insensitive" } }],
+      },
+    });
     return row === null ? null : mapAction(row);
   },
 };

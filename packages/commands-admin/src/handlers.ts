@@ -113,7 +113,7 @@ const warn: AdminHandler = async (ctx, deps) => {
     : "";
   return {
     ephemeral: false,
-    text: `Warned <@${target}>. (case ${result.value.id})${note}${renderEnforcement(result.value)}`,
+    text: `Warned <@${target}>. (case ${result.value.caseCode})${note}${renderEnforcement(result.value)}`,
   };
 };
 
@@ -133,7 +133,7 @@ const mute: AdminHandler = async (ctx, deps) => {
     ephemeral: false,
     text:
       `Muted <@${target}> across ${result.value.surfaces.join(" + ")} until ${result.value.expiresAt}. ` +
-      `(case ${result.value.id})${renderEnforcement(result.value)}`,
+      `(case ${result.value.caseCode})${renderEnforcement(result.value)}`,
   };
 };
 
@@ -151,7 +151,7 @@ const ban: AdminHandler = async (ctx, deps) => {
   if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
   return {
     ephemeral: false,
-    text: `Banned <@${target}>. (case ${result.value.id})${renderEnforcement(result.value)}`,
+    text: `Banned <@${target}>. (case ${result.value.caseCode})${renderEnforcement(result.value)}`,
   };
 };
 
@@ -178,7 +178,7 @@ const unmute: AdminHandler = async (ctx, deps) => {
   if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
   return {
     ephemeral: false,
-    text: `Unmuted <@${target}>. (case ${result.value.id})${renderEnforcement(result.value)}`,
+    text: `Unmuted <@${target}>. (case ${result.value.caseCode})${renderEnforcement(result.value)}`,
   };
 };
 
@@ -195,7 +195,7 @@ const unban: AdminHandler = async (ctx, deps) => {
   if (!result.ok) return { ephemeral: true, text: renderModError(result.error) };
   return {
     ephemeral: false,
-    text: `Unbanned <@${target}>. (case ${result.value.id})${renderEnforcement(result.value)}`,
+    text: `Unbanned <@${target}>. (case ${result.value.caseCode})${renderEnforcement(result.value)}`,
   };
 };
 
@@ -225,7 +225,7 @@ const kick: AdminHandler = async (ctx, deps) => {
 
   return {
     ephemeral: recorded.value.enforcement === "FAILED",
-    text: `Kicked <@${target}>. (case ${recorded.value.id})${renderEnforcement(recorded.value)}`,
+    text: `Kicked <@${target}>. (case ${recorded.value.caseCode})${renderEnforcement(recorded.value)}`,
   };
 };
 
@@ -429,7 +429,7 @@ const caseLookup: AdminHandler = async (ctx, deps) => {
   }
   return {
     ephemeral: true,
-    text: `Case ${result.value.id}:`,
+    text: `Case ${result.value.caseCode}:`,
     embed: modLogEmbed(result.value),
   };
 };

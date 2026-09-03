@@ -319,7 +319,7 @@ export function renderAuditPages(
         const target = r.targetDiscordId ? `<@${r.targetDiscordId}>` : "an unlinked member";
         const state = punishmentState(r, now);
         return field(
-          `Case ${r.id}`,
+          `Case ${r.caseCode}`,
           facts([
             {
               label: r.type,

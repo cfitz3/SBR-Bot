@@ -11,6 +11,7 @@ const NOW = new Date("2026-03-01T12:00:00.000Z");
 function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
   return {
     id: "act-1f3b",
+    caseCode: "CASE-DrJay-a1b2c3d4-3",
     guildId: "g1",
     type: "MUTE",
     actorDiscordId: "staff",
@@ -55,7 +56,7 @@ test("the card names the member, the staffer, the duration and the reason", () =
   assert.equal(fact(view, "Staff"), "<@staff>");
   assert.equal(fact(view, "Duration"), "1h");
   assert.equal(field(view, "Reason"), "spam");
-  assert.match(view.footer ?? "", /act-1f3b/);
+  assert.match(view.footer ?? "", /CASE-DrJay-a1b2c3d4-3/);
 });
 
 test("the card is dated by when the punishment happened, not by when it was sent", () => {
@@ -146,7 +147,7 @@ test("a permanent ban shows no duration or expiry line", () => {
   const view = modLogEmbed(action({ type: "BAN", durationSeconds: null, expiresAt: null }), NOW);
   assert.equal(fact(view, "Duration"), undefined);
   assert.equal(fact(view, "Expires"), undefined);
-  assert.equal(view.footer, "Case act-1f3b");
+  assert.equal(view.footer, "Case CASE-DrJay-a1b2c3d4-3");
 });
 
 test("an action on a member with no Discord account still renders", () => {

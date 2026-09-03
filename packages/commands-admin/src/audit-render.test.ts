@@ -15,6 +15,7 @@ const NOW = new Date("2026-03-10T12:00:00.000Z");
 function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
   return {
     id: "act-1",
+    caseCode: "CASE-target-a1b2c3d4-1",
     guildId: "g1",
     type: "WARN",
     actorDiscordId: "111111111111111111",
@@ -130,8 +131,11 @@ test("the listing labels its fields and puts the record in the value", () => {
   // The whole difference from the version this replaced: `BAN (expired) · 3
   // days ago` used to be the field *name*, which Discord renders in bold and
   // which gives the reader's eye nothing to anchor on.
-  const [page] = renderAuditPages([action({ id: "act-7", type: "KICK" })], { now: NOW });
-  assert.equal(page?.fields?.[0]?.name, "Case act-7");
+  const [page] = renderAuditPages(
+    [action({ id: "act-7", caseCode: "CASE-DrJay-a1b2c3d4-7", type: "KICK" })],
+    { now: NOW },
+  );
+  assert.equal(page?.fields?.[0]?.name, "Case CASE-DrJay-a1b2c3d4-7");
   const value = page?.fields?.[0]?.value ?? "";
   assert.match(value, /\*\*KICK\*\* <t:\d+:R>/);
   assert.match(value, /\*\*Member\*\* <@222222222222222222>/);

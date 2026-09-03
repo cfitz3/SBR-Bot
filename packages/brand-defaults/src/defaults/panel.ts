@@ -982,9 +982,11 @@ export const DEFAULT_PANEL = {
       UNBAN: "Lifts a ban.",
     },
 
-    lookupPlaceholder: "Search by name, IGN, or paste an id",
-    lookupAria: "Member to look up",
+    lookupPlaceholder: "Name, IGN, uuid, or a case id",
+    lookupAria: "Member or case to look up",
     lookupNoMatch: "No member matched. Pick one from the list, or paste their Discord user id.",
+    /** Shown when the term was not a member, so it was used to search the log. */
+    lookupSearching: "Searching cases for “{term}”.",
     lookupGo: "Look up",
     lookupClear: "Clear",
 
@@ -1009,6 +1011,7 @@ export const DEFAULT_PANEL = {
     colReason: "Reason",
     colWhen: "When",
     colAction: "Action",
+    colCase: "Case",
     colBy: "By",
     colEnds: "Ends",
     colSince: "Since",

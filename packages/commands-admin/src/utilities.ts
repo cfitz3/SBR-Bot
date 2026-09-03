@@ -74,7 +74,7 @@ export function renderNoteEmbed(action: ModerationActionDTO): EmbedView {
               : "an unlinked member",
           },
           { label: "By", value: `<@${action.actorDiscordId}>` },
-          { label: "Case", value: action.id },
+          { label: "Case", value: action.caseCode },
         ]),
       ),
     ],

@@ -14,6 +14,7 @@ const NOW = new Date("2026-03-01T12:00:00.000Z");
 function action(over: Partial<ModerationActionDTO> = {}): ModerationActionDTO {
   return {
     id: "a1",
+    caseCode: "CASE-target-a1b2c3d4-1",
     guildId: "g1",
     type: "MUTE",
     actorDiscordId: "staff",

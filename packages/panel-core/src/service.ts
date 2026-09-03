@@ -255,6 +255,8 @@ export interface RelayVM {
 
 export interface ModerationVM {
   readonly target: string;
+  /** The free-text term the case log was narrowed by, echoed back for the box. */
+  readonly search: string;
   readonly infractionCount: number;
   readonly infractions: readonly InfractionDTO[];
   /**
@@ -1015,12 +1017,27 @@ export class PanelService {
     session: PanelSession | null,
     guildId: string,
     targetDiscordId: string,
+    /**
+     * Free text: a case id, a username, or a uuid.
+     *
+     * Separate from `targetDiscordId` because it narrows a different thing.
+     * A target picks whose history to show, and this one finds a specific case
+     * within whatever is shown — including when staff arrive holding nothing
+     * but the id off a mod-log card.
+     */
+    search = "",
   ): Promise<PageResult<ModerationVM>> {
     const access = await authorize(session, guildId, "moderation", this.d.roles);
     if (!access.allowed) return this.denied(access, "moderation", guildId);
 
     const now = new Date();
-    const query: AuditQuery = { guildId, limit: 50, ...(targetDiscordId ? { targetDiscordId } : {}) };
+    const term = search.trim();
+    const query: AuditQuery = {
+      guildId,
+      limit: 50,
+      ...(targetDiscordId ? { targetDiscordId } : {}),
+      ...(term ? { term } : {}),
+    };
     // Only asked when somebody is named: with no target this would be a query
     // for the member whose id is the empty string, which is nobody.
     const targeted =
@@ -1055,6 +1072,7 @@ export class PanelService {
     const list = infractions !== null && infractions.ok ? infractions.value : [];
     const data: ModerationVM = {
       target: targetDiscordId,
+      search: term,
       infractionCount: list.length,
       infractions: list,
       recentInfractions: recent.ok ? recent.value : [],
