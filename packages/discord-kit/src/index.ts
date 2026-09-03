@@ -51,7 +51,26 @@ export {
   type StyleIssue,
   type StyleSeverity,
 } from "@sbr/embed-kit";
-export { toEmbed, toActionRow, replyOptions, type ReplyView, type DiscordReplyOptions } from "./render.js";
+export { toEmbed, toActionRow, MAX_ROWS_PER_MESSAGE } from "./render.js";
+export {
+  containerMessage,
+  replyOptions,
+  withoutEphemeral,
+  type ContainerMessage,
+  type ReplyView,
+  type DiscordReplyOptions,
+} from "./reply.js";
+export {
+  V2_FLAG,
+  V2_LIMITS,
+  toContainer,
+  toTextContainer,
+  headerContent,
+  fieldContent,
+  fieldBlocks,
+  footerContent,
+  timestampTag,
+} from "./render-v2.js";
 export { respond } from "./respond.js";
 export {
   fromDiscordJson,

@@ -23,6 +23,8 @@
 import {
   ActionRowBuilder,
   AttachmentBuilder,
+  ContainerBuilder,
+  FileBuilder,
   ChannelType,
   MessageFlags,
   ModalBuilder,
@@ -40,7 +42,7 @@ import {
 } from "discord.js";
 import { ticketConfigRepository, ticketRepository } from "@sbr/db";
 import { TICKET_NAMESPACE } from "@sbr/tickets";
-import { toActionRow, toEmbed, type ComponentRouter } from "@sbr/discord-kit";
+import { V2_FLAG, toActionRow, toContainer, toTextContainer, type ComponentRouter } from "@sbr/discord-kit";
 import type { Logger } from "@sbr/observability";
 import type { TicketCategoryDTO } from "@sbr/shared-types";
 import type {
@@ -258,21 +260,46 @@ export function ticketDiscordPort(client: Client, log: Logger): TicketDiscordPor
 /**
  * One outbound message, as discord.js wants it.
  *
+ * Components V2, like every other card the platform sends: the message *is*
+ * its containers, so the opening line, the cards, the controls and the
+ * transcript file all live inside them. `content` is not merely unused here —
+ * Discord rejects a V2 payload that carries it.
+ *
  * `allowedMentions` is always present and always explicit. Omitting it would
- * fall back to Discord's default, which parses everything in the content —
+ * fall back to Discord's default, which parses everything in the message —
  * which is the bug this shape exists to make impossible.
  */
 function toMessageOptions(message: OutboundMessage): {
-  content?: string;
-  embeds?: ReturnType<typeof toEmbed>[];
-  components?: ReturnType<typeof toActionRow>[];
+  components: ContainerBuilder[];
+  flags: number;
   files?: AttachmentBuilder[];
   allowedMentions: { users: string[]; roles: string[] };
 } {
+  const rows = message.components ?? [];
+  const cards = message.embeds ?? [];
+  const containers: ContainerBuilder[] = cards.map((embed, i) =>
+    toContainer(embed, i === cards.length - 1 ? rows : [], {
+      lead: i === 0 ? (message.content ?? null) : null,
+    }),
+  );
+  if (containers.length === 0) {
+    // A ticket message with no card is still a sentence somebody has to read,
+    // and V2 has no `content` to put it in.
+    const container = toTextContainer(message.content ?? "");
+    for (const row of rows) container.addActionRowComponents(toActionRow(row));
+    containers.push(container);
+  }
+
+  // Under V2 an attachment nothing points at is uploaded and invisible.
+  if (message.file !== undefined) {
+    containers[containers.length - 1]!.addFileComponents(
+      new FileBuilder().setURL(`attachment://${message.file.name}`),
+    );
+  }
+
   return {
-    ...(message.content === undefined ? {} : { content: message.content }),
-    ...(message.embeds?.length ? { embeds: message.embeds.map(toEmbed) } : {}),
-    ...(message.components?.length ? { components: message.components.map(toActionRow) } : {}),
+    components: containers,
+    flags: V2_FLAG,
     ...(message.file === undefined
       ? {}
       : {

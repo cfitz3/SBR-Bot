@@ -9,11 +9,9 @@
 import type { ActionRowView, ButtonView, EmbedView, SelectMenuView } from "@sbr/shared-types";
 import {
   ActionRowBuilder,
-  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle as DiscordButtonStyle,
   EmbedBuilder,
-  MessageFlags,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
   type MessageActionRowComponentBuilder,
@@ -35,7 +33,7 @@ import { VIEW_COLORS } from "@sbr/embed-kit";
  */
 const MAX_BUTTONS_PER_ROW = 5;
 const MAX_SELECT_OPTIONS = 25;
-const MAX_ROWS_PER_MESSAGE = 5;
+export const MAX_ROWS_PER_MESSAGE = 5;
 const MAX_BUTTON_LABEL = 80;
 const MAX_OPTION_LABEL = 100;
 const MAX_OPTION_DESCRIPTION = 100;
@@ -69,13 +67,6 @@ export function toEmbed(view: EmbedView): EmbedBuilder {
   if (view.title) embed.setTitle(view.title);
   if (view.description) embed.setDescription(view.description);
   if (view.url) embed.setURL(view.url);
-  if (view.author) {
-    embed.setAuthor({
-      name: clampText(view.author.name, MAX_AUTHOR_NAME),
-      ...(view.author.iconUrl ? { iconURL: view.author.iconUrl } : {}),
-      ...(view.author.url ? { url: view.author.url } : {}),
-    });
-  }
   if (view.thumbnailUrl) embed.setThumbnail(view.thumbnailUrl);
   if (view.imageUrl) embed.setImage(view.imageUrl);
   if (view.footer) embed.setFooter({ text: view.footer });
@@ -142,62 +133,4 @@ export function toActionRow(view: ActionRowView): ActionRowBuilder<MessageAction
   const row = new ActionRowBuilder<MessageActionRowComponentBuilder>();
   if (view.select) return row.addComponents(toSelect(view.select));
   return row.addComponents(...view.buttons.slice(0, MAX_BUTTONS_PER_ROW).map(toButton));
-}
-
-/** The transport-agnostic reply shape both command packages return. */
-export interface ReplyView {
-  readonly text: string;
-  readonly ephemeral: boolean;
-  readonly embed?: EmbedView;
-  readonly components?: readonly ActionRowView[];
-  readonly pages?: readonly EmbedView[];
-  /**
-   * An attachment rendered from text — a ticket transcript, today.
-   *
-   * Text rather than bytes because everything the platform attaches is
-   * generated here and now: a handler that wanted to forward arbitrary binary
-   * would be doing something this shape should not quietly allow.
-   */
-  readonly file?: { readonly name: string; readonly content: string };
-}
-
-export interface DiscordReplyOptions {
-  content?: string;
-  embeds?: EmbedBuilder[];
-  files?: AttachmentBuilder[];
-  components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
-  flags?: MessageFlags.Ephemeral;
-  allowedMentions?: { parse: [] };
-}
-
-/**
- * Render a reply for `interaction.reply()`.
- *
- * `text` is dropped when an embed carries the same information — repeating it
- * above the card reads as a duplicate. It is kept when there is no embed, which
- * is also the accessible fallback path.
- *
- * Nothing the platform renders needs to ping anyone: replies address the caller,
- * who is already looking at them. Suppressing mentions centrally means a handler
- * that interpolates a player-supplied IGN, guild name, or application answer
- * can't turn it into a notification, without every handler having to remember.
- */
-export function replyOptions(reply: ReplyView): DiscordReplyOptions {
-  const embedView = reply.embed ?? reply.pages?.[0];
-  const options: DiscordReplyOptions = { allowedMentions: { parse: [] } };
-  if (embedView) options.embeds = [toEmbed(embedView)];
-  else options.content = reply.text;
-  if (reply.components?.length) {
-    options.components = reply.components.slice(0, MAX_ROWS_PER_MESSAGE).map(toActionRow);
-  }
-  if (reply.file) {
-    options.files = [
-      new AttachmentBuilder(Buffer.from(reply.file.content, "utf8"), { name: reply.file.name }),
-    ];
-    // An attachment with no words above it reads as a mystery file. The text is
-    // kept even when an embed carried the same information.
-    options.content = reply.text;
-  }
-  if (reply.ephemeral) options.flags = MessageFlags.Ephemeral;
-  return options;
 }

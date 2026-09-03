@@ -2,7 +2,7 @@
 
 Every card this platform sends is an `EmbedView` — a small, transport-agnostic
 shape (`packages/shared-types/src/views.ts`) that a renderer returns and
-`@sbr/discord-kit` turns into a Discord embed. Until recently the only thing
+`@sbr/discord-kit` turns into a Discord message. Until recently the only thing
 deciding what one should *look* like was whoever wrote the renderer last, which
 is why the cards drifted: `/skills` grew a ragged inline row, `/audit` grew a
 paragraph nobody reads, and neither was visible in a diff.
@@ -34,6 +34,41 @@ carry a hex; they state a **tone** — `NEUTRAL`, `INFO`, `SUCCESS`, `WARNING`,
 `DANGER` — and the theme decides what each looks like. That indirection is what
 lets one edit restyle sixty cards, and it is why a specimen with an off-palette
 colour is a proposal to change the palette rather than a card to copy verbatim.
+
+## What Discord actually receives
+
+Every card the platform *sends* is a **Components V2** message: one container,
+carrying the header, the facts, the footer, the controls and any attachment.
+`EmbedView` did not change — handlers still return the same shape, and the
+gallery, the specimens and `checkEmbed` still work in embed terms — but
+`packages/discord-kit/src/render-v2.ts` is what turns that shape into a message,
+and `render.ts` is now the second renderer rather than the first.
+
+What the container spelling changes, in Operator's terms:
+
+| Embed | Container |
+|---|---|
+| the coloured left edge | the container's single accent, and the only colour in the message |
+| field boxes | a hairline between header, facts and footer — nothing else draws a box |
+| the author row | subtext (`-#`) above the heading |
+| an inline field | `**Label** value` on one line; a run of them is one text display |
+| the footer and the embed timestamp | one subtext line, joined with `" · "`, the age as `<t:…:R>` |
+| `content` above the card | the first line *inside* the card (`lead`) |
+
+Three consequences worth knowing before you touch a send site:
+
+- A V2 message may not carry `content` or `embeds` **at all**. Passing either,
+  even empty, is a rejected message rather than an ignored field.
+- An edit that drops `MessageFlags.IsComponentsV2` drops the body with it. Use
+  `withoutEphemeral()`, which clears only the ephemeral bit.
+- The caps are 40 components and 4000 characters per message, counted across
+  everything nested. `toContainer` spends them in reading order and stops
+  adding when they run out, so an over-long card loses its tail rather than
+  being rejected whole.
+
+Send a card with `replyOptions()` (answering an interaction) or
+`containerMessage()` (an announcement, a mod-log entry, a board the platform
+posts on its own initiative). Neither needs `toEmbed`.
 
 ## The rules
 
@@ -142,11 +177,13 @@ thing to re-run `learn` against when somebody asks why a card looks the way it d
 - The gallery renders **fixtures**. It proves a card is legal and in style for the
   data it was given; it does not prove the data is right.
 - `check` covers embeds. Buttons, modals and select menus have no style checker
-  yet.
+  yet, and the container renderer is checked in embed terms — the style rules
+  are about the view model, which is the same on both sides.
 
 ## See also
 
 - [`brand/README.md`](../brand/README.md) — the two-file model, and what a change costs.
 - [`design/embeds/README.md`](../design/embeds/README.md) — capturing a specimen.
 - `packages/discord-kit/src/style.ts` — the rules, as code.
+- `packages/discord-kit/src/render-v2.ts` — the view model as a container.
 - `packages/embed-gallery/src/fixtures.ts` — the data every card is drawn from.

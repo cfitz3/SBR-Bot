@@ -26,7 +26,7 @@ import {
   type Guild,
   type Role,
 } from "discord.js";
-import { toEmbed } from "@sbr/discord-kit";
+import { containerMessage } from "@sbr/discord-kit";
 import type { EmbedView } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import {
@@ -554,7 +554,10 @@ export class InternalApi {
     if (!channel || !channel.isTextBased()) return { ok: false, error: "CHANNEL_NOT_FOUND" };
 
     try {
-      await channel.send({ embeds: [toEmbed(view as EmbedView)], allowedMentions: { parse: [] } });
+      await channel.send({
+        ...containerMessage(view as EmbedView),
+        allowedMentions: { parse: [] },
+      });
       return { ok: true };
     } catch (error) {
       if (error instanceof DiscordAPIError) {

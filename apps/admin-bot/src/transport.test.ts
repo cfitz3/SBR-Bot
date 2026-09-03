@@ -5,6 +5,7 @@ import {
   FEATURE_SELECT_NAMESPACE,
 } from "@sbr/commands-admin";
 import { ComponentRouter } from "@sbr/discord-kit";
+import { MessageFlags } from "discord.js";
 import type { AdminContext } from "@sbr/commands-admin";
 import type { CommandArgs } from "@sbr/shared-types";
 import type { AdminApp } from "./composition.js";
@@ -146,7 +147,12 @@ test("the feature menu dispatches the command rather than writing the flag itsel
     { name: "feature-toggle", guildId: "g1", actorId: "staffer", set: "welcome:off" },
   ]);
   assert.ok(updated, "the card is replaced in place, not answered beside");
-  assert.equal("flags" in (updated as Record<string, unknown>), false, "update inherits visibility; naming it is rejected");
+  // The ephemeral bit is dropped — an update inherits the original message's
+  // visibility and naming it is rejected — but the V2 flag has to survive, or
+  // the edit describes a message shape Discord no longer recognises.
+  const updateFlags = (updated as { flags: number }).flags;
+  assert.equal(updateFlags & MessageFlags.Ephemeral, 0, "update inherits visibility");
+  assert.ok((updateFlags & MessageFlags.IsComponentsV2) !== 0, "the card is still a container");
 });
 
 test("/lockdown-lift is gone from the published payload, not merely inert", () => {
@@ -203,7 +209,9 @@ test("a lockdown button re-enters the dispatcher rather than writing on its own"
     },
   ]);
   assert.ok(updated, "the prompt is edited in place so the warning and the record are one message");
-  assert.equal((updated as { flags?: unknown }).flags, undefined, "update() rejects the ephemeral flag");
+  const liftFlags = (updated as { flags: number }).flags;
+  assert.equal(liftFlags & MessageFlags.Ephemeral, 0, "update() rejects the ephemeral flag");
+  assert.ok((liftFlags & MessageFlags.IsComponentsV2) !== 0, "the card is still a container");
 });
 
 test("a refusal comes back privately instead of editing the public prompt", async () => {
@@ -222,7 +230,9 @@ test("a refusal comes back privately instead of editing the public prompt", asyn
     async reply(payload: unknown) { replied = payload; },
     async update() { throw new Error("a denial must not rewrite the card everyone can see"); },
   } as never);
-  assert.match((replied as { content: string }).content, /OFFICER/);
+  // The refusal is a container like everything else, so the sentence is inside
+  // the message rather than beside it.
+  assert.match(JSON.stringify((replied as { components: unknown[] }).components), /OFFICER/);
 });
 
 test("the renamed note command is the one published, and the old name is gone", () => {

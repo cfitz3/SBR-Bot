@@ -36,7 +36,7 @@ import {
   PERM_NS,
   type HandlerDeps,
 } from "@sbr/commands-bridge";
-import { replyOptions, toActionRow, type ComponentRouter, type ReplyView } from "@sbr/discord-kit";
+import { replyOptions, withoutEphemeral, toActionRow, type ComponentRouter, type ReplyView } from "@sbr/discord-kit";
 import type { LFGActivity } from "@sbr/shared-types";
 
 /** The modal inputs. Ids rather than positions: an optional field may be absent. */
@@ -199,9 +199,8 @@ export async function handlePermModal(
  * `flags` is dropped because the deferral already decided ephemerality, and
  * `editReply` rejects the flag rather than ignoring it.
  */
-function edit(reply: ReplyView): Omit<ReturnType<typeof replyOptions>, "flags"> {
-  const { flags: _flags, ...rest } = replyOptions(reply);
-  return rest;
+function edit(reply: ReplyView): ReturnType<typeof replyOptions> {
+  return withoutEphemeral(replyOptions(reply));
 }
 
 // ── replies ──────────────────────────────────────────────────────────────────
@@ -218,17 +217,10 @@ async function show(interaction: MessageComponentInteraction, reply: ReplyView):
     await interaction.reply({ content: reply.text, flags: MessageFlags.Ephemeral }).catch(() => {});
     return;
   }
-  const options = replyOptions(reply);
   await interaction
-    .update({
-      // `update` keeps whatever it is not given, and the console always carries
-      // an embed — so without this the summary line of the *previous* card
-      // would sit above the new one.
-      content: options.content ?? "",
-      embeds: options.embeds ?? [],
-      components: options.components ?? [],
-      allowedMentions: { parse: [] },
-    })
+    // `update` keeps whatever it is not given, but under V2 the card *is* the
+    // message's components, so replacing them replaces the whole console.
+    .update(withoutEphemeral(replyOptions(reply)))
     .catch(() => {});
 }
 

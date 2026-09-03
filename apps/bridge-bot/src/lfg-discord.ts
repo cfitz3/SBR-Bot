@@ -23,7 +23,13 @@ import {
   type HandlerDeps,
   type LfgAnnouncer,
 } from "@sbr/commands-bridge";
-import { replyOptions, toEmbed, type ComponentRouter, type ReplyView } from "@sbr/discord-kit";
+import {
+  containerMessage,
+  replyOptions,
+  withoutEphemeral,
+  type ComponentRouter,
+  type ReplyView,
+} from "@sbr/discord-kit";
 import type { Logger } from "@sbr/observability";
 
 /** How the chosen classes ride in a customId. Mirrors `lfg-request.ts`. */
@@ -107,8 +113,9 @@ export function createLfgAnnouncer(client: Client, log: Logger): LfgAnnouncer {
       if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
       try {
         await channel.send({
-          content: text,
-          embeds: [toEmbed(embed)],
+          // The call-out line rides inside the card. V2 has no `content`, and
+          // the ping belongs above the party it is calling people to.
+          ...containerMessage(embed, { lead: text }),
           // Named rather than parsed: the card carries a member mention in its
           // headline, and `parse: ["roles"]` would also let a role slip in
           // through any field that happened to contain one.
@@ -133,15 +140,9 @@ export function createLfgAnnouncer(client: Client, log: Logger): LfgAnnouncer {
  * keeps whatever it is not given, which is why the embeds are cleared.
  */
 async function show(interaction: MessageComponentInteraction, reply: ReplyView): Promise<void> {
-  const options = replyOptions(reply);
-  await interaction
-    .update({
-      content: options.content ?? "",
-      embeds: options.embeds ?? [],
-      components: options.components ?? [],
-      allowedMentions: { parse: [] },
-    })
-    .catch(() => {});
+  // The whole message is the container, so an update replaces it outright —
+  // there is no stale embed or leftover line left behind to clear.
+  await interaction.update(withoutEphemeral(replyOptions(reply))).catch(() => {});
 }
 
 async function stale(interaction: MessageComponentInteraction): Promise<void> {

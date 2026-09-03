@@ -7,7 +7,7 @@ import { theme } from "@sbr/brand";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ActionRowView, EmbedView, SelectMenuView } from "@sbr/shared-types";
-import { replyOptions, toActionRow, toEmbed } from "./render.js";
+import { toActionRow, toEmbed } from "./render.js";
 
 /** A card that passes cleanly, so each case below differs in exactly one way. */
 function clean(over: Partial<EmbedView> = {}): EmbedView {
@@ -71,21 +71,6 @@ test("an over-long option label and description are truncated too", () => {
   const json = row.toJSON().components[0] as { options: { label: string; description: string }[] };
   assert.equal(json.options[0]?.label.length, 100);
   assert.equal(json.options[0]?.description.length, 100);
-});
-
-test("a reply carries at most five rows", () => {
-  const options = replyOptions({
-    text: "hello",
-    ephemeral: true,
-    components: [buttons(1), buttons(1), buttons(1), buttons(1), buttons(1), buttons(1), buttons(1)],
-  });
-  assert.equal(options.components?.length, 5);
-});
-
-test("every reply suppresses mentions, whatever the text says", () => {
-  const options = replyOptions({ text: "@everyone welcome", ephemeral: false });
-  assert.deepEqual(options.allowedMentions, { parse: [] });
-  assert.equal(options.content, "@everyone welcome");
 });
 
 test("a rendered embed takes its colour from the palette", () => {

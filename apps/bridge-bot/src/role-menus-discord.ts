@@ -10,7 +10,7 @@
  * a public "Ash took Red" per press would bury it within a day.
  */
 import { MessageFlags, type Client, type MessageComponentInteraction, type TextBasedChannel } from "discord.js";
-import { toActionRow, toEmbed, type ComponentRouter } from "@sbr/discord-kit";
+import { containerMessage, type ComponentRouter } from "@sbr/discord-kit";
 import type { ActionRowView, EmbedView } from "@sbr/shared-types";
 import type { Logger } from "@sbr/observability";
 import { ROLE_MENU_NAMESPACE, type RoleMenuGateway, type RoleMenuMessagePort } from "./role-menus.js";
@@ -30,8 +30,7 @@ export function roleMenuMessagePort(client: Client, log: Logger): RoleMenuMessag
 
   function payload(embed: EmbedView, rows: readonly ActionRowView[]) {
     return {
-      embeds: [toEmbed(embed)],
-      components: rows.map(toActionRow),
+      ...containerMessage(embed, { rows }),
       // A menu body is admin-typed text posted to a whole channel. Nothing in it
       // may ping: this is the one place an `@everyone` in a settings field would
       // reach the entire server.

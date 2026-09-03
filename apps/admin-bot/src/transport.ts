@@ -20,7 +20,14 @@ import {
   buildAdminRegistry,
   parseLockdownId,
 } from "@sbr/commands-admin";
-import { ComponentRouter, interactionArgs, replyOptions, respond, toSlashCommands } from "@sbr/discord-kit";
+import {
+  ComponentRouter,
+  interactionArgs,
+  replyOptions,
+  respond,
+  toSlashCommands,
+  withoutEphemeral,
+} from "@sbr/discord-kit";
 import { recordArgs } from "@sbr/shared-types";
 import { attachDiscordModObserver } from "./discord-mod-observer.js";
 import { attachMemberObserver } from "./member-observer.js";
@@ -161,9 +168,10 @@ export function attachLockdownButtons(components: ComponentRouter, app: AdminApp
       return;
     }
     // `interaction.update()` rejects the ephemeral flag outright, and this reply
-    // is public by construction, so drop it rather than pass it along.
-    const { flags: _public, ...update } = replyOptions(reply);
-    await interaction.update(update);
+    // is public by construction, so drop it rather than pass it along. The V2
+    // flag stays: without it the update is a message shape Discord no longer
+    // recognises, and it takes the card with it.
+    await interaction.update(withoutEphemeral(replyOptions(reply)));
   });
 }
 
@@ -203,8 +211,7 @@ export function attachFeatureMenu(components: ComponentRouter, app: AdminApp): v
     //
     // No ephemeral flag — an update inherits the original message's visibility,
     // and naming it again is the one thing discord.js rejects here.
-    const { flags: _ephemeral, ...update } = replyOptions({ ...reply, ephemeral: true });
-    await interaction.update(update);
+    await interaction.update(withoutEphemeral(replyOptions({ ...reply, ephemeral: true })));
   });
 }
 

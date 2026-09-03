@@ -6,7 +6,7 @@
  */
 import { installLifecycle } from "@sbr/observability";
 import { guildRepository } from "@sbr/db";
-import { toEmbed } from "@sbr/discord-kit";
+import { containerMessage } from "@sbr/discord-kit";
 import type { EmbedView } from "@sbr/shared-types";
 import { createAdminApp } from "./composition.js";
 import { startInternalApi } from "./internal-api.js";
@@ -75,8 +75,8 @@ async function main(): Promise<void> {
   };
   app.setOpsPoster(postOps);
 
-  // The moderation log. An embed rather than a line, rendered through the same
-  // `toEmbed` every other card in the platform goes through, so the house style
+  // The moderation log. A card rather than a line, rendered through the same
+  // container every other card in the platform goes through, so the house style
   // applies here too. Mentions are parsed off for a reason particular to this
   // channel: the card names the member it is about, and a mod log that pings
   // somebody every time they are warned is a mod log staff mute.
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     const channel = await client.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
     const sent = await channel
-      .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+      .send({ ...containerMessage(embed), allowedMentions: { parse: [] } })
       .catch(() => null);
     return sent !== null;
   };

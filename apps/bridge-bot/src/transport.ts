@@ -50,9 +50,10 @@ import {
   customId,
   interactionArgs,
   replyOptions,
+  withoutEphemeral,
   respond,
   toActionRow,
-  toEmbed,
+  containerMessage,
   toSlashCommands,
 } from "@sbr/discord-kit";
 import type { ReplyView } from "@sbr/discord-kit";
@@ -280,8 +281,7 @@ export function registerNetworthMenu(app: BridgeApp, components: ComponentRouter
     );
     // The ephemeral flag is dropped twice over: the defer above already set it,
     // and Discord types an edit as unable to carry it at all.
-    const { flags: _ephemeral, ...options } = replyOptions({ ...reply, ephemeral: false });
-    await interaction.editReply(options);
+    await interaction.editReply(withoutEphemeral(replyOptions(reply)));
   });
 }
 
@@ -313,8 +313,7 @@ export function registerHelpButton(app: BridgeApp, components: ComponentRouter):
  * so an edit that repeated the flag would be setting something it does not own.
  */
 function cardEdit(reply: ReplyView) {
-  const { flags: _decidedAtDeferral, ...body } = replyOptions(reply);
-  return body;
+  return withoutEphemeral(replyOptions(reply));
 }
 
 /** The one modal `/progression` opens: the target for the charted metric. */
@@ -413,15 +412,13 @@ export function registerMarketButtons(app: BridgeApp, components: ComponentRoute
     if (action === "l") {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const reply = await marketButtonReplies.listings(itemId, app.handlerDeps);
-      const { flags: _l, ...options } = replyOptions(reply);
-      await interaction.editReply(options);
+      await interaction.editReply(withoutEphemeral(replyOptions(reply)));
       return;
     }
 
     await interaction.deferUpdate();
     const reply = await marketButtonReplies.range(itemId, rawRange ?? "", app.handlerDeps);
-    const { flags: _r, ...options } = replyOptions(reply);
-    await interaction.editReply(options);
+    await interaction.editReply(withoutEphemeral(replyOptions(reply)));
   });
 }
 
@@ -852,9 +849,8 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
             // none of them is a ping: the message is redrawn on every RSVP and
             // would otherwise notify everybody on it each time.
             .send({
-              embeds: [toEmbed(embed)],
+              ...containerMessage(embed, { rows: components ?? [] }),
               allowedMentions: { parse: [] },
-              components: (components ?? []).map(toActionRow),
             })
             .catch(() => null);
           return message?.id ?? null;
@@ -869,9 +865,8 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
             // off a finished event, and an omitted `components` would leave
             // them there to be pressed.
             .edit({
-              embeds: [toEmbed(embed)],
+              ...containerMessage(embed, { rows: components ?? [] }),
               allowedMentions: { parse: [] },
-              components: (components ?? []).map(toActionRow),
             })
             .catch(() => null);
           return edited !== null;
@@ -945,7 +940,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
               // The rows are IGNs and mentions; none of them is a ping.
               // Notifying the top ten of four boards every Sunday is how a
               // digest channel becomes a muted one.
-              .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+              .send({ ...containerMessage(embed), allowedMentions: { parse: [] } })
               .catch(() => null);
             return message !== null;
           },
@@ -971,7 +966,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     const channel = await discord.channels.fetch(channelId).catch(() => null);
     if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
     const sent = await channel
-      .send({ embeds: [toEmbed(embed)], allowedMentions: { parse: [] } })
+      .send({ ...containerMessage(embed), allowedMentions: { parse: [] } })
       .catch(() => null);
     return sent !== null;
   });
@@ -986,7 +981,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
       const message = await (channel as SendableChannel)
         .send({
-          embeds: [toEmbed(embed)],
+          ...containerMessage(embed),
           // Only the member being congratulated is pingable. The label comes
           // from guild configuration, and a role or everyone mention typed into
           // one must not become a server-wide ping.
@@ -1010,7 +1005,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
       const message = await (channel as SendableChannel)
         .send({
-          embeds: [toEmbed(embed)],
+          ...containerMessage(embed),
           allowedMentions: mentionDiscordId === null ? { parse: [] } : { users: [mentionDiscordId] },
         })
         .catch(() => null);
@@ -1030,7 +1025,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
       if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
       const message = await (channel as SendableChannel)
         .send({
-          embeds: [toEmbed(embed)],
+          ...containerMessage(embed),
           // The one person being congratulated, and nobody else.
           allowedMentions: { users: [mentionDiscordId] },
         })
@@ -1056,7 +1051,7 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
         const channel = await discord.channels.fetch(channelId).catch(() => null);
         if (!channel || !channel.isTextBased() || !("send" in channel)) return;
         await (channel as SendableChannel).send({
-          embeds: [toEmbed(embed)],
+          ...containerMessage(embed),
           // The card names the author and links back to a message full of
           // mentions. None of it may ping: being reposted is not a reason to be
           // notified, and a quoted @everyone would be a second @everyone.
@@ -1169,7 +1164,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           : { parse: [] as never[], users: [request.mentionDiscordId] };
       const payload =
         request.mode === "EMBED"
-          ? { embeds: [toEmbed({ title: request.title, description: request.text, color: "SUCCESS" })], allowedMentions }
+          ? {
+              ...containerMessage({
+                title: request.title,
+                description: request.text,
+                color: "SUCCESS",
+              }),
+              allowedMentions,
+            }
           : { content: request.text, allowedMentions };
       const message = await (channel as SendableChannel).send(payload).catch(() => null);
       if (message === null) return false;
@@ -1207,10 +1209,14 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
           if (!channel || !channel.isTextBased() || !("send" in channel)) return false;
           const sent = await (channel as SendableChannel)
             .send({
-              ...(mentionDiscordIds.length === 0
-                ? {}
-                : { content: mentionDiscordIds.map((id) => `<@${id}>`).join(" ") }),
-              embeds: [toEmbed(embed)],
+              // The pings ride inside the card: V2 has no `content` to put them
+              // in, and they belong above the reminder they are about anyway.
+              ...containerMessage(embed, {
+                lead:
+                  mentionDiscordIds.length === 0
+                    ? null
+                    : mentionDiscordIds.map((id) => `<@${id}>`).join(" "),
+              }),
               // Only the members who said they were coming. The title is guild
               // configuration and must not be able to become an @everyone.
               allowedMentions: { parse: [], users: [...mentionDiscordIds] },
@@ -2153,10 +2159,11 @@ export async function startBridge(app: BridgeApp, opts: BridgeTransportOptions):
     // explicitly rather than parsed out of the text.
     await channel
       .send({
-        embeds: [toEmbed(renderJoinNoticeEmbed(view))],
-        ...(mention === null ? {} : { content: mention.text }),
+        ...containerMessage(renderJoinNoticeEmbed(view), {
+          ...(wanted ? { rows: [joinControls(view.ign)] } : {}),
+          lead: mention === null ? null : mention.text,
+        }),
         allowedMentions: mention === null ? { parse: [] } : { roles: mention.roleIds },
-        ...(wanted ? { components: [joinControls(view.ign)].map(toActionRow) } : {}),
       })
       .catch((e: unknown) => {
         app.log.warn("could not post screening report", { error: String(e) });
