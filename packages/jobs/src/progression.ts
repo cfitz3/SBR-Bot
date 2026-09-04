@@ -25,6 +25,8 @@ import {
   type SnapshotMilestoneMetric as SharedSnapshotMetric,
 } from "@sbr/shared-types";
 
+import { forEachLimit } from "./concurrency.js";
+
 export interface TrackedAccount {
   readonly minecraftAccountId: string;
   readonly uuid: string;
@@ -121,9 +123,32 @@ export interface ProfileRefreshDeps {
   batchSize?: number;
   /** Skip accounts read more recently than this. */
   minIntervalMs?: number;
+  /**
+   * How many accounts to have in the air at once.
+   *
+   * The cap above says how much of the budget a run may spend; this says how
+   * fast it may spend it. They are different questions, and conflating them is
+   * why a 25-account pass used to take most of a minute of pure waiting against
+   * an upstream that answers eight at a time without noticing.
+   *
+   * The Hypixel client is still the thing that enforces the actual limits — the
+   * shared rate gate, the per-player window, the 429 backoff — so raising this
+   * cannot exceed them; it can only stop us from being slower than they require.
+   */
+  concurrency?: number;
 }
 
 const DEFAULT_BATCH = 25;
+
+/**
+ * Accounts fetched at once, by default.
+ *
+ * Four, which is a quarter of a small guild's roster in flight and well inside
+ * anything Hypixel has ever objected to. `HYPIXEL_CONCURRENCY` moves it; the
+ * `hypixel` line in the throughput log is how you find out whether it should be
+ * moved, because a rate-limited count that is still zero means there is room.
+ */
+const DEFAULT_CONCURRENCY = 4;
 /**
  * Refresh cadence floor. Sits well above the one-hour per-player cap the policy
  * sets, so the schedule is inside the cap by construction rather than by the
@@ -136,7 +161,10 @@ const DEFAULT_MIN_INTERVAL_MS = 6 * 60 * 60_000;
  *
  * Accounts are ordered oldest-read-first, which spreads the guild across
  * successive runs on its own: whoever went longest without a refresh is always
- * next, so no explicit scheduling table is needed.
+ * next, so no explicit scheduling table is needed. That ordering decides which
+ * accounts are in the batch; within the batch they are fetched several at a
+ * time, because the order in which 25 already-chosen members are refreshed is
+ * not something anybody can observe.
  */
 export async function refreshProfiles(deps: ProfileRefreshDeps): Promise<number> {
   const now = (deps.now ?? (() => new Date()))();
@@ -152,12 +180,12 @@ export async function refreshProfiles(deps: ProfileRefreshDeps): Promise<number>
     .slice(0, deps.batchSize ?? DEFAULT_BATCH);
 
   let written = 0;
-  for (const account of due) {
+  const failures = await forEachLimit(due, deps.concurrency ?? DEFAULT_CONCURRENCY, async (account) => {
     const captured = await deps.capture(account).catch(() => null);
     // A member whose profile can't be read (API access off, or an upstream
     // blip) is skipped silently rather than failing the batch — one unreadable
     // account must not cost the other 124 their refresh.
-    if (captured === null) continue;
+    if (captured === null) return;
 
     const reading: ProfileReading = {
       minecraftAccountId: account.minecraftAccountId,
@@ -170,13 +198,21 @@ export async function refreshProfiles(deps: ProfileRefreshDeps): Promise<number>
       if (deps.onReading) await deps.onReading(reading);
     } catch (error) {
       // Without a handler this rethrows, which is `profile-refresh`'s
-      // behaviour and stays it.
+      // behaviour and stays it. It surfaces below rather than here, because a
+      // throw out of one of several concurrent passes has to be collected
+      // before it can be re-raised.
       if (deps.onAccountError === undefined) throw error;
       deps.onAccountError(account, error);
-      continue;
+      return;
     }
+    // Safe unsynchronised: every one of these resumes on the same event-loop
+    // turn as the await above, and JavaScript has no preemption between them.
     written += 1;
-  }
+  });
+
+  // The first is enough. A database that refused one snapshot refused them all,
+  // and the job runner's retry is what this is being handed to.
+  if (failures.length > 0) throw failures[0];
   return written;
 }
 

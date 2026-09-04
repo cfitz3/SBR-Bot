@@ -98,6 +98,31 @@ export interface AppConfig {
     readonly playerWindowMs: number;
   };
   /**
+   * How hard the platform is allowed to push the two APIs it does not own.
+   *
+   * Every number here is a ceiling on us rather than a promise from them: the
+   * Discord REST queue and the Hypixel rate gate still enforce the real limits,
+   * and raising any of these can only stop us from being slower than we have
+   * to be. They are configuration because the real limits are not published
+   * numbers — the `upstream throughput` log line reports calls, latency and
+   * rate-limit hits per surface, and these are what you move once you have read
+   * it.
+   */
+  readonly throughput: {
+    /**
+     * Discord REST requests per second, across every bucket. discord.js
+     * defaults to 50, which is the documented global limit and therefore the
+     * number at which the first 429 is somebody else's fault as much as ours.
+     */
+    readonly discordRps: number;
+    /** Retries per Discord request before the call is handed back as failed. */
+    readonly discordRetries: number;
+    /** Hypixel reads in flight at once inside one job. */
+    readonly hypixelConcurrency: number;
+    /** BullMQ jobs one worker process runs at once. */
+    readonly workerConcurrency: number;
+  };
+  /**
    * SkyKings — the third-party scammer database consulted when screening join
    * requests. Optional: without it screening still runs and still records, it
    * just reports every applicant as unchecked rather than cleared.
@@ -259,6 +284,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     internalApi: internalApiConfig(v),
     hypixel: hypixelConfig(v),
+    throughput: {
+      discordRps: v.int("DISCORD_RPS", 50),
+      discordRetries: v.int("DISCORD_RETRIES", 3),
+      hypixelConcurrency: v.int("HYPIXEL_CONCURRENCY", 4),
+      workerConcurrency: v.int("WORKER_CONCURRENCY", 8),
+    },
     skykings: { apiKey: v.optionalString("SKYKINGS_API_KEY") },
     ops: {
       alertChannelId: v.optionalString("OPS_ALERT_CHANNEL_ID"),

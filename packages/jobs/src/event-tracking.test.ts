@@ -124,8 +124,11 @@ describe("trackEvents", () => {
     });
 
     assert.equal(await trackEvents(h.deps), 4);
+    // Sorted, because participants are read several at a time and the order two
+    // members' score rows land in is not something the board can observe. Each
+    // member's own metrics stay in order, which is the part that is a promise.
     assert.deepEqual(
-      h.scores.map((s) => `${s.uuid}:${s.metric}:${s.value}`),
+      h.scores.map((s) => `${s.uuid}:${s.metric}:${s.value}`).sort(),
       ["uuid-1:catacombsLevel:40", "uuid-1:networth:1000", "uuid-2:catacombsLevel:40", "uuid-2:networth:1000"],
     );
   });

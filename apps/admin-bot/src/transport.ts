@@ -243,7 +243,33 @@ export async function startAdminGateway(
       GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildModeration,
     ],
+    // Discord's global ceiling is 50 requests a second and discord.js queues to
+    // it by default; naming it here is what makes it configurable, which is the
+    // point — `DISCORD_RPS` is how a fleet that is being rate-limited backs off,
+    // and how one that never is stops queueing behind a limit it is nowhere
+    // near. Retries are the library's own 429/5xx handling, and they are why a
+    // rate limit is counted apart from a failure below: a retried 429 is a call
+    // that succeeded slowly, not one that failed.
+    rest: {
+      globalRequestsPerSecond: app.config.throughput.discordRps,
+      retries: app.config.throughput.discordRetries,
+    },
   });
+
+  // Every 429 discord.js absorbs, on the record. It logs at warn rather than
+  // error because the library has already handled it — the number is only
+  // interesting as a trend, and a trend that stays at zero is permission to
+  // raise `DISCORD_RPS`.
+  client.rest.on("rateLimited", (info) => {
+    app.meter.rateLimited("discord");
+    app.log.warn("discord rate limit", {
+      route: info.route,
+      method: info.method,
+      timeToReset: info.timeToReset,
+      global: info.global,
+    });
+  });
+
   const handle = createInteractionHandler(app);
   const complete = createAutocompleteHandler(app);
   // Buttons whose state lives in the customId, so they survive a restart

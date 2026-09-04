@@ -18,6 +18,8 @@
  */
 import { diffGrants, resolveDesiredRoles, type AutoRolePolicy, type GrantRow, type RoleMemberFacts } from "@sbr/roles";
 
+import { forEachLimit } from "./concurrency.js";
+
 /** One member as the pass needs them: the facts, and what they hold today. */
 export interface RoleMemberSnapshot {
   readonly facts: RoleMemberFacts;
@@ -75,6 +77,8 @@ export interface RoleSyncDeps extends MemberSyncDeps {
   listMemberIds(guildId: string): Promise<readonly string[]>;
   /** Take up to `limit` ids *out* of the dirty set. */
   drainDirty(guildId: string, limit: number): Promise<readonly string[]>;
+  /** Guilds reconciled at once. Defaults to `GUILD_CONCURRENCY`. */
+  guildConcurrency?: number;
 }
 
 /**
@@ -85,6 +89,21 @@ export interface RoleSyncDeps extends MemberSyncDeps {
  * set and the next pass takes the next batch.
  */
 export const MAX_MEMBERS_PER_PASS = 200;
+
+/**
+ * How many guilds one pass reconciles at the same time.
+ *
+ * Role rate limits are per guild, so two guilds are two independent budgets and
+ * doing them one after the other buys nothing at all — it only means the last
+ * guild in the list waits for every guild before it. Members *within* a guild
+ * stay strictly serial, which is where the budget actually is.
+ *
+ * Four rather than unbounded because the shared costs are real even when the
+ * Discord ones are not: each guild's pass opens database reads and a loopback
+ * call to the admin bot, and this runs in the bulk lane alongside three other
+ * jobs.
+ */
+export const GUILD_CONCURRENCY = 4;
 
 /** Every write is attributed, so an audit log entry says which rule did it. */
 const REASON = "Automatic role rule";
@@ -100,14 +119,14 @@ export async function syncRoles(deps: RoleSyncDeps): Promise<number> {
   }
 
   let changed = 0;
-  for (const guildId of guilds) {
+  await forEachLimit(guilds, deps.guildConcurrency ?? GUILD_CONCURRENCY, async (guildId) => {
     try {
       changed += await syncGuild(deps, guildId);
     } catch (error) {
       // One guild's misconfiguration is not the rest of the platform's problem.
       deps.onError(`guild ${guildId}`, error);
     }
-  }
+  });
   return changed;
 }
 

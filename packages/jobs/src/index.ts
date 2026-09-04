@@ -33,6 +33,7 @@ export {
   defineXpAggregateJob,
 } from "./jobs.js";
 export {
+  GUILD_CONCURRENCY,
   MAX_MEMBERS_PER_PASS,
   syncOneMember,
   syncRoles,
@@ -41,15 +42,25 @@ export {
   type RoleMemberSnapshot,
   type RoleSyncDeps,
 } from "./role-sync.js";
-export { createGuildRankProbe, type GuildLookup, type ProbeGuild } from "./role-gate.js";
+export {
+  createGuildRankProbe,
+  type GuildLookup,
+  type GuildRankProbe,
+  type ProbeGuild,
+} from "./role-gate.js";
 export {
   NUDGE_BURST,
+  NUDGE_CONCURRENCY,
+  NUDGE_DEFAULTS,
   NUDGE_MAX_PENDING,
   NUDGE_REFILL_MS,
   createRoleNudgeQueue,
+  resolveNudgeTuning,
   type RoleNudgeQueue,
   type RoleNudgeQueueDeps,
+  type RoleNudgeTuning,
 } from "./role-nudge.js";
+export { forEachLimit, mapLimit, type Settled } from "./concurrency.js";
 export {
   blendEstimate,
   ingestEndedAuctions,

@@ -15,7 +15,14 @@ import {
 } from "@sbr/progression";
 import { err, ok, type ProgressionService } from "@sbr/shared-types";
 import { ProfileNetworthCalculator } from "skyhelper-networth";
-import { createLogger, HealthRegistry, pingCheck, type Logger } from "@sbr/observability";
+import {
+  createCallMeter,
+  createLogger,
+  HealthRegistry,
+  installMeterLog,
+  pingCheck,
+  type Logger,
+} from "@sbr/observability";
 import {
   closeRedis,
   createRedisAdapters,
@@ -55,8 +62,19 @@ export async function createWorkerContext(): Promise<WorkerContext> {
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis, { playerWindowMs: config.hypixel.playerWindowMs });
 
+  /**
+   * Counts and latencies for the two APIs we do not own.
+   *
+   * One per process, shared by everything that talks upstream, and reported once
+   * a minute as `upstream throughput`. It exists to answer one question — is
+   * there room to push harder — with a number instead of an opinion.
+   */
+  const meter = createCallMeter();
+  installMeterLog(meter, log);
+
   const hypixel = new HypixelClient({
     ...(config.hypixel.apiKey ? { apiKey: config.hypixel.apiKey } : {}),
+    meter,
     cache: adapters.hypixelCache,
     // The self-imposed per-player floor. Absent in production mode, where the
     // cache TTL is the only floor and the client falls back to `unlimitedPlayers`.

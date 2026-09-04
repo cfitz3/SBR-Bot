@@ -48,6 +48,7 @@ import {
   defineRoleSyncJob,
   defineRosterSyncJob,
   createRoleNudgeQueue,
+  resolveNudgeTuning,
   syncOneMember,
   defineTicketSweepJob,
   defineXpAggregateJob,
@@ -193,7 +194,10 @@ function roleMemberSyncDeps(ctx: WorkerContext): MemberSyncDeps {
  */
 export function buildRoleNudgeQueue(ctx: WorkerContext): RoleNudgeQueue {
   const deps = roleMemberSyncDeps(ctx);
+  const tuning = resolveNudgeTuning(process.env);
+  ctx.log.info("role nudge queue ready", { ...tuning });
   return createRoleNudgeQueue({
+    tuning,
     async sync(guildId, discordId) {
       const changed = await syncOneMember(deps, guildId, discordId);
       if (changed) ctx.log.info("roles applied on nudge", { guildId, discordId });
@@ -339,6 +343,7 @@ export function buildJobDefinitions(ctx: WorkerContext): Map<string, JobDefiniti
         listTracked: () => snapshotJobRepository.listTracked(),
         capture: captureProfile,
         write: (row) => snapshotJobRepository.write(row),
+        concurrency: ctx.config.throughput.hypixelConcurrency,
       }),
     ),
     lockKey: keys.lockJob("snapshot"),

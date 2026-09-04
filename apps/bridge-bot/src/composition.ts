@@ -89,7 +89,16 @@ import {
   type UsageSink,
 } from "@sbr/commands-bridge";
 import { BridgeService } from "@sbr/bridge";
-import { createLogger, curateStatus, HealthRegistry, pingCheck, type Logger } from "@sbr/observability";
+import {
+  createCallMeter,
+  createLogger,
+  curateStatus,
+  HealthRegistry,
+  installMeterLog,
+  pingCheck,
+  type CallMeter,
+  type Logger,
+} from "@sbr/observability";
 import {
   closeRedis,
   createRedisAdapters,
@@ -135,6 +144,8 @@ import type { WelcomeProfile } from "./welcome.js";
 export interface BridgeApp {
   readonly config: AppConfig;
   readonly log: Logger;
+  /** Upstream call counts, latencies and rate-limit hits. See `createCallMeter`. */
+  readonly meter: CallMeter;
   readonly dispatcher: CommandDispatcher;
   /**
    * The same services the slash handlers get. Exposed because persistent
@@ -413,8 +424,19 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   const redis = await getRedis();
   const adapters = createRedisAdapters(redis, { playerWindowMs: config.hypixel.playerWindowMs });
 
+  /**
+   * Counts and latencies for the two APIs we do not own.
+   *
+   * One per process, shared by everything that talks upstream, and reported once
+   * a minute as `upstream throughput`. It exists to answer one question — is
+   * there room to push harder — with a number instead of an opinion.
+   */
+  const meter = createCallMeter();
+  installMeterLog(meter, log);
+
   const hypixel = new HypixelClient({
     ...(config.hypixel.apiKey ? { apiKey: config.hypixel.apiKey } : {}),
+    meter,
     cache: adapters.hypixelCache,
     // The self-imposed per-player floor. Absent in production mode, where the
     // cache TTL is the only floor and the client falls back to `unlimitedPlayers`.
@@ -1060,6 +1082,7 @@ export async function createBridgeApp(): Promise<BridgeApp> {
   return {
     config,
     log,
+    meter,
     dispatcher,
     handlerDeps,
     milestones: milestoneAnnouncementRepository,

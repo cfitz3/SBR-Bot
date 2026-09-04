@@ -18,6 +18,15 @@ export {
   type LogShipper,
   type LogShipperOptions,
 } from "./shipper.js";
+export {
+  createCallMeter,
+  installMeterLog,
+  METER_LOG_INTERVAL_MS,
+  type CallMeter,
+  type CallStats,
+  type CallSurface,
+  type MeterLogOptions,
+} from "./meter.js";
 export { HealthRegistry, pingCheck } from "./health.js";
 export { curateStatus, MEMBER_STATUS_ROWS } from "./status.js";
 export {

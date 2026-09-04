@@ -30,7 +30,11 @@ async function main(): Promise<void> {
       }
       return ctx.runner.run(def);
     },
-    { connection, concurrency: 4 },
+    // Jobs are almost entirely waiting — on Postgres, on Redis, on Hypixel — so
+    // this is a queue depth rather than a core count. `WORKER_CONCURRENCY`
+    // moves it; the lane priorities in `SCHEDULE` are what keep a bulk sweep
+    // from crowding out a live one when it is raised.
+    { connection, concurrency: ctx.config.throughput.workerConcurrency },
   );
   worker.on("failed", (job, err) => ctx.log.error("bullmq job failed", { name: job?.name, error: err.message }));
 

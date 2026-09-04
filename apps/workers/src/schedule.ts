@@ -76,7 +76,9 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // ── bulk lane: everything that can wait for a token ──
   // Snapshots run twice an hour and take the oldest-captured slice each time,
   // which spreads ~125 members across the documented 6–12h window on its own.
-  { name: "profile-refresh", repeat: { pattern: "7 * * * *" }, priority: LANE.bulk },
+  // "Twice an hour" is what the comment always said and what the batch size was
+  // chosen against; the pattern used to say once.
+  { name: "profile-refresh", repeat: { pattern: "7,37 * * * *" }, priority: LANE.bulk },
   // Off-minute /10: 8,18,28,…,58. Bulk because what it actually spends is the
   // Hypixel budget, and ten minutes is fine for a job whose real cadence is the
   // per-event poll interval — the tick only decides how promptly an event whose
@@ -90,20 +92,31 @@ export const SCHEDULE: readonly ScheduleEntry[] = [
   // only reports crossings, so without this a new threshold would stay empty
   // for everyone already past it — forever, not just until they next play.
   { name: "milestone-backfill", repeat: { pattern: "41 4 * * *" }, priority: LANE.bulk },
-  { name: "guild-roster-sync", repeat: { pattern: "9,39 * * * *" }, priority: LANE.bulk },
+  // Four times an hour rather than twice. One roster read serves the whole
+  // guild — it is a single `guild?id=` call against a shared cache entry, not a
+  // call per member — so the cost of halving the staleness is one extra upstream
+  // request every half hour, and the thing it makes fresher is who is in the
+  // guild and at what rank, which is what every auto-role decision reads.
+  { name: "guild-roster-sync", repeat: { pattern: "9,24,39,54 * * * *" }, priority: LANE.bulk },
   // Auto-roles. Every fifteen minutes is the promptness floor for somebody who
   // just linked their account; the pass itself is a no-op for any guild whose
   // dirty set is empty, which is most guilds most of the time. Offset from the
   // roster jobs above, whose writes are what usually make members dirty.
   { name: "role-sync", repeat: { pattern: "11-59/15 * * * *" }, priority: LANE.bulk },
-  // The in-game roster cache, on the 6-hour cadence its TTL is written against —
-  // offset from midnight so a scan lands shortly *before* the cache goes stale
-  // rather than at the same instant as every other daily job on the box.
-  { name: "guild-scan", repeat: { pattern: "26 1,7,13,19 * * *" }, priority: LANE.bulk },
-  // The Discord roster, on the 2-hour cadence the member page is written
-  // against. Odd hours and :19 keep it away from the guild scan above and from
-  // the roster sync's :09/:39 — three jobs that all walk every guild.
-  { name: "discord-member-sync", repeat: { pattern: "19 1,3,5,7,9,11,13,15,17,19,21,23 * * *" }, priority: LANE.bulk },
+  // The in-game roster cache. Every three hours rather than every six: the scan
+  // is one guild read plus name resolution for members we have never seen, so
+  // for a settled guild it is nearly free, and what it decides — who counts as a
+  // guild member at all — is worth being at most three hours behind. Offset from
+  // midnight so a scan lands shortly *before* the cache goes stale rather than
+  // at the same instant as every other daily job on the box.
+  { name: "guild-scan", repeat: { pattern: "26 1,4,7,10,13,16,19,22 * * *" }, priority: LANE.bulk },
+  // The Discord roster, hourly rather than every two hours. It reads members
+  // from the gateway cache through the admin bot's loopback API and writes what
+  // changed, so its cost is a database pass rather than an upstream one, and the
+  // Monitor page's "who left" answer is only as good as its last run. :19 keeps
+  // it away from the guild scan above and from the roster sync's quarter-hours
+  // — three jobs that all walk every guild.
+  { name: "discord-member-sync", repeat: { pattern: "19 * * * *" }, priority: LANE.bulk },
   { name: "analytics-rollup", repeat: { pattern: "13 * * * *" }, priority: LANE.bulk },
   // Every three hours rather than nightly: a member who asks for their standing
   // should not be told about the person they were yesterday. Not more often than

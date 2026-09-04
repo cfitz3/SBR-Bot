@@ -54,6 +54,9 @@ import {
   HealthRegistry,
   pingCheck,
   type Logger,
+  createCallMeter,
+  installMeterLog,
+  type CallMeter,
 } from "@sbr/observability";
 import { closeRedis, createRedisAdapters, getRedis, pingRedis, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
@@ -69,6 +72,8 @@ const INSTANCE_ID = randomUUID().slice(0, 8);
 export interface AdminApp {
   readonly config: AppConfig;
   readonly log: Logger;
+  /** Upstream call counts, latencies and rate-limit hits. See `createCallMeter`. */
+  readonly meter: CallMeter;
   readonly dispatcher: AdminDispatcher;
   /**
    * Handed the gateway client once it is ready, so `/kick`, `/purge` and
@@ -363,8 +368,19 @@ export async function createAdminApp(): Promise<AdminApp> {
   // Staff commands reach beyond moderation — `/set-channel` and `/feature-toggle`
   // write guild config, `/accept-member` touches community, and every invocation
   // is captured for the audit surface.
+  /**
+   * Counts and latencies for the two APIs we do not own.
+   *
+   * One per process, shared by everything that talks upstream, and reported once
+   * a minute as `upstream throughput`. It exists to answer one question — is
+   * there room to push harder — with a number instead of an opinion.
+   */
+  const meter = createCallMeter();
+  installMeterLog(meter, log);
+
   const hypixel = new HypixelClient({
     ...(config.hypixel.apiKey ? { apiKey: config.hypixel.apiKey } : {}),
+    meter,
     cache: adapters.hypixelCache,
     // The self-imposed per-player floor. Absent in production mode, where the
     // cache TTL is the only floor and the client falls back to `unlimitedPlayers`.
@@ -569,6 +585,7 @@ export async function createAdminApp(): Promise<AdminApp> {
   return {
     config,
     log,
+    meter,
     dispatcher,
     effects,
     raidGate,

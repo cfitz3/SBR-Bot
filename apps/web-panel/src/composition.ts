@@ -48,7 +48,7 @@ import {
 import type { EmbedView } from "@sbr/shared-types";
 import { PANEL_ACCESS_FLOOR, PanelMutations, PanelService, type ConfigAuditSink, type PanelSession } from "@sbr/panel-core";
 import { XpService } from "@sbr/xp";
-import { createLogger, type Logger } from "@sbr/observability";
+import { createCallMeter, createLogger, installMeterLog, type Logger } from "@sbr/observability";
 import { createRedisAdapters, getRedis, RUNNABLE_JOBS, startHeartbeat } from "@sbr/redis";
 import { randomUUID } from "node:crypto";
 import { createRolesInsight } from "./roles-insight.js";
@@ -287,8 +287,19 @@ export async function createPanelApp(): Promise<PanelApp> {
    * same rate gate — two clients would each hold their own budget against a
    * per-key limit that is not divisible.
    */
+  /**
+   * Counts and latencies for the two APIs we do not own.
+   *
+   * One per process, shared by everything that talks upstream, and reported once
+   * a minute as `upstream throughput`. It exists to answer one question — is
+   * there room to push harder — with a number instead of an opinion.
+   */
+  const meter = createCallMeter();
+  installMeterLog(meter, log);
+
   const hypixel = new HypixelClient({
     ...(config.hypixel.apiKey ? { apiKey: config.hypixel.apiKey } : {}),
+    meter,
     cache: adapters.hypixelCache,
     // The self-imposed per-player floor. Absent in production mode, where the
     // cache TTL is the only floor and the client falls back to `unlimitedPlayers`.

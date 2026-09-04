@@ -18,7 +18,7 @@ import {
   type HypixelSocialLookup,
   type HypixelSocialResult,
 } from "@sbr/shared-types";
-import type { Logger } from "@sbr/observability";
+import type { CallMeter, Logger } from "@sbr/observability";
 import { InMemoryHypixelCache, InMemoryRateGate } from "./memory.js";
 import { fetchHttp } from "./http.js";
 import { decodeItemBytes } from "./nbt.js";
@@ -127,6 +127,16 @@ export interface HypixelClientOptions {
   readonly sleep?: Sleeper;
   readonly maxRetries?: number;
   readonly playerTtlMs?: number;
+  /**
+   * Where to record how long upstream took and how often it said 429.
+   *
+   * Optional because a unit test does not care, and because the numbers are for
+   * a human deciding whether a concurrency knob has room to move. Note that a
+   * 429 is counted apart from a failure: a rate limit that the retry recovered
+   * from is a successful call that cost extra time, and it is the number that
+   * moves first when a knob is turned too far.
+   */
+  readonly meter?: CallMeter;
 }
 
 /**
@@ -243,6 +253,7 @@ export class HypixelClient implements HypixelSocialLookup {
    * for exactly as long as the TTLs held.
    */
   private upstream: HypixelObservation | null = null;
+  private readonly meter: CallMeter | undefined;
 
   constructor(opts: HypixelClientOptions) {
     this.apiKey = opts.apiKey;
@@ -252,6 +263,7 @@ export class HypixelClient implements HypixelSocialLookup {
     this.playerLimiter = opts.playerLimiter ?? unlimitedPlayers;
     this.log = opts.logger.child({ service: "hypixel" });
     this.sleep = opts.sleep ?? realSleep;
+    this.meter = opts.meter;
     this.maxRetries = opts.maxRetries ?? 3;
     this.playerTtlMs = opts.playerTtlMs ?? TTL.player;
   }
@@ -329,9 +341,11 @@ export class HypixelClient implements HypixelSocialLookup {
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       let res;
+      const startedAt = Date.now();
       try {
         res = await this.http.get(req.url, headers);
       } catch (error) {
+        this.meter?.record("hypixel", Date.now() - startedAt, { failed: true });
         if (attempt < this.maxRetries) {
           await this.sleep(backoffMs(attempt));
           continue;
@@ -345,6 +359,10 @@ export class HypixelClient implements HypixelSocialLookup {
         );
       }
 
+      this.meter?.record("hypixel", Date.now() - startedAt, {
+        failed: res.status >= 400 && res.status !== 429,
+        rateLimited: res.status === 429,
+      });
       this.rateGate.observe(res.headers, res.status);
       // Anything with a status line means Hypixel is reachable; whether the
       // answer was one we wanted is decided per status below.
@@ -383,6 +401,33 @@ export class HypixelClient implements HypixelSocialLookup {
     return hypixelFailure("RATE_LIMITED");
   }
 
+  /**
+   * One HTTP call, on the record.
+   *
+   * Mojang is a separate surface from Hypixel because it has a separate budget
+   * and separate outages, and averaging the two would hide whichever one was
+   * healthy. It does not go through `cached()` — name lookups are resolved in
+   * batches and are not worth a Hypixel-shaped request path — so the timing has
+   * to be taken here rather than in `fetch`.
+   */
+  private async timed(
+    surface: string,
+    url: string,
+  ): Promise<Awaited<ReturnType<HttpFetcher["get"]>>> {
+    const startedAt = Date.now();
+    try {
+      const res = await this.http.get(url);
+      this.meter?.record(surface, Date.now() - startedAt, {
+        failed: res.status >= 400 && res.status !== 429,
+        rateLimited: res.status === 429,
+      });
+      return res;
+    } catch (error) {
+      this.meter?.record(surface, Date.now() - startedAt, { failed: true });
+      throw error;
+    }
+  }
+
   private unavailable(req: CachedRequest<unknown>, detail: string): never {
     throw new HypixelUnavailableError(`Hypixel request failed for ${req.label} (${detail})`);
   }
@@ -391,7 +436,7 @@ export class HypixelClient implements HypixelSocialLookup {
 
   /** Resolve an IGN to a (undashed) UUID via Mojang. Returns null if the name doesn't exist. */
   async resolveUuid(ign: string): Promise<{ uuid: string; name: string } | null> {
-    const res = await this.http.get(MOJANG_PROFILE_URL + encodeURIComponent(ign));
+    const res = await this.timed("mojang", MOJANG_PROFILE_URL + encodeURIComponent(ign));
     if (res.status === 200) {
       const profile = res.json as RawMojangProfile;
       if (profile.id) return { uuid: profile.id, name: profile.name ?? ign };
@@ -412,7 +457,7 @@ export class HypixelClient implements HypixelSocialLookup {
    * two would otherwise be indistinguishable, and the second is written down.
    */
   async resolveIgn(uuid: string): Promise<string | null> {
-    const res = await this.http.get(MOJANG_SESSION_URL + encodeURIComponent(uuid));
+    const res = await this.timed("mojang", MOJANG_SESSION_URL + encodeURIComponent(uuid));
     if (res.status === 200) {
       const profile = res.json as RawMojangProfile;
       return profile.name ?? null;
