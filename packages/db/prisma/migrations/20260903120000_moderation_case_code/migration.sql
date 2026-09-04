@@ -3,8 +3,14 @@
 -- Additive. `id` remains the primary key and every existing reference to it
 -- keeps resolving; this adds the name staff actually use alongside it.
 
-ALTER TABLE "ModerationAction" ADD COLUMN "caseCode" TEXT;
-ALTER TABLE "ModerationAction" ADD COLUMN "caseNumber" INTEGER NOT NULL DEFAULT 0;
+-- Written to be re-runnable. The first release of this migration failed at the
+-- unique index below, and Postgres had already committed the columns and the
+-- backfill by then, so the recovery path is to apply the whole file again over
+-- a half-finished table rather than to hand-patch it. Every step here is
+-- therefore either guarded or idempotent: the UPDATE recomputes every row from
+-- scratch and does not read what it is overwriting.
+ALTER TABLE "ModerationAction" ADD COLUMN IF NOT EXISTS "caseCode" TEXT;
+ALTER TABLE "ModerationAction" ADD COLUMN IF NOT EXISTS "caseNumber" INTEGER NOT NULL DEFAULT 0;
 
 -- Backfill, in the order the cases were issued, so somebody's second case is
 -- the second one they got rather than whichever row the planner reached first.
@@ -73,5 +79,5 @@ WHERE a."id" = n."id";
 -- Uniqueness is what makes allocation safe: two staff punishing the same person
 -- in the same second both compute the same next number, and the loser takes the
 -- next one rather than writing a duplicate id.
-CREATE UNIQUE INDEX "ModerationAction_guildId_caseCode_key" ON "ModerationAction"("guildId", "caseCode");
-CREATE INDEX "ModerationAction_guildId_targetDiscordId_caseNumber_idx" ON "ModerationAction"("guildId", "targetDiscordId", "caseNumber");
+CREATE UNIQUE INDEX IF NOT EXISTS "ModerationAction_guildId_caseCode_key" ON "ModerationAction"("guildId", "caseCode");
+CREATE INDEX IF NOT EXISTS "ModerationAction_guildId_targetDiscordId_caseNumber_idx" ON "ModerationAction"("guildId", "targetDiscordId", "caseNumber");
