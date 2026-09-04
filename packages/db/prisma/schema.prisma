@@ -756,6 +756,9 @@ model Infraction {
   @@index([guildId, targetDiscordId, createdAt])
   @@index([guildId, type])
   @@index([guildId, status])
+  // The guild-wide recent list on the Moderation page: newest first, no other
+  // filter. Without this the sort is a scan of every infraction ever recorded.
+  @@index([guildId, createdAt])
 }
 
 model ModerationAction {
@@ -833,6 +836,10 @@ model ModerationAction {
   @@index([guildId, targetDiscordId, caseNumber])
   // The sweep's own query: everything still pending, oldest attempt first.
   @@index([enforcement, enforcementAt])
+  // The case log's default read — a guild's newest cases with nothing else
+  // narrowing them. Every other index here leads with a column the default
+  // query does not supply, so without this one it sorts the whole guild.
+  @@index([guildId, createdAt])
 }
 
 /// One attempt to carry a punishment out, in the words of whoever answered.

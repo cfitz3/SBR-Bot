@@ -1062,6 +1062,15 @@ export class PanelService {
     // for the member whose id is the empty string, which is nobody.
     const targeted =
       targetDiscordId === "" ? null : this.d.moderation.listInfractions(guildId, targetDiscordId);
+    // The guild-wide infraction list is the one card the page hides the moment
+    // a member is picked, because the card above it is the same list narrowed
+    // to them. Asking for it anyway was fifty rows fetched to be thrown away on
+    // every lookup, so the read follows the render.
+    const recentWanted = targetDiscordId === "";
+    // Four of the nine reads below only ever feed sections an Admin can open.
+    // The rank is known before any of them are issued, so a moderator looking
+    // somebody up now pays for the case log and nothing else.
+    const canConfigure = rankOfRole(access.role) >= rankOfRole("ADMIN");
     const [
       infractions,
       recent,
@@ -1074,15 +1083,15 @@ export class PanelService {
       relay,
     ] = await Promise.all([
       targeted,
-      this.d.moderation.listRecentInfractions(guildId, 50),
+      recentWanted ? this.d.moderation.listRecentInfractions(guildId, 50) : null,
       this.d.moderation.listActions(query),
       // Empty target means the whole guild, which is what the page shows before
       // anybody has been looked up.
       this.d.moderation.listInForce(guildId, targetDiscordId === "" ? null : targetDiscordId),
-      this.loadFilter(guildId),
-      this.d.config.getSetting<unknown>(guildId, AUTOMOD_SETTING_KEY),
-      this.d.config.getSetting<unknown>(guildId, ANTIRAID_SETTING_KEY),
-      this.d.config.getSetting<unknown>(guildId, COOLDOWN_SETTING_KEY),
+      canConfigure ? this.loadFilter(guildId) : this.emptyFilter(),
+      canConfigure ? this.d.config.getSetting<unknown>(guildId, AUTOMOD_SETTING_KEY) : null,
+      canConfigure ? this.d.config.getSetting<unknown>(guildId, ANTIRAID_SETTING_KEY) : null,
+      canConfigure ? this.d.config.getSetting<unknown>(guildId, COOLDOWN_SETTING_KEY) : null,
       // Never a reason to fail the page: the case log is why anybody is here,
       // and an unreachable Redis is itself something worth seeing the rest of
       // the page during.
@@ -1095,10 +1104,10 @@ export class PanelService {
       search: term,
       infractionCount: list.length,
       infractions: list,
-      recentInfractions: recent.ok ? recent.value : [],
+      recentInfractions: recent !== null && recent.ok ? recent.value : [],
       actions: (actions.ok ? actions.value : []).map((a) => ({ ...a, state: punishmentState(a, now) })),
       inForce: inForce.ok ? inForce.value : [],
-      canConfigure: rankOfRole(access.role) >= rankOfRole("ADMIN"),
+      canConfigure,
       filter,
       automod: parseAutomod(storedAutomod),
       antiraid: parseAntiRaid(storedAntiRaid),
@@ -1696,6 +1705,25 @@ export class PanelService {
     const access = await authorize(session, guildId, "wordlist", this.d.roles);
     if (!access.allowed) return this.denied(access, "wordlist", guildId);
     return { access, data: await this.loadFilter(guildId) };
+  }
+
+  /**
+   * The filter block a moderator gets: the shape, none of the reads.
+   *
+   * The Filter section is Admin-tier and its tab is never offered below that,
+   * so for a moderator this is a field the view model must carry and nothing
+   * ever renders. Fabricating the defaults costs no queries; fetching them to
+   * fill a field nobody reads cost four.
+   */
+  private async emptyFilter(): Promise<WordlistVM> {
+    return {
+      installed: false,
+      rules: [],
+      escalation: parseEscalationPolicy(null),
+      relaySync: parseRelaySync(null),
+      packs: parsePackSelection(null),
+      packCatalogue: WORDLIST_PACKS,
+    };
   }
 
   /** The filter block, shared by the standalone page and the Moderation page. */

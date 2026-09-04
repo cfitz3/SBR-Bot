@@ -988,6 +988,43 @@ export const DEFAULT_PANEL = {
     /** With at least one rule, the count goes in the heading. */
     cardRulesCount: "Rules ({count})",
     cardCooldowns: "Cooldowns",
+    cardStanding: "Where they stand",
+
+    /**
+     * The standing strip: what is true of this member right now.
+     *
+     * Read off what is actually being enforced, not off the case log, which is
+     * why "clear" can be honest on somebody with a page of history.
+     */
+    standingBanned: "Banned",
+    standingMuted: "Muted",
+    standingClear: "Nothing in force",
+    standingInfractions: "{n} infraction(s)",
+    standingPending: "{n} awaiting the bridge",
+    standingFailed: "{n} never landed",
+
+    /** The one-click punishments. The form below still expresses all seven. */
+    quickHeading: "Quick actions",
+    quickHint: "Fills the form in and issues it. Use More options for a note, a lift, or another duration.",
+    quick: {
+      warn: "Warn",
+      mute1h: "Mute 1h",
+      mute1d: "Mute 1d",
+      kick: "Kick",
+      ban: "Ban",
+    },
+    quickNeedsReason: "Give a reason first — it is what the audit row will say.",
+    quickConfirm: "{action} — click again",
+    moreOptions: "More options",
+
+    /** Disclosure labels for the cards that answer a follow-up question. */
+    showInfractions: "Show their infractions",
+    showRecentInfractions: "Show recent infractions",
+    showRelayLog: "Show the last {n} command(s)",
+    advanced: "Advanced",
+    antiRaidAdvancedHint: "Who counts as suspicious, and what happens after the burst passes.",
+    exemptHeading: "Exemptions",
+    overridesHint: "Per-command waits, where the default is wrong for one command.",
 
     /** What each staff action does. Keyed by the values `PANEL_ACTIONS` allows. */
     actionName: {

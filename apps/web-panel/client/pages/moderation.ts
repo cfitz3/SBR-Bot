@@ -74,6 +74,42 @@ const actionHint = (value: string): string => lookup(t("actionHint"), value, "")
 /** Only these two carry a duration; the rest are instantaneous. */
 const TIMED = new Set(["MUTE", "BAN"]);
 
+/**
+ * The four punishments staff reach for, as one click each.
+ *
+ * The full form underneath can still express all seven with any duration, and
+ * it stays the authority — a preset only fills it in. What it removes is the
+ * three-control detour between reading a report and acting on it: the type
+ * dropdown, the duration box, and the guessing about what a blank duration
+ * means on a mute.
+ */
+interface Preset {
+  readonly key: string;
+  readonly type: string;
+  /** Null on the untimed ones, and on a ban, which is permanent by default. */
+  readonly durationSeconds: number | null;
+  readonly tone: "primary" | "danger" | "plain";
+}
+
+const PRESETS: readonly Preset[] = [
+  { key: "warn", type: "WARN", durationSeconds: null, tone: "primary" },
+  { key: "mute1h", type: "MUTE", durationSeconds: 3_600, tone: "plain" },
+  { key: "mute1d", type: "MUTE", durationSeconds: 86_400, tone: "plain" },
+  { key: "kick", type: "KICK", durationSeconds: null, tone: "danger" },
+  { key: "ban", type: "BAN", durationSeconds: null, tone: "danger" },
+];
+
+/**
+ * A section that stays out of the way until it is asked for.
+ *
+ * Used for the parts of this page that answer a follow-up rather than the
+ * question staff arrive with. Nothing is removed — a disclosure is one click,
+ * and the alternative was seven cards of which two are ever read.
+ */
+function collapsed(summary: string, body: HTMLElement): HTMLElement {
+  return h("details", { class: "collapse" }, h("summary", {}, h("span", {}, summary)), body);
+}
+
 type Section = "history" | "automod" | "antiraid" | "filter" | "cooldowns";
 
 const SECTIONS: readonly Section[] = ["history", "automod", "antiraid", "filter", "cooldowns"];
@@ -157,8 +193,18 @@ const capabilityOptions = (): readonly (readonly [string, string])[] => [
   ...Object.keys(BridgeCapability).map((v) => [v, v.toLowerCase().replace(/_/g, " ")] as const),
 ];
 
+/**
+ * Whether this page has ever drawn in this session.
+ *
+ * Every quick action, every case edit and every tab switch re-reads the page,
+ * and blanking the case log to a spinner each time made a one-field correction
+ * look like a page load. The spinner is for the first paint; after that the
+ * previous render stays up until the new one is ready.
+ */
+let painted = false;
+
 export async function renderModeration(host: HTMLElement, guildId: string): Promise<void> {
-  replace(host, spinner("moderation"));
+  if (!painted) replace(host, spinner("moderation"));
 
   const params = new URLSearchParams();
   if (state.target) params.set("target", state.target);
@@ -173,6 +219,7 @@ export async function renderModeration(host: HTMLElement, guildId: string): Prom
   }
 
   const data = result.data;
+  painted = true;
   const rerender = (): void => void renderModeration(host, guildId);
 
   // A moderator has one section, so the tab strip would be a row of refusals.
@@ -255,18 +302,65 @@ function sectionBody(guildId: string, data: ModerationVM, rerender: () => void):
 function historySection(guildId: string, data: ModerationVM, rerender: () => void): readonly (HTMLElement | null)[] {
   return [
     card(t("cardLookup"), lookupBody(guildId, rerender)),
+    // Where this member stands right now, before anything about what to do
+    // about it. It is one line of badges and it is the thing a staffer opening
+    // a report is actually checking; reading it off an expiry column three
+    // cards down is how the same person got muted twice.
+    data.target ? card(t("cardStanding"), standingBody(data)) : null,
     card(t("cardIssue"), actionForm(guildId, rerender)),
-    data.target ? card(t("cardInfractions"), infractionsBody(data.infractions, true)) : null,
     card(t("cardInForce"), inForceBody(data)),
-    // Above the case log rather than below it: "did the last command work" is
-    // the question somebody arrives with when something is wrong, and it was
-    // previously answerable only by reading a process log.
-    card(t("cardRelay"), relayBody(data.relay)),
     card(data.target ? t("cardActionsMember") : t("cardActionsRecent"), actionsBody(guildId, data, rerender)),
+    // From here down, behind a disclosure each. These three answer follow-up
+    // questions — what else is on their record, what the bridge did with the
+    // last command, what the guild has been doing lately — and having them
+    // unfolded by default put the case log itself below the fold.
+    data.target
+      ? card(t("cardInfractions"), collapsed(t("showInfractions"), infractionsBody(data.infractions, true)))
+      : null,
+    // "Did the last command work" stays glanceable: `relayBody` keeps its
+    // badges in the open and folds only the per-command log.
+    card(t("cardRelay"), relayBody(data.relay)),
     // Only worth showing when no target is picked: with one, the card above it
     // is the same list narrowed to the person actually being asked about.
-    data.target ? null : card(t("cardRecentInfractions"), infractionsBody(data.recentInfractions, false)),
+    data.target
+      ? null
+      : card(
+          t("cardRecentInfractions"),
+          collapsed(t("showRecentInfractions"), infractionsBody(data.recentInfractions, false)),
+        ),
   ];
+}
+
+/**
+ * The standing strip: banned, muted, or neither, plus what is outstanding.
+ *
+ * Read off `inForce`, which the server has already resolved against the clock,
+ * rather than off the case log — a row that says MUTE and a member who is
+ * currently muted are different claims, and the whole reason this card exists
+ * is that staff were being asked to tell them apart by eye.
+ */
+function standingBody(data: ModerationVM): HTMLElement {
+  const banned = data.inForce.some((row) => row.type === "BAN");
+  const muted = data.inForce.some((row) => row.type === "MUTE");
+  const pending = data.actions.filter((row) => row.enforcement === "PENDING").length;
+  const failed = data.actions.filter((row) => row.enforcement === "FAILED").length;
+
+  const marks: HTMLElement[] = [];
+  if (banned) marks.push(badge(t("standingBanned"), "bad"));
+  if (muted) marks.push(badge(t("standingMuted"), "warn"));
+  if (!banned && !muted) marks.push(badge(t("standingClear"), "ok"));
+  marks.push(
+    badge(
+      t("standingInfractions").replace("{n}", count(data.infractionCount)),
+      data.infractionCount === 0 ? "neutral" : "warn",
+    ),
+  );
+  // Only when there is something to chase. A row of zeroes is noise on the one
+  // line of this page that has to be readable at a glance.
+  if (pending > 0) marks.push(badge(t("standingPending").replace("{n}", count(pending)), "warn"));
+  if (failed > 0) marks.push(badge(t("standingFailed").replace("{n}", count(failed)), "bad"));
+
+  return h("div", { class: "job-cell" }, ...marks);
 }
 
 /**
@@ -392,46 +486,84 @@ function actionForm(guildId: string, rerender: () => void): HTMLElement {
   type.addEventListener("change", syncType);
   syncType();
 
+  /** The one write, shared by the Apply button and every quick action. */
+  async function issue(): Promise<WriteResult> {
+    const targetId = target.value();
+    if (!isSnowflake(targetId)) {
+      return { kind: "error", message: t("errNoTarget") };
+    }
+    const note = reason.value.trim();
+    if (note.length === 0) {
+      return { kind: "error", message: t("errNoReason") };
+    }
+
+    let durationSeconds: number | null = null;
+    if (TIMED.has(type.value)) {
+      const parsed = parseDurationSeconds(duration.value);
+      if (parsed === "invalid") {
+        return { kind: "error", message: t("errDuration") };
+      }
+      durationSeconds = parsed;
+    }
+
+    return postAction(guildId, "moderation.action", {
+      type: type.value,
+      targetDiscordId: targetId,
+      reason: note,
+      // Omitted rather than nulled for the untimed actions, which refuse a
+      // duration key outright.
+      ...(durationSeconds === null ? {} : { durationSeconds }),
+    });
+  }
+
+  function afterIssue(): void {
+    reason.value = "";
+    duration.value = "";
+    // The history below is now out of date by exactly this action.
+    state.target = target.value();
+    rerender();
+  }
+
   const submit = actionButton({
     label: t("apply"),
     tone: "primary",
     status,
-    run: async () => {
-      const targetId = target.value();
-      if (!isSnowflake(targetId)) {
-        return { kind: "error", message: t("errNoTarget") };
-      }
-      const note = reason.value.trim();
-      if (note.length === 0) {
-        return { kind: "error", message: t("errNoReason") };
-      }
-
-      let durationSeconds: number | null = null;
-      if (TIMED.has(type.value)) {
-        const parsed = parseDurationSeconds(duration.value);
-        if (parsed === "invalid") {
-          return { kind: "error", message: t("errDuration") };
-        }
-        durationSeconds = parsed;
-      }
-
-      return postAction(guildId, "moderation.action", {
-        type: type.value,
-        targetDiscordId: targetId,
-        reason: note,
-        // Omitted rather than nulled for the untimed actions, which refuse a
-        // duration key outright.
-        ...(durationSeconds === null ? {} : { durationSeconds }),
-      });
-    },
-    onDone: () => {
-      reason.value = "";
-      duration.value = "";
-      // The history below is now out of date by exactly this action.
-      state.target = target.value();
-      rerender();
-    },
+    run: issue,
+    onDone: afterIssue,
   });
+
+  /**
+   * A preset fills the form in and then issues it, in one click.
+   *
+   * It fills rather than bypasses on purpose: whatever a quick action does is
+   * visible in the controls underneath afterwards, so a staffer who meant "mute
+   * an hour" and clicked the day can see which one they pressed. A missing
+   * reason is not an error worth a red line — the reason box is where they were
+   * going next anyway — so it focuses the box and says what it wants.
+   */
+  const quick = PRESETS.map((preset) =>
+    actionButton({
+      label: lookup(t("quick"), preset.key, preset.key),
+      tone: preset.tone,
+      // Only where a mistake cannot be walked back in a click. A warn is a row
+      // in a log; a ban is somebody outside the door.
+      ...(preset.type === "BAN" || preset.type === "KICK"
+        ? { confirm: t("quickConfirm").replace("{action}", actionName(preset.type)) }
+        : {}),
+      status,
+      run: () => {
+        type.value = preset.type;
+        duration.value = preset.durationSeconds === null ? "" : compactSpan(preset.durationSeconds);
+        syncType();
+        if (reason.value.trim().length === 0) {
+          reason.focus();
+          return Promise.resolve<WriteResult>({ kind: "error", message: t("quickNeedsReason") });
+        }
+        return issue();
+      },
+      onDone: afterIssue,
+    }),
+  );
 
   return h(
     "div",
@@ -439,24 +571,37 @@ function actionForm(guildId: string, rerender: () => void): HTMLElement {
     h(
       "div",
       { class: "field" },
-      h("label", { class: "field-label" }, t("fieldAction")),
-      h("div", { class: "field-row" }, type),
-      explain,
-    ),
-    h(
-      "div",
-      { class: "field" },
       h("label", { class: "field-label" }, t("fieldMember")),
       h("div", { class: "field-row" }, target.el),
     ),
-    durationRow,
     h(
       "div",
       { class: "field" },
       h("label", { class: "field-label" }, t("fieldReason")),
       h("div", { class: "field-row" }, reason),
     ),
-    h("div", { class: "field-row" }, submit, status.el),
+    // The quick strip sits directly under the reason, because that is the order
+    // the job is done in: who, why, what.
+    h("div", { class: "field" }, h("label", { class: "field-label" }, t("quickHeading")), h("div", { class: "field-row" }, ...quick), h("p", { class: "field-hint" }, t("quickHint"))),
+    // Everything the presets already decided, for the cases they do not cover:
+    // notes, unmutes, unbans, and any duration other than the two offered.
+    collapsed(
+      t("moreOptions"),
+      h(
+        "div",
+        { class: "fields" },
+        h(
+          "div",
+          { class: "field" },
+          h("label", { class: "field-label" }, t("fieldAction")),
+          h("div", { class: "field-row" }, type),
+          explain,
+        ),
+        durationRow,
+        h("div", { class: "field-row" }, submit),
+      ),
+    ),
+    status.el,
   );
 }
 
@@ -559,15 +704,27 @@ function relayBody(relay: RelayVM): HTMLElement {
   if (relay.commands.length === 0) {
     return h("div", {}, intro, head, emptyState("moderationRelay"));
   }
-  return h("div", {}, intro, head, table(
-    [t("colCommand"), t("colOutcome"), t("colDetail"), { label: t("colWhen"), align: "when" }],
-    relay.commands.map((row) => [
-      h("code", {}, row.command),
-      badge(lookup(t("relayOutcome"), row.outcome, row.outcome), relayTone(row.outcome)),
-      row.detail,
-      relativeTime(row.at),
-    ]),
-  ));
+  // Badges in the open, log behind a disclosure. Whether the bridge is up is
+  // checked constantly; what it said to each of the last fifty commands is
+  // read once, while something is wrong.
+  return h(
+    "div",
+    {},
+    intro,
+    head,
+    collapsed(
+      t("showRelayLog").replace("{n}", count(relay.commands.length)),
+      table(
+        [t("colCommand"), t("colOutcome"), t("colDetail"), { label: t("colWhen"), align: "when" }],
+        relay.commands.map((row) => [
+          h("code", {}, row.command),
+          badge(lookup(t("relayOutcome"), row.outcome, row.outcome), relayTone(row.outcome)),
+          row.detail,
+          relativeTime(row.at),
+        ]),
+      ),
+    ),
+  );
 }
 
 /** Confirmed is good, typed is not yet anything, everything else is a failure. */
@@ -1154,29 +1311,36 @@ function ruleEditor(guildId: string, draft: Draft, drafting: boolean): HTMLEleme
       }),
     ),
     duration,
-    fieldGroup(
-      multiPickerField({
-        label: t("exemptRolesLabel"),
-        hint: t("exemptRolesHint"),
-        guildId,
-        kind: "role",
-        values: draft.exempt.roleIds,
-        placeholder: t("exemptRolesPlaceholder"),
-        save: (ids) => {
-          draft.exempt.roleIds = [...ids];
-          return save();
-        },
-      }),
-      selectField({
-        label: t("exemptCapabilityLabel"),
-        hint: t("exemptCapabilityHint"),
-        value: draft.exempt.capability ?? "",
-        options: capabilityOptions(),
-        save: (next) => {
-          draft.exempt.capability = next === "" ? null : next;
-          return save();
-        },
-      }),
+    // Exemptions are the part of a rule that is set once and then never looked
+    // at again, and most rules never set them at all. Folded so the two
+    // questions a rule is actually edited for — what it catches and what it
+    // does — are not the third and fourth things on screen.
+    collapsed(
+      t("exemptHeading"),
+      fieldGroup(
+        multiPickerField({
+          label: t("exemptRolesLabel"),
+          hint: t("exemptRolesHint"),
+          guildId,
+          kind: "role",
+          values: draft.exempt.roleIds,
+          placeholder: t("exemptRolesPlaceholder"),
+          save: (ids) => {
+            draft.exempt.roleIds = [...ids];
+            return save();
+          },
+        }),
+        selectField({
+          label: t("exemptCapabilityLabel"),
+          hint: t("exemptCapabilityHint"),
+          value: draft.exempt.capability ?? "",
+          options: capabilityOptions(),
+          save: (next) => {
+            draft.exempt.capability = next === "" ? null : next;
+            return save();
+          },
+        }),
+      ),
     ),
     drafting ? null : h("p", { class: "field-hint" }, t("autosaveNote")),
   );
@@ -1308,6 +1472,10 @@ function antiRaidSection(guildId: string, data: ModerationVM): readonly (HTMLEle
       ...over,
     });
 
+  // Split by the question each field answers. The four in the open are the
+  // gate itself — is it on, what counts as a burst, and what happens to the
+  // people it catches. The rest tune it, and a first-time operator reading nine
+  // fields at once could not tell which of them mattered.
   const body = h(
     "div",
     { class: "fields" },
@@ -1318,20 +1486,6 @@ function antiRaidSection(guildId: string, data: ModerationVM): readonly (HTMLEle
         hint: t("antiRaidEnabledHint"),
         checked: rules.enabled,
         save: (enabled) => save({ enabled }),
-      }),
-      toggleField({
-        label: t("antiRaidAutoEngageLabel"),
-        hint: t("antiRaidAutoEngageHint"),
-        checked: rules.autoEngage,
-        // An auto-engaging posture needs an auto-lift, which the mutation
-        // refuses without. Sending one here rather than surfacing that refusal
-        // turns a correct rule into a form the operator cannot get out of.
-        save: (autoEngage) =>
-          save(
-            autoEngage && rules.autoLiftMinutes === null
-              ? { autoEngage, autoLiftMinutes: 60 }
-              : { autoEngage },
-          ),
       }),
       textField({
         label: t("antiRaidBurstJoinsLabel"),
@@ -1348,19 +1502,6 @@ function antiRaidSection(guildId: string, data: ModerationVM): readonly (HTMLEle
         validate: (raw) => validateWhole(raw, 5, 3_600),
         save: (raw) => save({ burst: { joins: rules.burst.joins, windowSeconds: Number(raw.trim()) } }),
       }),
-      textField({
-        label: t("antiRaidAgeLabel"),
-        hint: t("antiRaidAgeHint"),
-        value: String(rules.minAccountAgeHours),
-        validate: (raw) => validateWhole(raw, 0, 24 * 365),
-        save: (raw) => save({ minAccountAgeHours: Number(raw.trim()) }),
-      }),
-      toggleField({
-        label: t("antiRaidAvatarLabel"),
-        hint: t("antiRaidAvatarHint"),
-        checked: rules.requireAvatar,
-        save: (requireAvatar) => save({ requireAvatar }),
-      }),
       selectField({
         label: t("antiRaidActionLabel"),
         hint: t("antiRaidActionHint"),
@@ -1373,22 +1514,60 @@ function antiRaidSection(guildId: string, data: ModerationVM): readonly (HTMLEle
         ],
         save: (joinAction) => save({ joinAction }),
       }),
-      textField({
-        label: t("antiRaidLiftLabel"),
-        hint: t("antiRaidLiftHint"),
-        value: rules.autoLiftMinutes === null ? "" : String(rules.autoLiftMinutes),
-        placeholder: t("antiRaidLiftPlaceholder"),
-        // Blank is a real answer here — stays on until lifted — so it is not
-        // treated as an unfilled field.
-        validate: (raw) => (raw.trim() === "" ? null : validateWhole(raw, 1, 24 * 60)),
-        save: (raw) => save({ autoLiftMinutes: raw.trim() === "" ? null : Number(raw.trim()) }),
-      }),
-      toggleField({
-        label: t("antiRaidLockdownLabel"),
-        hint: t("antiRaidLockdownHint"),
-        checked: rules.lockdownOnEngage,
-        save: (lockdownOnEngage) => save({ lockdownOnEngage }),
-      }),
+    ),
+    collapsed(
+      t("advanced"),
+      h(
+        "div",
+        { class: "fields" },
+        h("p", { class: "field-hint" }, t("antiRaidAdvancedHint")),
+        fieldGroup(
+          toggleField({
+            label: t("antiRaidAutoEngageLabel"),
+            hint: t("antiRaidAutoEngageHint"),
+            checked: rules.autoEngage,
+            // An auto-engaging posture needs an auto-lift, which the mutation
+            // refuses without. Sending one here rather than surfacing that
+            // refusal turns a correct rule into a form the operator cannot get
+            // out of.
+            save: (autoEngage) =>
+              save(
+                autoEngage && rules.autoLiftMinutes === null
+                  ? { autoEngage, autoLiftMinutes: 60 }
+                  : { autoEngage },
+              ),
+          }),
+          textField({
+            label: t("antiRaidAgeLabel"),
+            hint: t("antiRaidAgeHint"),
+            value: String(rules.minAccountAgeHours),
+            validate: (raw) => validateWhole(raw, 0, 24 * 365),
+            save: (raw) => save({ minAccountAgeHours: Number(raw.trim()) }),
+          }),
+          toggleField({
+            label: t("antiRaidAvatarLabel"),
+            hint: t("antiRaidAvatarHint"),
+            checked: rules.requireAvatar,
+            save: (requireAvatar) => save({ requireAvatar }),
+          }),
+          textField({
+            label: t("antiRaidLiftLabel"),
+            hint: t("antiRaidLiftHint"),
+            value: rules.autoLiftMinutes === null ? "" : String(rules.autoLiftMinutes),
+            placeholder: t("antiRaidLiftPlaceholder"),
+            // Blank is a real answer here — stays on until lifted — so it is
+            // not treated as an unfilled field.
+            validate: (raw) => (raw.trim() === "" ? null : validateWhole(raw, 1, 24 * 60)),
+            save: (raw) => save({ autoLiftMinutes: raw.trim() === "" ? null : Number(raw.trim()) }),
+          }),
+          toggleField({
+            label: t("antiRaidLockdownLabel"),
+            hint: t("antiRaidLockdownHint"),
+            checked: rules.lockdownOnEngage,
+            save: (lockdownOnEngage) => save({ lockdownOnEngage }),
+          }),
+        ),
+      ),
     ),
   );
 
@@ -1725,9 +1904,19 @@ function cooldownsBody(guildId: string, data: ModerationVM): HTMLElement {
         },
       }),
     ),
-    h("h4", { class: "field-label" }, t("overridesHeading")),
-    rows,
-    h("div", { class: "field-row" }, nameInput, secondsInput, add),
+    // Two numbers cover every guild that has never needed a third. Per-command
+    // overrides are the exception, and a list of them plus its add-row was
+    // twice the height of the setting almost everyone came here to change.
+    collapsed(
+      t("overridesHeading"),
+      h(
+        "div",
+        { class: "fields" },
+        h("p", { class: "field-hint" }, t("overridesHint")),
+        rows,
+        h("div", { class: "field-row" }, nameInput, secondsInput, add),
+      ),
+    ),
     status.el,
   );
 }

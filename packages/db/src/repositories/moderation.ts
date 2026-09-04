@@ -327,6 +327,11 @@ export const moderationRepository = {
     const rows = await prisma.infraction.findMany({
       where: { guildId, targetDiscordId: discordId },
       orderBy: { createdAt: "desc" },
+      // Bounded like the guild-wide read below. A member with a four-figure
+      // history is rare and is exactly the member whose page should not be the
+      // one that takes a second to draw; the newest 200 answer every question
+      // the card is asked.
+      take: 200,
     });
     return rows.map(mapInfraction);
   },
