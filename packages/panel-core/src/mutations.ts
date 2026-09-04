@@ -133,6 +133,7 @@ import {
 } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import { authorizeRole, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
+import type { PanelCache } from "./cache.js";
 import { ROLE_PREVIEW_LIMIT } from "./reads.js";
 import type { PermissionExceptionStore, PermSubjectKind, RolesInsight } from "./reads.js";
 import { isPermanentCategory } from "@sbr/tickets";
@@ -638,6 +639,11 @@ export interface PanelMutationsDeps {
   readonly audit: ConfigAuditSink;
   /** Panel writes land in the same usage stream as commands, `surface=WEB_PANEL`. */
   readonly analytics: AnalyticsService;
+  /**
+   * The read cache to drop on every successful write. Optional: without it the
+   * pages compute themselves every time and there is nothing to invalidate.
+   */
+  readonly cache?: PanelCache;
   readonly logger: Logger;
   /** Injectable clock, so audit timestamps are assertable in tests. */
   readonly now?: () => Date;
@@ -4342,6 +4348,13 @@ export class PanelMutations {
         detail: describe(step.result.error),
       });
     }
+
+    // Before the audit row and before the reply: a staff member who changes
+    // something and reloads the page must see what they changed, and the TTLs
+    // on the read cache are long enough for them not to. Failures inside the
+    // cache are swallowed by the adapter — a write must not fail because the
+    // thing that makes it visible sooner is unreachable.
+    if (this.d.cache) await this.d.cache.invalidate(guildId);
 
     const at = this.now().toISOString();
     await this.d.audit.record({ guildId, actorDiscordId, mutation, change: step.change, at });

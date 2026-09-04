@@ -62,6 +62,8 @@ interface Recorded {
   audits: ConfigAuditEntry[];
   usage: CommandUsageDTO[];
   limited: string[];
+  /** Guilds whose read cache was dropped, in order. */
+  invalidated: string[];
 }
 
 /** A config service that records what it was asked to do and answers `result`. */
@@ -547,7 +549,7 @@ function make(
     previewMembers?: RolesInsight["previewMembers"];
   } = {},
 ) {
-  const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [] };
+  const recorded: Recorded = { calls: [], audits: [], usage: [], limited: [], invalidated: [] };
   const analytics: AnalyticsService = {
     async capture(u) { recorded.usage.push(u); },
     async emit() {},
@@ -590,6 +592,8 @@ function make(
       ? {}
       : { rolesInsight: rolesInsightRecorder(recorded, over.previewMembers) }),
     limiter: limiter(recorded, over.blocked ?? []),
+    cache: { async fetch(_g, _k, _t, load) { return load(); },
+      async invalidate(guildId) { recorded.invalidated.push(guildId); } },
     audit: { async record(entry) { recorded.audits.push(entry); } },
     analytics,
     logger: silent,

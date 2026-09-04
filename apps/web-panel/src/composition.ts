@@ -363,6 +363,10 @@ export async function createPanelApp(): Promise<PanelApp> {
   const rolesInsight = createRolesInsight({ dirty: adapters.rolesDirty, refusals: adapters.roleRefusals });
 
   const panel = new PanelService({
+    // Read cache and its invalidation, one object shared with the write side
+    // below. Handing the same instance to both is what makes "every write drops
+    // this guild's cache" a fact rather than a convention.
+    cache: adapters.panelCache,
     roles: rankResolver,
     xp,
     community,
@@ -433,6 +437,7 @@ export async function createPanelApp(): Promise<PanelApp> {
   };
 
   const mutations = new PanelMutations({
+    cache: adapters.panelCache,
     roles: rankResolver,
     config: guildConfig,
     // The same service objects the reads use, and the same ones the bots hold:

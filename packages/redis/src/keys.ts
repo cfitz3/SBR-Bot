@@ -138,6 +138,19 @@ export function createKeyFactory(prefix: string) {
     directory: (guildId: string, resource: string, q: string) =>
       p(`dir:${guildId}:${resource}:${q}`),
 
+    /**
+     * A cached panel page part, and the counter that expires the lot.
+     *
+     * Invalidation is a version bump rather than a delete sweep: every entry
+     * carries the version it was written under, so incrementing the counter
+     * orphans every key for that guild at once, in one round trip, with no
+     * SCAN and no list of what was cached. The orphans are never read again and
+     * age out on their own TTLs.
+     */
+    panelVersion: (guildId: string) => p(`panel:ver:${guildId}`),
+    panelCache: (guildId: string, version: number, key: string) =>
+      p(`panel:v${version}:${guildId}:${key}`),
+
     // 8. Worker locks
     lockJob: (name: string, scope?: string) => p(`lock:job:${name}${scope ? `:${scope}` : ""}`),
     /**

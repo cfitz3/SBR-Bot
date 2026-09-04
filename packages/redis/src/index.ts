@@ -20,6 +20,7 @@ export {
   RedisLock,
   RedisCooldownGate,
   RedisHypixelCache,
+  RedisPanelCache,
   RedisPriceSource,
   RedisBinSource,
   type CachedBinEntry,

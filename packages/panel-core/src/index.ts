@@ -97,6 +97,7 @@ export {
   type MetricChart,
   type ShapeOptions,
 } from "./series.js";
+export { noPanelCache, PANEL_CACHE_TTL, type PanelCache } from "./cache.js";
 export { commandStatsToCsv, csvCell, rollupsToCsv, toCsv } from "./csv.js";
 export type {
   PanelReads,

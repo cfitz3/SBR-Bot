@@ -25,6 +25,7 @@ import {
   type RoleResolver,
 } from "./access.js";
 import { rankOfRole } from "@sbr/shared-types";
+import type { PanelCache } from "./cache.js";
 import type {
   CommandCatalog,
   DirectoryMemberRow,
@@ -302,8 +303,32 @@ const configService = (over: Partial<GuildRuntimeConfig> = {}): GuildConfigServi
   return partial as GuildConfigService;
 };
 
+/**
+ * A cache that remembers, records what it had to compute, and forgets a guild
+ * on demand — the three things the service is allowed to assume about the port.
+ */
+function memoryCache() {
+  const store = new Map<string, unknown>();
+  const computed: string[] = [];
+  const cache: PanelCache = {
+    async fetch(guildId, key, _ttlSeconds, load) {
+      const id = `${guildId}:${key}`;
+      if (store.has(id)) return store.get(id) as never;
+      computed.push(id);
+      const value = await load();
+      store.set(id, value);
+      return value as never;
+    },
+    async invalidate(guildId) {
+      for (const id of [...store.keys()]) if (id.startsWith(`${guildId}:`)) store.delete(id);
+    },
+  };
+  return { cache, computed };
+}
+
 function svc(
   over: {
+    cache?: PanelCache;
     roles?: RoleResolver;
     community?: CommunityService;
     moderation?: ModerationService;
@@ -335,9 +360,52 @@ function svc(
     ...(over.commands ? { commands: over.commands } : {}),
     ...(over.rolesInsight ? { rolesInsight: over.rolesInsight } : {}),
     ...(over.roleMenuPublisher === undefined ? {} : { roleMenuPublisher: over.roleMenuPublisher }),
+    ...(over.cache ? { cache: over.cache } : {}),
     logger: silent,
   });
 }
+
+test("a second reader of the overview is served the first reader's work", async () => {
+  const { cache, computed } = memoryCache();
+  const panel = svc({ cache });
+
+  const first = await panel.loadOverview(session(), "g1");
+  const second = await panel.loadOverview(session(), "g1");
+
+  assert.deepEqual(computed, ["g1:overview"], "the page was summarised once");
+  assert.deepEqual(second.data, first.data);
+});
+
+test("one guild's cache is not another's", async () => {
+  const { cache, computed } = memoryCache();
+  const panel = svc({ cache });
+
+  const staff = session({ manageableGuildIds: ["g1", "g2"] });
+  await panel.loadOverview(staff, "g1");
+  await panel.loadOverview(staff, "g2");
+
+  assert.equal(computed.length, 2);
+});
+
+test("an invalidated guild is summarised again", async () => {
+  const { cache, computed } = memoryCache();
+  const panel = svc({ cache });
+
+  await panel.loadOverview(session(), "g1");
+  await cache.invalidate("g1");
+  await panel.loadOverview(session(), "g1");
+
+  assert.equal(computed.length, 2, "a write must be visible on the next page load");
+});
+
+test("without a cache every page load does its own work", async () => {
+  // The deployment shape with no Redis. It has to stay a working panel, and the
+  // read path must not quietly depend on the cache having answered.
+  const panel = svc();
+  const first = await panel.loadOverview(session(), "g1");
+  const second = await panel.loadOverview(session(), "g1");
+  assert.deepEqual(second.data, first.data);
+});
 
 /** Beats are graded by age, so the fixture writes them relative to now. */
 function beat(service: string, instance: string, ageMs: number): ServiceHeartbeat {

@@ -108,6 +108,7 @@ import {
 } from "@sbr/guild-config";
 import type { Logger } from "@sbr/observability";
 import { authorize, type AccessDecision, type PanelSession, type RoleResolver } from "./access.js";
+import { noPanelCache, PANEL_CACHE_TTL, type PanelCache } from "./cache.js";
 import type { DirectoryKind, DirectorySource, DirectoryVM } from "./directory.js";
 import { shapeAnalytics, type MetricChart } from "./series.js";
 import type {
@@ -942,6 +943,11 @@ export interface PanelServiceDeps {
    * of a panel with no worker fleet to ask.
    */
   readonly runnableJobs?: readonly string[];
+  /**
+   * Optional: absent means every page computes itself on every request, which
+   * is what a deployment without Redis gets and what the tests assert against.
+   */
+  readonly cache?: PanelCache;
   readonly logger: Logger;
 }
 
@@ -984,10 +990,12 @@ function gradeServices(
 export class PanelService {
   private readonly d: PanelServiceDeps;
   private readonly log: Logger;
+  private readonly cache: PanelCache;
 
   constructor(deps: PanelServiceDeps) {
     this.d = deps;
     this.log = deps.logger.child({ service: "panel" });
+    this.cache = deps.cache ?? noPanelCache;
   }
 
   // ─────────────────────────── selector (not guild-scoped) ───────────────────────────
@@ -1011,14 +1019,25 @@ export class PanelService {
     const access = await authorize(session, guildId, "overview", this.d.roles);
     if (!access.allowed) return this.denied(access, "overview", guildId);
 
-    const [counts, lastSnapshotAt, config, membership, activity, joinAttempts] = await Promise.all([
-      this.d.reads.overviewCounts(guildId),
-      this.d.reads.lastSnapshotAt(guildId),
-      this.d.config.get(guildId),
-      this.d.reads.membershipStats(guildId),
-      this.d.reads.listActivity(guildId, 40),
-      this.d.reads.listJoinAttempts(guildId, 15),
-    ]);
+    // Cached as one unit rather than six, because the page is only ever
+    // rendered whole and six entries would be six round trips to save five
+    // queries. The config read stays outside it: it is a single indexed row,
+    // it is already cached in the config service, and it is what a staff member
+    // watches change after flipping a switch.
+    const [counts, lastSnapshotAt, membership, activity, joinAttempts] = await this.cache.fetch(
+      guildId,
+      "overview",
+      PANEL_CACHE_TTL.overview,
+      () =>
+        Promise.all([
+          this.d.reads.overviewCounts(guildId),
+          this.d.reads.lastSnapshotAt(guildId),
+          this.d.reads.membershipStats(guildId),
+          this.d.reads.listActivity(guildId, 40),
+          this.d.reads.listJoinAttempts(guildId, 15),
+        ]),
+    );
+    const config = await this.d.config.get(guildId);
 
     const data: OverviewVM = {
       ...counts,
@@ -1540,13 +1559,22 @@ export class PanelService {
       data: {
         installed: true,
         tabs,
-        page: await leaderboards.page({
+        // Keyed by the viewer as well as the query: a board marks the row that
+        // belongs to whoever is reading it, so two staff members looking at the
+        // same category are not looking at the same page.
+        page: await this.cache.fetch(
           guildId,
-          category,
-          discordId: session.discordId,
-          ...(query.page === undefined ? {} : { page: query.page }),
-          ...(query.windowDays === undefined ? {} : { windowDays: query.windowDays }),
-        }),
+          `leaderboard:${category}:${query.page ?? 1}:${query.windowDays ?? 0}:${session.discordId}`,
+          PANEL_CACHE_TTL.leaderboard,
+          () =>
+            leaderboards.page({
+              guildId,
+              category,
+              discordId: session.discordId,
+              ...(query.page === undefined ? {} : { page: query.page }),
+              ...(query.windowDays === undefined ? {} : { windowDays: query.windowDays }),
+            }),
+        ),
       },
     };
   }
@@ -1585,12 +1613,22 @@ export class PanelService {
       data: {
         installed: true,
         tabs,
-        board: await leaderboards.board({
+        // The heaviest read in the panel: every member, every metric, one page.
+        // A minute of reuse is the difference between a staff member switching
+        // tabs and a staff member waiting to switch tabs, and the numbers on it
+        // are written by workers running twice an hour.
+        board: await this.cache.fetch(
           guildId,
-          discordId: session.discordId,
-          tab: query.tab ?? "stats",
-          ...(query.windowDays === undefined ? {} : { windowDays: query.windowDays }),
-        }),
+          `board:${query.tab ?? "stats"}:${query.windowDays ?? 0}:${session.discordId}`,
+          PANEL_CACHE_TTL.leaderboard,
+          () =>
+            leaderboards.board({
+              guildId,
+              discordId: session.discordId,
+              tab: query.tab ?? "stats",
+              ...(query.windowDays === undefined ? {} : { windowDays: query.windowDays }),
+            }),
+        ),
       },
     };
   }

@@ -1502,6 +1502,56 @@ export interface RedisAdapterOptions {
   readonly playerWindowMs?: number;
 }
 
+/**
+ * The panel's read cache, versioned per guild.
+ *
+ * Every method swallows its own failures. A panel whose cache is unreachable
+ * has to be a slow panel, never a broken one — these pages are how staff find
+ * out what is wrong, so they are the last thing that may depend on Redis being
+ * healthy.
+ */
+export class RedisPanelCache {
+  constructor(private readonly ctx: RedisContext) {}
+
+  /** The guild's current cache generation. Unreadable counts as generation 0. */
+  private async version(guildId: string): Promise<number> {
+    const raw = await this.ctx.client.get(this.ctx.keys.panelVersion(guildId)).catch(() => null);
+    const value = Number(raw ?? 0);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  async fetch<T>(guildId: string, key: string, ttlSeconds: number, load: () => Promise<T>): Promise<T> {
+    const version = await this.version(guildId);
+    const cacheKey = this.ctx.keys.panelCache(guildId, version, key);
+    const hit = await this.ctx.client.get(cacheKey).catch(() => null);
+    if (hit !== null) {
+      try {
+        return JSON.parse(hit) as T;
+      } catch {
+        // Something else wrote this key, or the shape changed across a deploy.
+        // Falling through re-computes and overwrites it.
+      }
+    }
+    const value = await load();
+    await this.ctx.client
+      .set(cacheKey, JSON.stringify(value), { EX: Math.max(1, Math.floor(ttlSeconds)) })
+      .catch(() => undefined);
+    return value;
+  }
+
+  /**
+   * Retire everything cached for this guild.
+   *
+   * The counter itself is deliberately given no TTL. If it were to expire, the
+   * generation would reset to zero and a page could start reading entries from
+   * before the last several invalidations — a stale panel produced by a cleanup
+   * mechanism, which is the one failure this design exists to rule out.
+   */
+  async invalidate(guildId: string): Promise<void> {
+    await this.ctx.client.incr(this.ctx.keys.panelVersion(guildId)).catch(() => undefined);
+  }
+}
+
 export function createRedisAdapters(ctx: RedisContext, opts: RedisAdapterOptions = {}) {
   const playerWindowMs = opts.playerWindowMs ?? 0;
   return {
@@ -1529,5 +1579,6 @@ export function createRedisAdapters(ctx: RedisContext, opts: RedisAdapterOptions
     tallies: new RedisTallyStore(ctx, FUN_TALLY_TTL_SECONDS),
     automodCounters: new RedisAutomodCounters(ctx),
     firings: new RedisFiringLedger(ctx),
+    panelCache: new RedisPanelCache(ctx),
   };
 }
