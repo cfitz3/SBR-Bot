@@ -34,6 +34,16 @@ export interface WorkerRoleEffectorDeps {
 }
 
 export interface WorkerRoleEffector {
+  /**
+   * The roles this member holds on Discord now, or `undefined` when the bot
+   * could not say.
+   *
+   * The distinction is the whole point. An empty list means "they hold
+   * nothing", which is a fact a reconcile may act on; `undefined` means the
+   * question went unanswered, and the caller must fall back to whatever it had
+   * rather than conclude a member lost every role.
+   */
+  heldRoles(guildId: string, userId: string): Promise<readonly string[] | undefined>;
   apply(
     guildId: string,
     userId: string,
@@ -50,6 +60,23 @@ function strings(value: unknown): readonly string[] {
 export function createWorkerRoleEffector(deps: WorkerRoleEffectorDeps): WorkerRoleEffector {
   const base = deps.baseUrl.replace(/\/+$/, "");
   return {
+    async heldRoles(guildId, userId) {
+      if (deps.token === undefined) return undefined;
+      try {
+        const url = `${base}/internal/g/${encodeURIComponent(guildId)}/member-roles?userId=${encodeURIComponent(userId)}`;
+        const res = await fetch(url, {
+          headers: { authorization: `Bearer ${deps.token}` },
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        if (!res.ok) return undefined;
+        const body = (await res.json()) as Record<string, unknown>;
+        if (body["ok"] !== true || body["present"] !== true) return undefined;
+        return strings(body["roleIds"]);
+      } catch (error) {
+        deps.logger.debug("live role read unavailable", { guildId, userId, error: String(error) });
+        return undefined;
+      }
+    },
     async apply(guildId, userId, add, remove, reason) {
       if (deps.token === undefined) return NOTHING;
       try {

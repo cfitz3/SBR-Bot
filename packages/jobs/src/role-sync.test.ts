@@ -80,6 +80,11 @@ function harness(over: {
    */
   mirrored?: boolean;
   outcome?: (add: readonly string[], remove: readonly string[]) => RoleApplyOutcome;
+  /**
+   * What Discord says the member holds, when the immediate path asks. Absent
+   * is a deployment with no live read at all, which must still reconcile.
+   */
+  live?: readonly string[] | undefined;
 } = {}): Harness {
   const members = over.members ?? [member({ linked: true })];
   /** Roles the mirror believes each member holds, once `mirrored` is on. */
@@ -143,6 +148,7 @@ function harness(over: {
       closeGrants: async (_g, discordId, rows) => {
         h.closed.push({ discordId, rows });
       },
+      ...(over.live === undefined ? {} : { liveHeldRoles: async () => over.live }),
       onRefusal: (_g, _r, detail) => h.refusals.push(detail),
       onError: (scope) => h.errors.push(scope),
     },
@@ -345,6 +351,27 @@ test("a member reconciled on the spot gets their role without waiting for a pass
 
   assert.equal(await syncOneMember(h.deps, GUILD, "u1"), true);
   assert.deepEqual(h.applied, [{ discordId: "u1", add: ["role-linked"], remove: [] }]);
+});
+
+test("a stale mirror claiming the role does not stop the immediate pass", async () => {
+  // The bug this exists to prevent, in the shape it actually took: the mirror
+  // was refreshed while the member still held the role, they lost it, and every
+  // nudge afterwards reported that there was nothing to do. Live truth is what
+  // the immediate path asks for, so the role goes back on.
+  const h = harness({ members: [member({ linked: true }, ["role-linked"])], live: [] });
+
+  assert.equal(await syncOneMember(h.deps, GUILD, "u1"), true);
+  assert.deepEqual(h.applied, [{ discordId: "u1", add: ["role-linked"], remove: [] }]);
+});
+
+test("a live read agreeing with the member's roles still makes no call", async () => {
+  // The other direction. Trusting Discord over the mirror must not turn every
+  // nudge into a write: a member who already holds what they qualify for is
+  // still nothing to do, and the guild's rate-limit budget says so.
+  const h = harness({ members: [member({ linked: true }, [])], live: ["role-linked"] });
+
+  assert.equal(await syncOneMember(h.deps, GUILD, "u1"), false);
+  assert.deepEqual(h.applied, []);
 });
 
 test("reconciling on the spot leaves the dirty mark alone", async () => {

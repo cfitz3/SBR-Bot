@@ -358,6 +358,9 @@ export class InternalApi {
             ),
           });
           return;
+        case "member-roles":
+          sendJson(res, 200, await this.memberRoles(guild, url.searchParams.get("userId") ?? ""));
+          return;
         default:
           sendJson(res, 404, { error: "NOT_FOUND" });
           return;
@@ -470,6 +473,36 @@ export class InternalApi {
     // Highest first: the role someone is looking for is nearly always near the top.
     rows.sort((a, b) => b.position - a.position);
     return rows.slice(0, MAX_ROWS);
+  }
+
+  /**
+   * What one member holds *right now*, straight off the gateway.
+   *
+   * Deliberately not the cached roster: this exists for callers whose mirrored
+   * copy of the roster is the thing they have reason to doubt, and answering
+   * them from a minute-old cache would be answering a different question. One
+   * member is one fetch, which is why this is affordable where re-fetching the
+   * whole roster would not be.
+   *
+   * `present: false` is an answer, not an error - people leave - and is kept
+   * distinct from the failures above, which return no answer at all.
+   */
+  private async memberRoles(guild: Guild, userId: string): Promise<{
+    ok: boolean;
+    present: boolean;
+    roleIds: readonly string[];
+    error?: string;
+  }> {
+    if (userId === "") return { ok: false, present: false, roleIds: [], error: "INVALID_USER" };
+    try {
+      const member = await guild.members.fetch(userId);
+      return { ok: true, present: true, roleIds: [...member.roles.cache.keys()] };
+    } catch (error) {
+      if (error instanceof DiscordAPIError && error.code === 10007) {
+        return { ok: true, present: false, roleIds: [] };
+      }
+      return { ok: false, present: false, roleIds: [], error: describeError(error) };
+    }
   }
 
   /**

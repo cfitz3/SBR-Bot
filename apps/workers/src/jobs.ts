@@ -159,6 +159,12 @@ function roleMemberSyncDeps(ctx: WorkerContext): MemberSyncDeps {
       await client.sAdd(keys.rolesDirty(guildId), [...discordIds]);
     },
     loadSnapshots: (guildId, ids) => roleSyncRepository.loadSnapshots(guildId, ids),
+    // One gateway read per link, and only on the immediate path. Off is the
+    // old behaviour exactly -- the mirrored roster -- so this is a switch an
+    // operator can throw rather than a code path they have to trust.
+    ...(process.env["ROLE_NUDGE_LIVE_ROLES"] === "0"
+      ? {}
+      : { liveHeldRoles: (guildId: string, discordId: string) => effector.heldRoles(guildId, discordId) }),
     openGrants: (guildId, discordId) => roleGrantRepository.openGrants(guildId, discordId),
     apply: (guildId, discordId, add, remove) =>
       effector.apply(guildId, discordId, add, remove, "Automatic role rule"),

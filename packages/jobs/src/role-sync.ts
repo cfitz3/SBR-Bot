@@ -86,6 +86,23 @@ export interface MemberSyncDeps {
    * sweep does not report it for the same reason it does not report outcomes.
    */
   onDecision?(guildId: string, discordId: string, decision: MemberSyncDecision): void;
+  /**
+   * What the member holds on Discord right now, for the immediate path only.
+   *
+   * The roster mirror is refreshed on the hour, and the sweep can afford to
+   * wait for it: being an hour late on a member nobody is watching costs
+   * nothing. Somebody who has just typed `/link` is the opposite case, and the
+   * failure is not symmetric. A mirror that has *missed* a role they now hold
+   * costs one wasted effector call, which the effector filters out. A mirror
+   * that still *claims* a role they no longer hold suppresses the add
+   * entirely, and the reconcile reports that it had nothing to do -- which is
+   * exactly what "I linked and got no roles" looks like from outside.
+   *
+   * `undefined` -- unanswered, or absent -- keeps the mirrored answer. Reading
+   * a failed lookup as "holds nothing" would be a far worse mistake than the
+   * one it is here to fix.
+   */
+  liveHeldRoles?(guildId: string, discordId: string): Promise<readonly string[] | undefined>;
 }
 
 /** What one member's reconcile actually compared, for the log line. */
@@ -317,7 +334,10 @@ export async function syncOneMember(
       return false;
     }
 
-    const changed = await syncMember(deps, guildId, policy, snapshot, true);
+    const live = await deps.liveHeldRoles?.(guildId, discordId);
+    const current = live === undefined ? snapshot : { ...snapshot, heldRoleIds: live };
+
+    const changed = await syncMember(deps, guildId, policy, current, true);
     report(changed ? "applied" : "unchanged");
     return changed;
   } catch (error) {
