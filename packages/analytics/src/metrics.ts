@@ -29,6 +29,15 @@ export interface DomainMetrics {
   actionFailed(guildId: string, type: string): void;
   filterHit(guildId: string, ruleId: string, action: string): void;
   relayed(guildId: string, direction: string): void;
+  /**
+   * One message sent by a member anywhere in the server.
+   *
+   * The totals card has counted these for a while, out of the daily activity
+   * table, but a total cannot answer "is the server getting quieter" — which is
+   * the question the charts exist for. Emitted per message rather than derived
+   * from that table so it buckets like everything else on the page.
+   */
+  discordMessage(guildId: string): void;
 }
 
 export function createDomainMetrics(opts: DomainMetricsOptions): DomainMetrics {
@@ -55,6 +64,9 @@ export function createDomainMetrics(opts: DomainMetricsOptions): DomainMetrics {
     },
     relayed(guildId, direction) {
       send("bridge.relay", guildId, { direction });
+    },
+    discordMessage(guildId) {
+      send("discord.message", guildId, {});
     },
   };
 }

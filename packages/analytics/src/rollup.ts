@@ -17,6 +17,8 @@ export interface MetricRow {
 const DIM_KEYS: Readonly<Record<string, readonly string[]>> = {
   "command.used": ["command", "surface", "success"],
   "bridge.relay": ["direction"],
+  // No breakdown: one line for the server, which is the whole question.
+  "discord.message": [],
   "mod.action": ["type"],
   "mod.action.failed": ["type"],
   "filter.hit": ["rule", "action"],

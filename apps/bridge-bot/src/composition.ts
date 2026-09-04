@@ -1109,6 +1109,10 @@ export async function createBridgeApp(): Promise<BridgeApp> {
       return meetsFloor(role, floor);
     },
     async creditDiscordMessage(guildId, discordId, text) {
+      // Counted where it is credited, because these are the same event seen
+      // twice: XP is what the member gets for talking, and the metric is the
+      // guild seeing that somebody did. Fire-and-forget, like every metric.
+      metrics.discordMessage(guildId);
       await xp.recordMessage(guildId, discordId, "DISCORD_MESSAGE", text);
     },
     async creditGuildChat(guildId, ign, text) {

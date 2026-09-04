@@ -90,7 +90,7 @@ test("counts for the same command and bucket are summed across dimension sets", 
   assert.deepEqual(charts[0]?.series[0]?.points, [5, 0, 0, 0, 0]);
 });
 
-test("charts are discovered from the data, busiest metric first", () => {
+test("a metric with no rows in the window gets no empty chart", () => {
   const charts = shapeAnalytics(
     [
       point("command.used", "2026-08-01T00:00:00.000Z", 2, { command: "stats" }),
@@ -107,11 +107,59 @@ test("charts are discovered from the data, busiest metric first", () => {
   );
 });
 
-test("an unknown metric still charts, as a single undifferentiated line", () => {
-  const charts = shapeAnalytics([point("something.new", "2026-08-02T00:00:00.000Z", 9)], WINDOW);
-  assert.equal(charts[0]?.metric, "something.new");
+/** The Discord side of the same question, one line for the whole server. */
+test("discord messages chart as a single undifferentiated line", () => {
+  const charts = shapeAnalytics(
+    [
+      point("discord.message", "2026-08-01T00:00:00.000Z", 12),
+      point("discord.message", "2026-08-03T00:00:00.000Z", 4),
+    ],
+    WINDOW,
+  );
+  assert.equal(charts[0]?.metric, "discord.message");
   assert.equal(charts[0]?.series.length, 1);
-  assert.deepEqual(charts[0]?.series[0]?.points, [0, 9, 0, 0, 0]);
+  assert.deepEqual(charts[0]?.series[0]?.points, [12, 0, 4, 0, 0]);
+});
+
+/**
+ * The page charts three things. A fourth metric is not an error and is not
+ * lost — it is stored, exported, and shown wherever it belongs — but it does
+ * not silently become a chart here.
+ */
+test("a metric the page is not about gets no chart", () => {
+  assert.deepEqual(shapeAnalytics([point("something.new", "2026-08-02T00:00:00.000Z", 9)], WINDOW), []);
+  assert.deepEqual(shapeAnalytics([point("mod.action", "2026-08-02T00:00:00.000Z", 9)], WINDOW), []);
+});
+
+/**
+ * Panel mutations are captured through `command.used` on purpose, and just as
+ * deliberately are not commands anybody wants charted: this page answers "how
+ * busy is the guild", not "how much did staff press Save".
+ */
+test("the panel's own mutations are counted but not charted", () => {
+  const charts = shapeAnalytics(
+    [
+      point("command.used", "2026-08-02T00:00:00.000Z", 40, { command: "ticket.panel.save", surface: "WEB_PANEL" }),
+      point("command.used", "2026-08-02T00:00:00.000Z", 2, { command: "stats", surface: "BRIDGE_BOT" }),
+    ],
+    WINDOW,
+  );
+  assert.equal(charts.length, 1);
+  assert.equal(charts[0]?.total, 2);
+  assert.deepEqual(charts[0]?.series.map((s) => s.label), ["stats"]);
+});
+
+/** Fixed order, so the page does not rearrange itself on a quiet week. */
+test("the three charts keep their order regardless of size", () => {
+  const charts = shapeAnalytics(
+    [
+      point("command.used", "2026-08-02T00:00:00.000Z", 90, { command: "stats" }),
+      point("bridge.relay", "2026-08-02T00:00:00.000Z", 50, { direction: "IN" }),
+      point("discord.message", "2026-08-02T00:00:00.000Z", 5),
+    ],
+    WINDOW,
+  );
+  assert.deepEqual(charts.map((c) => c.metric), ["discord.message", "bridge.relay", "command.used"]);
 });
 
 test("a missing dimension value is labelled rather than dropped", () => {

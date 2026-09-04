@@ -8,11 +8,13 @@
  *    at all. Plotting only the rows that exist draws a line straight across the
  *    gap, which reads as "steady traffic" when the truth is "nothing happened" —
  *    the opposite conclusion.
- * 2. **Discovers metrics from the data.** Only `command.used` is emitted today
- *    (AnalyticsServiceImpl.capture), but `emit()` is open and the rollup job
- *    already knows how to break down bridge relays, mod actions, and filter hits.
- *    Deriving the chart list from what's in the rows means those appear on the
- *    page the day something starts emitting them, with no change here.
+ * 2. **Charts the three metrics the page is about.** Deriving the chart list
+ *    from whatever the rows happened to contain sounded open and behaved like a
+ *    leak: every panel mutation is captured as `command.used`, so a page meant
+ *    to show how a guild is doing filled up with lines for staff pressing Save.
+ *    Mod actions and filter hits went the same way — they are moderation's
+ *    subject, they have their own page, and they were here because nothing
+ *    stopped them. `CHARTED` is that stopper, and it is short on purpose.
  */
 import { bucketStart, type MetricPeriod } from "@sbr/analytics";
 import type { RollupPoint } from "./reads.js";
@@ -33,10 +35,35 @@ const PRIMARY_DIMENSION: Readonly<Record<string, string>> = {
 const METRIC_LABELS: Readonly<Record<string, string>> = {
   "command.used": "Command usage",
   "bridge.relay": "Bridge messages",
+  "discord.message": "Discord messages",
   "mod.action": "Moderation actions",
   "mod.action.failed": "Failed enforcement",
   "filter.hit": "Filter hits",
 };
+
+/**
+ * The metrics that get a chart, in the order they are drawn.
+ *
+ * Three questions about how busy the guild is: are people talking in Discord,
+ * is guild chat moving, are the commands being used. Everything else the
+ * rollups carry is still stored, still exported, and still on whichever page
+ * owns it — it is simply not one of the lines this page is for.
+ */
+const CHARTED: readonly string[] = ["discord.message", "bridge.relay", "command.used"];
+
+/**
+ * A row that belongs on a chart.
+ *
+ * Panel mutations are captured through the same `command.used` metric as slash
+ * commands — same shape, same table, deliberately — so a Command usage chart
+ * that took every row plotted `ticket.panel.save` next to `/stats` and called
+ * both a command. They are distinguishable by surface, and the panel's own
+ * activity belongs in the audit log, which is where it already is.
+ */
+function charted(row: RollupPoint): boolean {
+  if (!CHARTED.includes(row.metric)) return false;
+  return row.metric !== "command.used" || dimValue(row.dims, "surface") !== "WEB_PANEL";
+}
 
 /**
  * Series drawn separately before the rest collapse into "other".
@@ -146,16 +173,21 @@ export interface ShapeOptions {
   readonly until: string;
 }
 
-/** One chart per metric present in `rollups`, largest total first. */
+/**
+ * One chart per charted metric, in `CHARTED` order.
+ *
+ * Fixed order rather than largest-first: the three are always the same three,
+ * and a page whose charts swap places when a quiet week changes which is
+ * biggest is a page nobody can build a habit of reading.
+ */
 export function shapeAnalytics(rollups: readonly RollupPoint[], opts: ShapeOptions): MetricChart[] {
   const { buckets, truncated } = bucketRange(opts.since, opts.until, opts.period);
   if (buckets.length === 0) return [];
 
-  const metrics = [...new Set(rollups.map((r) => r.metric))];
-  return metrics
-    .map((metric) => shapeMetric(rollups, metric, buckets, truncated))
-    .filter((chart) => chart.total > 0)
-    .sort((a, b) => b.total - a.total);
+  const rows = rollups.filter(charted);
+  return CHARTED.map((metric) => shapeMetric(rows, metric, buckets, truncated)).filter(
+    (chart) => chart.total > 0,
+  );
 }
 
 function shapeMetric(
