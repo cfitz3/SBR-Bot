@@ -3,6 +3,7 @@
   "files": [],
   "references": [
     { "path": "packages/shared-types" },
+    { "path": "packages/skyblock-parse" },
     { "path": "packages/brand-defaults" },
     { "path": "brand" },
     { "path": "packages/env" },
@@ -17,6 +18,8 @@
     { "path": "packages/triggers" },
     { "path": "packages/pricing" },
     { "path": "packages/progression" },
+    { "path": "packages/guide" },
+    { "path": "packages/guide-content" },
     { "path": "packages/bridge" },
     { "path": "packages/moderation" },
     { "path": "packages/tickets" },
@@ -40,6 +43,7 @@
     { "path": "apps/bridge-bot" },
     { "path": "apps/admin-bot" },
     { "path": "apps/web-panel" },
+    { "path": "apps/guide-bot" },
     { "path": "apps/web-panel/tsconfig.client.json" }
   ]
 }

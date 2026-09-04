@@ -70,7 +70,7 @@ const API = "https://api.hypixel.net/v2";
 
 /**
  * Endpoint TTLs. Global datasets are refreshed by workers, so the client's TTL
- * here is a floor that keeps a live read from re-fetching a snapshot the worker
+ * here is a floor that keeps a live read from re-fetching a dataset the worker
  * is already maintaining.
  *
  * Two regimes, and the split is the policy's own:

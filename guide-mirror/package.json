@@ -1,0 +1,39 @@
+{
+  "name": "sbr-guide",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SBR-Guide — a Hypixel SkyBlock progression advisor. Curated, sourced guidance matched to a player's actual profile.",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "prisma generate && tsc -b",
+    "clean": "tsc -b --clean",
+    "typecheck": "tsc -b",
+    "start": "node dist/main.js",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "scan": "node scripts/denylist-scan.mjs",
+    "db:generate": "prisma generate",
+    "db:validate": "prisma validate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "discord.js": "^14.27.0",
+    "dotenv": "^17.4.2",
+    "pg": "^8.22.0",
+    "redis": "^6.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "prisma": "^7.9.1",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+
+      # The persistence promise, enforced by the pipeline rather than by review.
+      # Runs first: if this fails, nothing else about the build is interesting.
+      # See COMPLIANCE.md §1.
+      - name: Persistence denylist scan
+        run: npm run scan
+
+      # Prisma 7 resolves the datasource URL when it loads prisma.config.ts, so
+      # `generate` needs the variable to exist even though it never connects.
+      # The example values point at nothing and are never dialled.
+      - name: Provide build-time environment
+        run: cp .env.example .env
+
+      # `prisma generate` runs as part of build, so the schema is validated here
+      # too — a malformed model fails before the compiler is reached.
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: node --test "dist/**/*.test.js"

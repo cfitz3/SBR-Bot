@@ -277,6 +277,13 @@ export const APPS = [
     label: "member bridge bot",
     needs: ["DISCORD_BRIDGE_TOKEN"],
   },
+  {
+    id: "guide-bot",
+    dir: "apps/guide-bot",
+    color: c.blue,
+    label: "progression advisor",
+    needs: ["DISCORD_GUIDE_TOKEN"],
+  },
 ];
 
 export const appById = (id) => APPS.find((a) => a.id === id);

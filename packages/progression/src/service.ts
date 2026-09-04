@@ -43,17 +43,24 @@ import type {
   SkyblockProfileData,
   UpgradePriceSource,
 } from "./ports.js";
-import { bestiaryMilestone, parseDungeons, parseSkills, parseSlayers, skyblockLevel } from "./skyblock/parse.js";
 import {
+  analyseAccessories,
+  bestiaryMilestone,
+  CATALOG_NOTE,
   essenceTotal,
   fairySouls,
   minionSlots,
   museumDonations,
+  parseDungeons,
+  parseSkills,
+  parseSlayers,
   petScore,
-} from "./skyblock/metrics.js";
-import { senitherWeight } from "./skyblock/weight.js";
+  senitherWeight,
+  skyblockLevel,
+  type AccessoryReport,
+  type CatalogEntry,
+} from "@sbr/skyblock-parse";
 import { buildAchievements } from "./achievements.js";
-import { analyseAccessories, CATALOG_NOTE, type AccessoryReport, type CatalogEntry } from "./skyblock/accessories.js";
 import {
   buildNextSteps,
   buildUpgradeAdvice,

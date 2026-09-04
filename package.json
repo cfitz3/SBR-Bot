@@ -25,6 +25,7 @@
     "start:web-panel": "node scripts/start.mjs web-panel",
     "start:admin-bot": "node scripts/start.mjs admin-bot",
     "start:bridge-bot": "node scripts/start.mjs bridge-bot",
+    "start:guide-bot": "node scripts/start.mjs guide-bot",
     "infra:up": "docker compose up -d --wait",
     "infra:down": "docker compose down",
     "infra:reset": "docker compose down -v && docker compose up -d --wait",

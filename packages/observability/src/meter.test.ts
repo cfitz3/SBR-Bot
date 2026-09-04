@@ -10,7 +10,7 @@ test("calls, failures and rate limits are counted apart from one another", () =>
   // Retried and succeeded: the limit was real, the call was not a failure.
   meter.record("hypixel", 900, { rateLimited: true });
 
-  const [stats] = meter.snapshot();
+  const [stats] = meter.current();
   assert.equal(stats?.calls, 3);
   assert.equal(stats?.failures, 1);
   assert.equal(stats?.rateLimited, 1);
@@ -23,7 +23,7 @@ test("a rate limit reported from inside a client queue is not a call", () => {
   // would inflate the very number the ratio is measured against.
   const meter = createCallMeter();
   meter.rateLimited("discord");
-  const [stats] = meter.snapshot();
+  const [stats] = meter.current();
   assert.equal(stats?.calls, 0);
   assert.equal(stats?.rateLimited, 1);
 });
@@ -34,7 +34,7 @@ test("surfaces are kept apart and reported busiest first", () => {
   meter.record("discord", 10);
   meter.record("discord", 10);
   assert.deepEqual(
-    meter.snapshot().map((s) => s.surface),
+    meter.current().map((s) => s.surface),
     ["discord", "hypixel"],
   );
 });
@@ -51,7 +51,7 @@ test("a nonsense duration still counts the call", () => {
   const meter = createCallMeter();
   meter.record("discord", Number.NaN);
   meter.record("discord", -5);
-  const [stats] = meter.snapshot();
+  const [stats] = meter.current();
   assert.equal(stats?.calls, 2);
   assert.equal(stats?.totalMs, 0);
 });

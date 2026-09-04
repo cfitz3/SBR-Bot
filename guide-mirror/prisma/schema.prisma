@@ -1,0 +1,91 @@
+// SBR-Guide — the whole schema.
+//
+// Three tables, and the shortness is the design. A reviewer should be able to
+// read this file in under a minute and satisfy themselves that no value
+// returned by the Hypixel API is written down anywhere.
+//
+// What is deliberately absent, and must stay absent (COMPLIANCE.md §1):
+//   - any table whose rows are keyed by (uuid, capturedAt), or by any other
+//     pairing of a player with a time of observation;
+//   - any column holding a skill level, a networth, a slayer XP total, a
+//     collection count, or any other value read from a profile;
+//   - any daily or weekly aggregate, or any series, derived from the above;
+//   - any ranking table, or any cross-player comparison of any kind.
+//
+// Advice is computed from a profile read and discarded with the response. If a
+// feature appears to need a fourth table, that is a conversation to have in the
+// open, not a column to add quietly.
+//
+// The connection URL is not here. It reaches the CLI through prisma.config.ts
+// and the runtime through the pg driver adapter in src/db/index.ts, which is
+// the Prisma 7 model and keeps this file to models alone.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A verified Discord-to-Minecraft link.
+///
+/// The only player-scoped row in the system, and it holds an identity rather
+/// than an observation: who asked, and which account they are asking about.
+/// Verification is by the Discord handle the player set on their own Hypixel
+/// profile — the bot reads that field and compares it, which is why there is no
+/// code, no DM flow, and no way to claim an account you do not control.
+model PlayerLink {
+  id             String   @id @default(cuid())
+  /// The Discord user. Unique: one person, one linked account.
+  discordId      String   @unique
+  /// The Minecraft account, as a dashless UUID.
+  minecraftUuid  String   @unique
+  /// The name at link time, for display only. Refreshed on lookup, never relied
+  /// upon for identity — names change hands.
+  ign            String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  profilePreference ProfilePreference?
+
+  @@map("player_link")
+}
+
+/// Which SkyBlock profile this player wants advice about.
+///
+/// A preference, not an observation: it holds the profile id the player chose
+/// and the cosmetic name it had when they chose it, so a command does not have
+/// to ask every time. Nothing about the contents of that profile is stored.
+model ProfilePreference {
+  id            String   @id @default(cuid())
+  playerLinkId  String   @unique
+  playerLink    PlayerLink @relation(fields: [playerLinkId], references: [id], onDelete: Cascade)
+  /// The Hypixel profile id (a UUID), as returned in the profile list.
+  profileId     String
+  /// The cute name ("Mango", "Papaya") shown when the choice was made. Display
+  /// only; the id is what is used.
+  cuteName      String?
+  updatedAt     DateTime @updatedAt
+
+  @@map("profile_preference")
+}
+
+/// Which build of the curated content this deployment has loaded.
+///
+/// Not player data at all: it records the compiled content artefact by hash, so
+/// an operator can tell at a glance whether the running process is serving the
+/// guidance they think it is, and so a stale deploy is visible rather than
+/// silent. See COMPLIANCE.md §4 and docs/DATA_FLOW.md.
+model ContentVersion {
+  id          String   @id @default(cuid())
+  /// Content-addressed digest of the compiled artefact.
+  digest      String   @unique
+  /// The game patch the corpus was last verified against, e.g. "0.21.4".
+  patch       String
+  /// How many steps the artefact contains, for a quick sanity read.
+  stepCount   Int
+  loadedAt    DateTime @default(now())
+
+  @@map("content_version")
+}

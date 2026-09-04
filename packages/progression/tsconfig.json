@@ -9,6 +9,7 @@
   "references": [
     { "path": "../shared-types" },
     { "path": "../observability" },
-    { "path": "../pricing" }
+    { "path": "../pricing" },
+    { "path": "../skyblock-parse" }
   ]
 }

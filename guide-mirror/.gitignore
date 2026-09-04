@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+.env
+.env.local
+
+# Prisma writes the generated client here.
+src/generated/
+
+# On-disk caches for the reference-data fetchers.
+.cache/

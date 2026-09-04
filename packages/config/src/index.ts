@@ -54,6 +54,13 @@ export interface AppConfig {
   readonly discord: {
     readonly bridgeToken: string | undefined;
     readonly adminToken: string | undefined;
+    /**
+     * SBR-Guide's own token. A third application rather than a third set of
+     * commands on an existing one: the advisor is the leg submitted for Hypixel
+     * API review as a standalone bot, and a shared token would mean the reviewed
+     * surface and the guild-tracking surface log in as the same thing.
+     */
+    readonly guideToken: string | undefined;
     readonly clientId: string | undefined;
   };
   readonly oauth: {
@@ -274,6 +281,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     discord: {
       bridgeToken: v.optionalString("DISCORD_BRIDGE_TOKEN"),
       adminToken: v.optionalString("DISCORD_ADMIN_TOKEN"),
+      guideToken: v.optionalString("DISCORD_GUIDE_TOKEN"),
       clientId: v.optionalString("DISCORD_CLIENT_ID"),
     },
     oauth: {

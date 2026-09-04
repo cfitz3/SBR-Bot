@@ -18,7 +18,7 @@ import type {
   SkillsDTO,
   SlayersDTO,
 } from "@sbr/shared-types";
-import type { AccessoryReport } from "./accessories.js";
+import type { AccessoryReport } from "@sbr/skyblock-parse";
 
 /** A suggestion before pricing: `itemId` is what the command layer looks up. */
 export interface Suggestion {

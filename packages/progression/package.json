@@ -19,6 +19,7 @@
   "dependencies": {
     "@sbr/observability": "*",
     "@sbr/pricing": "*",
-    "@sbr/shared-types": "*"
+    "@sbr/shared-types": "*",
+    "@sbr/skyblock-parse": "*"
   }
 }

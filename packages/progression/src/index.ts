@@ -9,8 +9,32 @@ export type {
   SkyblockProfileData,
   UpgradePriceSource,
 } from "./ports.js";
-export { analyseAccessories, CATALOG, CATALOG_NOTE, type AccessoryReport } from "./skyblock/accessories.js";
-export { readBag, type BagItem } from "./skyblock/nbt.js";
+/**
+ * The parsers now live in `@sbr/skyblock-parse` and are re-exported unchanged.
+ *
+ * Every one of these was `@sbr/progression`'s to export before the split, and a
+ * consumer should not have to know the split happened. Keeping the surface here
+ * is what made moving the files a refactor rather than a migration
+ * (docs/PLATFORM_EXPANSION_PLAN.md §0: backward compatible).
+ */
+export {
+  analyseAccessories,
+  CATACOMBS_XP,
+  CATALOG,
+  CATALOG_NOTE,
+  levelFromXp,
+  parseDungeons,
+  parseSkills,
+  parseSlayers,
+  readBag,
+  senitherWeight,
+  SKILL_XP,
+  skyblockLevel,
+  slayerTier,
+  type AccessoryReport,
+  type BagItem,
+  type LevelReading,
+} from "@sbr/skyblock-parse";
 export {
   buildNextSteps,
   buildUpgradeAdvice,
@@ -21,6 +45,3 @@ export {
   type Suggestion,
   type UpgradeFocus,
 } from "./skyblock/advice.js";
-export { parseDungeons, parseSkills, parseSlayers, skyblockLevel } from "./skyblock/parse.js";
-export { senitherWeight } from "./skyblock/weight.js";
-export { CATACOMBS_XP, SKILL_XP, levelFromXp, slayerTier, type LevelReading } from "./skyblock/xp.js";

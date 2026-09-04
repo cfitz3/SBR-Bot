@@ -37,14 +37,14 @@ export class HealthRegistry implements HealthAggregator {
     );
 
     return {
-      status: rollup(components),
+      status: worst(components),
       checkedAt: new Date().toISOString(),
       components,
     };
   }
 }
 
-function rollup(components: readonly ComponentHealthDTO[]): "ok" | "degraded" | "down" {
+function worst(components: readonly ComponentHealthDTO[]): "ok" | "degraded" | "down" {
   if (components.some((c) => c.status === "down")) return "down";
   if (components.some((c) => c.status === "degraded")) return "degraded";
   return "ok";

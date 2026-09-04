@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/shared-types" },
+    { "path": "../../packages/skyblock-parse" },
+    { "path": "../../packages/config" },
+    { "path": "../../packages/db" },
+    { "path": "../../packages/redis" },
+    { "path": "../../packages/observability" },
+    { "path": "../../packages/hypixel" },
+    { "path": "../../packages/guide" },
+    { "path": "../../packages/guide-content" }
+  ]
+}

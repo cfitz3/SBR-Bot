@@ -3,16 +3,25 @@
  * one of the six the platform started with.
  *
  * These are separate from `parse.ts` because they are not a DTO anybody renders
- * whole. Each is a single number pulled off the member blob for one purpose:
- * being charted over time and aimed at with a goal. `parse.ts` builds objects
- * commands print; this builds scalars the tracker stores.
+ * whole. `parse.ts` builds structured objects a command prints; this pulls single
+ * numbers off the member blob, each one standing on its own. What a consumer
+ * does with a scalar is the consumer's business — this file only reads it.
  *
  * Same discipline as the parsers next door: the input is `unknown`, every field
  * here has moved between API generations or is omitted outright when a profile
  * hides a section, and absent is `null` rather than `0`. A zero is a real
  * reading that a threshold can sit under; a null is "we could not see".
  */
-import type { MuseumRead } from "../ports.js";
+/**
+ * Just enough of a museum response to count what has been donated.
+ *
+ * Declared here rather than beside the provider that fetches it: this is a
+ * shape the parser reads, and a parser package that owns the shapes it parses
+ * is one a consumer can take without also taking the fetching layer.
+ */
+export interface MuseumRead {
+  readonly members: Readonly<Record<string, unknown>>;
+}
 
 function obj(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)

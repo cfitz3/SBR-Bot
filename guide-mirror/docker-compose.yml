@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: sbr-guide-postgres
+    # Without this the datastores stay down after any Docker or host restart
+    # while the bot (run outside compose) keeps going — and the freed 5432/6379
+    # can then be claimed by any other Postgres or Redis on the box, so
+    # perfectly valid credentials start being rejected.
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sbrguide
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    # Loopback only. `"5433:5432"` would publish to 0.0.0.0 — with the
+    # development credentials above that is an open Postgres on the internet,
+    # which is scanned for and taken over within hours. The bot runs on the same
+    # host, so it loses nothing; a remote client should tunnel over SSH.
+    #
+    # 5433 rather than 5432 so this can run alongside another local Postgres
+    # without either of them silently taking the other port.
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - guide_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sbrguide"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sbr-guide-redis
+    restart: unless-stopped
+    # Loopback only, and for the stronger reason: this Redis has no password at
+    # all, and an exposed one is routinely used to write an SSH key onto the host.
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - guide_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  guide_postgres_data:
+  guide_redis_data:

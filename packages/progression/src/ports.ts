@@ -7,6 +7,7 @@
  */
 import type { CommunityMetricsDTO, HypixelResult, SkyblockGameMode } from "@sbr/shared-types";
 import type { NetworthEngineInput } from "@sbr/pricing";
+import type { MuseumRead } from "@sbr/skyblock-parse";
 
 export interface SkyblockProfileData {
   readonly profileId: string;
@@ -74,7 +75,9 @@ export interface MuseumProvider {
   museum(profileId: string): Promise<MuseumRead | null>;
 }
 
-/** Just enough of a museum response to count what has been donated. */
-export interface MuseumRead {
-  readonly members: Readonly<Record<string, unknown>>;
-}
+/**
+ * Re-exported from `@sbr/skyblock-parse`, which owns it: the shape exists to
+ * be counted, and the counting moved there. Kept named here so every existing
+ * `import type { MuseumRead } from "@sbr/progression"` still resolves.
+ */
+export type { MuseumRead } from "@sbr/skyblock-parse";

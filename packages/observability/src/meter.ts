@@ -50,7 +50,7 @@ export interface CallMeter {
    */
   rateLimited(surface: CallSurface): void;
   /** Everything counted so far, busiest surface first. */
-  snapshot(): readonly CallStats[];
+  current(): readonly CallStats[];
   /** The same, and resets the counters. For a periodic "since last time" log. */
   drain(): readonly CallStats[];
 }
@@ -109,7 +109,7 @@ export function createCallMeter(): CallMeter {
     rateLimited(surface) {
       bucket(surface).rateLimited += 1;
     },
-    snapshot() {
+    current() {
       return read(false);
     },
     drain() {
