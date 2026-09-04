@@ -139,6 +139,28 @@ nudge: `MAX_NUDGED_PER_MARK` caps it, because nudging each of them would flood a
 queue that would drop most of them anyway and would spend the guild's Discord
 role budget racing a sweep already scheduled to do the same work.
 
+## Event board redraws
+
+| | |
+|---|---|
+| **Trigger** | Start, complete and cancel in `PanelMutations` (`packages/panel-core/src/mutations.ts`) |
+| **Immediate work** | `redrawBoard` → `eventEffects.publishBoard`, one render and one Discord edit |
+| **Backstop** | `event-board`, twice an hour (`13,43 * * * *`), filtered by `listBoardDue` |
+
+A staff member who starts or cancels an event and then looks at the channel
+expects the message to say so. Waiting up to half an hour for the sweep would
+read as a broken bot, so the three status changes redraw on the request itself.
+
+The redraw obeys the rule at the top of this file the other way round from the
+role paths: rather than writing a mark first, it runs **after** the change is
+already durably written, and its failure is swallowed. A channel the bot can no
+longer post in must not turn a completed event into a failed mutation —
+`listBoardDue` sees the moved standing on the next pass and republishes.
+
+`BOARD_REFRESH_MS` is still the ceiling on how stale a *score* may look. The
+immediate redraw covers status changes only, which are the ones a human just
+made and is watching for.
+
 ## Pacing, and why it is not parallelism
 
 Discord's per-guild role bucket is empirically about ten modifications per ten
