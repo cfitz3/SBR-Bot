@@ -94,6 +94,11 @@ async function main(): Promise<void> {
    */
   const nudges = buildRoleNudgeQueue(ctx);
   const stopNudges = await ctx.adapters.roleNudges.subscribe((message) => {
+    // Logged on arrival rather than on completion. This is the line that
+    // separates "the publish never reached this process" from "it did, and the
+    // reconcile decided nothing needed doing" -- two very different bugs that
+    // otherwise leave identical silence.
+    ctx.log.info("role nudge received", { guildId: message.guildId, discordId: message.discordId });
     nudges.nudge(message.guildId, message.discordId);
   });
 

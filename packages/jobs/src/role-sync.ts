@@ -63,7 +63,27 @@ export interface MemberSyncDeps {
   closeGrants(guildId: string, discordId: string, rows: readonly GrantRow[]): Promise<void>;
   onRefusal(guildId: string, roleId: string, detail: string): void;
   onError(scope: string, error: unknown): void;
+  /**
+   * What one immediate reconcile decided, called by `syncOneMember` only.
+   *
+   * The sweep does not report this: it looks at hundreds of members a pass and
+   * almost all of them are already correct, so a line each would be noise. One
+   * member reconciled because somebody just linked is the opposite case — an
+   * operator watching a `/link` needs to see the difference between "no rules
+   * configured", "not on the roster yet" and "already had the roles", and
+   * without this all three look identical to a nudge that never arrived.
+   */
+  onOutcome?(guildId: string, discordId: string, outcome: MemberSyncOutcome): void;
 }
+
+/** Why one immediate reconcile did or did not change anything. */
+export type MemberSyncOutcome =
+  | "applied"
+  | "unchanged"
+  | "rules-disabled"
+  | "no-rules"
+  | "not-on-roster"
+  | "failed";
 
 export interface RoleSyncDeps extends MemberSyncDeps {
   listGuilds(): Promise<readonly string[]>;
@@ -237,21 +257,37 @@ export async function syncOneMember(
   guildId: string,
   discordId: string,
 ): Promise<boolean> {
+  const report = (outcome: MemberSyncOutcome): void => {
+    deps.onOutcome?.(guildId, discordId, outcome);
+  };
   try {
     const policy = await deps.loadPolicy(guildId);
     // Same refusal as the sweep's, for the same reason: a guild with the
     // feature off has not asked us to act on it promptly either.
-    if (!policy.enabled || policy.rules.length === 0) return false;
+    if (!policy.enabled) {
+      report("rules-disabled");
+      return false;
+    }
+    if (policy.rules.length === 0) {
+      report("no-rules");
+      return false;
+    }
 
     const snapshots = await deps.loadSnapshots(guildId, [discordId]);
     const snapshot = snapshots.at(0);
     // Not a member of this guild as far as the mirror is concerned. Nothing to
     // reconcile against, and inventing facts for them would be worse than
     // waiting for the roster to catch up.
-    if (snapshot === undefined) return false;
+    if (snapshot === undefined) {
+      report("not-on-roster");
+      return false;
+    }
 
-    return await syncMember(deps, guildId, policy, snapshot);
+    const changed = await syncMember(deps, guildId, policy, snapshot);
+    report(changed ? "applied" : "unchanged");
+    return changed;
   } catch (error) {
+    report("failed");
     // Never rethrown. The caller is on somebody's request path — a link, a
     // join, a punishment — and a role that could not be applied is not a
     // failure of the thing they actually asked for. The mark they left behind

@@ -177,6 +177,13 @@ function roleMemberSyncDeps(ctx: WorkerContext): MemberSyncDeps {
     onError(scope, error) {
       ctx.log.warn("role sync failed", { scope, error: String(error) });
     },
+    onOutcome(guildId, discordId, outcome) {
+      // The immediate path's one line. Every reason a nudge can end in nothing
+      // is named here, because from outside they are indistinguishable from a
+      // nudge that was never published -- which is the first thing anybody
+      // debugging "my roles did not arrive" needs ruled out.
+      ctx.log.info("role nudge reconciled", { guildId, discordId, outcome });
+    },
   };
 }
 
@@ -199,9 +206,8 @@ export function buildRoleNudgeQueue(ctx: WorkerContext): RoleNudgeQueue {
   return createRoleNudgeQueue({
     tuning,
     async sync(guildId, discordId) {
-      const changed = await syncOneMember(deps, guildId, discordId);
-      if (changed) ctx.log.info("roles applied on nudge", { guildId, discordId });
-      return changed;
+      // `onOutcome` above says what it decided; this says it got that far.
+      return await syncOneMember(deps, guildId, discordId);
     },
     onDropped(guildId, discordId, why) {
       // Visible on purpose, and not an error: the member is still marked dirty
