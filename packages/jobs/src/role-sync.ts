@@ -74,6 +74,30 @@ export interface MemberSyncDeps {
    * without this all three look identical to a nudge that never arrived.
    */
   onOutcome?(guildId: string, discordId: string, outcome: MemberSyncOutcome): void;
+  /**
+   * The arithmetic behind one immediate reconcile, called by `syncOneMember`
+   * only.
+   *
+   * `unchanged` is the one outcome that names no cause. It is reached from four
+   * quite different places -- every rule switched off, no rule this member
+   * satisfies, the roles already held according to the mirrored roster, or a
+   * qualification lost under a rule that was never allowed to revoke -- and
+   * telling them apart from outside is impossible without the numbers. The
+   * sweep does not report it for the same reason it does not report outcomes.
+   */
+  onDecision?(guildId: string, discordId: string, decision: MemberSyncDecision): void;
+}
+
+/** What one member's reconcile actually compared, for the log line. */
+export interface MemberSyncDecision {
+  /** Enabled rules considered. Fewer than `policy.rules.length` means some are off. */
+  readonly rules: number;
+  /** Role ids the enabled rules say this member should hold. */
+  readonly qualified: readonly string[];
+  /** Role ids the mirrored roster believes they already hold. */
+  readonly held: readonly string[];
+  readonly add: readonly string[];
+  readonly remove: readonly string[];
 }
 
 /** Why one immediate reconcile did or did not change anything. */
@@ -187,11 +211,21 @@ async function syncMember(
   guildId: string,
   policy: AutoRolePolicy,
   snapshot: RoleMemberSnapshot,
+  explain = false,
 ): Promise<boolean> {
   const discordId = snapshot.facts.discordId;
   const ledger = await deps.openGrants(guildId, discordId);
   const outcomes = resolveDesiredRoles(snapshot.facts, policy);
   const diff = diffGrants(outcomes, snapshot.heldRoleIds, ledger);
+  if (explain) {
+    deps.onDecision?.(guildId, discordId, {
+      rules: outcomes.length,
+      qualified: outcomes.filter((o) => o.qualifies).map((o) => o.rule.roleId),
+      held: snapshot.heldRoleIds,
+      add: diff.add,
+      remove: diff.remove,
+    });
+  }
   if (diff.add.length === 0 && diff.remove.length === 0) {
     // Nothing to do on Discord. There may still be ledger rows to close — a
     // grant whose role somebody removed by hand — and closing them is what stops
@@ -283,7 +317,7 @@ export async function syncOneMember(
       return false;
     }
 
-    const changed = await syncMember(deps, guildId, policy, snapshot);
+    const changed = await syncMember(deps, guildId, policy, snapshot, true);
     report(changed ? "applied" : "unchanged");
     return changed;
   } catch (error) {

@@ -36,6 +36,7 @@ export {
   GUILD_CONCURRENCY,
   MAX_MEMBERS_PER_PASS,
   syncOneMember,
+  type MemberSyncDecision,
   type MemberSyncOutcome,
   syncRoles,
   type MemberSyncDeps,

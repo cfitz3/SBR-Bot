@@ -184,6 +184,12 @@ function roleMemberSyncDeps(ctx: WorkerContext): MemberSyncDeps {
       // debugging "my roles did not arrive" needs ruled out.
       ctx.log.info("role nudge reconciled", { guildId, discordId, outcome });
     },
+    onDecision(guildId, discordId, decision) {
+      // Only ever the immediate path, one line per link. This is what turns
+      // "unchanged" from a dead end into a diagnosis: no enabled rules, no
+      // rule satisfied, or a role the roster mirror already believes they hold.
+      ctx.log.info("role nudge decision", { guildId, discordId, ...decision });
+    },
   };
 }
 
