@@ -598,10 +598,15 @@ export const DEFAULT_EMBEDS = {
      * the only part that has to say which of those is happening — everything
      * below it is the same sections with different contents.
      */
-    eventOpen: "Signups are open — the buttons below record whether you're coming.",
+    eventOpen: "Signups are open — press Register to put your name down.",
     eventLive: "Live now. Standings update as the tracker polls.",
     eventDone: "Finished. Final standings below.",
     eventOff: "Cancelled.",
+    /**
+     * What the event ranks people by, in the opening lines rather than in a
+     * field. `{metric}` is the sentence-cased phrase from `metricPhrase`.
+     */
+    eventScoredOn: "Scored on **{metric}**.",
     /** An event that measures nothing: a meeting, a giveaway, a social night. */
     eventUnscored: "Turnout only — nothing is scored.",
     /** `{id}` is the event id, which is how the bot finds its own message again. */

@@ -858,6 +858,8 @@ export async function startPanelServer(app: PanelApp): Promise<PanelServer> {
         return sendMutation(res, await m.updateEvent(session, guildId, b));
       case "event.complete":
         return sendMutation(res, await m.completeEvent(session, guildId, b["eventId"]));
+      case "event.start":
+        return sendMutation(res, await m.startEvent(session, guildId, b["eventId"]));
       case "event.attendance":
         return sendMutation(res, await m.markAttendance(session, guildId, b));
       case "event.board.publish":

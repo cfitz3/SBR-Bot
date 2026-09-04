@@ -169,7 +169,11 @@ export async function renderEvents(host: HTMLElement, guildId: string): Promise<
         statTile(t("tileGoing"), next ? seats(next) : c("dash")),
       ),
       card(t("cardCreate"), createForm(guildId, rerender)),
-      live.length === 0 ? null : card(t("cardLive"), upcomingBody(guildId, live, rerender)),
+      // Running events fold. A guild running four at once had four full blocks
+      // of roster counts and buttons above the list of everything it had not
+      // started yet, and the thing a host actually comes here to do during an
+      // event is open one of them.
+      live.length === 0 ? null : card(t("cardLive"), upcomingBody(guildId, live, rerender, true)),
       card(t("cardUpcoming"), upcomingBody(guildId, scheduled, rerender)),
       open ? card(t("cardManage").replace("{title}", open.title), manageBody(guildId, open, rerender)) : null,
       open ? card(t("cardScores").replace("{title}", open.title), scoresBody(open, data.standings, data.unlinked)) : null,
@@ -467,12 +471,17 @@ function createForm(guildId: string, rerender: () => void): HTMLElement {
 
 // ─────────────────────────── the list ───────────────────────────
 
-function upcomingBody(guildId: string, events: readonly PanelEvent[], rerender: () => void): HTMLElement {
+function upcomingBody(
+  guildId: string,
+  events: readonly PanelEvent[],
+  rerender: () => void,
+  fold = false,
+): HTMLElement {
   if (events.length === 0) return emptyState("eventsUpcoming");
-  return h("div", { class: "queue" }, ...events.map((event) => eventRow(guildId, event, rerender)));
+  return h("div", { class: "queue" }, ...events.map((event) => eventRow(guildId, event, rerender, fold)));
 }
 
-function eventRow(guildId: string, event: PanelEvent, rerender: () => void): HTMLElement {
+function eventRow(guildId: string, event: PanelEvent, rerender: () => void, fold = false): HTMLElement {
   const status = statusSlot();
   const isOpen = state.selected === event.id;
 
@@ -501,17 +510,30 @@ function eventRow(guildId: string, event: PanelEvent, rerender: () => void): HTM
     onDone: rerender,
   });
 
-  return h(
-    "article",
-    { class: "queue-item" },
-    h(
-      "header",
-      { class: "queue-head" },
-      h("strong", {}, event.title),
-      badge(event.type.toLowerCase(), "neutral"),
-      badge(event.status.toLowerCase(), statusTone(event.status)),
-      h("span", { class: "muted" }, `${dateTime(event.startsAt)} ${c("dot")} ${countdown(event.startsAt)}`),
-    ),
+  // Only a scheduled event can be started, and starting one is the press that
+  // rewrites its message in the channel — armed, like the cancel beside it.
+  const start =
+    event.status === "SCHEDULED"
+      ? actionButton({
+          label: t("start"),
+          tone: "primary",
+          confirm: t("startConfirm"),
+          status,
+          run: () => postAction(guildId, "event.start", { eventId: event.id }),
+          onDone: rerender,
+        })
+      : null;
+
+  const head = h(
+    "header",
+    { class: "queue-head" },
+    h("strong", {}, event.title),
+    badge(event.type.toLowerCase(), "neutral"),
+    badge(event.status.toLowerCase(), statusTone(event.status)),
+    h("span", { class: "muted" }, `${dateTime(event.startsAt)} ${c("dot")} ${countdown(event.startsAt)}`),
+  );
+
+  const detail = [
     h(
       "p",
       { class: "muted" },
@@ -522,10 +544,32 @@ function eventRow(guildId: string, event: PanelEvent, rerender: () => void): HTM
       event.hostDiscordId ? t("hostedBy") : t("noHost"),
       event.hostDiscordId ? h("code", {}, event.hostDiscordId) : null,
     ),
-    event.prize === null
-      ? null
-      : h("p", { class: "muted" }, `${t("prizeInline")}: ${event.prize}`),
-    h("div", { class: "row-actions" }, toggle, cancel, status.el),
+    event.prize === null ? null : h("p", { class: "muted" }, `${t("prizeInline")}: ${event.prize}`),
+    h("div", { class: "row-actions" }, toggle, ...(start === null ? [] : [start]), cancel, status.el),
+  ];
+
+  if (!fold) return h("article", { class: "queue-item" }, head, ...detail);
+
+  // Folded, the summary has to carry enough to pick the right event out of
+  // four: the name and how many people are in it. The badges and the countdown
+  // are inside, where somebody who opened this one is looking.
+  return h(
+    "article",
+    { class: "queue-item" },
+    h(
+      "details",
+      { class: "collapse" },
+      h(
+        "summary",
+        {},
+        h(
+          "span",
+          {},
+          t("liveSummary").replace("{title}", event.title).replace("{going}", seats(event)),
+        ),
+      ),
+      h("div", {}, head, ...detail),
+    ),
   );
 }
 

@@ -992,6 +992,16 @@ export interface CommunityService {
   /** Change a scheduled event. Host, or staff acting on their behalf. */
   updateEvent(input: EventEdit): Promise<Result<EventDTO, EventError>>;
   /**
+   * Start a scheduled event now.
+   *
+   * The sweep already moves an event to LIVE when its start time passes, and
+   * this does not replace it — it is the host saying "we are going now", which
+   * is a different fact from the clock reaching a time somebody typed a week
+   * ago. Everything downstream keys off LIVE, so this is also what turns the
+   * event's message from a signup sheet into a standings board.
+   */
+  startEvent(eventId: string, actorDiscordId: string, isStaff?: boolean): Promise<Result<EventDTO, EventError>>;
+  /**
    * End an event that has run, stamping `endsAt`.
    *
    * Separate from `cancelEvent` because the two mean opposite things to

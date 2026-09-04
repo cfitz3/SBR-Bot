@@ -412,6 +412,27 @@ export class CommunityServiceImpl implements CommunityService {
    * what the tracker board reads to write its result card: an event with no end
    * time is one that is still going, and the board would keep redrawing.
    */
+  /**
+   * SCHEDULED → LIVE, on purpose rather than on the clock.
+   *
+   * Forward only and from one status only: an event that has finished or been
+   * called off does not restart, and one already running has nothing to do
+   * here. The tracker takes its baselines on the first poll after this, so
+   * starting early measures from early — which is what the person who pressed
+   * the button meant by starting it.
+   */
+  async startEvent(eventId: string, actorDiscordId: string, isStaff?: boolean): Promise<Result<EventDTO, EventError>> {
+    const event = await this.repo.getEvent(eventId);
+    if (!event) return err({ kind: "NOT_FOUND" });
+    if (event.status !== "SCHEDULED") return err({ kind: "CLOSED" });
+    if (!this.mayAct(event, actorDiscordId, isStaff)) return err({ kind: "NOT_HOST" });
+
+    const started = await this.repo.setEventStatus(eventId, "LIVE");
+    if (!started) return err({ kind: "NOT_FOUND" });
+    this.log.info("event started", { eventId, actorDiscordId });
+    return ok(started);
+  }
+
   async completeEvent(eventId: string, actorDiscordId: string, isStaff?: boolean): Promise<Result<EventDTO, EventError>> {
     const event = await this.repo.getEvent(eventId);
     if (!event) return err({ kind: "NOT_FOUND" });

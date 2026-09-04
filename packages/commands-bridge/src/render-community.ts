@@ -311,10 +311,20 @@ export function renderEventCard(view: EventCardView): EmbedView {
     title: view.title,
     // The status sentence leads, and the organiser's own words follow it: the
     // reader wants "is this open" answered before they read the pitch.
-    headline: described === "" ? HEADLINES[view.status] : `${HEADLINES[view.status]}\n\n${described}`,
+    // The status sentence, then what the event is scored on, then the pitch.
+    // The metric used to be the second field, four lines below the fold on a
+    // phone, which made "what am I being ranked on" the one question about a
+    // scored event the card answered last. It is the reason to enter, so it is
+    // in the opening lines with the reason to care.
+    headline: [
+      HEADLINES[view.status],
+      view.metric == null ? C.eventUnscored : C.eventScoredOn.replace("{metric}", metricLabel(view.metric)),
+      described === "" ? null : `\n${described}`,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n"),
     fields: [
       field(F.details, facts(detail)),
-      field(F.scoring, view.metric == null ? C.eventUnscored : metricLabel(view.metric)),
       // The roster is what the message is *for* until the event starts. After
       // that the standings are, and printing both would push the table under
       // a list of names that has stopped changing.
@@ -387,15 +397,26 @@ function standingsBlock(metric: string, standings: readonly EventBoardStandingVi
     .join("\n");
 }
 
-/** RSVP buttons carry the event id, so they keep working across restarts. */
+/**
+ * One button: are you in or not.
+ *
+ * Three answers were three answers to a question the event only has two of.
+ * "Maybe" recorded nothing anyone acted on — a host counting heads read the
+ * going number, the standings only ever contained people who turned up, and the
+ * reminder pinged maybes anyway — while "Can't make it" was a press that asked
+ * a member to announce a non-attendance nobody was waiting for. What is left is
+ * the one press that means something, and it toggles: pressing it again is how
+ * somebody who changes their mind takes their name back off the roster.
+ *
+ * The id still carries the event, so a button posted last week still routes
+ * after a restart. `TOGGLE` rather than a state because the button does not
+ * know which way it is about to go — the handler reads that from the roster,
+ * and a customId that named a state would go stale the moment they pressed it.
+ */
 export function rsvpButtons(eventId: string): readonly ActionRowView[] {
   return [
     {
-      buttons: [
-        { label: "Going", style: "SUCCESS", customId: `rsvp:${eventId}:GOING` },
-        { label: "Maybe", style: "SECONDARY", customId: `rsvp:${eventId}:MAYBE` },
-        { label: "Can't make it", style: "DANGER", customId: `rsvp:${eventId}:NOT_GOING` },
-      ],
+      buttons: [{ label: "Register", style: "SUCCESS", customId: `rsvp:${eventId}:TOGGLE` }],
     },
   ];
 }

@@ -38,7 +38,7 @@ import {
   MARKET_NAMESPACE,
   marketButtonReplies,
   helpButtonReplies,
-  parseRsvpState,
+  parseRsvpPress,
   progressionButtonReplies,
   readLevelOptOuts,
 } from "@sbr/commands-bridge";
@@ -219,7 +219,7 @@ export function createInteractionHandler(app: BridgeApp) {
  */
 export function registerCommunityButtons(app: BridgeApp, components: ComponentRouter): void {
   components.register("rsvp", async (interaction, [eventId, rawState]) => {
-    const state = parseRsvpState(rawState);
+    const state = parseRsvpPress(rawState);
     if (!eventId || state === null) {
       await interaction.reply({ content: "That button is from an older version and no longer works.", ephemeral: true });
       return;

@@ -132,20 +132,51 @@ const rsvp: CommandHandler = async (ctx, deps) => {
   return rsvpReply(eventId, ctx.userId, state, deps);
 };
 
-/** Shared by `/rsvp` and the RSVP buttons, so both answer identically. */
+/**
+ * What the Register button asks for: in, out, or "the other one from now".
+ *
+ * `TOGGLE` is not a stored state and never reaches the service — it is resolved
+ * against the roster first. It exists because one button cannot know, at the
+ * moment it is rendered, which way the next press goes.
+ */
+export type RsvpPress = RSVPState | "TOGGLE";
+
+/**
+ * Which way a `TOGGLE` press goes for this member.
+ *
+ * On the roster in any form — going, maybe from an older card, or waitlisted —
+ * counts as registered, so the press takes them off. A read that fails registers
+ * them: the failure mode of guessing wrong is one extra press, and guessing
+ * "register" is the guess that matches what somebody pressing a green button
+ * labelled Register almost always meant.
+ */
+async function toggleTarget(eventId: string, userId: string, deps: HandlerDeps): Promise<RSVPState> {
+  const attendance = await deps.community.getAttendance(eventId);
+  if (!attendance.ok) return "GOING";
+  const { going, maybe, waitlist } = attendance.value;
+  const registered = [...going, ...maybe, ...waitlist].some((entry) => entry.discordId === userId);
+  return registered ? "NOT_GOING" : "GOING";
+}
+
+/** Shared by `/rsvp` and the Register button, so both answer identically. */
 async function rsvpReply(
   eventId: string,
   userId: string,
-  state: RSVPState,
+  press: RsvpPress,
   deps: HandlerDeps,
 ): Promise<CommandReply> {
+  const state = press === "TOGGLE" ? await toggleTarget(eventId, userId, deps) : press;
   const result = await deps.community.rsvp(eventId, userId, state);
   if (!result.ok) return { ephemeral: true, text: eventProblem(result.error) };
 
   const { event, waitlisted } = result.value;
+  // Said back in the words of the button they pressed. "Recorded: not going" is
+  // accurate about the row and wrong about what they did, which was leave.
   const text = waitlisted
     ? `"${event.title}" is full — you're on the waitlist.`
-    : `Recorded: ${result.value.state.toLowerCase().replace("_", " ")} for "${event.title}".`;
+    : result.value.state === "NOT_GOING"
+      ? `You're off the list for "${event.title}". Press Register again to rejoin.`
+      : `You're registered for "${event.title}".`;
   return { ephemeral: true, text, embed: renderEventEmbed(event) };
 }
 
@@ -401,9 +432,9 @@ const ticketTypeAutocomplete: AutocompleteHandler = async (focused, ctx, deps) =
  * and the tests can press a button without a Discord client.
  */
 export const communityButtonReplies = {
-  /** `rsvp:<eventId>:<state>` */
-  async rsvp(eventId: string, userId: string, state: RSVPState, deps: HandlerDeps): Promise<CommandReply> {
-    return rsvpReply(eventId, userId, state, deps);
+  /** `rsvp:<eventId>:TOGGLE`, or a state on a card posted before the merge. */
+  async rsvp(eventId: string, userId: string, press: RsvpPress, deps: HandlerDeps): Promise<CommandReply> {
+    return rsvpReply(eventId, userId, press, deps);
   },
   /**
    * `run:<postId>:join|leave|close`
@@ -437,6 +468,17 @@ export const communityButtonReplies = {
 /** Valid RSVP states, for validating a customId segment before trusting it. */
 export function parseRsvpState(raw: string | undefined): RSVPState | null {
   return raw === "GOING" || raw === "MAYBE" || raw === "NOT_GOING" || raw === "WAITLIST" ? raw : null;
+}
+
+/**
+ * The same, plus the toggle the Register button sends.
+ *
+ * The old states stay readable on purpose: cards posted before the merge still
+ * carry `rsvp:<id>:GOING` buttons, and a member pressing one of those should
+ * have their answer recorded rather than be told the button is too old.
+ */
+export function parseRsvpPress(raw: string | undefined): RsvpPress | null {
+  return raw === "TOGGLE" ? "TOGGLE" : parseRsvpState(raw);
 }
 
 // ─────────────────────────────── Registry ───────────────────────────────

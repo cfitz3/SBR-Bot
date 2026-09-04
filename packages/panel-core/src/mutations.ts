@@ -383,6 +383,7 @@ export const MUTATION_TIERS = {
   "event.cancel": "OFFICER",
   "event.update": "OFFICER",
   "event.complete": "OFFICER",
+  "event.start": "OFFICER",
   /** Marking turnout writes to the record achievements are counted from. */
   "event.attendance": "OFFICER",
   /** Redrawing the tracker board edits a message in a members-visible channel. */
@@ -4059,8 +4060,50 @@ export class PanelMutations {
       if (found.value === null || found.value.guildId !== guildId) return invalid("no such event");
 
       const result = await this.d.community.completeEvent(eventId, actorDiscordId, true);
+      // The card in the channel is the event's record, and completion is the
+      // edit that turns it into the result. Left to the sweep it is a signup
+      // sheet for another half hour, next to a contest that has ended.
+      await this.redrawBoard(guildId, eventId, actorDiscordId, result.ok);
       return { result, change: { eventId } };
     });
+  }
+
+  /**
+   * Start a scheduled event now.
+   *
+   * The one press that turns the signup message into the live board: the card
+   * is the same message throughout, so what members have been watching for
+   * signups becomes the standings table under them without a second post.
+   */
+  async startEvent(session: PanelSession | null, guildId: string, eventId: unknown): Promise<MutationResult> {
+    return this.run(session, guildId, "event.start", async (actorDiscordId) => {
+      if (typeof eventId !== "string" || !ENTITY_ID.test(eventId)) {
+        return invalid("eventId must be an event id");
+      }
+      const found = await this.d.community.getEvent(eventId);
+      if (!found.ok) return { result: found, change: { eventId } };
+      if (found.value === null || found.value.guildId !== guildId) return invalid("no such event");
+
+      const result = await this.d.community.startEvent(eventId, actorDiscordId, true);
+      await this.redrawBoard(guildId, eventId, actorDiscordId, result.ok);
+      return { result, change: { eventId } };
+    });
+  }
+
+  /**
+   * Redraw an event's message after a status change, best effort.
+   *
+   * Every caller has already written the change and is about to report success,
+   * so a channel the bot can no longer post in must not turn a completed event
+   * into a failed mutation. The sweep republishes on its next pass.
+   */
+  private async redrawBoard(guildId: string, eventId: string, actorDiscordId: string, changed: boolean): Promise<void> {
+    if (!changed || this.d.eventEffects === undefined) return;
+    try {
+      await this.d.eventEffects.publishBoard(guildId, eventId, actorDiscordId);
+    } catch {
+      // Left to the sweep.
+    }
   }
 
   /**
@@ -4143,6 +4186,10 @@ export class PanelMutations {
         return invalid("eventId must be an event id");
       }
       const result = await this.d.community.cancelEvent(eventId, actorDiscordId);
+      // A cancelled event whose message still says "signups are open" is worse
+      // than no message: members answer it. The card is edited to say it was
+      // called off, in place, and loses its button in the same edit.
+      await this.redrawBoard(guildId, eventId, actorDiscordId, result.ok);
       return { result, change: { eventId } };
     });
   }

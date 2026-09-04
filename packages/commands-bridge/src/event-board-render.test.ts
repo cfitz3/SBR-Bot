@@ -63,8 +63,11 @@ test("a loss keeps its sign, and an unreadable number says so", () => {
 });
 
 test("the card names what it scores, and says so plainly when it scores nothing", () => {
-  assert.equal(fields(view())["Scoring"], "catacombs level");
-  assert.match(fields(view({ metric: null }))["Scoring"] ?? "", /Turnout only/);
+  // In the opening lines rather than in a field: what an event ranks people on
+  // is the reason to enter it, so it reads before the details do.
+  assert.match(renderEventCard(view()).description ?? "", /Scored on \*\*catacombs level\*\*/);
+  assert.match(renderEventCard(view({ metric: null })).description ?? "", /Turnout only/);
+  assert.ok(!("Scoring" in fields(view())), "and not repeated as a field below");
 });
 
 /**

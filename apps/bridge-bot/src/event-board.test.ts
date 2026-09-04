@@ -226,7 +226,7 @@ test("a scheduled event is posted as the signup sheet, buttons and all", async (
   assert.ok(!names.includes("Standings"), "and nothing to rank before it starts");
   assert.deepEqual(
     (h.posted[0]?.components ?? []).flatMap((r) => r.buttons.map((b) => b.customId)),
-    ["rsvp:e1:GOING", "rsvp:e1:MAYBE", "rsvp:e1:NOT_GOING"],
+    ["rsvp:e1:TOGGLE"],
   );
 });
 
@@ -395,8 +395,7 @@ test("a legacy multi-metric event is scored on the metric its board already rank
   const result = await h.gateway.publish("g1", "e1");
   assert.equal(result.ok, true);
   assert.deepEqual(h.asked, [{ eventId: "e1", metric: "networth" }]);
-  const scoring = (h.posted[0]?.embed.fields ?? []).find((f) => f.name === "Scoring");
-  assert.equal(scoring?.value, "networth");
+  assert.match(h.posted[0]?.embed.description ?? "", /Scored on \*\*networth\*\*/);
 });
 
 test("a metric the tracker does not recognise is skipped, not rendered empty", async () => {

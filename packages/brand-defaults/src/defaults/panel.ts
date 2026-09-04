@@ -853,6 +853,14 @@ export const DEFAULT_PANEL = {
     hideRsvps: "Hide RSVPs",
     cancel: "Cancel event",
     cancelConfirm: "Confirm cancel",
+    /**
+     * Starting an event is what turns its signup message into the live board,
+     * so the label says the visible consequence rather than the status name.
+     */
+    start: "Start event",
+    startConfirm: "Confirm start",
+    /** The one-line summary of a running event, before it is expanded. */
+    liveSummary: "{title} — {going} registered",
     /** `{going}` already carries its own "of {capacity}" when the event is capped. */
     rowCounts: "{going} going · {maybe} maybe · {declined} declined",
     hostedBy: " · hosted by ",

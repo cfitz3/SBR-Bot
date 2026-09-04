@@ -51,7 +51,7 @@ import type { Logger } from "@sbr/observability";
 import { SEED_CATEGORIES } from "@sbr/tickets";
 import { CommandDispatcher } from "./dispatcher.js";
 import { buildBridgeRegistry } from "./handlers.js";
-import { communityButtonReplies, parseRsvpState } from "./handlers-community.js";
+import { communityButtonReplies, parseRsvpPress, parseRsvpState } from "./handlers-community.js";
 import { InMemoryCooldownGate } from "./cooldown.js";
 import type { CapabilityChecker, CommandContext, CommandSpec, LfgBoard, UsageSink } from "./types.js";
 
@@ -1291,7 +1291,9 @@ test("/create-event attaches persistent RSVP buttons keyed by event id", async (
     ctx({ args: recordArgs({ title: "Kuudra t5", starts_at: "2026-09-01T18:00:00.000Z" }) }),
   );
   const ids = (r.components ?? [])[0]?.buttons.map((b) => b.customId);
-  assert.deepEqual(ids, ["rsvp:new:GOING", "rsvp:new:MAYBE", "rsvp:new:NOT_GOING"]);
+  // One button, and it names no state: which way the press goes is read off the
+  // roster when it is pressed, not baked in when the card was drawn.
+  assert.deepEqual(ids, ["rsvp:new:TOGGLE"]);
 });
 
 test("/create-event reports an unusable start time instead of creating anything", async () => {
@@ -1306,7 +1308,7 @@ test("/create-event reports an unusable start time instead of creating anything"
 
 test("/rsvp confirms the recorded response", async () => {
   const r = await makeDispatcher().dispatch("rsvp", ctx({ args: recordArgs({ event: "e1", response: "MAYBE" }) }));
-  assert.match(r.text, /maybe for "F7 carries"/);
+  assert.match(r.text, /registered for "F7 carries"/);
 });
 
 test("a full event tells the member they are on the waitlist, not that they are going", async () => {
@@ -1655,7 +1657,24 @@ test("RSVP buttons route to the same reply as /rsvp", async () => {
     community: community(), perms: perms(), config: guildConfig, analytics, logger: silent,
   };
   const r = await communityButtonReplies.rsvp("e1", "111", "GOING", deps);
-  assert.match(r.text, /Recorded: going for "F7 carries"/);
+  assert.match(r.text, /You're registered for "F7 carries"/);
+});
+
+/**
+ * The whole point of one button: the same press means opposite things to
+ * somebody who is on the roster and somebody who is not, and the difference is
+ * read from the roster rather than from the button.
+ */
+test("Register toggles against what the member already answered", async () => {
+  const deps = {
+    identity: identity(), progression: progression(), players, pricing, market: market(),
+    community: community(), perms: perms(), config: guildConfig, analytics, logger: silent,
+  };
+  // The shared fake has 111 on the going list and nobody else.
+  const off = await communityButtonReplies.rsvp("e1", "111", "TOGGLE", deps);
+  assert.match(off.text, /off the list/);
+  const on = await communityButtonReplies.rsvp("e1", "999", "TOGGLE", deps);
+  assert.match(on.text, /registered/);
 });
 
 test("run buttons join and leave, and reject an unknown action", async () => {
@@ -1673,6 +1692,12 @@ test("parseRsvpState only accepts real states", async () => {
   assert.equal(parseRsvpState("NOT_GOING"), "NOT_GOING");
   assert.equal(parseRsvpState("garbage"), null);
   assert.equal(parseRsvpState(undefined), null);
+  // TOGGLE is a press, not a state, so only the press parser takes it — and the
+  // press parser still reads the states on cards posted before the merge.
+  assert.equal(parseRsvpState("TOGGLE"), null);
+  assert.equal(parseRsvpPress("TOGGLE"), "TOGGLE");
+  assert.equal(parseRsvpPress("GOING"), "GOING");
+  assert.equal(parseRsvpPress("garbage"), null);
 });
 
 // ── /online ────────────────────────────────────────────────────────────────
